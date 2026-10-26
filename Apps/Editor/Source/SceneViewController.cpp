@@ -31,22 +31,8 @@
 #include "Rendering/Core/HzbCullingStrategy.h"
 #include "Rendering/Core/NoneCullingStrategy.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
-
-#include <algorithm>
-#include <utility>
-#include <atomic>
-#include <cassert>
-#include <cmath>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <numeric>
-#include <optional>
-#include <string>
-#include <vector>
 
 #include "Components/Rendering/Camera.h"
 #include "Components/Rendering/PostProcessVolume.h"
@@ -70,13 +56,28 @@
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
-#include "Picking/MeshPickingService.h"
+#include "Picking/ScenePick.h"
 #include "Picking/PickRootResolver.h"
 #include "UI/Controls/Widgets/CameraBookmarksWidget.h"
 #include "Editor/Settings/SceneViewSettings.h"
 #include "SceneView/SceneViewFraming.h"
 #include "SceneView/SceneViewOverlayShared.h"
 #include "TerrainECS/TerrainService.h"
+
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -1679,18 +1680,20 @@ void SceneViewController::UpdatePickCandidates(GameEngine::ECS::World& world,
     // descendants are filtered out without blocking picks of entities behind.
     // Terrain is included (PickOptions default): it is scene geometry the user
     // clicks like any other, and the scene view has no other way to select it.
-    Editor::Picking::PickOptions options;
+    // A renderer with no CPU mesh is clicked through its box (IncludeBoundsFallback).
+    Scene::PickOptions options;
+    options.IncludeBoundsFallback = true;
     options.WaitForSceneTlas = false; // the caller saw the scene TLAS ready (SceneTlasReadyForPick)
-    GameEngine::Editor::Picking::RaycastSceneAll(ray, world, m_PickHits, options);
+    GameEngine::Editor::Picking::PickSceneAll(ray, world, m_PickHits, options);
     m_PickHits.erase(std::remove_if(m_PickHits.begin(), m_PickHits.end(),
-                                    [this](const Editor::Picking::PickHit& h)
+                                    [this](const Scene::PickHit& h)
                                     { return !IsEntityPickable(h.Entity); }),
                      m_PickHits.end());
     Editor::Picking::BuildPickCandidates(world, m_PickHits, exactPick, m_PickCandidates);
 
     m_PickCacheRay = ray;
     m_PickCacheExactMode = exactPick;
-    // Sample versions after the raycast: RaycastSceneAll's TLAS sync may
+    // Sample versions after the raycast: PickSceneAll's TLAS sync may
     // itself count as a write grant, which would otherwise invalidate the
     // fresh cache immediately.
     m_PickCacheWriteVersion = world.GetGlobalSystemVersion();
@@ -2185,20 +2188,21 @@ void SceneViewController::HandleHoverDetection(const Editor::SceneTools::ScenePo
         return;
     }
 
-    Editor::Picking::PickOptions options;
+    Scene::PickOptions options;
+    options.IncludeBoundsFallback = true;
     options.WaitForSceneTlas = false; // ready, checked above
     // Hover highlights by drawing the entity's LocalBounds box, which terrain does not
     // carry — a hovered terrain would put a default 1 m box under the cursor everywhere
     // over the ground. Clicking still selects it; only the preview box is mesh-only.
     options.IncludeTerrain  = false;
     options.IncludeDisabled = revealHidden; // honor reveal-hidden modifier
-    std::vector<Editor::Picking::PickHit> hits;
-    GameEngine::Editor::Picking::RaycastSceneAll(event.ray, *world, hits, options);
+    std::vector<Scene::PickHit> hits;
+    GameEngine::Editor::Picking::PickSceneAll(event.ray, *world, hits, options);
 
     GameEngine::ECS::EntityHandle hoverEntity{};
     for (const auto& hit : hits)
     {
-        // Hidden-via-ancestor filter (RaycastSceneAll already filtered the
+        // Hidden-via-ancestor filter (PickSceneAll already filtered the
         // entity itself when IncludeDisabled is false).
         if (!revealHidden && !GameEngine::ECS::Entity(world, hit.Entity).IsEnabledInHierarchy())
             continue;
@@ -2416,7 +2420,7 @@ bool SceneViewController::DeclarePreviewTargetsRG(
         clear.clearColorValue[2] = static_cast<float>(bg & 0xFFu) / 255.0f;
         clear.clearColorValue[3] = 1.0f;
         clear.clearDepth = true;
-        clear.clearDepthValue = 0.0f;
+        clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
         rs->Views().SetViewClearConfig(m_PreviewViewId, clear);
     }
 
@@ -2445,7 +2449,9 @@ bool SceneViewController::DeclarePreviewTargetsRG(
                       static_cast<unsigned long long>(windowId));
         td.sampleCount = samples;
         td.format = static_cast<uint32_t>(Rendering::TextureFormat::R16G16B16A16_FLOAT);
-        td.usage = static_cast<uint32_t>(Rendering::TextureUsage::RenderTarget);
+        // Sampled: the world pass resolves it with a shader.
+        td.usage = static_cast<uint32_t>(Rendering::TextureUsage::RenderTarget) |
+                   static_cast<uint32_t>(Rendering::TextureUsage::ShaderResource);
         td.debugName = "BookmarkPreview.ColorMsaa";
         msaaColor = frame.ImportPersistentTexture(nameBuf, td);
     }
@@ -4119,7 +4125,7 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
         clear.clearColorValue[3] = 1.0f;
     }
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     rs->Views().SetViewClearConfig(m_ViewId, clear);
 
     // Scene-view-local post-process override — identical to the old arm.
@@ -4304,7 +4310,7 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
     colorDesc.arrayLayers = 1;
     colorDesc.sampleCount = samples;
     colorDesc.format = static_cast<uint32_t>(TextureFormat::R16G16B16A16_FLOAT);
-    // TransferSrc: the presentation snapshot copies whichever colour target is
+    // TransferSrc: the presentation snapshot copies whichever color target is
     // single-sampled — this one when MSAA is off, the resolve (which inherits
     // this desc) when it is on. Pool-backed, so the desc is the only declaration.
     colorDesc.usage = static_cast<uint32_t>(Rendering::TextureUsage::RenderTarget) |

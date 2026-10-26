@@ -2,6 +2,8 @@
 
 #include "Components/SceneEntityTag.h"
 #include "Components/Spline/SplineComponent.h"
+#include "Components/Spline/SplineNetworkMember.h"
+#include "Components/Spline/SplineNetworkOverrides.h"
 #include "Components/Spline/SplineWall.h"
 #include "Components/Transform.h"
 #include "ECS/ComponentFieldRegistry.h"
@@ -20,6 +22,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace GameEngine;
@@ -91,12 +94,12 @@ class SplineSceneSerialization : public testing::Test
         return world.Create(tag, Components::Transform{}, component).GetHandle();
     }
 
-    ECS::EntityHandle Find(ECS::World& world)
+    ECS::EntityHandle Find(ECS::World& world, std::string_view id = "curve")
     {
         ECS::EntityHandle result{};
         world.Query<ECS::Read<Components::SceneEntityTag>>().Each(
             [&](ECS::EntityHandle entity, const Components::SceneEntityTag& tag)
-            { if (tag.View() == "curve") result = entity; });
+            { if (tag.View() == id) result = entity; });
         return result;
     }
 
@@ -343,5 +346,53 @@ TEST_F(SplineSceneSerialization, ServiceHandleWordsAreTransientInReflection)
     EXPECT_TRUE(reflected.ApplyProperty(world, entity, {}, "splinedatageneration",
                                         std::to_string(other.Generation()), &error)) << error;
     EXPECT_TRUE(Stored(world, entity) == handle);
+}
+// The network's saved state is the member kind and the override records; a record's Other is
+// saved as the partner's scene id and names the partner again after the load, whichever
+// handle the load gives it. A slot whose Rule is None stays empty.
+TEST_F(SplineSceneSerialization, NetworkMemberAndOverridesRoundTripWithTheirPartner)
+{
+    ECS::World original;
+    const auto square = original.Create(Components::SceneEntityTag{"square"},
+        Components::SplineNetworkMember{Components::SplineNetworkMemberKind::Area}).GetHandle();
+    Components::SplineNetworkOverrides overrides;
+    overrides.Records[0] = {square, 12.5f, 40.25f, Components::SplineNodeRule::AtGrade};
+    overrides.Records[3] = {square, 0.0f, 7.75f, Components::SplineNodeRule::Attach};
+    original.Create(Components::SceneEntityTag{"lane"},
+        Components::SplineNetworkMember{Components::SplineNetworkMemberKind::Road}, overrides);
+    const auto path = directory / "network.scene";
+    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    const auto saved = Read(path);
+    EXPECT_NE(saved.find("SplineNetworkMember."), std::string::npos) << saved;
+    EXPECT_NE(saved.find("SplineNetworkOverrides."), std::string::npos) << saved;
+
+    ECS::World loaded;
+    loaded.Create(Components::SceneEntityTag{"padding"});
+    ASSERT_TRUE(Load(loaded, path));
+    const auto loadedSquare = Find(loaded, "square");
+    const auto loadedLane = Find(loaded, "lane");
+    ASSERT_TRUE(loadedSquare.IsValid());
+    ASSERT_TRUE(loadedLane.IsValid());
+    ASSERT_NE(loaded.GetComponent<Components::SplineNetworkMember>(loadedSquare), nullptr);
+    EXPECT_EQ(loaded.GetComponent<Components::SplineNetworkMember>(loadedSquare)->Kind,
+              Components::SplineNetworkMemberKind::Area);
+    ASSERT_NE(loaded.GetComponent<Components::SplineNetworkMember>(loadedLane), nullptr);
+    EXPECT_EQ(loaded.GetComponent<Components::SplineNetworkMember>(loadedLane)->Kind,
+              Components::SplineNetworkMemberKind::Road);
+    const auto* records = loaded.GetComponent<Components::SplineNetworkOverrides>(loadedLane);
+    ASSERT_NE(records, nullptr);
+    for (uint32 slot = 0; slot < Components::kMaxSplineNetworkOverrides; ++slot)
+    {
+        const Components::SplineNetworkOverride& record = records->Records[slot];
+        if (slot != 0 && slot != 3)
+        {
+            EXPECT_EQ(record.Rule, Components::SplineNodeRule::None) << slot;
+            continue;
+        }
+        EXPECT_EQ(record.Other, loadedSquare) << slot;
+        EXPECT_EQ(record.ArcLengthMetres, overrides.Records[slot].ArcLengthMetres) << slot;
+        EXPECT_EQ(record.OtherArcLengthMetres, overrides.Records[slot].OtherArcLengthMetres) << slot;
+        EXPECT_EQ(record.Rule, overrides.Records[slot].Rule) << slot;
+    }
 }
 } // namespace

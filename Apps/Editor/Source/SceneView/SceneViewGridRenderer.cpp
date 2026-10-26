@@ -6,6 +6,7 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 
 #include <cstring>
 #include <vector>
@@ -108,7 +109,7 @@ static GraphicsPipelineDesc BuildGridPipelineDesc(const std::vector<uint8_t>& vs
     // OFF so the grid doesn't occlude gizmos drawn after it.
     gd.DepthStencil.depthTestEnable  = true;
     gd.DepthStencil.depthWriteEnable = false;
-    gd.DepthStencil.depthCompareOp   = CompareOp::GreaterOrEqual;
+    gd.DepthStencil.depthCompareOp   = ReverseZ::kNearerOrEqual;
 
     ColorBlendAttachmentState blend{};
     blend.blendEnable = true;

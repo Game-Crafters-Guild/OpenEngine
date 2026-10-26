@@ -4,7 +4,8 @@ project(MarkupECS LANGUAGES CXX)
 
 # World mark-ups: the notes store, the tag vocabulary and the revision beside the
 # Markup components, and a region's outline rules and area (MarkupRegionOutline,
-# MarkupRegionArea, and the boolean its display draws, MarkupRegionBoolean).
+# MarkupRegionArea, and the footprints as rings for the area boolean its display draws,
+# MarkupRegionBoolean, over SplineGeometry's CombineAreas and BuildAreaGround).
 # Editor-authored data; a game export strips the components
 # (Engine/Build/SceneExportStrip.h).
 add_library(MarkupECS OBJECT
@@ -21,9 +22,6 @@ add_library(MarkupECS OBJECT
 
 target_compile_features(MarkupECS PUBLIC cxx_std_20)
 
-# clipper2: the polygon boolean behind CombineRegionArea (MarkupRegionBoolean.cpp only).
-find_package(Clipper2 CONFIG REQUIRED)
-
 target_include_directories(MarkupECS
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/Include
@@ -38,12 +36,12 @@ target_link_libraries(MarkupECS
         Mathematics
         Spline
         SplineECS
+        SplineGeometry
         Types
     PRIVATE
         # MarkupSceneSchema.cpp includes Scene/SceneSchemaRegistry.h, which
         # includes AssetCore headers.
         AssetCore
-        Clipper2::Clipper2
 )
 
 if(BUILD_TESTING)

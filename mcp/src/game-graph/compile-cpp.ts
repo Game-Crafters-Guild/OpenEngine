@@ -201,6 +201,7 @@ export function compileGameGraphCpp(model: GameGraphModel, functionName: string)
     } else if (node.typeId === "StopAllSounds") { lines.push("    ctx.StopAllSounds();"); emitOut("out");
     } else if (node.typeId === "SetBusVolume") { lines.push(`    ctx.SetBusVolume(${valueExpr(node, "bus", "int", "bus")}, ${valueExpr(node, "volume", "float", "volume")});`); emitOut("out");
     } else if (node.typeId === "CreateEntity") { lines.push(`    (void)ctx.CreateEntity(${valueExpr(node, "name", "string", "name")});`); emitOut("out");
+    } else if (node.typeId === "SpawnPrefab") { lines.push(`    (void)ctx.SpawnPrefab(${valueExpr(node, "prefab", "string", "prefab")}, ${valueExpr(node, "position", "float3", "position")}, ${valueExpr(node, "rotation", "float3", "rotation")});`); emitOut("out");
     } else if (node.typeId === "DestroyEntity") { lines.push(`    ctx.DestroyEntity(${entityExpr(node, "entity")});`); emitOut("out");
     } else if (node.typeId === "SetEntityEnabled") { lines.push(`    ctx.SetEntityEnabled(${entityExpr(node, "entity")}, ${valueExpr(node, "enabled", "bool", "enabled")});`); emitOut("out");
     } else if (node.typeId === "SetPosition") { lines.push(`    ctx.SetPosition(${entityExpr(node, "entity")}, ${valueExpr(node, "position", "float3", "position")});`); emitOut("out");

@@ -61,7 +61,6 @@ uint64 ComputeHeightStoreKey(const HeightStoreCookInputs& inputs)
     key = Hashing::Fnv1a64Value(key, inputs.SamplesX);
     key = Hashing::Fnv1a64Value(key, inputs.SamplesZ);
     key = Hashing::Fnv1a64Value(key, static_cast<uint8>(PageFieldFilter::HeightTent));
-    key = Hashing::Fnv1a64Value(key, kHeightStepMax);
     return key;
 }
 
@@ -96,8 +95,9 @@ std::optional<HeightSourceIdentity> ReadHeightSourceMemo(const std::filesystem::
     take(stored.Volume);
     take(stored.Index);
     take(identity.ContentHash);
-    take(identity.MinHeight);
-    take(identity.MaxHeight);
+    take(identity.SamplesX);
+    take(identity.SamplesZ);
+    take(identity.StepExponents);
     if (!read || magic != kSourceMemoMagic || version != kPageStoreFormatVersion || stored != *now)
         return std::nullopt;
     return identity;
@@ -120,7 +120,7 @@ bool WriteHeightSourceMemo(const std::filesystem::path& directory, const GUID& a
     const auto put = [out](const auto& value) { return std::fwrite(&value, sizeof(value), 1, out) == 1; };
     const bool written = put(kSourceMemoMagic) && put(version) && put(now->ModifiedTicks) && put(now->Size) &&
                          put(now->Volume) && put(now->Index) && put(identity.ContentHash) &&
-                         put(identity.MinHeight) && put(identity.MaxHeight);
+                         put(identity.SamplesX) && put(identity.SamplesZ) && put(identity.StepExponents);
     if (std::fclose(out) != 0 || !written)
     {
         std::filesystem::remove(temp, ec);

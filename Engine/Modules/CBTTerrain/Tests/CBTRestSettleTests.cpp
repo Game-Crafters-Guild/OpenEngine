@@ -16,15 +16,20 @@
 // own state across a path when they engage; the poses here converge below the occupancy where either
 // engages (keep step 0, contention 0 under 50% occupancy), which the tests assert, so the rest rule
 // alone is under test.
+//
+// The screen-space edge rule, which decides the planar terrains without a height pyramid, keeps its motion
+// band at rest; the TheEdgeRule tests bind the relief through the atlas source and assert that it goes
+// quiet and that the band holds under a small move.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
-#include <utility>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <optional>
+#include <utility>
 #include <vector>
 
 #include "CBTTerrain/CBTDemandTuning.h"
@@ -66,6 +71,14 @@ constexpr uint32_t kQuietUpdates = 8u;
 // The contention ramp's lower bound (cbt_layout.glsl CBT_NEAR_BIAS_CONTENTION_LO): below it the
 // near-bias is exactly 1.
 constexpr float kContentionFreeOccupancy = 0.50f;
+// The rest updates the edge rule may take to go quiet after a converged motion tree. At rest the edge
+// rule keeps the motion thresholds, so a converged motion tree is already a rest tree; the bound catches
+// a rest rule that keeps changing the tree.
+constexpr uint32_t kEdgeRuleRestUpdates = 24u;
+// A camera that moves 1 cm and back on alternate updates: far inside the motion band of every facet.
+constexpr float kJiggleM = 0.01f;
+constexpr uint32_t kJiggleUpdates = 48u;
+constexpr uint32_t kJiggleCounted = 32u;
 
 struct Pose
 {
@@ -110,6 +123,7 @@ struct Shaping
     bool NearBias = true;               // the near-bias contention ramp
     float KeepOcc = kOffFrustumKeepOcc; // 0 leaves the planar off-frustum field ungated (no keep step)
     uint32_t PoolPressure = 1u;         // 0 holds the pool-pressure scale at 1x
+    bool EdgeRule = false;              // the relief through the atlas source, which keeps the edge rule
 };
 
 void BuildParams(CBTFrameParams& p, const Pose& pose, const Shaping& shaping = {})
@@ -150,6 +164,34 @@ void BuildParams(CBTFrameParams& p, const Pose& pose, const Shaping& shaping = {
     p.DemandTuning[3] = kEdgeRescueOcc;
 }
 
+// The relief a test runs on: the unified height texture, where the planar criterion decides, or with
+// Shaping::EdgeRule the same relief through the atlas source, where the screen-space edge rule decides.
+class ShapedRelief
+{
+  public:
+    ShapedRelief(IDevice& device, CBTInstance& instance, const Shaping& shaping)
+    {
+        if (shaping.EdgeRule)
+            m_Atlas.emplace(device, instance, kReliefDim + 1u);
+        else
+            m_Unified.emplace(device, instance, kHeightScale, kReliefDim);
+    }
+
+    // Whether the relief's height source is bound. Unbound, the lattice is flat.
+    bool IsArmed() const { return m_Atlas ? m_Atlas->IsArmed() : m_Unified && m_Unified->IsArmed(); }
+
+    // Writes the atlas geometry into `p` when the relief comes through the atlas.
+    void Apply(CBTFrameParams& p) const
+    {
+        if (m_Atlas)
+            m_Atlas->Apply(p);
+    }
+
+  private:
+    std::optional<ReliefHeightSource> m_Unified;
+    std::optional<ReliefAtlasSource> m_Atlas;
+};
+
 // A motion stage then a rest stage at one pose: the live count the motion converged to, the lowest live
 // count any rest update left, and whether the last kQuietUpdates rest updates split and merged nothing.
 struct RestTrace
@@ -157,6 +199,7 @@ struct RestTrace
     uint32_t MotionLive = 0;
     uint32_t RestLiveMin = 0;
     uint32_t RestLiveEnd = 0;
+    uint32_t RestUpdatesChanging = 0; // the rest updates up to the last one that split or merged anything
     bool Quiet = false;
 };
 
@@ -273,10 +316,12 @@ class CBTRestSettle : public ::testing::Test
         CBTInstance inst;
         EXPECT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
         EXPECT_TRUE(inst.InitializeRoots(kDomainPlanar));
-        ReliefHeightSource relief(*m_Device, inst, kHeightScale, kReliefDim);
+        const ShapedRelief relief(*m_Device, inst, shaping);
+        EXPECT_TRUE(relief.IsArmed()) << "the relief bound no height source, so the lattice is flat";
         CBTClassifyDesc c = ScreenClassify(shaping);
         CBTFrameParams p;
         BuildParams(p, pose, shaping);
+        relief.Apply(p);
         c.Settle = 0u;
         for (uint32_t i = 0; i < kStageUpdates; ++i)
             RunUpdate(inst, c, p);
@@ -291,12 +336,49 @@ class CBTRestSettle : public ::testing::Test
             const CBTTessellationStats s = inst.ReadTessellationStats();
             t.RestLiveMin = std::min(t.RestLiveMin, s.LiveCount);
             t.RestLiveEnd = s.LiveCount;
-            quiet = (s.SplitServed == 0 && s.MergeServed == 0) ? quiet + 1u : 0u;
+            const bool changed = s.SplitServed != 0 || s.MergeServed != 0;
+            quiet = changed ? 0u : quiet + 1u;
+            t.RestUpdatesChanging = changed ? i + 1u : t.RestUpdatesChanging;
         }
         t.Quiet = quiet >= kQuietUpdates;
         EXPECT_EQ(inst.ReadValidationErrorCount(), 0u) << "the rest tree must be conforming";
         inst.Shutdown();
         return t;
+    }
+
+    // Converges the motion tree at `pose`, then moves the eye kJiggleM to one side and back on alternate
+    // updates, every update with moving inputs (Settle 0). Returns the splits and merges served over the
+    // last kJiggleCounted updates.
+    uint64_t JiggleServed(const Pose& pose, const Shaping& shaping)
+    {
+        CBTInstance inst;
+        EXPECT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
+        EXPECT_TRUE(inst.InitializeRoots(kDomainPlanar));
+        const ShapedRelief relief(*m_Device, inst, shaping);
+        EXPECT_TRUE(relief.IsArmed()) << "the relief bound no height source, so the lattice is flat";
+        CBTClassifyDesc c = ScreenClassify(shaping);
+        CBTFrameParams here;
+        CBTFrameParams there;
+        Pose moved = pose;
+        moved.EyeX += kJiggleM;
+        BuildParams(here, pose, shaping);
+        BuildParams(there, moved, shaping);
+        relief.Apply(here);
+        relief.Apply(there);
+        c.Settle = 0u;
+        for (uint32_t i = 0; i < kStageUpdates; ++i)
+            RunUpdate(inst, c, here);
+        uint64_t served = 0;
+        for (uint32_t i = 0; i < kJiggleUpdates; ++i)
+        {
+            RunUpdate(inst, c, (i & 1u) == 0u ? there : here);
+            const CBTTessellationStats s = inst.ReadTessellationStats();
+            if (i + kJiggleCounted >= kJiggleUpdates)
+                served += static_cast<uint64_t>(s.SplitServed) + static_cast<uint64_t>(s.MergeServed);
+        }
+        EXPECT_EQ(inst.ReadValidationErrorCount(), 0u) << "the tree must be conforming";
+        inst.Shutdown();
+        return served;
     }
 
     std::unique_ptr<IDevice> m_Device;
@@ -482,4 +564,39 @@ TEST_F(CBTRestSettle, AContendedPoolGoesQuietAtRest)
     ASSERT_GT(occupancy, kContentionFreeOccupancy) << "the rest tree must sit on the contention ramp";
     ASSERT_LT(occupancy, 0.90f) << "the rest tree must sit under the contention ramp's top";
     EXPECT_TRUE(t.Quiet) << "the tree must stop changing at rest";
+}
+
+// #4823: the screen-space edge rule (here the atlas source) comes to rest at a still camera within a bounded
+// number of updates. Its near-field merge measures the child's own edge, so one threshold for the split and
+// the merge would flip the facets that straddle it.
+TEST_F(CBTRestSettle, TheEdgeRuleSettlesAtRest)
+{
+    Shaping edge;
+    edge.EdgeRule = true;
+    for (const Arrival& a : kArrivals)
+    {
+        SCOPED_TRACE(a.Label);
+        const RestTrace t = MotionThenRest(a.Rest, edge);
+        std::printf("[edge-rest:%s] motion live %u, rest minimum %u, rest end %u, rest updates changing %u, quiet %d\n",
+                    a.Label, t.MotionLive, t.RestLiveMin, t.RestLiveEnd, t.RestUpdatesChanging, t.Quiet ? 1 : 0);
+        ASSERT_GT(t.MotionLive, 10000u) << "the pose barely refined; the test would prove nothing";
+        EXPECT_TRUE(t.Quiet) << "the tree must stop changing at rest";
+        EXPECT_LE(t.RestUpdatesChanging, kEdgeRuleRestUpdates) << "the rest must settle within a bound";
+    }
+}
+
+// The edge rule's motion band: while the camera moves, a facet splits well above the threshold its
+// children merge below, so a camera that moves a centimeter and back does not split and merge the same
+// facets on every update. The walk pose holds the near field under the eye, where the split and the merge
+// measure different edges. (At the overview a centimeter moves a few facets across the eye plane, from the
+// near-field rule to the screen-space rule and back, which splits and merges them whatever the band.)
+TEST_F(CBTRestSettle, TheEdgeRuleDoesNotChurnUnderASmallMove)
+{
+    Shaping edge;
+    edge.EdgeRule = true;
+    const Arrival& walk = kArrivals[1];
+    const uint64_t served = JiggleServed(walk.Rest, edge);
+    std::printf("[edge-jiggle:%s] splits and merges served over the last %u updates: %llu\n", walk.Label,
+                kJiggleCounted, static_cast<unsigned long long>(served));
+    EXPECT_EQ(served, 0u) << "a centimeter of camera motion must not churn the mesh";
 }

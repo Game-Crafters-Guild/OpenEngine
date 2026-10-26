@@ -25,6 +25,7 @@
 #include "Engine/Rendering/SkyEnvironmentSource.h"
 #include "Engine/Rendering/IrradianceReadbackFeature.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
+#include "Mathematics/Vector3.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
@@ -48,6 +49,7 @@ using Engine::Renderer::RenderServices;
 using Engine::Renderer::SkyEnvironmentSource;
 using Engine::Renderer::IrradianceReadbackFeature;
 using Engine::Renderer::SkyRenderFeature;
+using Mathematics::Vector3;
 
 namespace
 {
@@ -66,7 +68,7 @@ struct FramePools
 
 float ExpectedLux(const float linearRgb[3])
 {
-    return std::numbers::pi_v<float> * ColorUtils::LinearRec709Luminance(linearRgb) *
+    return std::numbers::pi_v<float> * ColorUtils::LinearRec709Luminance({linearRgb[0], linearRgb[1], linearRgb[2]}) *
            Components::kReferenceWhiteNits;
 }
 
@@ -189,6 +191,13 @@ class IrradianceReadbackTest : public ::testing::Test
     std::unique_ptr<FramePools> m_Pools;
     std::unique_ptr<RenderGraph::RGFrame> m_Frame;
 };
+
+void ExpectSameVector(const Vector3& actual, const Vector3& expected, const char* field)
+{
+    EXPECT_EQ(actual.x, expected.x) << field;
+    EXPECT_EQ(actual.y, expected.y) << field;
+    EXPECT_EQ(actual.z, expected.z) << field;
+}
 } // namespace
 
 TEST_F(IrradianceReadbackTest, ACopyLandsInLuxAndMovesWithTheNextBake)
@@ -403,4 +412,31 @@ TEST_F(IrradianceReadbackTest, AReflectionProbeCopiesTheRestingCubeOnce)
     EXPECT_TRUE(declaresCopy(0)) << "a readback that arrives between bakes must get a reading";
     for (uint64_t i = 1; i < 4; ++i)
         EXPECT_FALSE(declaresCopy(i)) << "frame " << i << ": the resting cube is copied once";
+}
+
+// A box probe hands the image-based lighting its position, box center, half-extents and each
+// box axis in that vector's own field, so the shader's box projection uses the probe's own frame.
+// A cyclic turn of the axes, so no axis keeps its default.
+TEST_F(IrradianceReadbackTest, AReflectionProbeHandsEachBoxVectorToItsOwnLocalReflectionField)
+{
+    Engine::Renderer::SceneReflectionProbeEnvironmentSource probe(*m_Services);
+    Engine::Renderer::SceneReflectionProbeEnvironmentDesc desc{};
+    desc.SourceKey = 1;
+    desc.BoxProjection = true;
+    desc.Position = Vector3(1.0f, 2.0f, 3.0f);
+    desc.BoxCenter = Vector3(4.0f, 5.0f, 6.0f);
+    desc.BoxHalfExtents = Vector3(7.0f, 8.0f, 9.0f);
+    desc.BoxAxisX = Vector3(0.0f, 1.0f, 0.0f);
+    desc.BoxAxisY = Vector3(0.0f, 0.0f, 1.0f);
+    desc.BoxAxisZ = Vector3(1.0f, 0.0f, 0.0f);
+    probe.SetProbe(desc);
+
+    const Engine::Renderer::EnvironmentLocalReflectionData local = probe.LocalReflectionData();
+    ASSERT_TRUE(local.BoxProjection);
+    ExpectSameVector(local.ProbePositionWS, desc.Position, "ProbePositionWS");
+    ExpectSameVector(local.BoxCenterWS, desc.BoxCenter, "BoxCenterWS");
+    ExpectSameVector(local.BoxHalfExtentsWS, desc.BoxHalfExtents, "BoxHalfExtentsWS");
+    ExpectSameVector(local.BoxAxisXWS, desc.BoxAxisX, "BoxAxisXWS");
+    ExpectSameVector(local.BoxAxisYWS, desc.BoxAxisY, "BoxAxisYWS");
+    ExpectSameVector(local.BoxAxisZWS, desc.BoxAxisZ, "BoxAxisZWS");
 }

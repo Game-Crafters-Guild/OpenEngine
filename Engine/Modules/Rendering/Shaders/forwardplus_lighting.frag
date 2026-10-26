@@ -54,6 +54,7 @@ layout(set = 0, binding = 5, std140) uniform ViewParamsBlock
 // frame's pre-exposure P.
 #define GE_EXPOSURE_HISTORY_BINDING 6
 #include "Includes/exposure_history.glsl"
+#include "Includes/reverse_z.glsl"
 
 float Saturate(float x) { return clamp(x, 0.0, 1.0); }
 
@@ -95,8 +96,7 @@ void main()
     vec3 nV = normalize(cross(dFdx(posV), dFdy(posV)));
 #endif
 
-    // Reverse-Z: empty/sky pixels are at depth == 0.0.
-    if (depth <= 0.000001)
+    if (IsBackgroundDepth(depth))
     {
         oColor = vec4(0.0);
         return;

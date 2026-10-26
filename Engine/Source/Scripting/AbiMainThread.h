@@ -1,7 +1,6 @@
 #pragma once
 
-// AbiMainThread.h - The scripting ABI's two thread predicates: which threads an export that reads
-// frame-thread state admits.
+// AbiMainThread.h - The thread predicates: which threads may read or write frame-thread state.
 
 #include "Core/Engine.h"
 #include "JobSystem/WorkStealingThreadPool.h"
@@ -33,6 +32,13 @@ inline bool OnEngineThreadFor(const EngineCore& engine)
     return NoFrameLoopFor(engine) || engine.IsMainThread() || JobSystem::WorkStealingThreadPool::IsExecutingJob();
 }
 
+/// The main thread outside any job body. A job body answers false, also when the main thread runs it
+/// while it waits. Read by the prefab spawn and the prefab library's writes.
+inline bool IsMainThreadOutsideJobFor(const EngineCore& engine)
+{
+    return engine.IsMainThread() && !JobSystem::WorkStealingThreadPool::IsExecutingJob();
+}
+
 /**
  * @brief May this thread mutate frame-thread state now: the main thread outside any job body.
  *
@@ -42,7 +48,7 @@ inline bool OnEngineThreadFor(const EngineCore& engine)
  */
 inline bool OnEngineMainThreadFor(const EngineCore& engine)
 {
-    return NoFrameLoopFor(engine) || (engine.IsMainThread() && !JobSystem::WorkStealingThreadPool::IsExecutingJob());
+    return NoFrameLoopFor(engine) || IsMainThreadOutsideJobFor(engine);
 }
 
 /// OnEngineMainThread for the engine instance this process binds; a function, so it can be a predicate pointer

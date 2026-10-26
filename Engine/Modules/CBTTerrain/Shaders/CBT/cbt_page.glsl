@@ -1,6 +1,7 @@
 // cbt_page.glsl: the paged height resolve. A terrain's height field is a pyramid of 128-sample
 // pages (130 with the apron) held in one physical cache texture; a page table maps each page of
-// every level to the cache slot holding it. The resolve samples level L = floor(lambda) and blends
+// every level to the cache slot holding it, dense, or tiered past the dense budget (CBT_PageTableEntry,
+// the walk of TerrainECS PageTable). The resolve samples level L = floor(lambda) and blends
 // toward its parent over the last quarter of the level's ring; a level whose page is not resident
 // resolves to its first resident ancestor alone (the fallback walk), and a page that has just
 // arrived fades in from its parent.
@@ -13,7 +14,7 @@
 //
 // Pure math, no bindings. The consumer defines the four taps declared below, after including this
 // file (GLSL resolves a prototype at link):
-//   uint CBT_PageTableEntry(uint index);       // the table's entry `index` (level-major, row-major)
+//   uint CBT_PageTableWord(uint index);        // word `index` of the table's words (PageTable::Words)
 //   float CBT_PageSlotFade(uint slot);         // the arrival fade of a slot: 0 just assigned, 1 settled
 //   CBTPageLevel CBT_PageLevelShape(uint level);
 //   float CBT_PageCacheBilinear(float texelX, float texelZ);
@@ -33,13 +34,18 @@ struct CBTPageLevel
     uint Pad;
 };
 
-// The field a resolve reads (mirror PageTable's level-0 shape and PageCacheGeometry).
+// The field a resolve reads (mirror PageTable's level-0 shape and tiers, and PageCacheGeometry).
+// std430, 32 B.
 struct CBTPageField
 {
     uint Level0SamplesX;
     uint Level0SamplesZ;
     uint LevelCount;  // 0: no field, the resolve answers 0
     uint SlotsPerRow; // the cache texture's slots per row (square-packed)
+    uint FloorLevel;  // the finest dense level: 0 for a dense table
+    uint TierCount;   // the tiers of blocks below the floor
+    uint DirectoryOffset; // the floor's directory: one block index per floor page
+    uint Pad;
 };
 
 // A level's sample and the resident level that answered it.
@@ -51,7 +57,7 @@ struct CBTPageLevelSample
 // GE_SHARED_PAGE_TYPES_END
 
 // The consumer's taps (see the header).
-uint CBT_PageTableEntry(uint index);
+uint CBT_PageTableWord(uint index);
 float CBT_PageSlotFade(uint slot);
 CBTPageLevel CBT_PageLevelShape(uint level);
 float CBT_PageCacheBilinear(float texelX, float texelZ);
@@ -70,6 +76,9 @@ const uint CBT_PAGE_SLOT_MASK = 0x00FFFFFFu;
 const uint CBT_PAGE_OWNED = 128u;
 const uint CBT_PAGE_APRON = 1u;
 const uint CBT_PAGE_STRIDE = 130u;
+// Mirror kNoPageBlock, kPageTableTierWords in TerrainECS PageTable.cpp.
+const uint CBT_PAGE_NO_BLOCK = 0xFFFFFFFFu;
+const uint CBT_PAGE_TIER_WORDS = 4u;
 
 // Mirror PageParentBlend: 0 over the first three quarters of a level's ring, a linear ramp to 1
 // over the last quarter.
@@ -92,13 +101,57 @@ uint CBT_PageIndex(float c, uint pages)
     return min(uint(c) / CBT_PAGE_OWNED, pages - 1u);
 }
 
+// The first word of level k below a block's root (k from 1): 4 + 16 + ... + 4^(k-1).
+uint CBT_PageBlockLevelOffset(uint k)
+{
+    return ((1u << (2u * k)) - 4u) / 3u;
+}
+
+// The entry of page (pageX, pageZ) of `level` (mirror PageTable::Entry). A dense level is one read.
+// Below the floor: the floor's directory names the block of the page's floor ancestor, each tier's
+// block holds the page's entry when its level is in the block, else the directory word naming the
+// next tier's block. A directory word of CBT_PAGE_NO_BLOCK means no page under it is resident.
+uint CBT_PageTableEntry(uint level, uint pageX, uint pageZ, CBTPageField field)
+{
+    CBTPageLevel shape = CBT_PageLevelShape(level);
+    if (level >= field.FloorLevel)
+        return CBT_PageTableWord(shape.FirstEntry + pageZ * shape.PagesX + pageX);
+    uint shift = field.FloorLevel - level;
+    uint rootX = pageX >> shift;
+    uint rootZ = pageZ >> shift;
+    uint block = CBT_PageTableWord(field.DirectoryOffset + rootZ * CBT_PageLevelShape(field.FloorLevel).PagesX + rootX);
+    for (uint tier = 0u; tier < field.TierCount; ++tier)
+    {
+        if (block == CBT_PAGE_NO_BLOCK)
+            return CBT_PAGE_NO_PAGE;
+        uint rootLevel = CBT_PageTableWord(tier * CBT_PAGE_TIER_WORDS);
+        uint levels = CBT_PageTableWord(tier * CBT_PAGE_TIER_WORDS + 1u);
+        uint base = CBT_PageTableWord(tier * CBT_PAGE_TIER_WORDS + 3u) +
+                    block * CBT_PageTableWord(tier * CBT_PAGE_TIER_WORDS + 2u);
+        uint deepest = rootLevel - levels;
+        if (level >= deepest)
+        {
+            uint k = rootLevel - level;
+            return CBT_PageTableWord(base + CBT_PageBlockLevelOffset(k) + (pageZ - (rootZ << k)) * (1u << k) +
+                                     (pageX - (rootX << k)));
+        }
+        uint childX = pageX >> (deepest - level);
+        uint childZ = pageZ >> (deepest - level);
+        block = CBT_PageTableWord(base + CBT_PageBlockLevelOffset(levels + 1u) +
+                                  (childZ - (rootZ << levels)) * (1u << levels) + (childX - (rootX << levels)));
+        rootX = childX;
+        rootZ = childZ;
+    }
+    return CBT_PAGE_NO_PAGE;
+}
+
 // The table entry of the page of `level` holding terrain UV (u, v).
 uint CBT_PageEntryAt(float u, float v, uint level, CBTPageField field)
 {
     CBTPageLevel shape = CBT_PageLevelShape(level);
     uint pageX = CBT_PageIndex(CBT_PageLattice(u, field.Level0SamplesX, level), shape.PagesX);
     uint pageZ = CBT_PageIndex(CBT_PageLattice(v, field.Level0SamplesZ, level), shape.PagesZ);
-    return CBT_PageTableEntry(shape.FirstEntry + pageZ * shape.PagesX + pageX);
+    return CBT_PageTableEntry(level, pageX, pageZ, field);
 }
 
 // Level `level` at (u, v) from the page in `slot`: bilinear at the lattice coordinate inside the

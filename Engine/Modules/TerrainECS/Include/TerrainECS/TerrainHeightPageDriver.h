@@ -14,6 +14,11 @@ namespace GameEngine::Rendering
 class IDevice;
 }
 
+namespace GameEngine::PageStreaming
+{
+struct GeneratedHeightLattice;
+}
+
 namespace GameEngine::TerrainECS
 {
 
@@ -23,6 +28,13 @@ class TerrainHeightPageFeature;
 struct TiledTerrainData;
 struct TiledRenderExtent;
 struct TerrainHandle;
+
+/// The generated height lattice of a noise or flat tiled terrain: its tile grid and the tile fill's
+/// noise. The height pages and the surface pages read it.
+PageStreaming::GeneratedHeightLattice MakeGeneratedHeightLattice(const TiledTerrainData& tiled);
+
+/// The identity of a generated height lattice: equal for two lattices that make the same pages.
+uint64 GeneratedHeightIdentity(const PageStreaming::GeneratedHeightLattice& lattice);
 
 /// The height-source inputs of a tiled terrain and its page requests for `cameras` this frame: its
 /// CPU pages whenever TerrainHeightHasCpuPages says so, and its GPU pages too when

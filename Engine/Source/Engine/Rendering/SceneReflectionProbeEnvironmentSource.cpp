@@ -22,6 +22,7 @@
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Core/SpecializationConstants.h"
 
 #include <algorithm>
@@ -56,11 +57,11 @@ static_assert(SceneProbeRecaptureSchedule::kPipelineRestFrames ==
 
 struct ProbeCubeFaceBasis
 {
-    float up[3];
-    float forward[3];
+    Mathematics::Vector3 up;
+    Mathematics::Vector3 forward;
 };
 
-constexpr ProbeCubeFaceBasis kProbeCaptureFaces[ImageBasedLightingFeature::kNumCaptureFaces] = {
+const ProbeCubeFaceBasis kProbeCaptureFaces[ImageBasedLightingFeature::kNumCaptureFaces] = {
     {{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
     {{0.0f, 1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}},
     {{0.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
@@ -200,7 +201,7 @@ void SceneReflectionProbeEnvironmentSource::ScheduleCulling(const FeatureCulling
     Vector3 origin{};
     {
         const auto originSector =
-            ComputeRenderOriginSector(m_Desc.Position[0], m_Desc.Position[1], m_Desc.Position[2]);
+            ComputeRenderOriginSector(m_Desc.Position.x, m_Desc.Position.y, m_Desc.Position.z);
         SectorToWorld(originSector, origin.x, origin.y, origin.z);
     }
 
@@ -256,14 +257,14 @@ uint64_t SceneReflectionProbeEnvironmentSource::BaseDigest() const
     HashBytes(h, kTag, sizeof(kTag) - 1);
     HashBytes(h, &m_Desc.SourceKey, sizeof(m_Desc.SourceKey));
     HashBytes(h, &m_Desc.WorldId, sizeof(m_Desc.WorldId));
-    HashBytes(h, m_Desc.Position, sizeof(m_Desc.Position));
+    HashBytes(h, &m_Desc.Position, sizeof(m_Desc.Position));
     HashBytes(h, &m_Desc.InfluenceRadius, sizeof(m_Desc.InfluenceRadius));
     HashBytes(h, &m_Desc.BoxProjection, sizeof(m_Desc.BoxProjection));
-    HashBytes(h, m_Desc.BoxCenter, sizeof(m_Desc.BoxCenter));
-    HashBytes(h, m_Desc.BoxHalfExtents, sizeof(m_Desc.BoxHalfExtents));
-    HashBytes(h, m_Desc.BoxAxisX, sizeof(m_Desc.BoxAxisX));
-    HashBytes(h, m_Desc.BoxAxisY, sizeof(m_Desc.BoxAxisY));
-    HashBytes(h, m_Desc.BoxAxisZ, sizeof(m_Desc.BoxAxisZ));
+    HashBytes(h, &m_Desc.BoxCenter, sizeof(m_Desc.BoxCenter));
+    HashBytes(h, &m_Desc.BoxHalfExtents, sizeof(m_Desc.BoxHalfExtents));
+    HashBytes(h, &m_Desc.BoxAxisX, sizeof(m_Desc.BoxAxisX));
+    HashBytes(h, &m_Desc.BoxAxisY, sizeof(m_Desc.BoxAxisY));
+    HashBytes(h, &m_Desc.BoxAxisZ, sizeof(m_Desc.BoxAxisZ));
     HashBytes(h, &m_Desc.MaxDistance, sizeof(m_Desc.MaxDistance));
     HashBytes(h, &m_Desc.CapturedLayers.Bits, sizeof(m_Desc.CapturedLayers.Bits));
     HashBytes(h, &m_Desc.ExposureEV, sizeof(m_Desc.ExposureEV));
@@ -364,19 +365,19 @@ EnvironmentLocalReflectionData SceneReflectionProbeEnvironmentSource::LocalRefle
 {
     EnvironmentLocalReflectionData data{};
     const bool validBox = m_Desc.BoxProjection &&
-                          m_Desc.BoxHalfExtents[0] > 0.0001f &&
-                          m_Desc.BoxHalfExtents[1] > 0.0001f &&
-                          m_Desc.BoxHalfExtents[2] > 0.0001f;
+                          m_Desc.BoxHalfExtents.x > 0.0001f &&
+                          m_Desc.BoxHalfExtents.y > 0.0001f &&
+                          m_Desc.BoxHalfExtents.z > 0.0001f;
     if (!validBox)
         return data;
 
     data.BoxProjection = true;
-    std::memcpy(data.ProbePositionWS, m_Desc.Position, sizeof(data.ProbePositionWS));
-    std::memcpy(data.BoxCenterWS, m_Desc.BoxCenter, sizeof(data.BoxCenterWS));
-    std::memcpy(data.BoxHalfExtentsWS, m_Desc.BoxHalfExtents, sizeof(data.BoxHalfExtentsWS));
-    std::memcpy(data.BoxAxisXWS, m_Desc.BoxAxisX, sizeof(data.BoxAxisXWS));
-    std::memcpy(data.BoxAxisYWS, m_Desc.BoxAxisY, sizeof(data.BoxAxisYWS));
-    std::memcpy(data.BoxAxisZWS, m_Desc.BoxAxisZ, sizeof(data.BoxAxisZWS));
+    data.ProbePositionWS = m_Desc.Position;
+    data.BoxCenterWS = m_Desc.BoxCenter;
+    data.BoxHalfExtentsWS = m_Desc.BoxHalfExtents;
+    data.BoxAxisXWS = m_Desc.BoxAxisX;
+    data.BoxAxisYWS = m_Desc.BoxAxisY;
+    data.BoxAxisZWS = m_Desc.BoxAxisZ;
     return data;
 }
 
@@ -449,26 +450,18 @@ CameraData SceneReflectionProbeEnvironmentSource::MakeFaceCamera(uint32_t face) 
     using GameEngine::Mathematics::Vector3;
 
     const ProbeCubeFaceBasis& basis = kProbeCaptureFaces[face % ImageBasedLightingFeature::kNumCaptureFaces];
-    const Vector3 eye(m_Desc.Position[0], m_Desc.Position[1], m_Desc.Position[2]);
-    const Vector3 forward(basis.forward[0], basis.forward[1], basis.forward[2]);
-    const Vector3 up(basis.up[0], basis.up[1], basis.up[2]);
-    const Vector3 target(eye.x + forward.x, eye.y + forward.y, eye.z + forward.z);
-    const Matrix4x4 view = MakeLookAtLH(eye, target, up);
+    const Vector3& eye = m_Desc.Position;
+    const Vector3 target = eye + basis.forward;
+    const Matrix4x4 view = MakeLookAtLH(eye, target, basis.up);
     float fallbackFar = m_Desc.InfluenceRadius;
     if (m_Desc.BoxProjection)
     {
-        const float rel[3] = {
-            m_Desc.Position[0] - m_Desc.BoxCenter[0],
-            m_Desc.Position[1] - m_Desc.BoxCenter[1],
-            m_Desc.Position[2] - m_Desc.BoxCenter[2]};
-        const float local[3] = {
-            rel[0] * m_Desc.BoxAxisX[0] + rel[1] * m_Desc.BoxAxisX[1] + rel[2] * m_Desc.BoxAxisX[2],
-            rel[0] * m_Desc.BoxAxisY[0] + rel[1] * m_Desc.BoxAxisY[1] + rel[2] * m_Desc.BoxAxisY[2],
-            rel[0] * m_Desc.BoxAxisZ[0] + rel[1] * m_Desc.BoxAxisZ[1] + rel[2] * m_Desc.BoxAxisZ[2]};
-        const float dx = m_Desc.BoxHalfExtents[0] + std::fabs(local[0]);
-        const float dy = m_Desc.BoxHalfExtents[1] + std::fabs(local[1]);
-        const float dz = m_Desc.BoxHalfExtents[2] + std::fabs(local[2]);
-        fallbackFar = std::max(fallbackFar, std::sqrt(dx * dx + dy * dy + dz * dz));
+        const Vector3 rel = m_Desc.Position - m_Desc.BoxCenter;
+        const Vector3 local(Vector3::Dot(rel, m_Desc.BoxAxisX), Vector3::Dot(rel, m_Desc.BoxAxisY),
+                            Vector3::Dot(rel, m_Desc.BoxAxisZ));
+        const Vector3 reach(m_Desc.BoxHalfExtents.x + std::fabs(local.x), m_Desc.BoxHalfExtents.y + std::fabs(local.y),
+                            m_Desc.BoxHalfExtents.z + std::fabs(local.z));
+        fallbackFar = std::max(fallbackFar, std::sqrt(reach.LengthSquared()));
     }
     const float requestedFar = m_Desc.MaxDistance > 0.0f ? m_Desc.MaxDistance : fallbackFar;
     const float farZ = std::max(requestedFar, 1.0f);
@@ -633,7 +626,7 @@ bool SceneReflectionProbeEnvironmentSource::DeclareFaceCapture(
     clear.clearColorValue[2] = 0.0f;
     clear.clearColorValue[3] = 1.0f;
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     m_Services->Views().SetViewClearConfig(m_ViewId, clear);
 
     TextureDesc depthDesc{};

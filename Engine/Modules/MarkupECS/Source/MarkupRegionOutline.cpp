@@ -1,7 +1,6 @@
 #include "MarkupECS/MarkupRegionOutline.h"
 
 #include "Mathematics/Geometry.h"
-#include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector3.h"
 #include "Spline/SplineUtility.h"
 
@@ -13,6 +12,7 @@
 namespace GameEngine::MarkupECS
 {
 
+using Mathematics::DistanceToSegment;
 using Mathematics::Vector2;
 
 namespace
@@ -32,18 +32,6 @@ constexpr float32 kLabelPrecision = 0.5f;
 constexpr int kMaxLabelCells = 100000;
 // The Douglas-Peucker tolerance an agent's ring starts from, in meters.
 constexpr float32 kRingTolerance = 0.1f;
-
-float32 DistanceToSegment(const Vector2& p, const Vector2& a, const Vector2& b)
-{
-    const float32 abx = b.x - a.x;
-    const float32 aby = b.y - a.y;
-    const float32 lengthSquared = abx * abx + aby * aby;
-    float32 t = lengthSquared > 0.0f ? ((p.x - a.x) * abx + (p.y - a.y) * aby) / lengthSquared : 0.0f;
-    t = Math::Clamp01(t);
-    const float32 dx = p.x - (a.x + abx * t);
-    const float32 dy = p.y - (a.y + aby * t);
-    return std::sqrt(dx * dx + dy * dy);
-}
 
 float32 DistanceToRing(const Vector2& p, std::span<const Vector2> ring)
 {

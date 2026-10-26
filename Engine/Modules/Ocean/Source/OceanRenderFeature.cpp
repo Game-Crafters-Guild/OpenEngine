@@ -1361,7 +1361,7 @@ void OceanRenderFeature::ForgetSimulationClaimsBefore(uint32 frameIndex)
     constexpr uint32 kNoClaim = 0xFFFFFFFFu;
     for (uint32* claim : {&m_LastFFTDispatchFrame, &m_LastSeabedDispatchFrame, &m_LastFlowDispatchFrame,
                           &m_LastWaveMaskDispatchFrame, &m_LastFoamDispatchFrame, &m_LastClipDispatchFrame,
-                          &m_LastAlbedoDispatchFrame, &m_LastReflectionDispatchFrame,
+                          &m_LastAlbedoDispatchFrame,
                           &m_LastCombineDispatchFrame})
     {
         if (*claim != frameIndex)

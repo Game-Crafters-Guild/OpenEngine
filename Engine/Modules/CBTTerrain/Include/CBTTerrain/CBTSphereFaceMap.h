@@ -35,8 +35,10 @@
 #include <cmath>
 #include <cstdint>
 
-#include "CBTTerrain/CBTSphereRoots.h" // kCubeFaces, kCubeFaceCount, CBTCubeCorner
+#include "CBTTerrain/CBTSphereRoots.h" // kCubeFaceCount
+#include "Mathematics/CubeFaces.h"
 #include "Mathematics/Interpolation.h"
+#include "Mathematics/Vector3.h"
 
 namespace GameEngine::CBTTerrain
 {
@@ -73,39 +75,31 @@ struct SphereEditRegions
 
 namespace Detail
 {
-// Float cube corner (components in {-1,+1}) for kCubeFaces index `cornerIdx`.
-inline std::array<float, 3> CubeCornerF(int cornerIdx)
-{
-    return {(cornerIdx & 1) ? 1.0f : -1.0f, (cornerIdx & 2) ? 1.0f : -1.0f,
-            (cornerIdx & 4) ? 1.0f : -1.0f};
-}
-
 // The four CCW-from-outside corners of face `f`, as float vec3, from the SAME face
 // table the GPU decodes geometry from (kCubeFaces). Q0 is the UV origin, (Q1-Q0) the
 // U axis, (Q3-Q0) the V axis — an axis-aligned square, so the parametrization is exact
 // affine (u,v in [0,1] on the face).
-inline void FaceCorners(uint32_t f, std::array<float, 3>& q0, std::array<float, 3>& q1,
-                        std::array<float, 3>& q3)
+inline void FaceCorners(uint32_t f, Mathematics::Vector3& q0, Mathematics::Vector3& q1, Mathematics::Vector3& q3)
 {
-    q0 = CubeCornerF(kCubeFaces[f * 4u + 0u]);
-    q1 = CubeCornerF(kCubeFaces[f * 4u + 1u]);
-    q3 = CubeCornerF(kCubeFaces[f * 4u + 3u]);
+    q0 = Mathematics::Vector3(Mathematics::CubeCorner(Mathematics::kCubeFaces[f * 4u + 0u]));
+    q1 = Mathematics::Vector3(Mathematics::CubeCorner(Mathematics::kCubeFaces[f * 4u + 1u]));
+    q3 = Mathematics::Vector3(Mathematics::CubeCorner(Mathematics::kCubeFaces[f * 4u + 3u]));
 }
 
 // A cube-plane point `p` (already on face f's plane, i.e. p[axis] == +/-1) -> face-local
 // UV via the exact affine face parametrization. Shared by the dominant-face map and the
 // project-onto-any-face classifier so both use one convention.
-inline void CubePosToFaceUV(uint32_t f, const float p[3], float& u, float& v)
+inline void CubePosToFaceUV(uint32_t f, const Mathematics::Vector3& p, float& u, float& v)
 {
-    std::array<float, 3> q0, q1, q3;
+    Mathematics::Vector3 q0, q1, q3;
     FaceCorners(f, q0, q1, q3);
-    const float du[3] = {q1[0] - q0[0], q1[1] - q0[1], q1[2] - q0[2]};
-    const float dv[3] = {q3[0] - q0[0], q3[1] - q0[1], q3[2] - q0[2]};
-    const float rel[3] = {p[0] - q0[0], p[1] - q0[1], p[2] - q0[2]};
-    const float uu = du[0] * du[0] + du[1] * du[1] + du[2] * du[2];
-    const float vv = dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2];
-    u = uu > 0.0f ? (rel[0] * du[0] + rel[1] * du[1] + rel[2] * du[2]) / uu : 0.0f;
-    v = vv > 0.0f ? (rel[0] * dv[0] + rel[1] * dv[1] + rel[2] * dv[2]) / vv : 0.0f;
+    const Mathematics::Vector3 du = q1 - q0;
+    const Mathematics::Vector3 dv = q3 - q0;
+    const Mathematics::Vector3 rel = p - q0;
+    const float uu = Mathematics::Vector3::Dot(du, du);
+    const float vv = Mathematics::Vector3::Dot(dv, dv);
+    u = uu > 0.0f ? Mathematics::Vector3::Dot(rel, du) / uu : 0.0f;
+    v = vv > 0.0f ? Mathematics::Vector3::Dot(rel, dv) / vv : 0.0f;
 }
 } // namespace Detail
 
@@ -127,7 +121,7 @@ inline bool ProjectDirOntoFace(uint32_t f, float dx, float dy, float dz, float e
     if (denom <= 0.0f)
         return false;
     const float inv = 1.0f / denom;
-    const float p[3] = {dx * inv, dy * inv, dz * inv};
+    const Mathematics::Vector3 p(dx * inv, dy * inv, dz * inv);
     Detail::CubePosToFaceUV(f, p, u, v);
     return u >= -eps && u <= 1.0f + eps && v >= -eps && v <= 1.0f + eps;
 }
@@ -165,7 +159,7 @@ inline SphereFaceUV WorldDirToFaceUV(float x, float y, float z)
     // cubePos = dir / |dir[axis]| -> the dominant component is exactly +/-1.
     const float denom = (axis == 0u) ? ax : (axis == 1u) ? ay : az;
     const float inv = denom > 0.0f ? 1.0f / denom : 0.0f;
-    const float p[3] = {x * inv, y * inv, z * inv};
+    const Mathematics::Vector3 p(x * inv, y * inv, z * inv);
 
     SphereFaceUV out{};
     out.Face = face;
@@ -178,16 +172,16 @@ inline SphereFaceUV WorldDirToFaceUV(float x, float y, float z)
 // corners/edges, to fp32 in the interior.
 inline void FaceUVToWorldDir(uint32_t face, float u, float v, float& x, float& y, float& z)
 {
-    std::array<float, 3> q0, q1, q3;
+    Mathematics::Vector3 q0, q1, q3;
     Detail::FaceCorners(face, q0, q1, q3);
-    const float px = q0[0] + u * (q1[0] - q0[0]) + v * (q3[0] - q0[0]);
-    const float py = q0[1] + u * (q1[1] - q0[1]) + v * (q3[1] - q0[1]);
-    const float pz = q0[2] + u * (q1[2] - q0[2]) + v * (q3[2] - q0[2]);
-    const float len = std::sqrt(px * px + py * py + pz * pz);
+    const Mathematics::Vector3 du = q1 - q0;
+    const Mathematics::Vector3 dv = q3 - q0;
+    const Mathematics::Vector3 p = q0 + du * u + dv * v;
+    const float len = std::sqrt(Mathematics::Vector3::Dot(p, p));
     const float inv = len > 0.0f ? 1.0f / len : 0.0f;
-    x = px * inv;
-    y = py * inv;
-    z = pz * inv;
+    x = p.x * inv;
+    y = p.y * inv;
+    z = p.z * inv;
 }
 
 // Classify a spherical-cap edit (centre direction + angular radius, radians) into per-

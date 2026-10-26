@@ -1,6 +1,7 @@
 #include "PlayMode/GameViewPointerLock.h"
 
 #include "PlayMode/GameViewPointerLockRule.h"
+#include "PlayMode/WindowCursorLock.h"
 
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
@@ -27,13 +28,22 @@ GameViewPointerLockState NextGameViewPointerLockState(GameViewPointerLockState s
     return state;
 }
 
-void GameViewPointerLock::Update(Input::InputSystem& runtimeInput, Platform::Window* gameViewWindow, bool playing)
+std::optional<Platform::Window::LockedCursorMotion> ResolveWindowCursorLock(WindowCursorLockRequests requests)
+{
+    if (requests.Game)
+        return Platform::Window::LockedCursorMotion::Raw;
+    if (requests.UiDrag)
+        return Platform::Window::LockedCursorMotion::Accelerated;
+    return std::nullopt;
+}
+
+void GameViewPointerLock::Update(Input::InputSystem& runtimeInput, WindowCursorLock* gameViewCursorLock, bool playing)
 {
     GameViewPointerLockInputs inputs;
     inputs.Playing = playing;
     inputs.Requested = runtimeInput.GetPointerLockState() != Input::PointerLockState::Unlocked;
-    inputs.GameViewActive = gameViewWindow != nullptr;
-    inputs.WindowFocused = gameViewWindow && gameViewWindow->IsFocused();
+    inputs.GameViewActive = gameViewCursorLock != nullptr;
+    inputs.WindowFocused = gameViewCursorLock && gameViewCursorLock->IsWindowFocused();
     inputs.EscapePressed = m_EscapePressed;
     inputs.GameViewPressed = m_GameViewPressed;
     m_EscapePressed = false;
@@ -42,26 +52,28 @@ void GameViewPointerLock::Update(Input::InputSystem& runtimeInput, Platform::Win
     // (the browser build) the rule sees it unlocked, so a focus loss is not
     // taken for a hand-back.
     GameViewPointerLockState state;
-    state.Locked = m_LockedWindow != nullptr;
+    state.Locked = m_LockedCursor != nullptr;
     state.HandedBack = m_HandedBack;
     state = NextGameViewPointerLockState(state, inputs);
     m_HandedBack = state.HandedBack;
 
-    Platform::Window* target = state.Locked ? gameViewWindow : nullptr;
-    if (target != m_LockedWindow)
+    WindowCursorLock* target = state.Locked ? gameViewCursorLock : nullptr;
+    if (target != m_LockedCursor)
     {
-        if (m_LockedWindow)
-            m_LockedWindow->SetCursorLocked(false);
-        m_LockedWindow = nullptr;
+        if (m_LockedCursor)
+            m_LockedCursor->UnlockForGame();
+        m_LockedCursor = nullptr;
         if (target)
         {
-            target->SetCursorLocked(true);
-            if (target->IsCursorLocked())
-                m_LockedWindow = target;
+            target->LockForGame();
+            if (target->IsLocked())
+                m_LockedCursor = target;
+            else
+                target->UnlockForGame();
         }
     }
     Input::IRawInputSink& sink = runtimeInput;
-    sink.OnPointerLock(m_LockedWindow != nullptr);
+    sink.OnPointerLock(m_LockedCursor != nullptr);
 }
 
 void GameViewPointerLock::OnKey(int key, int action)
@@ -75,15 +87,15 @@ void GameViewPointerLock::OnGameViewPressed()
     m_GameViewPressed = true;
 }
 
-void GameViewPointerLock::ForgetWindow(const Platform::Window* window)
+void GameViewPointerLock::ForgetCursorLock(const WindowCursorLock* cursorLock)
 {
-    if (window && window == m_LockedWindow)
-        m_LockedWindow = nullptr;
+    if (cursorLock && cursorLock == m_LockedCursor)
+        m_LockedCursor = nullptr;
 }
 
-bool GameViewPointerLock::IsLockedTo(const Platform::Window* window) const
+bool GameViewPointerLock::IsLockedTo(const WindowCursorLock* cursorLock) const
 {
-    return window && window == m_LockedWindow;
+    return cursorLock && cursorLock == m_LockedCursor;
 }
 
 } // namespace GameEngine::Editor

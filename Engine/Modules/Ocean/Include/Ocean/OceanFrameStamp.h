@@ -26,8 +26,24 @@ struct OceanFrameStamp
     }
 };
 
-// A view that has not declared for this long no longer exists or no longer
-// shows the ocean; its per-view history is released. Wall-clock, because views
-// in different windows advance separate render-graph frame counters.
+// A view that goes this long without declaring no longer exists or no longer
+// shows the ocean, and its per-view history is released. Wall-clock, because
+// views in different windows advance separate render-graph frame counters. The
+// planar reflection measures the time with IsOceanViewIdle.
 inline constexpr std::chrono::seconds kOceanViewHistoryIdleTimeout{5};
+
+// Whether a view's state is idle, judged while another view declares.
+// lastDeclared is when the state's view last declared; declarerPrevious is when
+// the declaring view declared before (a default time point on its first
+// declare, which judges no state idle). The state is idle when its view had
+// already gone longer than the timeout without declaring at the declaring view's
+// previous declare, so a stopped view is released one declare after the
+// timeout. The time of the current declare is not used: one frame longer than
+// the timeout (a movie recorder waiting for its encoder, a long shader compile)
+// would make every view that declares later in that frame look idle.
+inline bool IsOceanViewIdle(std::chrono::steady_clock::time_point lastDeclared,
+                            std::chrono::steady_clock::time_point declarerPrevious)
+{
+    return declarerPrevious - lastDeclared > kOceanViewHistoryIdleTimeout;
+}
 } // namespace GameEngine::Ocean

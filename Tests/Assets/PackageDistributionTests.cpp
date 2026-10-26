@@ -11,6 +11,7 @@
 #include "Assets/Packages/PackageResolver.h"
 #include "Assets/Packages/PackagesLockFile.h"
 #include "Assets/Packages/ProjectPackagesManifest.h"
+#include "Engine/Build/CancellableShellProcess.h"
 #include "NativeScripting/EngineBuildIdentity.h"
 #include "TestTempDir.h"
 
@@ -19,6 +20,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 using namespace GameEngine;
@@ -527,6 +529,51 @@ TEST(PackageGitResolution, MissingGitRefFailsLoudlyAndSkipsOnlyThatPackage)
     ASSERT_EQ(res.MountOrder.size(), 1u); // degraded, not all-or-nothing
     EXPECT_EQ(res.MountOrder.front().Manifest.Name, "good-local");
     EXPECT_EQ(res.MountOrder.front().SourceKind, PackageSourceKind::Embedded);
+
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+// A package at the root of its repository: the whole checkout is the payload.
+// The fetch runs against a local repository, so it needs git but no network.
+TEST(PackageGitResolution, AcquiresPackageAtRepositoryRoot)
+{
+    std::string gitExe;
+    std::string error;
+    if (!TryFindGitExecutable(gitExe, error))
+        GTEST_SKIP() << error;
+
+    const fs::path root = GameEngine::TestUtils::MakeUniqueTempDirectory("pkggit_rootpkg");
+    const fs::path repoDir = root / "repo";
+    WriteTextFile(repoDir / "package.json", "{ \"name\": \"root-pack\", \"version\": \"1.2.0\" }");
+    WriteTextFile(repoDir / "Assets" / "Textures" / "colormap.txt", "payload");
+
+    const std::string repoText = repoDir.generic_string();
+    const std::vector<std::vector<std::string>> setup = {
+        {"init", "-q", "-b", "main", repoText},
+        {"-C", repoText, "add", "."},
+        {"-C", repoText, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit",
+         "-q", "-m", "Package at the root"},
+    };
+    for (const std::vector<std::string>& args : setup)
+    {
+        const ShellProcessResult result = RunProcessCaptured(gitExe, args);
+        ASSERT_EQ(result.exitCode, 0) << result.output;
+    }
+
+    GitPackageSpec spec;
+    spec.Url = "file://" + repoText;
+    spec.Ref = "main";
+    GitPackageAcquisition acquisition;
+    ASSERT_TRUE(AcquireGitPackage(gitExe, "root-pack", spec, root / "cache", acquisition, error))
+        << error;
+
+    EXPECT_EQ(acquisition.Name, "root-pack");
+    EXPECT_EQ(ReadTextFile(acquisition.PackageDir / "Assets" / "Textures" / "colormap.txt"),
+              "payload");
+    EXPECT_FALSE(fs::exists(acquisition.PackageDir / ".git"));
+    EXPECT_EQ(std::distance(fs::directory_iterator(acquisition.PackageDir), fs::directory_iterator{}),
+              2) << "the entry holds package.json and Assets, nothing staged";
 
     std::error_code ec;
     fs::remove_all(root, ec);

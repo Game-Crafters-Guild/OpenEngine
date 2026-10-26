@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <map>
@@ -27,19 +28,18 @@ uint32_t HeapDepth(uint64_t h)
     return d;
 }
 
-using IVec3 = std::array<int32_t, 3>;
+using GameEngine::Mathematics::Vector3Int;
 
 // Unordered integer edge key (min corner first) so a shared edge from two triangles
 // maps to the same key regardless of traversal direction.
-std::array<int32_t, 6> EdgeKey(const IVec3& a, const IVec3& b)
+std::array<int32_t, 6> EdgeKey(const Vector3Int& a, const Vector3Int& b)
 {
-    const bool aFirst = a < b;
-    const IVec3& lo = aFirst ? a : b;
-    const IVec3& hi = aFirst ? b : a;
-    return {lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]};
+    const std::array<int32_t, 6> forward{a.x, a.y, a.z, b.x, b.y, b.z};
+    const std::array<int32_t, 6> backward{b.x, b.y, b.z, a.x, a.y, a.z};
+    return std::min(forward, backward);
 }
 
-bool SameEdge(const IVec3& a0, const IVec3& a1, const IVec3& b0, const IVec3& b1)
+bool SameEdge(const Vector3Int& a0, const Vector3Int& a1, const Vector3Int& b0, const Vector3Int& b1)
 {
     return EdgeKey(a0, a1) == EdgeKey(b0, b1);
 }
@@ -140,9 +140,9 @@ TEST(CBTSphereRoots, WindingConsistent)
     int32_t signRef = 0;
     for (uint32_t r = 0; r < kSphereRootCount; ++r)
     {
-        const IVec3& v0 = roots[r].V0;
-        const IVec3& v1 = roots[r].V1;
-        const IVec3& v2 = roots[r].V2;
+        const Vector3Int& v0 = roots[r].V0;
+        const Vector3Int& v1 = roots[r].V1;
+        const Vector3Int& v2 = roots[r].V2;
         const int32_t e0[3] = {static_cast<int32_t>(v1[0] - v0[0]), static_cast<int32_t>(v1[1] - v0[1]),
                                static_cast<int32_t>(v1[2] - v0[2])};
         const int32_t e1[3] = {static_cast<int32_t>(v2[0] - v0[0]), static_cast<int32_t>(v2[1] - v0[1]),

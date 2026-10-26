@@ -1148,6 +1148,35 @@ static void AddDeclaredPropertyRows(UIElement* content, const Rendering::ShaderP
     Editor::AddUndeclaredKeysNotice(content, unknown, declaredNames, &table);
 }
 
+// One cell of a header label drag: the field, its component index and its value at the press.
+struct HeaderDragCell
+{
+    FloatField* Field = nullptr;
+    int ComponentIndex = 0;
+    float StartValue = 0.0f;
+};
+
+// Escape or another button during a header label drag: a drag that moved the two cells puts back
+// their start values and commits them.
+void CancelHeaderDrag(UIEvent& e, Label* label, bool didMove, HeaderDragCell cellA, HeaderDragCell cellB,
+                      const std::function<void(int, float)>& commitComponent)
+{
+    auto& state = InspectorDrag::GetDragState();
+    if (state.draggingLabel != label)
+        return;
+    InspectorDrag::SetLabelDragHighlight(label, false);
+    state.draggingLabel = nullptr;
+    if (didMove)
+    {
+        for (const HeaderDragCell& cell : {cellA, cellB})
+        {
+            cell.Field->SetValue(cell.StartValue);
+            commitComponent(cell.ComponentIndex, cell.StartValue);
+        }
+    }
+    e.Stop();
+}
+
 } // namespace
 
 // ============================================================================
@@ -2096,6 +2125,10 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     if (state.draggingLabel != label)
                         return;
                     float deltaX = e.X - state.dragStartX;
+                    if (!InspectorDrag::BeginLabelDragPastThreshold(label, *didMove, deltaX)) {
+                        e.Stop();
+                        return;
+                    }
                     float newA = *startA + deltaX * InspectorDrag::kInspectorDragFloatSensitivity;
                     float newB = *startB + deltaX * InspectorDrag::kInspectorDragFloatSensitivity;
                     if (snapToWhole && !(e.Mods & Input::kModAlt)) {
@@ -2104,7 +2137,6 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     }
                     fA->SetValue(newA);
                     fB->SetValue(newB);
-                    *didMove = true;
                     beginEditIfNeeded(editLabel);
                     previewComponentTwo(idxA, newA, idxB, newB);
                     e.Stop();
@@ -2122,6 +2154,11 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                         commitComponent(idxB, fB->GetValue());
                     }
                     e.Stop();
+                });
+
+                label->RegisterEventHandler(kEventMouseCancel,
+                    [label, fA, fB, startA, startB, didMove, idxA, idxB, commitComponent](UIEvent& e) {
+                    CancelHeaderDrag(e, label, *didMove, {fA, idxA, *startA}, {fB, idxB, *startB}, commitComponent);
                 });
             };
 

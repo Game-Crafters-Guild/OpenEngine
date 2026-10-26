@@ -756,13 +756,11 @@ void RGFrame::RecordAndSubmit()
         //   · relocated transition — the consumer is a submission in THIS frame
         //     that already waits on this one, and a semaphore signal/wait pair
         //     is a full memory dependency, not merely an execution one;
-        //   · export contract — the consumer is next frame. On a graphics
-        //     placement queue submission order covers it. On a NON-graphics
-        //     placement nothing in this frame's plan orders it: the device's
-        //     per-frame fences span MAX_FRAMES_IN_FLIGHT slots and the compute
-        //     fence is never armed for graph work, so the edge holds only while
-        //     some later frame carries a compute→graphics wait that transitively
-        //     covers it. That residual is Hole 1's open half, not a guarantee.
+        //   · export contract — the consumer is next frame. A consumer on the
+        //     placement's queue is ordered by submission order; one on another
+        //     queue waits on the placement's submission, because the plan records
+        //     the export as a write of the imported physical and the next frame's
+        //     plan orders conflicting accesses after it (RGCrossFrameAccesses).
         m_ScratchPassBarriers.clear();
         for (uint32_t k = 0; k < barrierSubOf.size(); ++k)
         {

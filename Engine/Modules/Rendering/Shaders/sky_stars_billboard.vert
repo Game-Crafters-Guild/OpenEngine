@@ -1,6 +1,8 @@
 #version 450
 
-// The night sky's stars: one instanced quad per catalog star, sized in screen pixels.
+// The night sky's stars: one instanced quad per catalog star, sized in screen pixels. The first
+// instances are the falling stars' slots (sky_meteor.glsl), as many as fallingStarParams.x (0 when
+// they are off); the catalog's stars follow them.
 //
 // Each star carries its V magnitude and its colour (StarCatalog.cpp). sky_star_model.glsl turns
 // them into what the star puts on screen: its illuminance above the atmosphere, times the
@@ -9,9 +11,12 @@
 // after extinction is within the limiting magnitude, lowered by the eye's threshold against the
 // sky-view LUT behind it. A star that is not drawn becomes a degenerate triangle. This shader only
 // gathers the inputs (GE_StarGeometry decides where the star sits for the sky) and places the quad.
+// A falling star is a white star drawn as the round core whatever the shape dial says, its whole light
+// spread along the streak to its tail; its quad covers the streak.
 
 #include "Includes/compat_profile.glsl"
 #include "Includes/sky_composite.glsl"
+#include "Includes/sky_meteor.glsl"
 #include "Includes/sky_star_model.glsl"
 
 struct StarInstance {
@@ -41,8 +46,7 @@ layout(set = 0, binding = 1) uniform SkyUBO
     vec2  viewportResolution; float nightSkyBlend; float skyTimeSeconds;
     vec4  starModel;    // x = limiting magnitude, y = highlight compression, z = twinkle amount, w = twinkle rate
     vec4  skyboxParams; // z = the artistic Star glow, w = the observer (1 = the eye, 0 = a camera)
-    vec4  fallingStarParams;
-    vec4  fallingStarShapeParams;
+    vec4  fallingStarParams; // x = the falling stars' slot count (0 = off), y = the mean interval in seconds
     vec4  gradientSkyTop;
     vec4  gradientSkyHorizon;
     vec4  gradientSkyBottom;
@@ -75,6 +79,7 @@ layout(location = 5) flat out vec3 vGlowPeak;
 layout(location = 6) flat out float vGlowRadius;
 layout(location = 7) flat out vec4 vSpikePeakAndLength;
 layout(location = 8) flat out float vShape;
+layout(location = 9) flat out vec2 vStreak;
 
 // The sky-view LUT's height (SkyRenderer::Config::skyViewLutHeight).
 const float kSkyViewLutHeight = 256.0;
@@ -101,6 +106,7 @@ void Cull()
     vGlowRadius = 1.0;
     vSpikePeakAndLength = vec4(0.0, 0.0, 0.0, 1.0);
     vShape = 0.0;
+    vStreak = vec2(0.0);
 }
 
 // Luminance of the sky behind the star in nits: the sky-view LUT at the star's planet-local direction.
@@ -114,11 +120,37 @@ float SkyLuminanceBehind(vec3 lutDirection)
 
 void main()
 {
-    StarInstance star = sb.stars[gl_InstanceIndex];
-    vec3 starDir = star.dirAndMagnitude.xyz;
-    float magnitude = star.dirAndMagnitude.w;
-    vec3 starColor = star.colorAndSeed.rgb;
-    float seed = star.colorAndSeed.w;
+    vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
+    float camR = length(uSky.cameraPositionWS - planetCenter);
+    vec3 up = (uSky.cameraPositionWS - planetCenter) / max(camR, 1e-5);
+
+    uint meteorSlots = uint(uSky.fallingStarParams.x);
+    bool meteor = uint(gl_InstanceIndex) < meteorSlots;
+    vec3 starDir;
+    vec3 tailDir = vec3(0.0);
+    float magnitude;
+    vec3 starColor = vec3(1.0);
+    float seed = 0.0;
+    if (meteor)
+    {
+        GE_Meteor m = GE_MeteorAt(uint(gl_InstanceIndex), meteorSlots, uSky.skyTimeSeconds, uSky.fallingStarParams.y, up);
+        if (!m.Active)
+        {
+            Cull();
+            return;
+        }
+        starDir = m.Head;
+        tailDir = m.Tail;
+        magnitude = m.Magnitude;
+    }
+    else
+    {
+        StarInstance star = sb.stars[uint(gl_InstanceIndex) - meteorSlots];
+        starDir = star.dirAndMagnitude.xyz;
+        magnitude = star.dirAndMagnitude.w;
+        starColor = star.colorAndSeed.rgb;
+        seed = star.colorAndSeed.w;
+    }
 
     vec3 fwd = normalize(uSky.cameraForwardWS);
     vec3 right = normalize(uSky.cameraRightWS);
@@ -134,9 +166,6 @@ void main()
         return;
     }
 
-    vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
-    float camR = length(uSky.cameraPositionWS - planetCenter);
-    vec3 up = (uSky.cameraPositionWS - planetCenter) / max(camR, 1e-5);
     GE_StarViewGeometry geometry = GE_StarGeometry(starDir, up, tanHalf, uSky.viewportResolution.y);
 
     // Extinction: the transmittance from the camera to the top of the atmosphere along the star.
@@ -153,12 +182,13 @@ void main()
 
     float skyNits = isOrtho ? 0.0 : SkyLuminanceBehind(geometry.LutDirection);
 
-    // The twinkle (scintillation): three beats per star, its amplitude growing with the airmass.
+    // The twinkle (scintillation): three beats per star, its amplitude growing with the airmass. A
+    // falling star is too short and too bright to twinkle.
     float beat = uSky.skyTimeSeconds * uSky.starModel.w * (0.7 + 0.6 * fract(seed * 17.13));
     float phase = seed * 6.2831853;
     float flicker = (0.15 * sin(beat * 2.3 + phase) + 0.08 * sin(beat * 5.7 + phase * 1.7) +
                      0.04 * sin(beat * 11.0 + phase * 2.9)) / 0.27;
-    flicker = 1.0 + flicker * GE_StarScintillationAmplitude(geometry.SinAltitude, uSky.starModel.z);
+    flicker = meteor ? 1.0 : 1.0 + flicker * GE_StarScintillationAmplitude(geometry.SinAltitude, uSky.starModel.z);
 
     GE_StarShapeDials shape;
     shape.CoreScale = uSky.starShape.x;
@@ -166,16 +196,15 @@ void main()
     shape.SpikeLength = uSky.starShape.z;
     shape.Shape = uSky.starShape.w;
     shape.Eye = uSky.skyboxParams.w;
+    if (meteor)
+        shape = GE_MeteorShape(shape);
     GE_StarDrawn drawn = GE_StarShade(magnitude, starColor, transmittance, skyNits, uSky.starModel.x,
                                       uSky.starModel.y, uSky.skyboxParams.z, shape, flicker, geometry.PixelSolidAngle);
 
-    // The moon's disc hides the stars behind it.
+    // The moon's disk hides the stars behind it; a falling star is in front of it.
     if (uSky.moonIntensity > 0.0 && !isOrtho)
-    {
-        float moonDot = dot(starDir, normalize(uSky.moonDirectionWS));
-        float moonRadius = max(uSky.moonAngularRadius, 0.0);
-        drawn.Visibility *= 1.0 - smoothstep(cos(moonRadius * 1.25), cos(moonRadius * 0.95), moonDot);
-    }
+        drawn.Visibility *= 1.0 - GE_StarMoonCover(starDir, normalize(uSky.moonDirectionWS), uSky.moonAngularRadius,
+                                                   meteor);
 #ifdef GE_SKY_HEIGHT_FOG
     drawn.Visibility *= 1.0 - GE_HeightFogSkyAmount(starDir);
 #endif
@@ -191,14 +220,22 @@ void main()
     vCoreRadius = drawn.CoreRadius;
     vSpikePeakAndLength = vec4(drawn.SpikePeak * drawn.Visibility, drawn.SpikeLength);
     vShape = drawn.Shape;
-    // The quad covers the star's cut radius (GE_StarShade, kStarMinCutRadiusPixels).
-    float cutRadius = drawn.CutRadius;
-    vec2 corner = QuadOffset(uint(gl_VertexIndex) % 6u);
-    vPixelOffset = corner * cutRadius;
-    vCutRadius = cutRadius;
-
     float aspect = max(uSky.viewportAspect, 0.001);
-    vec2 centreNdc = vec2(viewDir.x / (aspect * tanHalf), viewDir.y / tanHalf) / viewDir.z;
+    vec2 centerNdc = vec2(viewDir.x / (aspect * tanHalf), viewDir.y / tanHalf) / viewDir.z;
     vec2 pixelToNdc = 2.0 / max(uSky.viewportResolution, vec2(1.0));
-    gl_Position = vec4(centreNdc + corner * cutRadius * pixelToNdc, 0.5, 1.0);
+
+    // A falling star's streak, in pixels from the head to where the head was (sky_meteor.glsl).
+    vec2 streak = vec2(0.0);
+    vec3 tailView = vec3(dot(tailDir, right), dot(tailDir, camUp), dot(tailDir, fwd));
+    if (meteor && tailView.z > 0.05)
+        streak = (vec2(tailView.x / (aspect * tanHalf), tailView.y / tanHalf) / tailView.z - centerNdc) / pixelToNdc;
+    vStreak = streak;
+
+    // The quad covers the cut radius around the star (GE_StarShade, kStarMinCutRadiusPixels), and
+    // around a falling star's whole streak (GE_MeteorCutRadius).
+    float cutRadius = meteor ? GE_MeteorCutRadius(drawn) : drawn.CutRadius;
+    vec2 corner = QuadOffset(uint(gl_VertexIndex) % 6u);
+    vPixelOffset = 0.5 * streak + corner * (cutRadius + 0.5 * length(streak));
+    vCutRadius = drawn.CutRadius;
+    gl_Position = vec4(centerNdc + vPixelOffset * pixelToNdc, 0.5, 1.0);
 }

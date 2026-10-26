@@ -12,7 +12,7 @@
 
 #include "Logger/Logger.h"
 #include "Mathematics/Interpolation.h"
-#include "Mathematics/VectorOps.h"
+#include "Mathematics/Vector3.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,7 +24,7 @@ namespace GameEngine { namespace Engine::Renderer {
 
 namespace
 {
-using Mathematics::Dot3;
+using Mathematics::Vector3;
 
 constexpr float kReflectionProbeDegToRad = 0.01745329251994329577f;
 constexpr float kMinProbeExtent = 0.0001f;
@@ -48,23 +48,23 @@ struct ProbeCandidate
     float NormalizedDistanceSq = 0.0f;
     float Weight = 1.0f;
     float InfluenceRadius = 0.0f;
-    float Position[3] = {0.0f, 0.0f, 0.0f};
-    float BoxCenter[3] = {0.0f, 0.0f, 0.0f};
-    float BoxHalfExtents[3] = {0.0f, 0.0f, 0.0f};
-    float BoxAxisX[3] = {1.0f, 0.0f, 0.0f};
-    float BoxAxisY[3] = {0.0f, 1.0f, 0.0f};
-    float BoxAxisZ[3] = {0.0f, 0.0f, 1.0f};
+    Vector3 Position{0.0f, 0.0f, 0.0f};
+    Vector3 BoxCenter{0.0f, 0.0f, 0.0f};
+    Vector3 BoxHalfExtents{0.0f, 0.0f, 0.0f};
+    Vector3 BoxAxisX{1.0f, 0.0f, 0.0f};
+    Vector3 BoxAxisY{0.0f, 1.0f, 0.0f};
+    Vector3 BoxAxisZ{0.0f, 0.0f, 1.0f};
     bool HasBox = false;
     uint64_t SourceKey = 0;
 };
 
 struct ProbeVolume
 {
-    float Center[3] = {0.0f, 0.0f, 0.0f};
-    float AxisX[3] = {1.0f, 0.0f, 0.0f};
-    float AxisY[3] = {0.0f, 1.0f, 0.0f};
-    float AxisZ[3] = {0.0f, 0.0f, 1.0f};
-    float HalfExtents[3] = {0.0f, 0.0f, 0.0f};
+    Vector3 Center{0.0f, 0.0f, 0.0f};
+    Vector3 AxisX{1.0f, 0.0f, 0.0f};
+    Vector3 AxisY{0.0f, 1.0f, 0.0f};
+    Vector3 AxisZ{0.0f, 0.0f, 1.0f};
+    Vector3 HalfExtents{0.0f, 0.0f, 0.0f};
     bool Valid = false;
 };
 
@@ -81,12 +81,12 @@ struct NearestRejectedProbe
     // overshoot past the surface for an ellipsoid.
     float OvershootWorld = 0.0f;
     int WorstAxis = -1; // 0/1/2 = box local axis; -1 = ellipsoid (radial) rejection
-    float CameraLocal[3] = {0.0f, 0.0f, 0.0f};
-    float HalfExtents[3] = {0.0f, 0.0f, 0.0f};
+    Vector3 CameraLocal{0.0f, 0.0f, 0.0f};
+    Vector3 HalfExtents{0.0f, 0.0f, 0.0f};
 };
 
 void RecordIfNearest(NearestRejectedProbe& nearest, uint32 entityId, float overshootWorld,
-                     int worstAxis, const float cameraLocal[3], const float halfExtents[3])
+                     int worstAxis, const Vector3& cameraLocal, const Vector3& halfExtents)
 {
     if (nearest.Valid && overshootWorld >= nearest.OvershootWorld)
         return;
@@ -94,11 +94,8 @@ void RecordIfNearest(NearestRejectedProbe& nearest, uint32 entityId, float overs
     nearest.EntityId = entityId;
     nearest.OvershootWorld = overshootWorld;
     nearest.WorstAxis = worstAxis;
-    for (int i = 0; i < 3; ++i)
-    {
-        nearest.CameraLocal[i] = cameraLocal[i];
-        nearest.HalfExtents[i] = halfExtents[i];
-    }
+    nearest.CameraLocal = cameraLocal;
+    nearest.HalfExtents = halfExtents;
 }
 
 void ClearProbeSourceIfActive(ImageBasedLightingFeature* feature, uint64_t worldId)
@@ -131,78 +128,61 @@ ProbeVolume ExtractProbeVolume(const Components::WorldTransform& xf)
 {
     ProbeVolume volume{};
     const float* m = xf.matrix;
-    volume.Center[0] = m[12];
-    volume.Center[1] = m[13];
-    volume.Center[2] = m[14];
+    volume.Center = xf.GetPosition();
 
-    const float ax[3] = {m[0], m[1], m[2]};
-    const float ay[3] = {m[4], m[5], m[6]};
-    const float az[3] = {m[8], m[9], m[10]};
-    const float sx = std::sqrt(Dot3(ax, ax));
-    const float sy = std::sqrt(Dot3(ay, ay));
-    const float sz = std::sqrt(Dot3(az, az));
+    const Vector3 ax(m[0], m[1], m[2]);
+    const Vector3 ay(m[4], m[5], m[6]);
+    const Vector3 az(m[8], m[9], m[10]);
+    const float sx = std::sqrt(ax.LengthSquared());
+    const float sy = std::sqrt(ay.LengthSquared());
+    const float sz = std::sqrt(az.LengthSquared());
     if (sx <= kMinProbeExtent || sy <= kMinProbeExtent || sz <= kMinProbeExtent)
         return volume;
 
     const float invSx = 1.0f / sx;
     const float invSy = 1.0f / sy;
     const float invSz = 1.0f / sz;
-    for (int i = 0; i < 3; ++i)
-    {
-        volume.AxisX[i] = ax[i] * invSx;
-        volume.AxisY[i] = ay[i] * invSy;
-        volume.AxisZ[i] = az[i] * invSz;
-    }
-    volume.HalfExtents[0] = sx * 0.5f;
-    volume.HalfExtents[1] = sy * 0.5f;
-    volume.HalfExtents[2] = sz * 0.5f;
+    volume.AxisX = ax * invSx;
+    volume.AxisY = ay * invSy;
+    volume.AxisZ = az * invSz;
+    volume.HalfExtents = Vector3(sx * 0.5f, sy * 0.5f, sz * 0.5f);
     volume.Valid = true;
     return volume;
 }
 
-void ProjectToVolumeLocal(const ProbeVolume& volume, const float worldPos[3], float outLocal[3])
+Vector3 ProjectToVolumeLocal(const ProbeVolume& volume, const Vector3& worldPos)
 {
-    const float d[3] = {
-        worldPos[0] - volume.Center[0],
-        worldPos[1] - volume.Center[1],
-        worldPos[2] - volume.Center[2]};
-    outLocal[0] = Dot3(d, volume.AxisX);
-    outLocal[1] = Dot3(d, volume.AxisY);
-    outLocal[2] = Dot3(d, volume.AxisZ);
+    const Vector3 d = worldPos - volume.Center;
+    return Vector3(Vector3::Dot(d, volume.AxisX), Vector3::Dot(d, volume.AxisY), Vector3::Dot(d, volume.AxisZ));
 }
 
-float ComputeBoxCaptureRadius(const ProbeVolume& volume, const float capturePosition[3])
+float ComputeBoxCaptureRadius(const ProbeVolume& volume, const Vector3& capturePosition)
 {
-    float captureLocal[3] = {0.0f, 0.0f, 0.0f};
-    ProjectToVolumeLocal(volume, capturePosition, captureLocal);
-    const float dx = volume.HalfExtents[0] + std::fabs(captureLocal[0]);
-    const float dy = volume.HalfExtents[1] + std::fabs(captureLocal[1]);
-    const float dz = volume.HalfExtents[2] + std::fabs(captureLocal[2]);
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
+    const Vector3 captureLocal = ProjectToVolumeLocal(volume, capturePosition);
+    const Vector3 reach(volume.HalfExtents.x + std::fabs(captureLocal.x), volume.HalfExtents.y + std::fabs(captureLocal.y),
+                        volume.HalfExtents.z + std::fabs(captureLocal.z));
+    return std::sqrt(reach.LengthSquared());
 }
 
-float ComputeEllipsoidDistanceToEdge(const float local[3], const float half[3], float normalizedRadius)
+float ComputeEllipsoidDistanceToEdge(const Vector3& local, const Vector3& half, float normalizedRadius)
 {
     if (normalizedRadius <= kMinProbeExtent)
-        return std::min({half[0], half[1], half[2]});
+        return std::min({half.x, half.y, half.z});
 
-    const float localLen = std::sqrt(Dot3(local, local));
+    const float localLen = std::sqrt(local.LengthSquared());
     if (localLen <= kMinProbeExtent)
-        return std::min({half[0], half[1], half[2]});
+        return std::min({half.x, half.y, half.z});
 
     return std::max(0.0f, localLen * ((1.0f / normalizedRadius) - 1.0f));
 }
 
 void CopyVolumeToCandidate(const ProbeVolume& volume, ProbeCandidate& candidate)
 {
-    for (int i = 0; i < 3; ++i)
-    {
-        candidate.BoxCenter[i] = volume.Center[i];
-        candidate.BoxHalfExtents[i] = volume.HalfExtents[i];
-        candidate.BoxAxisX[i] = volume.AxisX[i];
-        candidate.BoxAxisY[i] = volume.AxisY[i];
-        candidate.BoxAxisZ[i] = volume.AxisZ[i];
-    }
+    candidate.BoxCenter = volume.Center;
+    candidate.BoxHalfExtents = volume.HalfExtents;
+    candidate.BoxAxisX = volume.AxisX;
+    candidate.BoxAxisY = volume.AxisY;
+    candidate.BoxAxisZ = volume.AxisZ;
 }
 } // namespace
 
@@ -212,15 +192,13 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     if (!rs)
         return;
 
-    float cameraPos[3] = {0.0f, 0.0f, 0.0f};
+    Vector3 cameraPos{0.0f, 0.0f, 0.0f};
     const std::optional<Camera> activeCamera = FindActiveCamera(world);
     const bool hasCamera = activeCamera.has_value();
     if (hasCamera)
     {
         const float* m = activeCamera->worldTransform.Data();
-        cameraPos[0] = m[12];
-        cameraPos[1] = m[13];
-        cameraPos[2] = m[14];
+        cameraPos = Vector3(m[12], m[13], m[14]);
     }
 
     ProbeCandidate best{};
@@ -241,60 +219,49 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
 
         float normalizedDistanceSq = 0.0f;
         float weight = 1.0f;
-        const float capturePosition[3] = {
-            volume.Center[0] + volume.AxisX[0] * probe.OriginOffsetX +
-                               volume.AxisY[0] * probe.OriginOffsetY +
-                               volume.AxisZ[0] * probe.OriginOffsetZ,
-            volume.Center[1] + volume.AxisX[1] * probe.OriginOffsetX +
-                               volume.AxisY[1] * probe.OriginOffsetY +
-                               volume.AxisZ[1] * probe.OriginOffsetZ,
-            volume.Center[2] + volume.AxisX[2] * probe.OriginOffsetX +
-                               volume.AxisY[2] * probe.OriginOffsetY +
-                               volume.AxisZ[2] * probe.OriginOffsetZ};
+        const Vector3 capturePosition = volume.Center + volume.AxisX * probe.OriginOffsetX +
+                                        volume.AxisY * probe.OriginOffsetY +
+                                        volume.AxisZ * probe.OriginOffsetZ;
         const bool hasBox = probe.BoxProjection;
-        const float originOffsetLocal[3] = {
-            probe.OriginOffsetX,
-            probe.OriginOffsetY,
-            probe.OriginOffsetZ};
+        const Vector3 originOffsetLocal(probe.OriginOffsetX, probe.OriginOffsetY, probe.OriginOffsetZ);
         const float influenceRadius = hasBox
                                           ? ComputeBoxCaptureRadius(volume, capturePosition)
-                                          : std::max({volume.HalfExtents[0], volume.HalfExtents[1], volume.HalfExtents[2]}) +
-                                                std::sqrt(Dot3(originOffsetLocal, originOffsetLocal));
+                                          : std::max({volume.HalfExtents.x, volume.HalfExtents.y, volume.HalfExtents.z}) +
+                                                std::sqrt(originOffsetLocal.LengthSquared());
         if (hasCamera && hasBox)
         {
-            float local[3] = {0.0f, 0.0f, 0.0f};
-            ProjectToVolumeLocal(volume, cameraPos, local);
-            const float ax = std::fabs(local[0]);
-            const float ay = std::fabs(local[1]);
-            const float az = std::fabs(local[2]);
-            if (ax > volume.HalfExtents[0] ||
-                ay > volume.HalfExtents[1] ||
-                az > volume.HalfExtents[2])
+            const Vector3 local = ProjectToVolumeLocal(volume, cameraPos);
+            const float ax = std::fabs(local.x);
+            const float ay = std::fabs(local.y);
+            const float az = std::fabs(local.z);
+            if (ax > volume.HalfExtents.x ||
+                ay > volume.HalfExtents.y ||
+                az > volume.HalfExtents.z)
             {
-                const float overshoot[3] = {ax - volume.HalfExtents[0],
-                                            ay - volume.HalfExtents[1],
-                                            az - volume.HalfExtents[2]};
-                const int worst = overshoot[0] > overshoot[1]
-                                      ? (overshoot[0] > overshoot[2] ? 0 : 2)
-                                      : (overshoot[1] > overshoot[2] ? 1 : 2);
+                const Vector3 overshoot(ax - volume.HalfExtents.x,
+                                        ay - volume.HalfExtents.y,
+                                        az - volume.HalfExtents.z);
+                const int worst = overshoot.x > overshoot.y
+                                      ? (overshoot.x > overshoot.z ? 0 : 2)
+                                      : (overshoot.y > overshoot.z ? 1 : 2);
                 RecordIfNearest(nearestRejected, e.id, overshoot[worst], worst, local,
                                 volume.HalfExtents);
                 return;
             }
 
-            const float nx = local[0] / volume.HalfExtents[0];
-            const float ny = local[1] / volume.HalfExtents[1];
-            const float nz = local[2] / volume.HalfExtents[2];
+            const float nx = local.x / volume.HalfExtents.x;
+            const float ny = local.y / volume.HalfExtents.y;
+            const float nz = local.z / volume.HalfExtents.z;
             normalizedDistanceSq = (nx * nx + ny * ny + nz * nz) / 3.0f;
 
             const float distanceToEdge = std::min({
-                volume.HalfExtents[0] - ax,
-                volume.HalfExtents[1] - ay,
-                volume.HalfExtents[2] - az});
+                volume.HalfExtents.x - ax,
+                volume.HalfExtents.y - ay,
+                volume.HalfExtents.z - az});
             const float blend = std::clamp(probe.BlendDistance, 0.0f, std::min({
-                volume.HalfExtents[0],
-                volume.HalfExtents[1],
-                volume.HalfExtents[2]}));
+                volume.HalfExtents.x,
+                volume.HalfExtents.y,
+                volume.HalfExtents.z}));
             if (blend > 0.0001f && distanceToEdge < blend)
             {
                 weight = Math::Clamp01(distanceToEdge / blend);
@@ -304,18 +271,17 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
         }
         else if (hasCamera)
         {
-            float local[3] = {0.0f, 0.0f, 0.0f};
-            ProjectToVolumeLocal(volume, cameraPos, local);
-            const float nx = local[0] / volume.HalfExtents[0];
-            const float ny = local[1] / volume.HalfExtents[1];
-            const float nz = local[2] / volume.HalfExtents[2];
+            const Vector3 local = ProjectToVolumeLocal(volume, cameraPos);
+            const float nx = local.x / volume.HalfExtents.x;
+            const float ny = local.y / volume.HalfExtents.y;
+            const float nz = local.z / volume.HalfExtents.z;
             const float normalizedRadiusSq = nx * nx + ny * ny + nz * nz;
             if (normalizedRadiusSq > 1.0f)
             {
                 // Radial overshoot past the ellipsoid surface, in world units: the camera
                 // sits at localLen, the surface at localLen / normalizedRadius along the
                 // same ray (normalizedRadius > 1 here).
-                const float localLen = std::sqrt(Dot3(local, local));
+                const float localLen = std::sqrt(local.LengthSquared());
                 const float normalizedRadius = std::sqrt(normalizedRadiusSq);
                 RecordIfNearest(nearestRejected, e.id,
                                 localLen * (1.0f - 1.0f / normalizedRadius), -1, local,
@@ -343,9 +309,7 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
         candidate.NormalizedDistanceSq = normalizedDistanceSq;
         candidate.Weight = weight;
         candidate.InfluenceRadius = influenceRadius;
-        candidate.Position[0] = capturePosition[0];
-        candidate.Position[1] = capturePosition[1];
-        candidate.Position[2] = capturePosition[2];
+        candidate.Position = capturePosition;
         candidate.HasBox = hasBox;
         if (hasBox)
             CopyVolumeToCandidate(volume, candidate);
@@ -377,10 +341,10 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                     "({:.2f}, {:.2f}, {:.2f})). Grow that probe's Transform.scale on that "
                     "axis, or move the camera inside.",
                     nearestRejected.EntityId, nearestRejected.OvershootWorld,
-                    "XYZ"[nearestRejected.WorstAxis], nearestRejected.CameraLocal[0],
-                    nearestRejected.CameraLocal[1], nearestRejected.CameraLocal[2],
-                    nearestRejected.HalfExtents[0], nearestRejected.HalfExtents[1],
-                    nearestRejected.HalfExtents[2]);
+                    "XYZ"[nearestRejected.WorstAxis], nearestRejected.CameraLocal.x,
+                    nearestRejected.CameraLocal.y, nearestRejected.CameraLocal.z,
+                    nearestRejected.HalfExtents.x, nearestRejected.HalfExtents.y,
+                    nearestRejected.HalfExtents.z);
             else
                 Logger::Log::Warning(
                     "No ReflectionProbe contributes: the active camera is outside every "
@@ -390,9 +354,9 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                     "{:.2f}, {:.2f})). Grow that probe's Transform.scale, or move the camera "
                     "inside.",
                     nearestRejected.EntityId, nearestRejected.OvershootWorld,
-                    nearestRejected.CameraLocal[0], nearestRejected.CameraLocal[1],
-                    nearestRejected.CameraLocal[2], nearestRejected.HalfExtents[0],
-                    nearestRejected.HalfExtents[1], nearestRejected.HalfExtents[2]);
+                    nearestRejected.CameraLocal.x, nearestRejected.CameraLocal.y,
+                    nearestRejected.CameraLocal.z, nearestRejected.HalfExtents.x,
+                    nearestRejected.HalfExtents.y, nearestRejected.HalfExtents.z);
             m_LoggedNoProbeSelected = true;
         }
         ClearProbeSourceIfActive(rs->GetFeature<ImageBasedLightingFeature>(), world.GetWorldId());
@@ -411,21 +375,16 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
         return;
 
     SceneReflectionProbeEnvironmentDesc desc{};
-    desc.Position[0] = best.Position[0];
-    desc.Position[1] = best.Position[1];
-    desc.Position[2] = best.Position[2];
+    desc.Position = best.Position;
     desc.InfluenceRadius = std::max(0.0f, best.InfluenceRadius);
     desc.BoxProjection = best.HasBox;
     if (best.HasBox)
     {
-        for (int i = 0; i < 3; ++i)
-        {
-            desc.BoxCenter[i] = best.BoxCenter[i];
-            desc.BoxHalfExtents[i] = best.BoxHalfExtents[i];
-            desc.BoxAxisX[i] = best.BoxAxisX[i];
-            desc.BoxAxisY[i] = best.BoxAxisY[i];
-            desc.BoxAxisZ[i] = best.BoxAxisZ[i];
-        }
+        desc.BoxCenter = best.BoxCenter;
+        desc.BoxHalfExtents = best.BoxHalfExtents;
+        desc.BoxAxisX = best.BoxAxisX;
+        desc.BoxAxisY = best.BoxAxisY;
+        desc.BoxAxisZ = best.BoxAxisZ;
     }
     desc.MaxDistance = std::max(0.0f, best.Probe.MaxDistance);
     desc.CapturedLayers = best.Probe.CapturedLayers;

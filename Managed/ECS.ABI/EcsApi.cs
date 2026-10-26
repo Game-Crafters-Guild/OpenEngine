@@ -458,7 +458,7 @@ namespace GameEngine.ECS
             public uint offset;
             public uint size;
             public ushort fieldType;
-            public ushort reserved;
+            public ushort assetCategory;
         }
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -800,7 +800,7 @@ namespace GameEngine.ECS
                     pDescs[i].offset = fields[i].Offset;
                     pDescs[i].size = fields[i].Size;
                     pDescs[i].fieldType = (ushort)fields[i].Type;
-                    pDescs[i].reserved = 0;
+                    pDescs[i].assetCategory = fields[i].AssetCategory;
                 }
                 return s_registerBlobWithSchema(pName, (uint)nameBytes.Length, sizeBytes,
                     fields.Length == 0 ? null : pDescs, (uint)fields.Length, out typeId);

@@ -56,7 +56,7 @@ By default the surface bakes every mesh that does not move, so a flower, a reed,
 | Include | Always baked, where it stands when the bake runs, also on a kinematic or dynamic body or a navigation agent. The surface does not follow it when it moves. A child that inherits Include and moves on its own, such as a crew member on an included deck, is left out unless it sets Include itself. |
 | Exclude | Never baked. Colliders are separate sources: a Static collider on the same entity or a child is still baked. |
 
-The policy covers the entity's own mesh and the meshes of its children: the children of a blueprint, and the submesh entities a model makes under the entity that shows it. A child with its own Navigation Source, Auto included, follows its own policy instead. Saving the scene or the blueprint keeps the policy.
+The policy covers the entity's own mesh and the meshes of its children: the children of a prefab, and the submesh entities a model makes under the entity that shows it. A child with its own Navigation Source, Auto included, follows its own policy instead. Saving the scene or the prefab keeps the policy.
 
 :::tip[A tree agents walk under]
 
@@ -97,6 +97,7 @@ A dirty tile is rebuilt only when its content changed: its hash (see [Saved tile
 | `Out of date: the settings changed since the last bake (1,024 tiles). Bake to apply.` | A setting changed after the last bake. The surface still holds that bake until Bake is pressed. After a Mode change the text names the mode of the bake it holds. |
 | `Waiting for: terrain tile (3, 7) is not resident` | Part of the bounds lies on a terrain tile that has not streamed in. The bake continues once it has. |
 | `Waiting for: model Rock is still loading` | A mesh renderer shows a model that has not loaded yet. The bake starts once it has. |
+| `Waiting for: the scene's spline recipes to build` | A road, wall, fence or placement recipe has not built yet. The bake starts once every recipe has built or failed. |
 | `Failed: no geometry inside the bounds; …` | Nothing the surface bakes from is inside its bounds. Move the bounds, or add a terrain, a static collider, or a mesh. |
 | `Failed: the bounds need 4,761 tiles and a mesh surface spans at most 64 x 64 tiles (2,048 m on a side at this Cell Size): …` | A mesh surface wider than 64 tiles on a side is refused. Shrink the bounds to 2,048 m or less, or raise Cell Size. |
 | `Failed: the bounds need 5,000,000 cells: …` | The bounds are too large for a grid at this cell size. Raise Cell Size or shrink the bounds. |

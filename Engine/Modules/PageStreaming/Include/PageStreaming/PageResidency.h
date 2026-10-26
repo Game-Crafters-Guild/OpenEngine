@@ -3,6 +3,8 @@
 #include "PageStreaming/CpuPageDirectory.h"
 #include "PageStreaming/PageCache.h"
 #include "PageStreaming/PageLoader.h"
+#include "PageStreaming/PageSampleRect.h"
+#include "Types/FlatMap.h"
 
 #include <atomic>
 #include <chrono>
@@ -29,11 +31,13 @@ class AssetIOService;
 namespace GameEngine::PageStreaming
 {
 
-struct PageSampleRect;
-
 /// The synchronous CPU fetch's share of a frame (design page-streaming D3): CPU window pages are
 /// fetched on the main thread only while less than this has passed since the frame's Update began.
 inline constexpr std::chrono::microseconds kCpuSyncFetchDeadline{500};
+/// The most level-0 samples along either axis of a store whose pages stream: 2^22. The CPU
+/// directory is one 32-bit-counted entry per page of every level, which this keeps inside 32 bits;
+/// a larger store is refused before it streams (TerrainECS DenseDirectoryRefusal).
+inline constexpr uint32 kCpuDirectoryMaxSamplesPerAxis = 1u << 22u;
 
 /// The clock the synchronous fetch's deadline is read from.
 using PageFetchClock = std::function<std::chrono::steady_clock::time_point()>;
@@ -41,11 +45,9 @@ using PageFetchClock = std::function<std::chrono::steady_clock::time_point()>;
 /// What the residency may spend, for every field of every terrain in the process together.
 struct PageResidencyBudget
 {
-    /// The one CPU budget of decoded page samples (design D5's CPU cache: 64 MiB desktop, 32 MiB
-    /// Steam Deck): the pages waiting for their upload and the pages the CPU readers sample alike.
-    /// The placeable pages, this frame's CPU window pages and the CPU's pinned levels are kept past
-    /// it, so the budget in force is the larger of this and their bytes; the least recently wanted
-    /// others are dropped first.
+    /// The one CPU budget of loaded page bytes (design D5: 64 MiB desktop, 32 MiB Steam Deck), each
+    /// page counted by its PageSource::PayloadBytes. The placeable pages, this frame's CPU window pages
+    /// and the CPU pinned levels are kept past it; the least recently wanted others go first.
     uint64 CpuBytes = 64ull * 1024ull * 1024ull;
     uint32 UploadsPerFrame = 64;          ///< new cache assignments a frame, all streams together
     uint32 UploadsPerFrameTeleport = 128; ///< the same after a teleport
@@ -68,7 +70,7 @@ struct PageResidencyBudget
 ///   terrains of a field divide its slots by that order;
 /// - starts loads in that order up to the loads-in-flight budget, and gives the per-frame upload cap
 ///   to the placeable loaded pages in that order;
-/// - trims the CPU samples to their budget (the larger of PageResidencyBudget::CpuBytes and the
+/// - trims the CPU pages to their budget (the larger of PageResidencyBudget::CpuBytes and the
 ///   placeable pages' bytes), least recently wanted first, never a placeable page. The trim runs only
 ///   when there is a page to drop, so it is an event, not a per-frame cost.
 /// - fetches the pages a stream's CPU readers keep (RequestCpu, design D3): the top page
@@ -80,7 +82,7 @@ struct PageResidencyBudget
 ///   the last can still end past the deadline); the other CPU window pages, then the CPU pinned
 ///   levels' pages coarsest first, load like the wanted pages with at most a quarter of the loads
 ///   in flight, so the CPU never holds most of the queue the drawn pages wait on.
-/// A page is fetched once for both sides: its samples stay on the CPU past its upload, for the CPU
+/// A page is fetched once for both sides: its bytes stay on the CPU past its upload, for the CPU
 /// readers (CpuPages) and for a later upload of the same page, until the trim drops them.
 /// Every count it reports is edge-triggered, and a parked camera allocates nothing.
 ///
@@ -137,8 +139,9 @@ public:
     /// Field `field`'s physical cache: every stream's assignments, uploads and transitions this
     /// frame, each page tagged with its stream.
     const PageCache& FieldCache(uint32 field) const;
-    /// The decoded samples of a page of stream `stream` on the CPU (kPageSampleCount), or null.
-    const std::vector<float32>* Samples(uint32 stream, const PageAddress& address) const;
+    /// The loaded bytes of a page of stream `stream` on the CPU (its source's PayloadBytes; a height
+    /// page's heights through HeightSamples), or null.
+    const std::vector<uint8>* Bytes(uint32 stream, const PageAddress& address) const;
     /// Stream `stream`'s CPU page directory, the one way a CPU reader looks a page up (empty when
     /// the stream is not configured or its source has no levels).
     CpuPageDirectory CpuPages(uint32 stream) const;
@@ -152,7 +155,7 @@ public:
 private:
     struct LoadedPage
     {
-        std::shared_ptr<const std::vector<float32>> Samples;
+        std::shared_ptr<const std::vector<uint8>> Bytes;
         uint64 LastWantedFrame = 0;
     };
 
@@ -177,6 +180,7 @@ private:
         PageSource Source;
         uint32 Field = 0;
         uint32 TopLevel = 0;
+        uint32 PageBytes = 0; // every loaded page's bytes: the source's PayloadBytes
         uint64 Epoch = 0; // bumps on Configure, so a restarted stream ignores its old loads
         std::shared_ptr<std::atomic<bool>> Cancel = std::make_shared<std::atomic<bool>>(false);
         std::vector<PageWant> Wanted;
@@ -186,7 +190,9 @@ private:
         std::unordered_map<PageAddress, LoadedPage, PageAddressHash> Loaded;
         std::unordered_set<PageAddress, PageAddressHash> InFlight;
         std::unordered_set<PageAddress, PageAddressHash> Absent;
-        std::unordered_set<PageAddress, PageAddressHash> Stale; // resident pages to load and rewrite (Refresh)
+        // Resident pages to load and rewrite (Refresh), each with the union of the level-0 rects
+        // refreshed under it since its last rewrite.
+        FlatMap<PageAddress, PageSampleRect> Stale;
         std::unordered_map<PageAddress, LoadFailure, PageAddressHash> Failures;
         uint32 CpuPinnedLevel = ~0u;               // the CPU keeps every page of this level and coarser
         std::vector<PageAddress> CpuWindow;        // this frame's CPU window pages, nearest first
@@ -228,7 +234,7 @@ private:
     void StartLoad(uint32 streamId, Stream& stream, const PageAddress& address, bool cpu);
     void AssignLoaded(uint64 frameIndex, float32 deltaSeconds, bool teleport);
     void RewriteRefreshed(uint32 field, PageCache& cache);
-    void TrimCpuSamples(uint64 frameIndex);
+    void TrimCpuPages(uint64 frameIndex);
 
     JobSystem::WorkStealingThreadPool* m_Pool = nullptr;
     AssetIOService* m_Io = nullptr;

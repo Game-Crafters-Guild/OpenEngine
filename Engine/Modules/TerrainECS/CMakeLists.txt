@@ -25,6 +25,7 @@ add_library(TerrainECS OBJECT
     Source/RawHeightmap.cpp
     Source/AtlasResidencyController.cpp
     Source/PageLevelRule.cpp
+    Source/PageTable.cpp
     Source/PagedHeightSampler.cpp
     Source/SurfaceHeightQuery.cpp
     Source/TerrainSkyline.cpp
@@ -39,6 +40,10 @@ add_library(TerrainECS OBJECT
     Source/Systems/TerrainWorldHooks.cpp
     Source/Systems/TerrainModifierSystem.cpp
     Source/Systems/TerrainModifierPageOverlay.cpp
+    Source/Systems/TerrainModifierSurfacePages.cpp
+    Source/TerrainSurfacePageBaker.cpp
+    Source/TerrainSurfacePageDriver.cpp
+    Source/TerrainSurfaceStore.cpp
     Source/TileStreamingManager.cpp
     Source/TerrainModifierComponents.cpp
     Source/TerrainColorMap.cpp

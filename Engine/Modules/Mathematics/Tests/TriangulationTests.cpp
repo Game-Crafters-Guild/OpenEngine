@@ -152,3 +152,21 @@ TEST(EarClip, AnOutlineWithABridgedHoleLeavesTheHoleUncovered)
             << "triangle " << t / 3 << " covers the hole";
     }
 }
+
+// Two bands joined by a rung (an H on its side): once the clip has cut away one band's far end,
+// the diagonal of the next ear runs along that band's inner side, through the corner where the
+// rung meets it. That corner on the diagonal blocks the ear, so no triangle crosses the notch.
+TEST(EarClip, ACornerOnAnEarsDiagonalBlocksTheEar)
+{
+    const std::vector<Vector2> h{{2, -2}, {10, -2}, {10, -6.5f}, {14, -6.5f}, {14, 6.5f}, {10, 6.5f},
+                                 {10, 2}, {2, 2},   {2, 6.5f},   {-2, 6.5f},  {-2, -6.5f}, {2, -6.5f}};
+    std::vector<std::uint32_t> triangles;
+    EarClip(h, Sequence(h.size()), triangles);
+    EXPECT_EQ(triangles.size(), 3u * (h.size() - 2u));
+    ExpectCovers(h, triangles, PolygonDoubledSignedArea(h));
+    for (std::size_t t = 0; t < triangles.size(); t += 3)
+    {
+        const Vector2 centroid = (h[triangles[t]] + h[triangles[t + 1]] + h[triangles[t + 2]]) * (1.0f / 3.0f);
+        EXPECT_TRUE(PointInPolygon(centroid, h)) << "triangle " << t / 3 << " lies outside the outline";
+    }
+}

@@ -1,0 +1,47 @@
+#version 450
+
+// Sun glare, the cascade term: once per view and frame, the fraction of the sun's disc whose
+// beam reaches the eye past every shadow caster, written as one float the glare's vertex stage
+// reads (sun_glare_vs.glsl). One workgroup; the evaluation is Includes/sun_glare_casters.glsl.
+
+#include "Includes/sun_glare_casters.glsl"
+
+layout(local_size_x = GE_SUN_GLARE_CASTERS_LANES) in;
+
+layout(set = 0, binding = 0) uniform sampler2DArrayShadow uShadowMapArray;
+
+// Leading prefix of the ShadowData block the shadow cascades upload
+// (shadow_sampling.glsl, set 0 binding 8). Only the first three fields are declared: std140
+// makes a prefix binding-compatible, and a source contract test pins these three against that
+// header so the two layouts cannot drift apart silently.
+layout(set = 0, binding = 1, std140) uniform SunGlareShadowData
+{
+    mat4 ge_shadowVP[4];   // Light view-projection per cascade
+    vec4 ge_shadowSplits;  // View-space split distances
+    vec4 ge_shadowParams;  // x=depthBias, y=normalBias, z=numCascades, w=maxShadowDistance
+} ShadowData;
+
+layout(set = 0, binding = 2, std430) writeonly buffer SunGlareCasters
+{
+    float casters; // fraction of the disc in [0, 1]
+} uCasters;
+
+layout(push_constant) uniform CastersPC
+{
+    // xyz = camera world position, w unused.
+    vec4 eye;
+    // xyz = world-space direction TOWARD the sun (unit), w = angular radius (rad) of the disc
+    // sampled: the screen probe's own.
+    vec4 sunDirRadius;
+} pc;
+
+void main()
+{
+    int cascades = min(int(ShadowData.ge_shadowParams.z + 0.5), GE_SUN_GLARE_CASTERS_CASCADES);
+    int laneCascade = min(GE_SunGlareCastersLaneCascade(), GE_SUN_GLARE_CASTERS_CASCADES - 1);
+    float visibility = GE_SunGlareCastersVisibility(
+        uShadowMapArray, ShadowData.ge_shadowVP[laneCascade], cascades, pc.eye.xyz,
+        pc.sunDirRadius.xyz, pc.sunDirRadius.w, ShadowData.ge_shadowParams.x);
+    if (gl_LocalInvocationIndex == 0u)
+        uCasters.casters = visibility;
+}

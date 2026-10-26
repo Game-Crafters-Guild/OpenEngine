@@ -48,6 +48,7 @@ static_assert(std::is_standard_layout_v<AssetRef<>>, "AssetRef must be standard 
 // the category is genuinely open.
 using MaterialRef = AssetRef<AssetType::Material>;
 using ModelRef    = AssetRef<AssetType::Model>;
+using PrefabRef   = AssetRef<AssetType::Prefab>;
 using TextureRef  = AssetRef<AssetType::Texture>;
 using AudioRef    = AssetRef<AssetType::Audio>;
 using OceanDepthCacheRef = AssetRef<AssetType::OceanDepthCache>;

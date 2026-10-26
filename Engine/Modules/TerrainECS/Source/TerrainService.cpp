@@ -2181,8 +2181,8 @@ TerrainTileData* TerrainService::LoadTile(TiledTerrainHandle handle, TileCoord c
     auto tile = std::make_unique<TerrainTileData>();
     tile->Coord = coord;
     tile->Config = tiled.Config.TileConfig;
-    tile->WorldOriginX = tiled.WorldOriginX + coord.X * tiled.Config.TileWorldSize;
-    tile->WorldOriginZ = tiled.WorldOriginZ + coord.Z * tiled.Config.TileWorldSize;
+    tile->WorldOriginX = TileWorldOrigin(tiled.WorldOriginX, coord.X, tiled.Config.TileWorldSize);
+    tile->WorldOriginZ = TileWorldOrigin(tiled.WorldOriginZ, coord.Z, tiled.Config.TileWorldSize);
 
     const float32 tileWorld = tiled.Config.TileWorldSize;
     tile->Heightfield.Resize(tile->Config.HeightmapWidth, tile->Config.HeightmapHeight, 0.0f);
@@ -2266,8 +2266,8 @@ TerrainTileData* TerrainService::CreateEmptyTile(TiledTerrainHandle handle, Tile
     auto tile = std::make_unique<TerrainTileData>();
     tile->Coord = coord;
     tile->Config = tiled.Config.TileConfig;
-    tile->WorldOriginX = tiled.WorldOriginX + coord.X * tiled.Config.TileWorldSize;
-    tile->WorldOriginZ = tiled.WorldOriginZ + coord.Z * tiled.Config.TileWorldSize;
+    tile->WorldOriginX = TileWorldOrigin(tiled.WorldOriginX, coord.X, tiled.Config.TileWorldSize);
+    tile->WorldOriginZ = TileWorldOrigin(tiled.WorldOriginZ, coord.Z, tiled.Config.TileWorldSize);
     tile->LodState = TileLodState::Empty;
     tile->HeightfieldDirty = false; // No data yet
 

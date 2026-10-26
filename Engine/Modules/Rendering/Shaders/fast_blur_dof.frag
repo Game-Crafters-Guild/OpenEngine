@@ -65,13 +65,13 @@ void main()
     ivec2 depthSize = textureSize(uDepth, 0);
     ivec2 pix = ivec2(clamp(gl_FragCoord.xy, vec2(0.0), vec2(depthSize) - vec2(1.0)));
     float rawDepth = texelFetch(uDepth, pix, 0).r;
-    if (rawDepth <= 0.0)
+    if (IsBackgroundDepth(rawDepth))
     {
         oColor = vec4(centerRgb, center.a);
         return;
     }
 
-    float linearDepth = LinearizeReverseZ(rawDepth);
+    float linearDepth = LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
     float coc = CircleOfConfusion(linearDepth) * intensity;
     float radiusPx = coc * maxRadius;
     if (radiusPx <= 0.25)

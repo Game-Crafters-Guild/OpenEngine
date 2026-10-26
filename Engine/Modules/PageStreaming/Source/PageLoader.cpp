@@ -1,7 +1,6 @@
 #include "PageStreaming/PageLoader.h"
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
-#include "PageStreaming/HeightPageCodec.h"
 #include "PageStreaming/PageStoreFormat.h"
 #include "PageStreaming/PageStoreReader.h"
 
@@ -10,6 +9,7 @@
 #include "JobSystem/WorkStealingThreadPool.h"
 
 #include <algorithm>
+#include <cassert>
 
 namespace GameEngine::PageStreaming
 {
@@ -37,10 +37,10 @@ public:
 
     bool IsCancelled() const { return m_Request.Cancel && m_Request.Cancel->load(std::memory_order_acquire); }
 
-    void Load(std::vector<float32> samples)
+    void Load(std::vector<uint8> payload)
     {
         if (!m_Resolved.exchange(true))
-            m_Request.OnLoaded(m_Request.Address, std::move(samples));
+            m_Request.OnLoaded(m_Request.Address, std::move(payload));
     }
 
     void Fail(const std::string& reason)
@@ -54,7 +54,7 @@ private:
     std::atomic<bool> m_Resolved{false};
 };
 
-// The decode continuation: the page's bytes to samples. A page is not an asset, so the
+// The decode continuation: the page's stored bytes to its loaded bytes. A page is not an asset, so the
 // continuation's own result is always null.
 SharedPtr<Asset> DecodeLoadedPage(PendingPageLoad& load, Vector<uint8> bytes)
 {
@@ -63,15 +63,19 @@ SharedPtr<Asset> DecodeLoadedPage(PendingPageLoad& load, Vector<uint8> bytes)
         load.Fail("the page load was cancelled");
         return nullptr;
     }
-    std::vector<float32> samples(kPageSampleCount);
-    DecodeHeightPage(load.Request().Store->Layout().Header, bytes, samples);
-    load.Load(std::move(samples));
+    std::vector<uint8> payload;
+    if (!load.Request().Store->DecodePayload(load.Request().Address, bytes, payload))
+    {
+        load.Fail("the page's bytes are not its stored size");
+        return nullptr;
+    }
+    load.Load(std::move(payload));
     return nullptr;
 }
 
 } // namespace
 
-void SubmitHeightPageLoad(AssetIOService& io, PageLoadRequest request)
+void SubmitPageLoad(AssetIOService& io, PageLoadRequest request)
 {
     const PageIndexEntry* entry = request.Store ? request.Store->Layout().FindPresent(request.Address) : nullptr;
     if (!entry)
@@ -87,11 +91,17 @@ void SubmitHeightPageLoad(AssetIOService& io, PageLoadRequest request)
     read.Metadata.Path = pending.Store->File();
     read.Priority = pending.Priority;
     read.RangeOffset = pending.Store->BaseOffset() + entry->Offset;
-    read.RangeBytes = entry->Size;
+    read.RangeBytes = pending.Store->Layout().StoredBytes(*entry);
     read.CancelRequested = pending.Cancel;
     read.ProcessData = [load](Vector<uint8> bytes) { return DecodeLoadedPage(*load, std::move(bytes)); };
     read.OnFailure = [load](const String& error) { load->Fail(error); };
     io.SubmitRead(std::move(read));
+}
+
+uint32 PageSource::PayloadBytes() const
+{
+    assert((Store || Generated) && "a page source has a store or a generated provider");
+    return PagePayloadBytes(Store ? Store->Layout().Header.Format : PageFieldFormat::HeightSteps);
 }
 
 uint64 NextPageFetchRetryFrame(uint64 frameIndex, uint32 failedAttempts)
@@ -109,17 +119,20 @@ PageFetchOutcome FetchPage(const PageSource& source, const PageAddress& address)
         outcome.Absent = true;
         return outcome;
     }
-    auto samples = std::make_shared<std::vector<float32>>(kPageSampleCount);
+    auto payload = std::make_shared<std::vector<uint8>>();
     if (source.Generated)
     {
-        if (source.Generated->FillPage(address, *samples))
-            outcome.Samples = std::move(samples);
+        payload->resize(source.PayloadBytes());
+        if (source.Generated->FillPage(address, HeightSamples(*payload)))
+            outcome.Bytes = std::move(payload);
         else
             outcome.Absent = true; // outside the generated pyramid
         return outcome;
     }
-    if (source.Store && source.Store->ReadHeightPage(address, *samples))
-        outcome.Samples = std::move(samples);
+    std::vector<uint8> stored;
+    if (source.Store && source.Store->ReadPageBytes(address, stored) &&
+        source.Store->DecodePayload(address, stored, *payload))
+        outcome.Bytes = std::move(payload);
     else
         outcome.Error = "the page store could not be read";
     return outcome;
@@ -137,13 +150,13 @@ void SubmitPageFetch(JobSystem::WorkStealingThreadPool* pool, AssetIOService* io
         request.Address = address;
         request.Priority = AssetLoadPriority::High;
         request.Cancel = std::move(cancel);
-        request.OnLoaded = [shared](const PageAddress& page, std::vector<float32> samples) {
-            (*shared)(PageFetchOutcome{page, std::make_shared<const std::vector<float32>>(std::move(samples)), {}, false});
+        request.OnLoaded = [shared](const PageAddress& page, std::vector<uint8> payload) {
+            (*shared)(PageFetchOutcome{page, std::make_shared<const std::vector<uint8>>(std::move(payload)), {}, false});
         };
         request.OnFailed = [shared, store = source.Store](const PageAddress& page, const std::string& error) {
             (*shared)(PageFetchOutcome{page, nullptr, error, !store->Layout().FindPresent(page)});
         };
-        SubmitHeightPageLoad(*io, std::move(request));
+        SubmitPageLoad(*io, std::move(request));
         return;
     }
     auto fetch = [source, address, cancel = std::move(cancel), done = std::move(done)]() {

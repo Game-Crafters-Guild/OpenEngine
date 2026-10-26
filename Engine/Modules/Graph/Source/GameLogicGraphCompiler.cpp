@@ -540,6 +540,10 @@ private:
             EmitLine("ctx.SetBusVolume(" + ValueExpr(node, "bus", "int", "bus") + ", " + ValueExpr(node, "volume", "float", "volume") + ");");
         else if (node.TypeId == "CreateEntity")
             EmitLine("(void)ctx.CreateEntity(" + ValueExpr(node, "name", "string", "name") + ");");
+        else if (node.TypeId == "SpawnPrefab")
+            EmitLine("(void)ctx.SpawnPrefab(" + ValueExpr(node, "prefab", "string", "prefab") + ", " +
+                     ValueExpr(node, "position", "float3", "position") + ", " +
+                     ValueExpr(node, "rotation", "float3", "rotation") + ");");
         else if (node.TypeId == "DestroyEntity")
             EmitLine("ctx.DestroyEntity(" + EntityExpr(node, "entity") + ");");
         else if (node.TypeId == "SetEntityEnabled")

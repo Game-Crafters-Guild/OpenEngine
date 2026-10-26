@@ -11,6 +11,7 @@
 #include "Engine/Rendering/DDGIProbeFeature.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Matrix4x4.h"
 
 #include <algorithm>
 #include <cmath>
@@ -65,29 +66,20 @@ DDGIVolumeDesc DDGIVolumeSystem::ResolveActiveVolume(ECS::World& world)
     if (!found)
         return desc;
 
-    // Translation is the 4th column of the column-major WorldTransform matrix
-    // (matches every other GPUInstance/RTShadowMaskService transform read in
-    // this codebase). Size comes from the same transform's scale — the volume
-    // is a unit cube scaled by it (DDGIVolume.h's convention, shared with
-    // PostProcessVolume). v1 ignores rotation only: the box stays
-    // world-axis-aligned. ComputeVolumeHalfExtents is the ONE derivation, also
-    // used by the editor gizmo so the drawn box is the box that reaches the GPU.
-    const float* m = xform.matrix;
-    const float centerX = m[12];
-    const float centerY = m[13];
-    const float centerZ = m[14];
-
-    float halfExtents[3];
-    DDGIProbeFeature::ComputeVolumeHalfExtents(m, halfExtents);
+    // The center is the WorldTransform's translation column. Size comes from
+    // the same transform's scale — the volume is a unit cube scaled by it
+    // (DDGIVolume.h's convention, shared with PostProcessVolume). v1 ignores
+    // rotation only: the box stays world-axis-aligned. ComputeVolumeHalfExtents
+    // is the ONE derivation, also used by the editor gizmo so the drawn box is
+    // the box that reaches the GPU.
+    const Mathematics::Vector3 center = xform.GetPosition();
+    const Mathematics::Vector3 halfExtents =
+        DDGIProbeFeature::ComputeVolumeHalfExtents(Mathematics::Matrix4x4::FromColumnMajor(xform.matrix));
 
     desc.Enabled = true;
     desc.WorldId = world.GetWorldId();
-    desc.GridMinWS[0] = centerX - halfExtents[0];
-    desc.GridMinWS[1] = centerY - halfExtents[1];
-    desc.GridMinWS[2] = centerZ - halfExtents[2];
-    desc.GridSizeWS[0] = halfExtents[0] * 2.0f;
-    desc.GridSizeWS[1] = halfExtents[1] * 2.0f;
-    desc.GridSizeWS[2] = halfExtents[2] * 2.0f;
+    desc.GridMinWS = center - halfExtents;
+    desc.GridSizeWS = halfExtents * 2.0f;
     desc.Fit = comp.Fit;
     desc.FollowRange = comp.FollowRange;
     desc.FollowHeightFraction = comp.FollowHeightFraction;
@@ -137,18 +129,14 @@ void DDGIVolumeSystem::ApplyCameraFit(DDGIVolumeDesc& desc)
     // centre for the tick where no eligible view exists AND nothing has been
     // followed yet — leaving the transform's min against the synthesised size
     // would otherwise describe a box that is neither.
-    const Mathematics::Vector3 authoredCentre(desc.GridMinWS[0] + desc.GridSizeWS[0] * 0.5f,
-                                              desc.GridMinWS[1] + desc.GridSizeWS[1] * 0.5f,
-                                              desc.GridMinWS[2] + desc.GridSizeWS[2] * 0.5f);
+    const Mathematics::Vector3 authoredCentre = desc.GridMinWS + desc.GridSizeWS * 0.5f;
 
     // A followed volume is sized NUMERICALLY, not by the transform — see
     // Components::DDGIVolume::FollowRange. Resolved before the centre because
     // SnapCentreToProbeGrid quantises to this box's probe spacing.
     const float range = std::max(desc.FollowRange, 0.1f);
     const float heightFraction = std::clamp(desc.FollowHeightFraction, 0.05f, 4.0f);
-    desc.GridSizeWS[0] = range * 2.0f;
-    desc.GridSizeWS[1] = range * 2.0f * heightFraction;
-    desc.GridSizeWS[2] = range * 2.0f;
+    desc.GridSizeWS = Mathematics::Vector3(range * 2.0f, range * 2.0f * heightFraction, range * 2.0f);
 
     Mathematics::Vector3 cameraWS;
     if (m_FollowTracker.Update(m_RenderServices->Views(), desc.WorldId, cameraWS))

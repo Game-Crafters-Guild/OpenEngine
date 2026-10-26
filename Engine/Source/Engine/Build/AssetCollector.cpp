@@ -421,7 +421,7 @@ std::unordered_set<std::string> AssetCollector::CollectComponentNames(const Asse
     std::unordered_set<std::string> names;
     for (const auto& entry : manifest.entries)
     {
-        if (entry.type == AssetType::Scene)
+        if (entry.type == AssetType::Scene || entry.type == AssetType::Prefab)
             SceneAssetParser::CollectComponentNames(ParserExtraction::ReadFileBody(entry.sourcePath), names);
     }
     return names;

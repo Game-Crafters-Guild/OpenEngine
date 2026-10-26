@@ -32,7 +32,7 @@ inline constexpr const char* kHeight = "movieRecorder.height";
 inline constexpr const char* kOutputPath = "movieRecorder.outputPath";
 inline constexpr const char* kOutputPathSet = "movieRecorder.outputPathSet";
 inline constexpr const char* kBitrateKbps = "movieRecorder.bitrateKbps";
-inline constexpr const char* kAutoBitrate = "movieRecorder.autoBitrate";
+inline constexpr const char* kConstantQuality = "movieRecorder.constantQuality";
 inline constexpr const char* kEncoderMode = "movieRecorder.encoderMode";
 inline constexpr const char* kRecordAudio = "movieRecorder.recordAudio";
 inline constexpr const char* kFadeIn = "movieRecorder.fadeIn";
@@ -108,7 +108,7 @@ public:
         int Width = 1920;
         int Height = 1080;
         int BitrateKbps = 60000;
-        bool AutoBitrate = true;
+        bool ConstantQuality = true;
         bool RecordAudio = true;
         bool FadeIn = false;
         bool FadeOut = false;

@@ -104,7 +104,7 @@ void TerrainHeightPageFeature::StageUploads()
         return;
     }
     for (std::size_t i = 0; i < m_LatchedUploads.size(); ++i)
-        m_Device->UpdateBuffer(m_Staging, i * kPageBytes, kPageBytes, m_LatchedUploads[i].Samples.data());
+        m_Device->UpdateBuffer(m_Staging, i * kPageBytes, kPageBytes, m_LatchedUploads[i].Bytes.data());
 }
 
 void TerrainHeightPageFeature::RetireStaging()

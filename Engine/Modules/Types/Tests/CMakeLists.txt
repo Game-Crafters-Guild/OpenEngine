@@ -14,6 +14,7 @@ endif()
 
 add_executable(TypesTests
     ColorTests.cpp
+    DisjointSetsTests.cpp
     FalseSharingTests.cpp
     FlatMapTests.cpp
     FlatSetTests.cpp

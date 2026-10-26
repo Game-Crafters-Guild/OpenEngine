@@ -4,6 +4,7 @@
 #include "Components/Terrain/TerrainModifierBlend.h"
 #include "Components/Terrain/TerrainSurfaceRules.h"
 #include "Mathematics/Interpolation.h"
+#include "Types/Color.h"
 #include "Types/StringUtils.h"
 #include "Types/Types.h"
 
@@ -407,7 +408,7 @@ struct TerrainColorEffect
     GE_TERRAIN_EFFECT_COMMON_FIELDS
 
     // Linear, each channel [0,1]. The default is the grass's default Soil Color.
-    float32 Color[3] = {0.10f, 0.075f, 0.045f};
+    ColorLinear Color{0.10f, 0.075f, 0.045f};
     // [0,1]: how far the ground moves toward Color. At 1 the ground is Color alone and loses its
     // material's pattern, so the default keeps half of it.
     float32 Strength = 0.5f;

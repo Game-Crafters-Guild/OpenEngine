@@ -125,3 +125,18 @@ TEST(GameViewPointerLockTests, PauseStopOrAWithdrawnRequestEndTheHandBack)
     EXPECT_FALSE(state.Locked);
     EXPECT_TRUE(Step(state, Playing()).Locked);
 }
+
+TEST(GameViewPointerLockTests, TheGameLockWinsOverAUiDragAndOutlivesItsRelease)
+{
+    using Motion = GameEngine::Platform::Window::LockedCursorMotion;
+    EXPECT_EQ(ResolveWindowCursorLock({.Game = true, .UiDrag = true}), Motion::Raw);
+    // The game locks during a UI drag; the drag's release keeps the game's lock.
+    EXPECT_EQ(ResolveWindowCursorLock({.Game = true, .UiDrag = false}), Motion::Raw);
+}
+
+TEST(GameViewPointerLockTests, AUiDragAloneLocksWithAcceleratedMotionAndNothingLeavesTheWindowUnlocked)
+{
+    using Motion = GameEngine::Platform::Window::LockedCursorMotion;
+    EXPECT_EQ(ResolveWindowCursorLock({.Game = false, .UiDrag = true}), Motion::Accelerated);
+    EXPECT_EQ(ResolveWindowCursorLock({}), std::nullopt);
+}

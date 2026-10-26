@@ -32,6 +32,7 @@ namespace GameEngine.Scripting
         TerrainData = 1,
         Model = 2,
         BakedData = 3,
+        SplineRecipes = 4,
     }
 
     public enum NavigationBakeFailure : byte

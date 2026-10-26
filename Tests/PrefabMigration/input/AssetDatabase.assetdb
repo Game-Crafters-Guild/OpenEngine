@@ -1,0 +1,4 @@
+# GameEngine AssetDatabase.assetdb (authoritative)
+{"format":"assetdb","version":2}
+{"guid":"954fd91d-6a21-4357-90e8-d95717bb1e72","path":"blueprints/bp.blueprint","type":"Scene"}
+{"guid":"417a0968-49bf-40a3-bfd1-34efed69528f","path":"materials/rtsblueprint.material","type":"Material"}

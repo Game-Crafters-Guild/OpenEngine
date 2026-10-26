@@ -11,7 +11,7 @@
 #include "Markups/MarkupEditorBridge.h"
 #include "Markups/MarkupRequests.h"
 #include "Mathematics/Ray.h"
-#include "Picking/MeshPickingService.h"
+#include "Picking/ScenePick.h"
 #include "SceneView/SceneViewDropPlacement.h"
 #include "SceneView/SceneViewEvents.h"
 #include "SceneView/SceneViewNoticeOverlay.h"
@@ -175,11 +175,10 @@ std::vector<Vector2> SimplifyLassoStroke(std::span<const Vector3> stroke)
 
 std::optional<Vector3> ResolveMarkupRegionGround(const Mathematics::Ray3D& ray, ECS::World& world)
 {
-    Picking::PickOptions options;
+    Scene::PickOptions options;
     options.IncludeMeshes = false;
     options.IncludePrimitives = false;
-    options.IncludeBoundsFallback = false;
-    const Picking::PickResult terrain = Picking::RaycastScene(ray, world, options);
+    const Scene::PickResult terrain = Picking::PickScene(ray, world, options);
     if (terrain.Hit)
         return terrain.Best.WorldPosition;
     float t = 0.0f;

@@ -101,7 +101,7 @@ void RenderServices::SubmitLight(uint64 worldId, const ExtractedLight& light)
 
 float DeliveredLuminance(const ExtractedLight& l)
 {
-    const float luma = ColorUtils::LinearRec709Luminance(l.color);
+    const float luma = ColorUtils::LinearRec709Luminance({l.color[0], l.color[1], l.color[2]});
     return std::max(luma, 0.0f) * std::max(l.intensity, 0.0f);
 }
 

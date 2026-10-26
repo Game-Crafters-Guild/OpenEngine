@@ -50,7 +50,7 @@ Each mark-up draws as a translucent volume in its status color with an outline. 
 
 :::caution[Limits]
 
-- A mark-up belongs to a scene. One inside a blueprint or a subscene is refused when the scene loads, with a message that says to move it into the scene that places the instance.
+- A mark-up belongs to a scene. One inside a prefab or a subscene is refused when the scene loads, with a message that says to move it into the scene that places the instance.
 - Mark-ups are edited outside play mode. In play mode the Mark-up tool places nothing and the Mark-up and Mark-up Volume inspector sections are read-only, with a notice to stop play first. Hiding and showing mark-ups in the Mark-ups panel still works.
 - Duplicating a mark-up copies its shape, title, and status. The copy starts its own, empty thread.
 - Hiding a mark-up is your view, not a scene edit: it does not dirty the scene and is not undone. The editor remembers hidden mark-ups and what you have seen, per project and per scene. A mark-up you hide before the scene is first saved is remembered for the next session once the scene has been saved.

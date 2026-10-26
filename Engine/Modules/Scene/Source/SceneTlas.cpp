@@ -230,6 +230,7 @@ void SceneTlas::Clear()
     m_Impl->Sectors.clear();
     m_Impl->EntityToSectors.clear();
     m_Impl->EntityStableAabb.clear();
+    m_Impl->Version.fetch_add(1u, std::memory_order_release);
 }
 
 void SceneTlas::SyncFromRecords(
@@ -239,6 +240,7 @@ void SceneTlas::SyncFromRecords(
     std::unique_lock lock(m_Impl->Mutex);
     Internal::ReconcileFromRecords(*m_Impl, records);
     ++m_Impl->ReconcileCount;
+    m_Impl->Version.fetch_add(1u, std::memory_order_release);
 }
 
 namespace
@@ -537,9 +539,12 @@ SceneTlas::SyncResult SceneTlas::RefitResolvedCandidates(JobSystem::WorkStealing
         }
     }
 
+    const uint64 refitLeavesBefore = m_Impl->RefitLeafCount;
     m_Impl->RefitLeafCount += m_Impl->PrimarySector.DirtyLeavesScratch.size();
     for (auto& kv : m_Impl->Sectors)
         m_Impl->RefitLeafCount += kv.second->DirtyLeavesScratch.size();
+    if (m_Impl->RefitLeafCount != refitLeavesBefore)
+        m_Impl->Version.fetch_add(1u, std::memory_order_release);
 
     if (!m_Impl->PrimarySector.DirtyLeavesScratch.empty())
         Internal::RefitDirty(m_Impl->PrimarySector);
@@ -635,6 +640,11 @@ void SceneTlas::SetParallelRefitChunkCountForTesting(uint32 chunks)
 {
     std::unique_lock lock(m_Impl->Mutex);
     m_Impl->ForcedParallelChunks = chunks;
+}
+
+uint64 SceneTlas::Version() const
+{
+    return m_Impl->Version.load(std::memory_order_acquire);
 }
 
 uint64 SceneTlas::GetRefitLeafCountForTesting() const

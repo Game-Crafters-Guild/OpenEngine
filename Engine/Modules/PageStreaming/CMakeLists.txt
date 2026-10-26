@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(PageStreaming LANGUAGES CXX)
 
 # Page streaming: the .gepage store of a terrain field (a pyramid of fixed-size pages), its
-# cooker, reader and asynchronous page loader, the generated provider of noise and flat bases,
+# codecs, cooker, reader and asynchronous page loader, the generated provider of noise and flat bases,
 # and the shipped terrain container. Device-free: the GPU half (physical caches, page tables, the
 # resolve) lives with the terrain renderer in TerrainECS and CBTTerrain.
 add_library(PageStreaming OBJECT
@@ -11,6 +11,9 @@ add_library(PageStreaming OBJECT
     Source/PageStoreFormat.cpp
     Source/PageStoreSerialization.cpp
     Source/HeightPageCodec.cpp
+    Source/PageCodec.cpp
+    Source/BytePageCodec.cpp
+    Source/Bc5PageCodec.cpp
     Source/PageStoreWriter.cpp
     Source/PageStoreReader.cpp
     Source/PageLoader.cpp
@@ -22,8 +25,14 @@ add_library(PageStreaming OBJECT
     Source/HeightStoreCache.cpp
     Source/HeightSourceRows.cpp
     Source/SourceRangeReader.cpp
-    Source/HeightPyramidBuilder.cpp
+    Source/PageFieldFilter.cpp
+    Source/PagePyramidBuilder.cpp
+    Source/PageStorePatcher.cpp
+    Source/HeightStepPlanner.cpp
+    Source/HeightCookBands.cpp
     Source/HeightPageCooker.cpp
+    Source/PlanetPageCooker.cpp
+    Source/PageFaceSeams.cpp
     Source/TerrainPageContainer.cpp
     Source/NonInheritedFile.cpp
 )
@@ -46,6 +55,7 @@ target_link_libraries(PageStreaming
         # The loader's reader threads (Assets/AssetIOService.h); objects link once into Engine.
         AssetRuntime
         JobSystem
+        Mathematics
         FileSystem
         FileWatcher
         Terrain

@@ -6,6 +6,7 @@
 #include "Logger/Logger.h"
 #include "MovieRecorderController.h"
 #include "Platform/Shell.h"
+#include "Types/StringUtils.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/IntField.h"
@@ -22,9 +23,7 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cctype>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -46,24 +45,6 @@ Editor::SettingsStore OpenSettings()
 {
     const auto& root = EngineCore::GetInstance().GetWorkspaceRoot();
     return root.empty() ? Editor::OpenEditorPreferences() : Editor::OpenProjectSettings(root);
-}
-
-std::string Trim(std::string value)
-{
-    while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r' || value.back() == '\n'))
-    {
-        value.pop_back();
-    }
-    size_t start = 0;
-    while (start < value.size() && (value[start] == ' ' || value[start] == '\t' || value[start] == '\r' || value[start] == '\n'))
-    {
-        ++start;
-    }
-    if (start > 0)
-    {
-        value.erase(0, start);
-    }
-    return value;
 }
 
 std::string FilenameForDisplay(const std::filesystem::path& path)
@@ -92,26 +73,27 @@ std::string RecentRecordingKey(const std::filesystem::path& path)
     return path.lexically_normal().string();
 }
 
-std::string FormatBytes(std::uintmax_t bytes)
-{
-    const double mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.1f MB", mb);
-    return buf;
-}
-
 bool IsMoviePath(const std::filesystem::path& path)
 {
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
+    const std::string ext = ToLowerAscii(path.extension().string());
     return ext == ".mov" || ext == ".mp4" || ext == ".m4v" || ext == ".hevc" || ext == ".h265";
 }
 
 bool CodecUsesBitrate(const std::string& codec)
 {
     return codec == "h265" || codec == "h264";
+}
+
+void SetRowShown(UIElement* row, bool shown)
+{
+    if (shown)
+    {
+        row->RemoveClass("hidden");
+    }
+    else
+    {
+        row->AddClass("hidden");
+    }
 }
 
 void StyleOutputField(UIElement* el)
@@ -135,7 +117,7 @@ bool EqualSettings(const MovieRecorderPanel::SettingsSnapshot& a, const MovieRec
            a.Width == b.Width &&
            a.Height == b.Height &&
            a.BitrateKbps == b.BitrateKbps &&
-           a.AutoBitrate == b.AutoBitrate &&
+           a.ConstantQuality == b.ConstantQuality &&
            a.RecordAudio == b.RecordAudio &&
            a.FadeIn == b.FadeIn &&
            a.FadeOut == b.FadeOut &&
@@ -551,9 +533,9 @@ void MovieRecorderPanel::BuildUI()
     }
 
     {
-        m_AutoBitrateToggle = InspectorDrag::AddToggleRow(
+        m_ConstantQualityToggle = InspectorDrag::AddToggleRow(
             settingsBody,
-            "Auto Bitrate",
+            "Constant Quality",
             true,
             [this](bool enabled) {
                 if (m_SuppressSettingUndo)
@@ -565,30 +547,22 @@ void MovieRecorderPanel::BuildUI()
                     ApplyPresetBitrateDefault();
                 }
                 UpdateBitrateAvailability();
-                CommitSettingsChange("Change Movie Auto Bitrate");
+                CommitSettingsChange("Change Movie Constant Quality");
             },
-            "Use encoder/default bitrate; suggested values follow the selected preset");
+            "Record H.264 and HEVC at constant quality, so each frame gets the bits it needs. Turn off to set an average bitrate");
+        m_ConstantQualityRow = InspectorUI::RowOfControl(m_ConstantQualityToggle);
     }
 
     {
         m_BitrateField = InspectorDrag::AddIntRowWithDrag(
             settingsBody, "Bitrate Kbps", 60000,
             [](int) {},
-            [this](int) {
-                if (m_AutoBitrateToggle && !m_SuppressSettingUndo)
-                {
-                    const bool oldSuppress = m_SuppressSettingUndo;
-                    m_SuppressSettingUndo = true;
-                    m_AutoBitrateToggle->SetValue(false);
-                    m_SuppressSettingUndo = oldSuppress;
-                }
-                UpdateBitrateAvailability();
-                CommitSettingsChange("Change Movie Bitrate");
-            },
-            60000, "Manual average video bitrate in kilobits per second");
+            [this](int) { CommitSettingsChange("Change Movie Bitrate"); },
+            60000, "Average video bitrate in kilobits per second, used while Constant Quality is off");
         if (m_BitrateField)
         {
             m_BitrateField->SetRange(100, 1000000);
+            m_BitrateRow = InspectorUI::RowOfControl(m_BitrateField);
         }
     }
 
@@ -806,11 +780,11 @@ void MovieRecorderPanel::LoadSettings()
     {
         m_BitrateField->SetValue(loadInt(Prefs::kBitrateKbps, 60000));
     }
-    if (m_AutoBitrateToggle)
+    if (m_ConstantQualityToggle)
     {
-        bool autoBitrate = true;
-        prefs.TryGetBool(Prefs::kAutoBitrate, autoBitrate);
-        m_AutoBitrateToggle->SetValue(autoBitrate);
+        bool constantQuality = true;
+        prefs.TryGetBool(Prefs::kConstantQuality, constantQuality);
+        m_ConstantQualityToggle->SetValue(constantQuality);
     }
     if (m_FadeDurationField)
     {
@@ -849,13 +823,13 @@ void MovieRecorderPanel::LoadSettings()
         {
             prefs.TryGetString(Prefs::kOutputPath, outputPath);
         }
-        outputPath = Trim(outputPath);
+        outputPath = TrimWhitespace(outputPath);
         m_OutputPathExplicit = outputPathSet && !outputPath.empty();
         m_OutputPathField->SetValue(m_OutputPathExplicit ? outputPath : std::string{});
     }
 
     SyncResolutionPresetDropdown();
-    if (m_AutoBitrateToggle && m_AutoBitrateToggle->GetValue())
+    if (m_ConstantQualityToggle && m_ConstantQualityToggle->GetValue())
     {
         ApplyPresetBitrateDefault();
     }
@@ -881,7 +855,7 @@ void MovieRecorderPanel::SaveSettings()
     prefs.SetInt64(Prefs::kWidth, snapshot.Width);
     prefs.SetInt64(Prefs::kHeight, snapshot.Height);
     prefs.SetInt64(Prefs::kBitrateKbps, snapshot.BitrateKbps);
-    prefs.SetBool(Prefs::kAutoBitrate, snapshot.AutoBitrate);
+    prefs.SetBool(Prefs::kConstantQuality, snapshot.ConstantQuality);
     prefs.SetBool(Prefs::kRecordAudio, snapshot.RecordAudio);
     prefs.SetBool(Prefs::kFadeIn, snapshot.FadeIn);
     prefs.SetBool(Prefs::kFadeOut, snapshot.FadeOut);
@@ -970,7 +944,7 @@ void MovieRecorderPanel::CommitSettingsChange(const char* actionName)
             prefs.SetInt64(Prefs::kWidth, snapshot.Width);
             prefs.SetInt64(Prefs::kHeight, snapshot.Height);
             prefs.SetInt64(Prefs::kBitrateKbps, snapshot.BitrateKbps);
-            prefs.SetBool(Prefs::kAutoBitrate, snapshot.AutoBitrate);
+            prefs.SetBool(Prefs::kConstantQuality, snapshot.ConstantQuality);
             prefs.SetBool(Prefs::kRecordAudio, snapshot.RecordAudio);
             prefs.SetBool(Prefs::kFadeIn, snapshot.FadeIn);
             prefs.SetBool(Prefs::kFadeOut, snapshot.FadeOut);
@@ -1000,7 +974,7 @@ MovieRecorderPanel::SettingsSnapshot MovieRecorderPanel::CaptureSettingsSnapshot
     snapshot.Width = ParsePositiveInt(m_WidthField, 1920);
     snapshot.Height = ParsePositiveInt(m_HeightField, 1080);
     snapshot.BitrateKbps = ParseBitrateKbps(m_BitrateField, 60000);
-    snapshot.AutoBitrate = m_AutoBitrateToggle ? m_AutoBitrateToggle->GetValue() : true;
+    snapshot.ConstantQuality = m_ConstantQualityToggle ? m_ConstantQualityToggle->GetValue() : true;
     snapshot.RecordAudio = m_RecordAudioToggle && m_RecordAudioToggle->GetValue();
     snapshot.FadeIn = m_FadeInToggle && m_FadeInToggle->GetValue();
     snapshot.FadeOut = m_FadeOutToggle && m_FadeOutToggle->GetValue();
@@ -1049,9 +1023,9 @@ void MovieRecorderPanel::ApplySettingsSnapshot(const SettingsSnapshot& snapshot)
     {
         m_BitrateField->SetValue(std::clamp(snapshot.BitrateKbps, 100, 1000000));
     }
-    if (m_AutoBitrateToggle)
+    if (m_ConstantQualityToggle)
     {
-        m_AutoBitrateToggle->SetValue(snapshot.AutoBitrate);
+        m_ConstantQualityToggle->SetValue(snapshot.ConstantQuality);
     }
     if (m_RecordAudioToggle)
     {
@@ -1103,7 +1077,7 @@ void MovieRecorderPanel::ApplyResolutionPreset(const std::string& value)
     {
         m_HeightField->SetValue(preset->Height);
     }
-    if (m_BitrateField && (!m_AutoBitrateToggle || m_AutoBitrateToggle->GetValue()))
+    if (m_BitrateField && (!m_ConstantQualityToggle || m_ConstantQualityToggle->GetValue()))
     {
         m_BitrateField->SetValue(preset->BitrateKbps);
     }
@@ -1133,7 +1107,7 @@ void MovieRecorderPanel::SyncResolutionPresetDropdown()
     m_ResolutionPresetDropdown->SetSelectedValue(value);
     m_SuppressSettingUndo = oldSuppress;
 
-    if (m_AutoBitrateToggle && m_AutoBitrateToggle->GetValue())
+    if (m_ConstantQualityToggle && m_ConstantQualityToggle->GetValue())
     {
         ApplyPresetBitrateDefault();
     }
@@ -1163,31 +1137,17 @@ void MovieRecorderPanel::ApplyPresetBitrateDefault()
 
 void MovieRecorderPanel::UpdateBitrateAvailability()
 {
-    if (!m_BitrateField)
+    if (!m_BitrateRow || !m_ConstantQualityRow)
     {
         return;
     }
 
+    // A rate control the encoder does not use is not shown: ProRes sets its own
+    // quality and rate from the profile, and Constant Quality sets no bitrate.
     const bool bitrateCodec = CodecUsesBitrate(SelectedCodec());
-    const bool autoBitrate = !m_AutoBitrateToggle || m_AutoBitrateToggle->GetValue();
-    if (m_AutoBitrateToggle)
-    {
-        m_AutoBitrateToggle->SetEnabled(bitrateCodec);
-    }
-
-    m_BitrateField->SetEnabled(bitrateCodec && !autoBitrate);
-    if (!bitrateCodec)
-    {
-        m_BitrateField->SetTooltip("ProRes bitrate is determined by codec profile, resolution, and frame rate");
-    }
-    else if (autoBitrate)
-    {
-        m_BitrateField->SetTooltip("Preset suggestion shown; encoder chooses the final bitrate automatically");
-    }
-    else
-    {
-        m_BitrateField->SetTooltip("Manual average video bitrate in kilobits per second");
-    }
+    const bool constantQuality = m_ConstantQualityToggle->GetValue();
+    SetRowShown(m_ConstantQualityRow, bitrateCodec);
+    SetRowShown(m_BitrateRow, bitrateCodec && !constantQuality);
 }
 
 void MovieRecorderPanel::RefreshRecentRecordings()
@@ -1383,7 +1343,7 @@ void MovieRecorderPanel::PumpRecentRecordingsRefresh()
                     m_ActiveRecordingSizeKey)
             {
                 m_ActiveRecordingSizeLabel->SetText(
-                    FormatBytes(m_RecentRecordings[i].SizeBytes));
+                    FormatMebibytes(m_RecentRecordings[i].SizeBytes));
             }
         }
     }
@@ -1467,7 +1427,7 @@ bool MovieRecorderPanel::InsertRecentRecordingFromDisk(const std::filesystem::pa
             else if (rowMarkedActive)
             {
                 m_ActiveRecordingSizeLabel->SetText(
-                    FormatBytes(entry.SizeBytes));
+                    FormatMebibytes(entry.SizeBytes));
             }
             return true;
         }
@@ -1698,7 +1658,7 @@ void MovieRecorderPanel::RebuildRecentRows()
 
         auto meta = std::make_unique<Label>();
         Label* metaPtr = meta.get();
-        meta->SetText(FormatBytes(rec.SizeBytes));
+        meta->SetText(FormatMebibytes(rec.SizeBytes));
         meta->AddClass("movie-recorder-row-meta");
         row->AddChild(std::move(meta));
         if (isCapturingRow)
@@ -2104,7 +2064,7 @@ std::filesystem::path MovieRecorderPanel::CurrentOutputPath() const
     {
         return {};
     }
-    std::filesystem::path output = Trim(m_OutputPathField->GetValue());
+    std::filesystem::path output = TrimWhitespace(m_OutputPathField->GetValue());
     if (output.empty())
     {
         return {};

@@ -20,7 +20,7 @@ kPatterns = [
     ("raw_wgpu", re.compile(r"\bwgpu[A-Z]\w*\s*\(|\bWGPU[A-Z]\w+\b"), "the backend behind IDevice; no WebGPU outside Rendering/Source/WebGPU"),
     ("create_command_list", re.compile(r"(?:->|\.)CreateCommandList\s*\("), "a render graph pass (RGFrame) records into the graph's command list"),
     ("create_texture", re.compile(r"(?:->|\.)CreateTexture(?:View)?\s*\("), "a graph texture (RGFrame Create or Import) or the owning manager (TextureManager)"),
-    ("create_buffer", re.compile(r"(?:->|\.)CreateBuffer\s*\("), "a graph buffer (RGFrame Create or Import) or the owning manager (BufferManager, RGUploadRing)"),
+    ("create_buffer", re.compile(r"(?<![Ff]rame)(?:->|\.)CreateBuffer\s*\("), "a graph buffer (RGFrame Create or Import) or the owning manager (BufferManager, RGUploadRing)"),
     ("destroy_resource", re.compile(r"(?:->|\.)Destroy(?:Texture|Buffer|TextureView)\s*\("), "the graph's transient pool or the owning manager releases it"),
     ("manual_barrier", re.compile(r"(?:->|\.)Barrier(?:Batch)?\s*\(|\bResourceBarrier\s*\{|\bResourceBarrier\s+\w+\s*[={;]"), "the graph owns the resource state: declare the Read or Write on the pass"),
     ("texture_upload_submit", re.compile(r"(?:->|\.)SubmitTextureUploads\s*\("), "TextureService or TextureManager submits uploads"),

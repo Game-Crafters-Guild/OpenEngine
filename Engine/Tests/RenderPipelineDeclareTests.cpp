@@ -192,6 +192,26 @@ TextureDesc DepthTargetDesc(uint32_t samples = 1)
     return d;
 }
 
+// A multisampled view color the scene color resolve can sample.
+TextureDesc SampledMsaaColorDesc()
+{
+    TextureDesc d = ColorTargetDesc(4);
+    d.usage |= static_cast<uint32_t>(TextureUsage::ShaderResource);
+    return d;
+}
+
+// The pass that resolves what `writer` drew into `msaa` into `resolved` (MsaaColorResolvePass names it
+// after the writer), kInvalidId when there is none.
+RenderGraph::RGPassId ColorResolvePassOf(const RenderGraph::RGGraph& g, RenderGraph::RGPassId writer,
+                                         RenderGraph::RGResourceId msaa, RenderGraph::RGResourceId resolved)
+{
+    const std::string name = std::string(g.PassName(writer)) + ".ColorResolve";
+    for (RenderGraph::RGPassId p = 0; p < g.PassCount(); ++p)
+        if (name == g.PassName(p) && g.HasReadAccess(p, msaa) && g.HasWriteAccess(p, resolved))
+            return p;
+    return RenderGraph::kInvalidId;
+}
+
 // Records every DeclareForView invocation; optionally publishes/resolves
 // blackboard entries so tests can pin the cross-node threading.
 struct DeclareProbeNode final : IRenderPipelineNode
@@ -5754,7 +5774,7 @@ TEST(RenderPipelineDeclareTests, MsaaOnKeepsViewColorMultisampledAndWorldDeclare
         RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
         frame.BeginFrame(0);
 
-        RenderGraph::RGTexture color = frame.ImportPersistentTexture("MSAA.Color", ColorTargetDesc(4));
+        RenderGraph::RGTexture color = frame.ImportPersistentTexture("MSAA.Color", SampledMsaaColorDesc());
         RenderGraph::RGTexture depth = frame.ImportPersistentTexture("MSAA.Depth", DepthTargetDesc(4));
 
         rs.BeginWorldDrawFrame();
@@ -5781,8 +5801,10 @@ TEST(RenderPipelineDeclareTests, MsaaOnKeepsViewColorMultisampledAndWorldDeclare
             if (rec.Tex == color.Id && !rec.IsDepth)
                 worldColor = &rec;
         ASSERT_NE(worldColor, nullptr) << "world attaches the multisampled caller color";
-        EXPECT_EQ(worldColor->Resolve, sceneColor.Id)
-            << "the world declares AttachColorResolve into SceneColor";
+        EXPECT_EQ(worldColor->Resolve, RenderGraph::kInvalidId) << "no attachment resolve";
+        EXPECT_NE(ColorResolvePassOf(frame.Graph(), worldColor->Pass, color.Id, sceneColor.Id),
+                  RenderGraph::kInvalidId)
+            << "a resolve pass after the world resolves the color into SceneColor";
 
         const auto effIt = fr->Textures.find({viewId, "View.EffectiveColor"});
         ASSERT_NE(effIt, fr->Textures.end());
@@ -7083,6 +7105,117 @@ TEST(RenderPipelineDeclareTests, ExposureHistoryResourceMaterializesAndZeroInits
     f.Down();
 }
 
+// A "perFrameCopies" history is one buffer per frame in flight: each frame binds the next copy, and
+// that copy starts as the previous frame's contents through a carry on the compute queue, where the
+// pre-exposure snapshot writes the history. The pre-exposure snapshot of a frame then never writes the
+// buffer the previous frame's tonemap reads, so the render graph orders no wait between them. The
+// first frame has no previous contents and starts from zero.
+TEST(RenderPipelineDeclareTests, ExposureHistoryPerFrameCopiesRotateAndCarryThePreviousFrame)
+{
+    FxChainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        RenderPipelineBlueprint bp;
+        bp.pipelineName = "ExpCopies";
+        bp.passes.push_back(FxChainFixture::WorldPass());
+        bp.passes.push_back(FxChainFixture::FxPass(
+            "Bloomish",
+            R"({"id":"Bloomish","type":"FullscreenShader","inputs":{"uTex":"SceneColor"},"buffers":{"uExposure":"ExposureHistory"},"output":"PostA","shaderPkg":"Shaders/copy.shaderpkg"})"));
+        bp.worldColorResolveTargetRef = "SceneColor";
+        FxChainFixture::AddTexResource(bp, "SceneColor");
+        FxChainFixture::AddTexResource(bp, "PostA");
+        bp.resources.push_back(
+            {"ExposureHistory",
+             R"({"kind":"buffer","scope":"perView","size":{"bytes":16},"usage":["storage"],"perFrameCopies":true})"});
+
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        FramePools pools(f.Device);
+
+        struct CopiesFrameResult
+        {
+            uint32_t FxPasses = 0;
+            uint32_t ZeroInitPasses = 0;
+            uint32_t CarryPasses = 0;
+            bool CarryOnCompute = true;
+            Rendering::BufferHandle CarrySource{};
+            Rendering::BufferHandle CarryDestination{};
+            Rendering::BufferHandle Buffer{};
+        };
+        auto declareFrame = [&](uint64_t frameIndex) -> CopiesFrameResult
+        {
+            RenderGraph::RGFrame frame(f.Device, &pools.Persistent, &pools.Transient, &pools.Ring);
+            frame.BeginFrame(frameIndex);
+            RenderGraph::RGTexture color = frame.ImportPersistentTexture("EC.Color", ColorTargetDesc());
+            RenderGraph::RGTexture depth = frame.ImportPersistentTexture("EC.Depth", DepthTargetDesc());
+            f.Rs->BeginWorldDrawFrame();
+            f.Rs->BuildWorldBatchKeys();
+            const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{f.View, color, depth, {}}};
+            const std::vector<Rendering::ViewDesc> views(f.Rs->Views().GetViews().begin(),
+                                                         f.Rs->Views().GetViews().end());
+            instance.Declare(frame, targets, views);
+
+            CopiesFrameResult r;
+            for (size_t p = 0; p < frame.Graph().PassCount(); ++p)
+            {
+                const auto pass = static_cast<RenderGraph::RGPassId>(p);
+                const std::string name(frame.Graph().PassName(pass));
+                if (RGQuery::Matches(name, RGQuery::Family{"Bloomish"}))
+                    ++r.FxPasses;
+                if (RGQuery::Matches(name, RGQuery::Subtree{"ZeroInit.ExposureHistory"}))
+                    ++r.ZeroInitPasses;
+                if (RGQuery::Matches(name, RGQuery::Subtree{"Carry.ExposureHistory"}))
+                {
+                    ++r.CarryPasses;
+                    r.CarryOnCompute = r.CarryOnCompute && frame.Graph().PassQueue(pass) == RenderGraph::RGQueue::Compute;
+                    for (const RenderGraph::RGAccessRecord& a : frame.Graph().Accesses())
+                    {
+                        if (a.Pass != pass)
+                            continue;
+                        const Rendering::BufferHandle buffer = frame.PhysicalBuffer(RenderGraph::RGBuffer{a.Resource});
+                        if (a.Access == RenderGraph::RGAccess::CopySrc)
+                            r.CarrySource = buffer;
+                        else if (a.Access == RenderGraph::RGAccess::CopyDst)
+                            r.CarryDestination = buffer;
+                    }
+                }
+            }
+            if (const auto* fr = instance.FrameResourcesFor(&frame))
+            {
+                if (auto it = fr->Buffers.find({f.View, "ExposureHistory"}); it != fr->Buffers.end())
+                    r.Buffer = it->second.Buffer;
+            }
+            frame.MarkOutput(color);
+            frame.Execute();
+            f.Device->WaitForIdle();
+            return r;
+        };
+
+        const CopiesFrameResult f0 = declareFrame(0);
+        if (f0.FxPasses == 0)
+            GTEST_SKIP() << "copy.shaderpkg unavailable in this environment";
+        EXPECT_TRUE(f0.Buffer.IsValid());
+        EXPECT_EQ(f0.ZeroInitPasses, 1u) << "the first frame starts from zero";
+        EXPECT_EQ(f0.CarryPasses, 0u) << "the first frame has no previous contents to carry";
+
+        std::vector<Rendering::BufferHandle> buffers = {f0.Buffer};
+        for (uint64_t frameIndex = 1; frameIndex <= Rendering::IDevice::kMaxSupportedFramesInFlight; ++frameIndex)
+        {
+            const CopiesFrameResult r = declareFrame(frameIndex);
+            EXPECT_EQ(r.CarryPasses, 1u) << "frame " << frameIndex << " starts from the previous frame";
+            EXPECT_TRUE(r.CarryOnCompute) << "frame " << frameIndex;
+            EXPECT_EQ(r.CarrySource, buffers.back()) << "frame " << frameIndex << " carries the previous frame's copy";
+            EXPECT_EQ(r.CarryDestination, r.Buffer) << "frame " << frameIndex << " carries into the copy it binds";
+            EXPECT_NE(r.Buffer, buffers.back()) << "frame " << frameIndex << " binds the copy the previous frame bound";
+            buffers.push_back(r.Buffer);
+        }
+        EXPECT_EQ(buffers.back(), buffers.front())
+            << "the copies rotate: one per frame the device can keep in flight";
+    }
+    f.Down();
+}
+
 // Unlit particles and emitters with an exposure weight below 1 divide by the view's exposure
 // (view_exposure.glsl), whose metered scale is in the view's ExposureHistory. The world pass and the
 // late transparent pass run before the metering node declares, so each must materialize the buffer
@@ -8358,7 +8491,7 @@ TEST(RenderPipelineDeclareTests, MsaaPairAndBlendLoadForViewColorTargets)
         FramePools pools(f.Device);
         RenderGraph::RGFrame frame(f.Device, &pools.Persistent, &pools.Transient, &pools.Ring);
         frame.BeginFrame(0);
-        RenderGraph::RGTexture color = frame.ImportPersistentTexture("PT.Color", ColorTargetDesc(4));
+        RenderGraph::RGTexture color = frame.ImportPersistentTexture("PT.Color", SampledMsaaColorDesc());
         RenderGraph::RGTexture depth = frame.ImportPersistentTexture("PT.Depth", DepthTargetDesc(4));
 
         f.Rs->BeginWorldDrawFrame();
@@ -8375,15 +8508,18 @@ TEST(RenderPipelineDeclareTests, MsaaPairAndBlendLoadForViewColorTargets)
         ASSERT_NE(fr, nullptr);
         const RenderGraph::RGTexture sceneColor = fr->Textures.at({f.View, "View.Resolve"});
 
-        // The overlay's attachment: the MSAA caller color with Load (blend)
-        // and a resolve into SceneColor. The world's rec on the same texture
-        // clears — distinguish by Load op.
+        // The overlay's attachment: the MSAA caller color with Load (blend),
+        // resolved into SceneColor by the pass after it. The world's rec on
+        // the same texture clears — distinguish by Load op.
         const RenderGraph::RGAttachmentRec* overlayRec = nullptr;
         for (const auto& rec : frame.Attachments())
             if (rec.Tex == color.Id && !rec.IsDepth && rec.Ops.Load == RenderGraph::RGLoadOp::Load)
                 overlayRec = &rec;
         ASSERT_NE(overlayRec, nullptr) << "blend => Load on the overlay attachment";
-        EXPECT_EQ(overlayRec->Resolve, sceneColor.Id) << "MSAA pair into the pipeline resolve";
+        EXPECT_EQ(overlayRec->Resolve, RenderGraph::kInvalidId) << "no attachment resolve";
+        EXPECT_NE(ColorResolvePassOf(frame.Graph(), overlayRec->Pass, color.Id, sceneColor.Id),
+                  RenderGraph::kInvalidId)
+            << "MSAA pair into the pipeline resolve, after the overlay";
         EXPECT_TRUE(frame.Graph().HasReadAccess(overlayRec->Pass, color.Id))
             << "Load derives the read that chains from the world's write";
 

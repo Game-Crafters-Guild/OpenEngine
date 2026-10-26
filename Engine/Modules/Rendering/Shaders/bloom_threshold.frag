@@ -21,6 +21,7 @@ layout(set=0,binding=3,std140) uniform ViewParamsBlock {
 #undef GE_VP_VEC4
 #undef GE_VP_MAT4
 } ViewParams;
+#include "Includes/reverse_z.glsl"
 // The depth veil follows an MIT-licensed OCASM technique while using the
 // engine's multiscale bloom reconstruction in place of a temporal ghost buffer.
 // See ThirdParty/OCASMDepthVeil/LICENSE and UPSTREAM.md.
@@ -49,13 +50,6 @@ vec3 SafeHDR(vec3 c)
 // differentiated while still bounding true fireflies; promote to a
 // BloomEffect field if content needs to tune it.
 const float kBloomClampMax = 100.0;
-
-float LinearizeReverseZ(float depth)
-{
-    float zNear = max(ViewParams.ge_nearFar.x, 1e-5);
-    float zFar = max(ViewParams.ge_nearFar.y, zNear + 1.0);
-    return (zNear * zFar) / max(depth * (zFar - zNear) + zNear, 1e-6);
-}
 
 vec3 BrightPass(vec3 c, float expScale)
 {
@@ -132,7 +126,8 @@ void main(){
         && pc.bloomDepthVeilEnd > pc.bloomDepthVeilStart)
     {
         float rawDepth = texture(uDepth, vUV).r;
-        float linearDepth = rawDepth <= 1e-6 ? ViewParams.ge_nearFar.y : LinearizeReverseZ(rawDepth);
+        float linearDepth = IsBackgroundDepth(rawDepth) ? ViewParams.ge_nearFar.y
+                                                        : LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
         float startDistance = max(pc.bloomDepthVeilStart, 0.0);
         float endDistance = max(pc.bloomDepthVeilEnd, startDistance + 1e-4);
         float depthMask = smoothstep(startDistance, endDistance, linearDepth);

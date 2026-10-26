@@ -174,11 +174,19 @@ struct GE_StarViewGeometry
     float PixelSolidAngle;
 };
 
-GE_StarViewGeometry GE_StarGeometry(vec3 starDir, vec3 up, float tanHalfFovY, float viewportRows)
+// The sky's frame at the camera: east and north, perpendicular to the planet's up.
+void GE_StarSkyFrame(vec3 up, out vec3 east, out vec3 north)
 {
     vec3 northRef = abs(dot(vec3(0.0, 0.0, 1.0), up)) > 0.98 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0);
-    vec3 east = normalize(cross(up, northRef));
-    vec3 north = normalize(cross(east, up));
+    east = normalize(cross(up, northRef));
+    north = normalize(cross(east, up));
+}
+
+GE_StarViewGeometry GE_StarGeometry(vec3 starDir, vec3 up, float tanHalfFovY, float viewportRows)
+{
+    vec3 east;
+    vec3 north;
+    GE_StarSkyFrame(up, east, north);
     GE_StarViewGeometry g;
     g.LutDirection = vec3(dot(starDir, east), dot(starDir, up), dot(starDir, north));
     g.SinAltitude = clamp(dot(starDir, up), -1.0, 1.0);
@@ -381,6 +389,18 @@ vec3 GE_StarRadianceAt(vec2 o, GE_StarDrawn star)
     float w2 = kStarSpikeWidthPixels * kStarSpikeWidthPixels;
     float spikes = exp(-a.x / star.SpikeLength) * exp(-o.y * o.y / w2) + exp(-a.y / star.SpikeLength) * exp(-o.x * o.x / w2);
     return body + halo + glow + star.SpikePeak * spikes;
+}
+
+// How much of a star the moon's disk hides (0 to 1), for unit directions to the star and the moon and
+// the disk's drawn angular radius in radians. A star is beyond the moon and fades out over the disk's
+// edge, from 1.25 to 0.95 drawn radii. A falling star burns in the upper air, about 100 km up, far in
+// front of the moon: the disk never hides it.
+float GE_StarMoonCover(vec3 starDir, vec3 moonDir, float moonAngularRadius, bool fallingStar)
+{
+    if (fallingStar)
+        return 0.0;
+    float radius = max(moonAngularRadius, 0.0);
+    return smoothstep(cos(radius * 1.25), cos(radius * 0.95), dot(starDir, moonDir));
 }
 
 #endif // GE_SKY_STAR_MODEL_GLSL

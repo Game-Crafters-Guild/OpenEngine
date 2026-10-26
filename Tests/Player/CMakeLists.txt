@@ -75,9 +75,11 @@ if(BUILD_TESTING)
         PlayerHdrOptionsTests.cpp
         PlayerLogTests.cpp
         PlayerRunOptionsTests.cpp
+        PlayerStartupReadinessTests.cpp
         ${CMAKE_SOURCE_DIR}/Apps/Player/Source/PlayerHdrOptions.cpp
         ${CMAKE_SOURCE_DIR}/Apps/Player/Source/PlayerLog.cpp
         ${CMAKE_SOURCE_DIR}/Apps/Player/Source/PlayerRunOptions.cpp
+        ${CMAKE_SOURCE_DIR}/Apps/Player/Source/PlayerStartupReadiness.cpp
     )
     target_include_directories(PlayerTests PRIVATE
         ${CMAKE_SOURCE_DIR}/Apps/Player/Source

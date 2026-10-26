@@ -57,10 +57,8 @@ vec3 CBT_CubeCorner(int idx)
                 (idx & 4) != 0 ? 1.0 : -1.0);
 }
 
-// 6 faces, 4 corner indices each, wound CCW as seen from OUTSIDE (outward normal by
-// the right-hand rule). MUST match kCubeFaces in CBTSphereRoots.h exactly — the C++
-// side builds the neighbor topology from this table and the GPU decodes geometry from
-// it, so a divergence would put geometry and topology on different meshes.
+// 6 faces, 4 corner indices each, wound CCW seen from outside. Must equal Mathematics::kCubeFaces
+// (Mathematics/CubeFaces.h): the C++ side builds the neighbor topology from that table.
 const int CBT_CUBE_FACES[24] = int[24](
     1, 3, 7, 5,  // +X
     0, 4, 6, 2,  // -X

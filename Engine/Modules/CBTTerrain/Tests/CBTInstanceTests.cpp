@@ -22,6 +22,7 @@
 #include "CBTTerrain/CBTTreeAudit.h"
 #include "CBTTerrain/CBTSphereRoots.h"
 #include "Rendering/Core/CommandList.h"
+#include "CBTReliefHeightSource.h"
 #include "CBTTestHarness.h"
 
 using namespace GameEngine::CBTTerrain;
@@ -115,14 +116,7 @@ TEST_F(CBTInstanceTest, RefreshTerrainSourcesDropsRetiredHeightmapAfterUpdate)
     ASSERT_TRUE(instance.Initialize(*m_Device, m_KernelSet));
     ASSERT_TRUE(instance.InitializeRoots());
 
-    TextureDesc td{};
-    td.width = 4;
-    td.height = 4;
-    td.format = static_cast<uint32_t>(TextureFormat::R32_FLOAT);
-    td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) |
-               static_cast<uint32_t>(TextureUsage::TransferDst);
-    td.debugName = "ReproInstanceHeightmap";
-    const TextureHandle retired = m_Device->CreateTexture(td);
+    const TextureHandle retired = MakeR32Texture(*m_Device, 4, 4, {}, "ReproInstanceHeightmap");
     ASSERT_TRUE(retired.IsValid());
 
     // Bind the heightmap into the ring the way BuildFrameParams does, then run an update so the

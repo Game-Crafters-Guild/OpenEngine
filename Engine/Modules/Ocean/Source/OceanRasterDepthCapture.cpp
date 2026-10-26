@@ -1,5 +1,6 @@
 #include "Ocean/OceanRasterDepthCapture.h"
 #include "Ocean/OceanShaderProgram.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Materials/ShaderLayoutShape.h"
 #include "OceanShaderDirectory.h"
 
@@ -478,7 +479,7 @@ bool OceanRasterDepthCapture::DeclareForView(Engine::Renderer::Pipeline::ViewDec
     Rendering::ViewClearConfig clear{};
     clear.clearColor = true;
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     d.Services.Views().SetViewClearConfig(m_ViewId, clear);
 
     TextureDesc colorDesc{};

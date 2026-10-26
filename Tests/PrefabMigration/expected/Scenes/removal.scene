@@ -1,0 +1,8 @@
+[scene name="S" version=1]
+[resource id="bp" path="Blueprints/bp_remove.prefab"]
+
+[prefab id="inst" source="bp"]
+-DebugMarker
++RigidBody
++AudioSource
+RigidBody.mass = 12

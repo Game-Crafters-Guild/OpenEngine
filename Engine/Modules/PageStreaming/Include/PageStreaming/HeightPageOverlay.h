@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PageStreaming/PageAddress.h"
+#include "PageStreaming/PageSampleRect.h"
 #include "PageStreaming/PageStoreFormat.h"
 #include "Types/Types.h"
 
@@ -10,26 +11,19 @@
 namespace GameEngine::PageStreaming
 {
 
-/// An inclusive rect of one level's samples.
-struct PageSampleRect
-{
-    uint32 MinX = 0;
-    uint32 MinZ = 0;
-    uint32 MaxX = 0;
-    uint32 MaxZ = 0;
-
-    uint32 Width() const { return MaxX - MinX + 1u; }
-    uint32 Height() const { return MaxZ - MinZ + 1u; }
-    bool Contains(uint32 x, uint32 z) const { return x >= MinX && x <= MaxX && z >= MinZ && z <= MaxZ; }
-};
-
 /// True when page `address` (its apron included) reads a level-0 sample of `level0Rect`.
 bool PageReadsLevel0Rect(const PageAddress& address, const PageSampleRect& level0Rect);
+
+/// The samples of level `level` of `levels` (the store's, BuildPageStoreLevels) whose filtered
+/// value reads a sample of `level0Rect`: where a change of those level-0 samples changes that
+/// level. `level` is below levels.size().
+PageSampleRect Level0RectReach(std::span<const PageStoreLevel> levels, const PageSampleRect& level0Rect,
+                               uint32 level);
 
 /// The height a terrain's modifiers add to its base pages (the baked-page cache of the
 /// page-streaming design, 3.8): level 0 holds the baked height minus the base over the rect the
 /// modifiers reach, every coarser level the [1 2 1] / 4 tent of the level below with the store's
-/// clamped edges (HeightPyramidBuilder's filter). The tent is linear, so a base page plus this
+/// clamped edges (PagePyramidBuilder's filter). The tent is linear, so a base page plus this
 /// overlay's page at any level is the page the cooker cuts from the baked level 0: a modified
 /// terrain pages without a second cook, and only the pages over the modifiers change.
 ///

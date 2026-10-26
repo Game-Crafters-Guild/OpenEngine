@@ -27,6 +27,7 @@
 #include "Pathfinding/NavigationWorld.h"
 #include "Pathfinding/ObstacleAvoidance.h"
 #include "Pathfinding/PathBuffer.h"
+#include "SplineRecipes/SplineRecipesScriptApi.h"
 #include "ECS/ChangeFilter.h"
 #include "TerrainECS/PlanarHeightfieldEditCursor.h"
 #include "Types/Fnv1a.h"
@@ -641,11 +642,19 @@ void NavigationSurfaceSystem::ReleaseUnboundMaps(ECS::World& world)
 void NavigationSurfaceSystem::StartBake(ECS::World& world, ECS::EntityHandle entity, NavigationSurface& surface,
                                         const Components::WorldTransform* transform, SurfaceRecord& record)
 {
-    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world);
+    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world, transform);
     if (terrain.Loading)
     {
         surface.BakePhase = NavigationBakePhase::Waiting;
         surface.BakeWait = NavigationBakeWait::TerrainData;
+        return;
+    }
+    // The recipes write roads, walls and the ground under them: a bake before they settle reads
+    // part of the scene. This update runs on a job, so it reads the recipe system's last answer.
+    if (!SplineRecipes::IsSceneSettledAtLastUpdate(world))
+    {
+        surface.BakePhase = NavigationBakePhase::Waiting;
+        surface.BakeWait = NavigationBakeWait::SplineRecipes;
         return;
     }
     if (const GUID model = FirstLoadingModel(world, entity, record); !model.IsNull())
@@ -865,7 +874,8 @@ void NavigationSurfaceSystem::StepMeshBake(ECS::World& world, ECS::EntityHandle 
 
     // The terrain's heightfield pointers are main-thread data and can change between frames, so it
     // is resolved again for every update's snapshots.
-    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world);
+    const NavigationTerrainSource terrain =
+        ResolveNavigationTerrainSource(world, world.GetComponent<Components::WorldTransform>(entity));
     Mathematics::Vector3 waitPoint;
     const bool submitted = bake.SubmitTiles(terrain, pool, kTileSnapshotsPerUpdate, waitPoint);
 
@@ -933,7 +943,7 @@ void NavigationSurfaceSystem::UpdateDirtyTiles(ECS::World& world, ECS::EntityHan
     auto* mesh = ResolveNavigationSurfaceMesh(world, surface);
     if (!mesh || !mesh->IsBuilt())
         return;
-    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world);
+    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world, transform);
     if (!record.MeshKnown)
     {
         // A mesh another system instance baked: its chart and agent are the mesh's own, its extent

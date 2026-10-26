@@ -268,7 +268,8 @@ struct StringSerializer final : IFieldSerializer
 // bytes <-> the scene's [path="..." guid="..."] form. Save heals the path from the GUID via the
 // resolver; load resolves via the [resource]/[embed] tables and accepts the legacy bare-GUID and
 // integer-0 clear forms too. A null GUID writes an empty value so the (caller-skipped) line is
-// omitted, matching the hand-written asset-ref schemas. Category-agnostic — one codec serves every
+// omitted, matching the hand-written asset-ref schemas, or the clear form `0` when the save writes
+// every field (SceneSaveContext::WriteEveryField). Category-agnostic — one codec serves every
 // AssetRef<T>; the asset type is only needed for load validation, which we leave permissive here.
 struct AssetGuidSerializer final : IFieldSerializer
 {
@@ -277,7 +278,7 @@ struct AssetGuidSerializer final : IFieldSerializer
         std::uint8_t raw[GUID::kSize];
         std::memcpy(raw, f, GUID::kSize);
         const GUID guid = GUID::FromBytes(raw);
-        if (guid.IsNull())
+        if (guid.IsNull() && !ctx.WriteEveryField)
             return {}; // omit the line for an unset reference
         return FormatAssetReferenceForSave(ctx, guid, "");
     }
@@ -303,12 +304,16 @@ struct AssetGuidSerializer final : IFieldSerializer
 // a quoted stable entity-id string. Save maps the handle to the referenced entity's scene id via
 // ctx.EntityTagById; load resolves the id back to a live handle via ctx.EntityIdMap. An invalid or
 // unresolved handle writes an empty value (the line is omitted) and reads back invalid, so a dangling
-// link simply unlinks rather than failing the load.
+// link simply unlinks rather than failing the load. When the save writes every field
+// (SceneSaveContext::WriteEveryField), an invalid handle writes "", which reads back invalid.
 struct EntityHandleSerializer final : IFieldSerializer
 {
     std::string Write(const std::byte* f, const FieldInfo&, const SceneSaveContext& ctx) const override
     {
-        return FormatEntityReferenceForSave(ctx, ReadPod<ECS::EntityHandle>(f));
+        const ECS::EntityHandle handle = ReadPod<ECS::EntityHandle>(f);
+        if (!handle.IsValid() && ctx.WriteEveryField)
+            return FormatQuoted({});
+        return FormatEntityReferenceForSave(ctx, handle);
     }
     bool Read(std::string_view t, std::byte* f, const FieldInfo&, const SceneLoadContext& ctx, std::string* e) const override
     {

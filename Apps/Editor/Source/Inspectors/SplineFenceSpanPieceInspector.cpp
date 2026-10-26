@@ -7,7 +7,7 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/SplineFenceOverrideFields.h"
-#include "Placement/FenceSpanOverrides.h"
+#include "SplineRecipes/FenceSpanOverrides.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Components/Hierarchy.h"
@@ -111,13 +111,13 @@ void BuildSpanPieceSection(const InspectorContext& ctx)
                                          "rebuild; the rest of this piece is rebuilt from the fence.");
 
     const SplineSpanOverride* current =
-        Editor::FindSpanOverride(*fence, piece->Run, piece->OrdinalInRun);
+        SplineRecipes::FindSpanOverride(*fence, piece->Run, piece->OrdinalInRun);
     const SplineSpanOverrideKind kind = current ? current->Kind : SplineSpanOverrideKind::None;
 
     Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
     Editor::UndoRedoService* undo = ctx.Undo;
     const SplineFenceSpanPiece address = *piece;
-    const bool tableFull = !current && Editor::CountSpanOverrides(*fence) >=
+    const bool tableFull = !current && SplineRecipes::CountSpanOverrides(*fence) >=
                                            Components::kSplineFenceMaxSpanOverrides;
 
     Dropdown* kindField = InspectorUI::AddDropdownRow(
@@ -133,12 +133,12 @@ void BuildSpanPieceSection(const InspectorContext& ctx)
             if (!nextKind || !recipe)
                 return;
             const SplineSpanOverride* existing =
-                Editor::FindSpanOverride(*recipe, address.Run, address.OrdinalInRun);
+                SplineRecipes::FindSpanOverride(*recipe, address.Run, address.OrdinalInRun);
             const uint8 slot = SlotForKind(*nextKind, existing, address);
             InspectorDrag::CommitComponentWithUndo<SplineFence>(
                 w, fenceEntity, n, undo, UndoNameFor(*nextKind),
                 [address, kind = *nextKind, slot](SplineFence& updated)
-                { Editor::SetSpanOverride(updated, address.Run, address.OrdinalInRun, kind, slot); });
+                { SplineRecipes::SetSpanOverride(updated, address.Run, address.OrdinalInRun, kind, slot); });
         });
     if (tableFull)
     {
@@ -172,7 +172,7 @@ void BuildSpanPieceSection(const InspectorContext& ctx)
                 w, fenceEntity, n, undo,
                 kind == SplineSpanOverrideKind::Gate ? "Change Gate Piece" : "Change Explicit Span Piece",
                 [address, kind, slot](SplineFence& updated)
-                { Editor::SetSpanOverride(updated, address.Run, address.OrdinalInRun, kind, slot); });
+                { SplineRecipes::SetSpanOverride(updated, address.Run, address.OrdinalInRun, kind, slot); });
         });
     for (const std::string& note : Editor::SpanOverrideNotes(*fence, *current, /*spanStands=*/true))
         InspectorUI::AddInfoCard(ctx.Parent, note);

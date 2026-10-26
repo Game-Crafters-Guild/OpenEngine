@@ -49,6 +49,7 @@ public:
 
     /// Sets where stores are found or cooked. Cancels the cooks in progress and forgets every store.
     void SetLocation(HeightPageStoreLocation location);
+    const HeightPageStoreLocation& Location() const { return m_Location; }
 
     /// The open store of heightmap `asset` at content version `contentVersion`, or null while it
     /// cooks or when it has none. Starts the cook on the first ask in the editor, named for

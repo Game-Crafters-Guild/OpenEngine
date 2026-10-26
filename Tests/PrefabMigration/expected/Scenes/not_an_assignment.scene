@@ -1,0 +1,14 @@
+[scene name="NotAnAssignment" version=1]
+[resource id="bp" path="Blueprints/bp.prefab"]
+
+[entity id="lines"]
+SkyEnvironment = 1
+SkyEnvironment. = 1
+.Latitude = 1
+SkyEnvironment.Latitude
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+SkyEnvironment.Latitud = 1
+SkyEnvironment.Latitude = -45
+
+[prefab id="inst" source="bp"]
+Transform.position

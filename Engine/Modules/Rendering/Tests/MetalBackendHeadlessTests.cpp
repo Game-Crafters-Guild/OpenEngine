@@ -17,10 +17,7 @@
 #include "../Source/Metal/MetalDevice.h"
 #include "../Source/Metal/MetalShaderTranslator.h"
 #include "PushBlockMslLayout.h"
-
-#if RENDERING_HAS_SHADERC
-#include <shaderc/shaderc.hpp>
-#endif
+#include "TestGlslCompile.h"
 
 #include <objc/runtime.h>
 
@@ -56,21 +53,7 @@ std::unique_ptr<IDevice> CreateHeadlessMetalDevice()
 }
 
 #if RENDERING_HAS_SHADERC
-std::vector<uint8_t> CompileGlsl(const char* source, shaderc_shader_kind kind, const char* name)
-{
-    shaderc::Compiler compiler;
-    shaderc::CompileOptions options;
-    options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
-    const auto result = compiler.CompileGlslToSpv(source, kind, name, options);
-    if (result.GetCompilationStatus() != shaderc_compilation_status_success)
-    {
-        ADD_FAILURE() << "GLSL compile failed: " << result.GetErrorMessage();
-        return {};
-    }
-    const auto* begin = reinterpret_cast<const uint8_t*>(result.cbegin());
-    const auto* end = reinterpret_cast<const uint8_t*>(result.cend());
-    return std::vector<uint8_t>(begin, end);
-}
+using Tests::CompileGlsl;
 #endif
 
 // Metal's own answer for the GPU the engine's device runs on.

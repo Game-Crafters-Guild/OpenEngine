@@ -146,18 +146,28 @@ float GE_SunGlareRadiance(float irradiance, float chordSq, float angularRadius, 
 // Visibility: is the direct beam reaching the optics at all?
 //
 // An occluder blocks the beam BEFORE it enters the lens, so visibility scales the WHOLE
-// halo rather than the pixels behind the occluder. Two independent terms are multiplied,
-// because in this engine neither one alone can see every occluder:
+// halo rather than the pixels behind the occluder. Each term is the fraction of the sun's disc
+// that reaches the eye, sampled over the same disc, and each sees a different set of
+// occluders:
 //
-//   * the shadow cascades catch anything that CASTS a shadow, on screen or off, including
-//     a sun behind the camera -- but the CBT terrain is excluded from the shadow passes
-//     (CBTRenderNode.h: "CBT casts no shadows for C3"), so it is invisible to them;
-//   * the screen probe catches anything in the depth buffer, terrain included, because CBT
-//     writes the shared scene depth in the World pass -- but only while the sun is on screen.
+//   * the shadow cascades see anything that CASTS a shadow, on screen or off, including a sun
+//     behind the camera -- but the CBT terrain is excluded from the shadow passes
+//     (CBTRenderNode.h), so it is invisible to them;
+//   * the terrain skyline, marched on the CPU, sees the terrain and nothing else;
+//   * the screen probe sees anything in the depth buffer, casters and terrain alike, because
+//     CBT writes the shared scene depth in the World pass -- but only while the sun is on
+//     screen.
 //
-// Their blind spots are disjoint, so the product closes both. What remains open, and is
-// stated rather than hidden: an occluder that neither casts a shadow nor is on screen, i.e.
-// terrain hiding a sun that is outside the frame.
+// The cascades and the skyline see disjoint occluders, so their fractions multiply. The probe
+// sees both sets, so multiplying it in would count an occluder twice: a caster on screen that
+// covers half the disc reads 0.5 in the probe AND 0.5 in the cascades, and the product 0.25 is
+// half the true 0.5. Visibility is therefore the MINIMUM of the probe and that product. Each
+// side is an estimate of the same fraction that can only miss occluders, never invent them,
+// so the smaller one is the one that saw more. Off screen the probe reads 1 and the minimum is
+// the product alone.
+//
+// What remains open, and is stated rather than hidden: an occluder that neither casts a shadow
+// nor is terrain nor is on screen.
 
 // Fraction of a small disc around the sun's projected position that is not covered by scene
 // geometry. Reverse-Z: the sky is depth 0.0 and any drawn geometry is greater.
@@ -177,10 +187,9 @@ float GE_SunGlareRadiance(float irradiance, float chordSq, float angularRadius, 
 #define GE_SUN_GLARE_PROBE_TAPS 16
 #define GE_SUN_GLARE_GOLDEN_ANGLE 2.39996323
 
-// Tap geometry, shared by both depth-source variants below so the ring cannot drift between
-// them: the same texel and the same weight whatever the depth texture's sample count is.
-void GE_SunGlareProbeTap(int i, ivec2 size, vec2 sunUV, vec2 probeRadiusUV,
-                         out ivec2 texel, out float weight)
+// The visibility disc's tap pattern, shared by the screen probe and the cascade term so the
+// two sample the same disc: tap `i` as a position inside the unit disc and its weight.
+void GE_SunGlareDiscTap(int i, out vec2 offset, out float weight)
 {
     // ONE CENTRE TAP plus three stratified shells of five, rather than a golden-angle spiral.
     //
@@ -205,9 +214,20 @@ void GE_SunGlareProbeTap(int i, ivec2 size, vec2 sunUV, vec2 probeRadiusUV,
         a = (float(slot) + 0.5) * (6.28318530718 / float(kPerShell))
             + float(shell) * GE_SUN_GLARE_GOLDEN_ANGLE;                // de-align the shells
     }
-    vec2 uv = sunUV + vec2(cos(a), sin(a)) * r * probeRadiusUV;
-    texel = clamp(ivec2(uv * vec2(size)), ivec2(0), size - ivec2(1));
+    offset = vec2(cos(a), sin(a)) * r;
     weight = 1.0 - r * r;                                              // smooth, centre-weighted
+}
+
+// Tap geometry of the screen probe, shared by both depth-source variants below so the ring
+// cannot drift between them: the same texel and the same weight whatever the depth texture's
+// sample count is.
+void GE_SunGlareProbeTap(int i, ivec2 size, vec2 sunUV, vec2 probeRadiusUV,
+                         out ivec2 texel, out float weight)
+{
+    vec2 offset;
+    GE_SunGlareDiscTap(i, offset, weight);
+    vec2 uv = sunUV + offset * probeRadiusUV;
+    texel = clamp(ivec2(uv * vec2(size)), ivec2(0), size - ivec2(1));
 }
 
 float GE_SunGlareScreenVisibility(sampler2D sceneDepth, vec2 sunUV, vec2 probeRadiusUV)
@@ -265,25 +285,130 @@ float GE_SunGlareScreenVisibilityMS(sampler2DMS sceneDepth, int samples, vec2 su
     return visible / max(total, 1e-6);
 }
 
-// Is `posWS` in direct sunlight according to one shadow cascade? Mirrors the conventions in
+// One comparison lookup in a shadow cascade, at a point given by its CLIP-space position: 1 when
+// nothing this cascade stores lies between the point and the light. Mirrors the conventions in
 // shadow_sampling.glsl exactly: the comparison sampler is GreaterOrEqual ("lit if refDepth >=
 // stored"), reverse-Z stores occluders with LARGER NDC depth, the bias is therefore ADDED to
-// push the receiver toward the light, and the cascades rasterize with the negative viewport
-// so the shadow UV's Y is flipped. A point outside this cascade's map returns LIT, because
-// that cascade knows nothing about it.
-float GE_SunGlareCascadeSunlit(sampler2DArrayShadow shadowArray, mat4 cascadeVP, int cascadeIdx,
-                               vec3 posWS, float depthBias)
+// push the point toward the light, and the cascades rasterize with the negative viewport so the
+// shadow UV's Y is flipped. A point outside the map reads lit, because the cascade knows
+// nothing there, and so does a point nearer the light than the map's near plane, where nothing
+// can be stored nearer still (casters beyond that plane are clamped onto it, at depth 1).
+//
+// Branch-free: the lookup is always issued and the verdict selected after it, so a tap's
+// lookups carry no control flow between them. The gradient form is an explicit level-0
+// lookup, which a compute stage needs (sampler2DArrayShadow has no textureLod).
+float GE_SunGlareCascadeLit(sampler2DArrayShadow shadowArray, int cascadeIdx, vec4 clip,
+                            float depthBias)
 {
-    vec4 clip = cascadeVP * vec4(posWS, 1.0);
-    if (clip.w <= 0.0)
-        return 1.0;
-    vec3 ndc = clip.xyz / clip.w;
+    vec3 ndc = clip.xyz / max(clip.w, 1e-6);
     vec2 uv = ndc.xy * 0.5 + 0.5;
     uv.y = 1.0 - uv.y;
     float refDepth = ndc.z + depthBias;
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || refDepth < 0.0 || refDepth > 1.0)
+    bool inside = clip.w > 0.0 && uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 &&
+                  refDepth < 1.0;
+    float lit = textureGrad(shadowArray, vec4(clamp(uv, 0.0, 1.0), float(cascadeIdx),
+                                              clamp(refDepth, 0.0, 1.0)),
+                            vec2(0.0), vec2(0.0));
+    return inside ? lit : 1.0;
+}
+
+// Distance bins along the beam, in meters from the eye toward the sun: edges 0, 0.25, 1, 4,
+// 16, 64 and 256, and a last bin that runs to the cascade's near plane. Four to one per bin,
+// so the lateral distance a bin assumes is within a factor of two of any occluder in it.
+#define GE_SUN_GLARE_CASCADE_BINS 7
+#define GE_SUN_GLARE_CASCADE_FIRST_EDGE 0.25
+#define GE_SUN_GLARE_CASCADE_BIN_RATIO 4.0
+
+// What every tap of one cascade shares: the eye and the beam's directions in the cascade's
+// clip space (the projection is linear in the world position, so each lookup position is a
+// sum of these rather than a matrix product), and whether a caster within the first bin hides
+// the whole disc.
+struct GE_SunGlareCascadeFrame
+{
+    vec4 eyeClip;
+    vec4 alongClip;   // clip-space change per meter along the beam, toward the sun
+    vec4 acrossXClip; // per meter along the beam, per unit of disc offset, on either axis
+    vec4 acrossYClip;
+    float eyeColumn;  // 1 - the caster fraction within the first bin of the eye's own column
+    bool covers;      // the eye is inside this cascade's depth range
+};
+
+GE_SunGlareCascadeFrame GE_SunGlareCascadeFrameAt(sampler2DArrayShadow shadowArray,
+                                                  mat4 cascadeVP, int cascadeIdx, vec3 eyeWS,
+                                                  vec3 sunDirWS, float discRadius,
+                                                  float depthBias)
+{
+    GE_SunGlareCascadeFrame f;
+    f.eyeClip = cascadeVP * vec4(eyeWS, 1.0);
+    float eyeDepth = f.eyeClip.z / max(f.eyeClip.w, 1e-6) + depthBias;
+    f.covers = f.eyeClip.w > 0.0 && eyeDepth >= 0.0 && eyeDepth <= 1.0;
+
+    // Two axes across the beam. Any pair perpendicular to it serves; the pattern has no
+    // preferred orientation.
+    vec3 helper = abs(sunDirWS.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 acrossX = normalize(cross(helper, sunDirWS));
+    vec3 acrossY = cross(sunDirWS, acrossX);
+    f.alongClip = cascadeVP * vec4(sunDirWS, 0.0);
+    f.acrossXClip = cascadeVP * vec4(acrossX * discRadius, 0.0);
+    f.acrossYClip = cascadeVP * vec4(acrossY * discRadius, 0.0);
+
+    float firstFar = GE_SunGlareCascadeLit(
+        shadowArray, cascadeIdx, f.eyeClip + f.alongClip * GE_SUN_GLARE_CASCADE_FIRST_EDGE,
+        depthBias);
+    float firstNear = GE_SunGlareCascadeLit(shadowArray, cascadeIdx, f.eyeClip, depthBias);
+    f.eyeColumn = 1.0 - max(firstFar - firstNear, 0.0);
+    return f;
+}
+
+// Whether the beam from the eye to one point of the sun's disc reaches it, according to one
+// shadow cascade: 1 clear, 0 hidden, fractional across a texel. `tap` is the point's offset
+// inside the unit disc (GE_SunGlareDiscTap), scaled by the disc's angular radius the frame was
+// built with -- the same disc the screen probe samples, through the same taps.
+//
+// A shadow map stores, per column along the light, only how near the light its nearest caster
+// is. The ray from the eye to a point of the disc at a small angle `offset` from the sun's
+// center is, at distance t along the light, the column `eyeWS + offset * t`. So an occluder at
+// distance t hides that point of the disc when the column at `offset * t` holds a caster whose
+// light-facing surface lies near t. Every distance bin is tested: the column at the bin's own
+// lateral distance, and a caster surface between the bin's two edges, which is the difference
+// of two comparisons, lit at the far edge minus lit at the near edge. That difference is the
+// filtered fraction of the column's texels whose stored depth falls inside the bin, so it
+// fades across a texel like any other comparison lookup.
+//
+// The occluder's distance therefore sets how wide a band of the map the disc covers: d times
+// the disc's diameter for an occluder at distance d. As the sun moves, an occluder's shadow
+// edge sweeps across the eye at d times the sun's angular speed, so the edge crosses the band
+// in the time the sun takes to move one disc diameter, whatever the distance. That is the time
+// the screen probe takes too, so the two terms fade together for an occluder both of them see.
+//
+// The first bin is the eye's own column for every tap (the frame's eyeColumn): across 0.25 m
+// the taps sit within a millimeter of the eye, finer than any cascade texel. An eye outside
+// the cascade's depth range reads clear, because the cascade knows nothing about it.
+float GE_SunGlareCascadeTapBeam(sampler2DArrayShadow shadowArray, int cascadeIdx,
+                                GE_SunGlareCascadeFrame f, vec2 tap, float depthBias)
+{
+    if (!f.covers)
         return 1.0;
-    return texture(shadowArray, vec4(uv, float(cascadeIdx), refDepth));
+    // Clip-space change per meter along the beam of this disc point's sideways offset.
+    vec4 lateralClip = f.acrossXClip * tap.x + f.acrossYClip * tap.y;
+    float beam = f.eyeColumn;
+    float nearEdge = GE_SUN_GLARE_CASCADE_FIRST_EDGE;
+    for (int bin = 1; bin < GE_SUN_GLARE_CASCADE_BINS; ++bin)
+    {
+        float farEdge = nearEdge * GE_SUN_GLARE_CASCADE_BIN_RATIO;
+        // The geometric middle of the bin; the last bin, which has no far edge, takes the
+        // middle it would have at the same ratio.
+        vec4 column = f.eyeClip + lateralClip * (nearEdge * 2.0);
+        float litNear = GE_SunGlareCascadeLit(shadowArray, cascadeIdx,
+                                              column + f.alongClip * nearEdge, depthBias);
+        float litFar = bin == GE_SUN_GLARE_CASCADE_BINS - 1
+                           ? 1.0
+                           : GE_SunGlareCascadeLit(shadowArray, cascadeIdx,
+                                                   column + f.alongClip * farEdge, depthBias);
+        beam *= 1.0 - max(litFar - litNear, 0.0);
+        nearEdge = farEdge;
+    }
+    return beam;
 }
 
 #endif // GE_SUN_GLARE_GLSL

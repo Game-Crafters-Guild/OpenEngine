@@ -542,11 +542,6 @@ void TerrainExtractionSystem::PublishSunGlareSkyline(ECS::World& world)
     if (!settings.showSunDisk)
         return;
 
-    // Resolved every frame rather than cached: the query is a view of the height pages, valid until
-    // their next Update. The skyline takes coarse answers (AcceptCoarse), so a far ridge reads the
-    // pinned level the GPU draws there.
-    const SurfaceHeightQuery ground = ResolveSurfaceHeightQuery(world);
-
     // The WHOLE set, replaced each frame. Scratch reused so the refill does not allocate.
     ++m_SkylinePublish;
     m_SkylineScratch.clear();
@@ -554,14 +549,21 @@ void TerrainExtractionSystem::PublishSunGlareSkyline(ECS::World& world)
     {
         float32 tangent = Engine::Renderer::SunGlareRenderFeature::kNoSkyline;
         const Rendering::CameraData* camera = m_RenderServices->Views().FindCameraData(view.cameraId);
-        if (ground.IsValid() && camera)
+        const Mathematics::Vector3 eye =
+            camera ? Mathematics::Vector3(camera->cameraPos[0], camera->cameraPos[1], camera->cameraPos[2])
+                   : Mathematics::Vector3{};
+        // The terrain under the eye, resolved every frame rather than cached: the query is a view of
+        // the height pages, valid until their next Update. The skyline takes coarse answers
+        // (AcceptCoarse), so a far ridge reads the pinned level the GPU draws there.
+        const SurfaceHeightQuery ground = camera ? ResolveSurfaceHeightQuery(world, eye) : SurfaceHeightQuery{};
+        if (ground.IsValid())
         {
             ViewSkylineState& state = m_ViewSkylines.GetOrInsert(view.id);
             state.LastPublish = m_SkylinePublish;
             if (!state.Skyline)
                 state.Skyline = std::make_unique<TerrainSkyline>();
             const float32 answered = state.Skyline->Tangent(
-                ground, Mathematics::Vector3(camera->cameraPos[0], camera->cameraPos[1], camera->cameraPos[2]),
+                ground, eye,
                 settings.scatteringSunDir[0], settings.scatteringSunDir[2], kSkylineMarchDistance, kSkylineMarchStep,
                 kSkylineAngularTolerance);
             if (answered != TerrainSkyline::kNoSkyline)

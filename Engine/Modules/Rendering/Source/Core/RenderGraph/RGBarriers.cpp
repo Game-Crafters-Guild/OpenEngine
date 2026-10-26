@@ -115,7 +115,9 @@ void RGGraph::GenerateBarriers(const uint8_t physicalOfLogical[kQueueCount])
         // prior GPU work): created resources may recycle pooled physical memory a
         // prior in-flight frame still touches, and imported resources carry last
         // frame's contents. TopOfPipe here would create NO execution dependency.
-        // Cross-frame memory availability comes from the frame fence/semaphore.
+        // The barrier orders only against earlier work on the same queue; an imported
+        // resource's earlier-frame accesses on other queues are ordered by the plan's
+        // cross-frame timeline waits (RGCrossFrameAccesses, BuildSubmissionPlan).
         // PendingImportSync is seeded for CREATED resources too — textures get
         // the Undefined transition anyway, but a recycled transient BUFFER's
         // first write would otherwise emit nothing while the pool blanket-frees

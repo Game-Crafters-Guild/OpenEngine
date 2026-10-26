@@ -9,6 +9,7 @@
 #include "AssetCore/GUID.h"
 #include "Assets/AssetRegistry.h"
 #include "Assets/ExpectedAssetWrite.h" // brings ExpectedWriteLedger with it
+#include "Events/Event.h"
 #include "FileWatcher/FileWatcher.h"
 #include "Assets/FileWatchingService.h"
 #include "Assets/ParserRegistry.h"
@@ -17,6 +18,7 @@
 #include <future>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -757,6 +759,11 @@ public:
      * @brief Check if hot reload is enabled
      */
     bool IsHotReloadEnabled() const { return m_HotReloadEnabled; }
+
+    /// Fires on the main thread from Update with the GUIDs of the changed files, each GUID once.
+    /// It also gives the GUIDs that no loaded asset holds, so a subsystem that builds state from
+    /// files the AssetManager does not load (the prefab library) can rebuild that state.
+    Event<std::span<const GUID>> FilesChanged;
 
     /**
      * @brief Memory usage statistics of the resident assets

@@ -225,6 +225,11 @@ class UIManager
     using CursorCallback = std::function<void(CursorStyle)>;
     void SetCursorCallback(CursorCallback callback) { m_CursorCallback = std::move(callback); }
 
+    // Called with true when the captured pointer's lock begins and with false when it ends
+    // (LockCapturedPointer). While locked, the host hides and holds the platform cursor.
+    using PointerLockCallback = std::function<void(bool locked)>;
+    void SetPointerLockCallback(PointerLockCallback callback) { m_PointerLockCallback = std::move(callback); }
+
     // Tooltip configuration supplied per-frame by the host application.
     struct TooltipConfig
     {
@@ -383,6 +388,11 @@ class UIManager
     /// another's drag. The id is compared, not resolved, so a holder removed this frame can still
     /// release; on the next update a removed holder's capture ends by itself. Returns whether it released.
     bool ReleaseMouseCaptureHeldBy(uint64_t instanceId);
+
+    /// Locks the pointer until the current capture ends: the cursor hides and moves run past the screen
+    /// edges. Escape or another button sends kEventMouseCancel to the capture element. Call it only once
+    /// the press is a drag, so a click never hides the cursor. Does nothing without a capture.
+    void LockCapturedPointer();
 
     const std::string& GetCaptureId() const { return m_CaptureId; }
 
@@ -850,10 +860,9 @@ public:
     // A press belongs to the button that began it: only that button's release
     // ends it, and another button's edges while it is held dispatch nothing.
     bool OnMouseButton(int button, bool down);
-    // Terminate an in-flight press whose release will never arrive, because the pointer
-    // stream itself ended (the Game View viewport the host reads pointer from was left).
-    // Not a release: the armed control is disarmed and capture is dropped, but nothing
-    // activates.
+    // Ends an in-flight press with no release: the pointer stream ended (the Game View viewport
+    // was left), or Escape or another button cancelled a locked drag. The armed control disarms
+    // and the capture drops, but nothing activates.
     void CancelPress();
     // Called when the OS reports the cursor entering/leaving this window.
     // This helps keep hover state correct even if the cursor leaves the window
@@ -1631,6 +1640,11 @@ public:
     // Cursor callback and tracking
     CursorCallback m_CursorCallback;
     CursorStyle m_LastCursorStyle = CursorStyle::Auto;
+    // Pointer lock: the capture instance that asked for it (0 = none), and
+    // whether the host was last told the pointer is locked.
+    PointerLockCallback m_PointerLockCallback;
+    uint64_t m_PointerLockCaptureInstanceId = 0;
+    bool m_PointerLocked = false;
     std::string m_FocusId;                            // persistent focus by element id
     std::string m_LastFocusIdNotified;                // to notify BaseField::OnFocusChanged
     // The element last told FocusIn, by instance id, so its FocusOut reaches it even after
@@ -2156,6 +2170,11 @@ public:
     // Tooltip overlay + cursor-style tail, shared by the heavy pass and the
     // pointer-only frame gate's early return.
     void UpdateTooltipAndCursor(bool interactive);
+    // Tells the host when the pointer lock begins or ends: it holds while the
+    // capture that asked for it does.
+    void SyncPointerLock();
+    // True while the current capture holds the pointer lock it asked for.
+    bool IsCapturedPointerLocked() const;
     // Finalize + push the per-frame update profile (TotalMs, dirty-source
     // top-N, history cap). Shared by the heavy tail and the gate's early
     // return so pointer-only frames still appear in profiling history.

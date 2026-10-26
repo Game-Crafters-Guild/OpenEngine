@@ -4,7 +4,7 @@
 #include "SceneView/SphereSculptStrokeCommand.h"
 #include "SceneView/TerrainZoneStrokeCommand.h"
 #include "SceneViewController.h"
-#include "Picking/TerrainPicking.h"
+#include "Scene/TerrainPicking.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "EditorChangeNotifications.h"
 
@@ -25,7 +25,6 @@
 #include "TerrainECS/TerrainZoneAuthoring.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -196,8 +195,8 @@ bool TerrainBrushTool::RaycastTerrain(const GizmoRay& ray, Mathematics::Vector3&
         && std::abs(ray.direction.z) < kRayDirEpsilon)
         return false;
 
-    Picking::TerrainPickHit hit{};
-    if (!Picking::RaycastTerrain(ray, *world, kMaxPickDistance, hit))
+    Scene::TerrainPickHit hit{};
+    if (!Scene::RaycastTerrain(ray, *world, kMaxPickDistance, hit))
         return false;
     outHit = hit.WorldPosition;
     outNormal = hit.WorldNormal;
@@ -249,12 +248,10 @@ bool TerrainBrushTool::RaycastPlanet(const GizmoRay& ray, float radius, Mathemat
     {
         if (auto* feature = rs->GetFeature<CBTTerrainECS::CBTRenderFeature>())
         {
-            const std::array<float, 3> ao{o.x, o.y, o.z};
-            const std::array<float, 3> ad{d.x, d.y, d.z};
             auto heightFn = [feature](float dx, float dy, float dz) {
                 return feature->SampleSphereSurfaceHeight(dx, dy, dz);
             };
-            CBTTerrain::RefinePlanetHit(ao, ad, radius, heightFn, t);
+            CBTTerrain::RefinePlanetHit(o, d, radius, heightFn, t);
         }
     }
 

@@ -121,6 +121,8 @@ Each entry declares one texture or buffer the pipeline owns. Resources have a **
 | `size.variables` | Map of name → number or expression string. Built-in: `renderWidth`, `renderHeight` |
 | `flags` | Array, optional. `PersistentlyMapped` keeps the buffer mapped for CPU writes |
 | `usage` | `Storage`, `ConstantBuffer`, `VertexBuffer`, `IndexBuffer`, `IndirectArgs`, `CopySource`, `CopyDestination` |
+| `zeroOnCreate` | Optional, default `false`. The buffer is zero-filled the first frame it exists, for state a pass reads before it writes it |
+| `perFrameCopies` | Optional, default `false`. For a small state buffer that passes on two queues read and write every frame (the exposure history). The buffer is kept as one copy per frame in flight; each frame's copy starts as the previous frame's contents, and the first frame's starts at zero. A frame's write then does not wait for the previous frame's reads on the other queue |
 
 #### Expression language
 

@@ -3,6 +3,7 @@
 #include "Engine/Rendering/IEnvironmentSource.h"
 #include "Engine/Rendering/SceneProbeRecaptureSchedule.h"
 #include "Engine/Rendering/SkyEnvironmentSource.h"
+#include "Mathematics/Vector3.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineIdentifiers.h"
 #include "Rendering/CameraTypes.h"
@@ -31,14 +32,14 @@ enum class SceneReflectionProbeUpdateMode : uint32_t
 
 struct SceneReflectionProbeEnvironmentDesc
 {
-    float Position[3] = {0.0f, 0.0f, 0.0f};
+    Mathematics::Vector3 Position{0.0f, 0.0f, 0.0f};
     float InfluenceRadius = 12.0f;
     bool BoxProjection = true;
-    float BoxCenter[3] = {0.0f, 0.0f, 0.0f};
-    float BoxHalfExtents[3] = {0.0f, 0.0f, 0.0f};
-    float BoxAxisX[3] = {1.0f, 0.0f, 0.0f};
-    float BoxAxisY[3] = {0.0f, 1.0f, 0.0f};
-    float BoxAxisZ[3] = {0.0f, 0.0f, 1.0f};
+    Mathematics::Vector3 BoxCenter{0.0f, 0.0f, 0.0f};
+    Mathematics::Vector3 BoxHalfExtents{0.0f, 0.0f, 0.0f};
+    Mathematics::Vector3 BoxAxisX{1.0f, 0.0f, 0.0f};
+    Mathematics::Vector3 BoxAxisY{0.0f, 1.0f, 0.0f};
+    Mathematics::Vector3 BoxAxisZ{0.0f, 0.0f, 1.0f};
     float MaxDistance = 0.0f;
     Rendering::RenderLayerMask CapturedLayers = Rendering::RenderLayerMask::All();
     uint64_t WorldId = 0;

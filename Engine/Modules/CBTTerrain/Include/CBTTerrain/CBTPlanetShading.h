@@ -18,13 +18,14 @@
 // relief is preserved at +/- kReliefEnvelope * amplitude regardless of octave count (the
 // ampSum normalization below), so the on-shell bound in CBTSphereDomainTests stays valid.
 
-#include <array>
-#include <cmath>
-#include <cstdint>
-
 #include "CBTTerrain/CBTLayout.h"        // page constants
 #include "CBTTerrain/CBTSphereFaceMap.h"  // WorldDirToFaceUV (dir -> face,uv)
 #include "CBTTerrain/SphereSculptPaging.h" // SphereSculptSampler + SampleSphereSculptByDir
+#include "Mathematics/Vector3.h"
+
+#include <array>
+#include <cmath>
+#include <cstdint>
 
 namespace GameEngine::CBTTerrain
 {
@@ -145,17 +146,17 @@ inline bool SphereCornerOccluded(const std::array<float, 3>& P, const std::array
 // direction. `t` is the base-sphere hit on input and the refined hit on output. `d` must be
 // unit. Returns false for a non-positive radius (leaving `t` untouched).
 template <typename HeightFn>
-inline bool RefinePlanetHit(const std::array<float, 3>& o, const std::array<float, 3>& d,
+inline bool RefinePlanetHit(const Mathematics::Vector3& o, const Mathematics::Vector3& d,
                             float radius, HeightFn&& heightFn, float& t)
 {
     if (radius <= 0.0f)
         return false;
     constexpr uint32_t kRefineIters = 6u;
-    const float b = o[0] * d[0] + o[1] * d[1] + o[2] * d[2];
-    const float oo = o[0] * o[0] + o[1] * o[1] + o[2] * o[2];
+    const float b = Mathematics::Vector3::Dot(o, d);
+    const float oo = Mathematics::Vector3::Dot(o, o);
     for (uint32_t i = 0; i < kRefineIters; ++i)
     {
-        const float px = o[0] + d[0] * t, py = o[1] + d[1] * t, pz = o[2] + d[2] * t;
+        const float px = o.x + d.x * t, py = o.y + d.y * t, pz = o.z + d.z * t;
         const float pLen = std::sqrt(px * px + py * py + pz * pz);
         if (pLen <= 0.0f)
             break;

@@ -365,6 +365,7 @@ void DDGIMaterialMapAtlas::UploadTable()
         float Layers[4];       // x = albedo, y = emissive, z = metallic-roughness
         float UvTransform[4];  // xy = scale, zw = offset
     };
+    static_assert(sizeof(TableRow) == 32, "must match ddgi_hit_shade.glsl's GE_DDGIMaterialMapRecord");
 
     if (m_TableBuffer.IsValid())
     {

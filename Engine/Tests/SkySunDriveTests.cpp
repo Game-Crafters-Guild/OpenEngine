@@ -95,7 +95,7 @@ float GroundLuminance(const float source[3], float upDot)
 {
     float ground[3];
     Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), source, upDot, ground);
-    return ColorUtils::LinearRec709Luminance(ground);
+    return ColorUtils::LinearRec709Luminance({ground[0], ground[1], ground[2]});
 }
 
 // The wave of the execution plan the system named `systemName` runs in, or -1 when it is not in the plan.
@@ -165,12 +165,12 @@ TEST(SkySunDrive, TheCurveSetsTheIntensityInTheLightsUnitAndTheColourIsHueOnly)
             << "hour " << hours;
 
         const Components::Light light = lux.Light();
-        EXPECT_NEAR(ColorUtils::LinearRec709Luminance(light.Color), 1.0f, 1e-6f) << "hour " << hours;
+        EXPECT_NEAR(ColorUtils::LinearRec709Luminance({light.Color[0], light.Color[1], light.Color[2]}), 1.0f, 1e-6f) << "hour " << hours;
         const float white[3] = {1.0f, 1.0f, 1.0f};
         float ground[3];
         Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), white,
                                                lux.Settings().scatteringSunDir[1], ground);
-        const float groundLuminance = ColorUtils::LinearRec709Luminance(ground);
+        const float groundLuminance = ColorUtils::LinearRec709Luminance({ground[0], ground[1], ground[2]});
         for (int c = 0; c < 3; ++c)
             EXPECT_NEAR(light.Color[c], ground[c] / groundLuminance, 1e-5f) << "hour " << hours << ", channel " << c;
         ++checked;
@@ -188,7 +188,7 @@ TEST(SkySunDrive, TheCurveSetsTheIntensityInTheLightsUnitAndTheColourIsHueOnly)
     float resolved[3];
     float unitlessIntensity = 0.0f;
     Components::ResolveLightColorIntensity(lux.Light(), resolved, unitlessIntensity);
-    EXPECT_NEAR(ColorUtils::LinearRec709Luminance(resolved), 1.0f, 1e-6f);
+    EXPECT_NEAR(ColorUtils::LinearRec709Luminance({resolved[0], resolved[1], resolved[2]}), 1.0f, 1e-6f);
 }
 
 // Below the twilight floor the light is the moon's: whatever the curve reads at midnight, the light
