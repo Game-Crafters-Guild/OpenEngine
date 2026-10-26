@@ -1,5 +1,6 @@
 #include "SceneView/TerrainBrushTool.h"
 
+#include "Mathematics/Interpolation.h"
 #include "SceneView/SphereSculptStrokeCommand.h"
 #include "SceneView/TerrainZoneStrokeCommand.h"
 #include "SceneViewController.h"
@@ -769,7 +770,7 @@ void TerrainBrushTool::ApplyDab(const Mathematics::Vector3& hit)
             const float dist = std::sqrt(dx * dx + dz * dz);
             if (dist > m_Radius)
                 continue;
-            const float t = std::clamp(1.0f - dist * invRadius, 0.0f, 1.0f);
+            const float t = Math::Clamp01(1.0f - dist * invRadius);
             const float falloff = t * t * (3.0f - 2.0f * t); // smoothstep
             const size_t idx = static_cast<size_t>(tz) * payload->Width + tx;
             if (paint)

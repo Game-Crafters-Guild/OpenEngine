@@ -14,6 +14,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Controls/Dropdown.h"
 #include "UndoRedo/UndoRedoService.h"
 
@@ -322,7 +323,7 @@ void RegisterSkyboxInspector()
 
         InspectorDrag::AddComponentFloatRowWithDrag<Components::Skybox>(ctx.Parent, "IBL ground darkening", skybox->IblLowerHemisphereDarkness, w, e, n,
             undo, "Change Skybox IBL Ground Darkening",
-            [](Components::Skybox& u, float v) { u.IblLowerHemisphereDarkness = std::clamp(v, 0.0f, 1.0f); },
+            [](Components::Skybox& u, float v) { u.IblLowerHemisphereDarkness = Math::Clamp01(v); },
             skybox->IblLowerHemisphereDarkness,
             "Darkens the lower hemisphere of baked IBL only, leaving the visible skybox unchanged", extras, 0.0f, 1.0f);
 

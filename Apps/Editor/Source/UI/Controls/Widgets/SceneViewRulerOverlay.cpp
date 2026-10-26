@@ -2,6 +2,7 @@
 
 #include "Editor/Settings/SceneViewSettings.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Panels/SceneViewPanel.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "SceneViewController.h"
@@ -239,8 +240,7 @@ void SceneViewRulerOverlay::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
     // User-configurable transparency multiplier (0..1). Scales the alpha of
     // every ruler primitive so the whole overlay can be made more see-through
     // without rebalancing the per-element opacities individually.
-    const float rulerOpacity = std::clamp(
-        Editor::SceneViewSettings::Get().GetRulerOpacity(), 0.0f, 1.0f);
+    const float rulerOpacity = Math::Clamp01(Editor::SceneViewSettings::Get().GetRulerOpacity());
 
     // Color palette — neutral dark with a warm cursor accent.
     const uint32_t bg        = PackColor(0.10f, 0.10f, 0.10f, 0.85f * rulerOpacity);

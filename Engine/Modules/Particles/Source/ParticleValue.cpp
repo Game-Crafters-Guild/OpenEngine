@@ -3,7 +3,6 @@
 #include "Mathematics/Interpolation.h"
 #include "Particles/ParticleProcessorRegistry.h"
 
-#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -99,7 +98,7 @@ float RemapParticleInput(const ParticleValueInput& input, float driver)
         return normalized > 1.0f ? 2.0f - normalized : normalized;
     case ParticleWrap::Clamp:
     default:
-        return std::clamp(normalized, 0.0f, 1.0f);
+        return Math::Clamp01(normalized);
     }
 }
 

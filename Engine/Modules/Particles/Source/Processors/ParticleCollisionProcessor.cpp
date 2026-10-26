@@ -1,5 +1,6 @@
 #include "Particles/Processors/ParticleCollisionProcessor.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Particles/ParticleRuntime.h"
 #include "Processors/ParticleBuiltInProcessors.h"
 #include "Processors/ParticleProcessorOptions.h"
@@ -66,8 +67,8 @@ void Execute(ParticleProcessorContext& context)
     auto settled = context.Channels.Get<uint32>(ParticleChannel::Settled);
     const uint64 contactBit = uint64{1} << context.ProcessorOrdinal;
     const Vector3 planeNormal = parameters.PlaneNormal.Length() < kMinimumNormalLength ? Vector3{0, 1, 0} : parameters.PlaneNormal.Normalize();
-    const float bounce = std::clamp(parameters.Bounce, 0.0f, 1.0f);
-    const float keep = 1.0f - std::clamp(parameters.Damping, 0.0f, 1.0f);
+    const float bounce = Math::Clamp01(parameters.Bounce);
+    const float keep = 1.0f - Math::Clamp01(parameters.Damping);
     const bool settles = parameters.Damping >= 1.0f && bounce <= 0.0f;
     const auto& frame = context.Emitter;
     for (const uint32 i : context.Particles)

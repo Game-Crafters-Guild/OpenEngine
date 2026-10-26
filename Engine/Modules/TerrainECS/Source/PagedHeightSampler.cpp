@@ -1,5 +1,6 @@
 #include "TerrainECS/PagedHeightSampler.h"
 
+#include "Mathematics/Interpolation.h"
 #include "TerrainECS/PageLevelRule.h"
 #include "TerrainECS/TerrainAtlas.h"
 
@@ -81,7 +82,7 @@ namespace
 // `level0Samples`: level-0 sample i sits at i / (samples - 1), level-L sample j at level-0 j * 2^L.
 float32 LatticeCoordinate(float32 t, uint32 level0Samples, uint32 level)
 {
-    return std::clamp(t, 0.0f, 1.0f) * static_cast<float32>(level0Samples - 1u) / static_cast<float32>(1u << level);
+    return Math::Clamp01(t) * static_cast<float32>(level0Samples - 1u) / static_cast<float32>(1u << level);
 }
 
 // The page along an axis holding lattice coordinate c, and c's position inside the page's stride.

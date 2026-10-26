@@ -14,6 +14,7 @@
 // they capture by value only (the sole pointer capture, &m_GridRenderer, is
 // safe because the controller strictly outlives this frame's Execute()).
 
+#include "Mathematics/Interpolation.h"
 #include "SceneViewController.h"
 
 #include "Assets/AssetManager.h"
@@ -1020,7 +1021,7 @@ void SceneViewController::DeclareSelectionOutlineRG(RenderGraph::RGFrame& frame,
         MaskDraw d{};
         d.alphaTest = alphaTexture.IsValid();
         d.alphaTexture = alphaTexture;
-        d.alphaCutoff = std::clamp(alphaCutoff, 0.0f, 1.0f);
+        d.alphaCutoff = Math::Clamp01(alphaCutoff);
         d.uvScale[0] = uvScaleX;
         d.uvScale[1] = uvScaleY;
         d.uvOffset[0] = uvOffsetX;

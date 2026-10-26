@@ -1,4 +1,5 @@
 #include "UI/Controls/GridView.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/VirtualWindowCore.h"
@@ -225,12 +226,12 @@ void GridView::AutoScrollDuringDrag(float mouseX, float mouseY)
     float dy = 0.0f;
     if (distTop < kEdgePx)
     {
-        const float t = std::clamp((kEdgePx - distTop) / kEdgePx, 0.0f, 1.0f);
+        const float t = Math::Clamp01((kEdgePx - distTop) / kEdgePx);
         dy = -kMaxSpeedPxPerFrame * t;
     }
     else if (distBot < kEdgePx)
     {
-        const float t = std::clamp((kEdgePx - distBot) / kEdgePx, 0.0f, 1.0f);
+        const float t = Math::Clamp01((kEdgePx - distBot) / kEdgePx);
         dy = kMaxSpeedPxPerFrame * t;
     }
 

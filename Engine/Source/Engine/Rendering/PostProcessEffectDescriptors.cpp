@@ -65,6 +65,7 @@
 #include "Components/Transform.h"
 #include "Components/Rendering/PostProcessEffects/VignetteEffect.h"
 #include "Components/Rendering/PostProcessEffects/VolumetricFogEffect.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -212,9 +213,9 @@ void CopyHeightFogEffectToSettings(
     if (effect.UseTimeOfDay)
         GameEngine::Components::ApplyHeightFogTimeOfDay(effect, ctx.TimeOfDayHours, ctx.DayKeyTimesHours);
 
-    settings.HeightFogIntensity = std::clamp(effect.Intensity, 0.0f, 1.0f);
-    settings.HeightFogDensity = std::clamp(effect.Density, 0.0f, 1.0f);
-    settings.HeightFogMaxOpacity = std::clamp(effect.MaxOpacity, 0.0f, 1.0f);
+    settings.HeightFogIntensity = Math::Clamp01(effect.Intensity);
+    settings.HeightFogDensity = Math::Clamp01(effect.Density);
+    settings.HeightFogMaxOpacity = Math::Clamp01(effect.MaxOpacity);
     settings.HeightFogMinDistance = std::max(effect.MinDistance, 0.0f);
     settings.HeightFogSmoothLength = std::max(effect.SmoothLength, 0.0001f);
     settings.HeightFogBaseHeight = effect.BaseHeight;
@@ -234,8 +235,8 @@ void CopyHeightFogEffectToSettings(
     settings.HeightFogPhaseWeight1 = std::max(effect.PhaseWeight1, 0.0f);
     settings.HeightFogSkyEnabled = effect.SkyEnabled ? 1 : 0;
     settings.HeightFogSkyPower = std::max(effect.SkyPower, 0.001f);
-    settings.HeightFogSkyFillStart = std::clamp(effect.SkyFillStart, 0.0f, 1.0f);
-    settings.HeightFogSkyFillEnd = std::clamp(effect.SkyFillEnd, 0.0f, 1.0f);
+    settings.HeightFogSkyFillStart = Math::Clamp01(effect.SkyFillStart);
+    settings.HeightFogSkyFillEnd = Math::Clamp01(effect.SkyFillEnd);
     settings.HeightFogDistanceFogEnabled = effect.DistanceFogEnabled ? 1 : 0;
     settings.HeightFogHeightFogEnabled = effect.HeightFogEnabled ? 1 : 0;
     settings.HeightFogMaxDistance = std::max(effect.MaxDistance, 0.01f);
@@ -250,7 +251,7 @@ void CopyHeightFogEffectToSettings(
     settings.HeightFogAxisY = axis[1];
     settings.HeightFogAxisZ = axis[2];
     settings.HeightFogGradientMode = static_cast<int32_t>(effect.GradientMode);
-    settings.HeightFogGradientStrength = std::clamp(effect.GradientStrength, 0.0f, 1.0f);
+    settings.HeightFogGradientStrength = Math::Clamp01(effect.GradientStrength);
     settings.HeightFogGradientLowR = std::max(effect.GradientLowColor[0], 0.0f);
     settings.HeightFogGradientLowG = std::max(effect.GradientLowColor[1], 0.0f);
     settings.HeightFogGradientLowB = std::max(effect.GradientLowColor[2], 0.0f);
@@ -261,18 +262,18 @@ void CopyHeightFogEffectToSettings(
     settings.HeightFogSunIntensityScale = std::max(effect.SunIntensityScale, 0.0f);
     settings.HeightFogNoiseEnabled = effect.NoiseEnabled ? 1 : 0;
     settings.HeightFogNoiseScale = std::max(effect.NoiseScale, 0.01f);
-    settings.HeightFogNoiseStrength = std::clamp(effect.NoiseStrength, 0.0f, 1.0f);
+    settings.HeightFogNoiseStrength = Math::Clamp01(effect.NoiseStrength);
     settings.HeightFogNoiseContrast = std::max(effect.NoiseContrast, 0.05f);
     settings.HeightFogNoiseVelX = effect.NoiseVelocity[0];
     settings.HeightFogNoiseVelY = effect.NoiseVelocity[1];
     settings.HeightFogNoiseVelZ = effect.NoiseVelocity[2];
-    settings.HeightFogNoiseMin = std::clamp(effect.NoiseMin, 0.0f, 1.0f);
-    settings.HeightFogNoiseMax = std::clamp(effect.NoiseMax, 0.0f, 1.0f);
+    settings.HeightFogNoiseMin = Math::Clamp01(effect.NoiseMin);
+    settings.HeightFogNoiseMax = Math::Clamp01(effect.NoiseMax);
     settings.HeightFogNoiseFadeStart = std::max(effect.NoiseFadeStart, 0.0f);
     settings.HeightFogNoiseFadeEnd = std::max(effect.NoiseFadeEnd, 0.0f);
     settings.HeightFogUseTimeOfDay = effect.UseTimeOfDay ? 1 : 0;
     settings.HeightFogSkyHorizonOffset = std::clamp(effect.SkyHorizonOffset, -1.0f, 1.0f);
-    settings.HeightFogSkyBottomStrength = std::clamp(effect.SkyBottomStrength, 0.0f, 1.0f);
+    settings.HeightFogSkyBottomStrength = Math::Clamp01(effect.SkyBottomStrength);
     settings.HeightFogColorMode = static_cast<int32_t>(effect.ColorMode);
 
     // A volume can contain both fog components. They intentionally share one
@@ -285,7 +286,7 @@ void CopyHeightFogEffectToSettings(
         settings.FogGlowIntensity = std::max(src.FogGlowIntensity, 0.0f);
         settings.FogGlowRadius = std::clamp(src.FogGlowRadius, 1.0f, 7.0f);
         settings.FogGlowOctaves = std::clamp(src.FogGlowOctaves, 3, 8);
-        settings.FogGlowScatter = std::clamp(src.FogGlowScatter, 0.0f, 1.0f);
+        settings.FogGlowScatter = Math::Clamp01(src.FogGlowScatter);
         settings.FogGlowThreshold = std::max(src.FogGlowThreshold, 0.0f);
         settings.FogGlowKnee = std::max(src.FogGlowKnee, 0.0f);
         settings.FogGlowFadeStart = std::clamp(src.FogGlowFadeStart, 0.0f, 0.999f);
@@ -1100,31 +1101,31 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.BloomKnee      = bloom->Knee;
                 out.Settings.BloomAntiFlicker = bloom->AntiFlicker ? 1 : 0;
                 out.Settings.BloomIntensity = bloom->Intensity;
-                out.Settings.BloomScatteringAmount = std::clamp(bloom->ScatteringAmount, 0.0f, 1.0f);
-                out.Settings.BloomTintR     = std::clamp(bloom->Tint[0], 0.0f, 1.0f);
-                out.Settings.BloomTintG     = std::clamp(bloom->Tint[1], 0.0f, 1.0f);
-                out.Settings.BloomTintB     = std::clamp(bloom->Tint[2], 0.0f, 1.0f);
+                out.Settings.BloomScatteringAmount = Math::Clamp01(bloom->ScatteringAmount);
+                out.Settings.BloomTintR     = Math::Clamp01(bloom->Tint[0]);
+                out.Settings.BloomTintG     = Math::Clamp01(bloom->Tint[1]);
+                out.Settings.BloomTintB     = Math::Clamp01(bloom->Tint[2]);
                 out.Settings.BloomRadius    = std::clamp(bloom->Radius, 1.0f, 7.0f);
                 out.Settings.BloomOctaves   = std::clamp(bloom->Octaves, 3, 8);
-                out.Settings.BloomScatter   = std::clamp(bloom->Scatter, 0.0f, 1.0f);
+                out.Settings.BloomScatter   = Math::Clamp01(bloom->Scatter);
                 out.Settings.BloomDepthVeilEnabled = bloom->DepthVeilEnabled ? 1 : 0;
                 out.Settings.BloomDepthVeilIntensity = std::clamp(bloom->DepthVeilIntensity, 0.0f, 10.0f);
                 out.Settings.BloomDepthVeilStart = std::max(bloom->DepthVeilStart, 0.0f);
                 out.Settings.BloomDepthVeilEnd = std::max(bloom->DepthVeilEnd, 0.0f);
-                out.Settings.BloomDepthVeilTintR = std::clamp(bloom->DepthVeilTint[0], 0.0f, 1.0f);
-                out.Settings.BloomDepthVeilTintG = std::clamp(bloom->DepthVeilTint[1], 0.0f, 1.0f);
-                out.Settings.BloomDepthVeilTintB = std::clamp(bloom->DepthVeilTint[2], 0.0f, 1.0f);
+                out.Settings.BloomDepthVeilTintR = Math::Clamp01(bloom->DepthVeilTint[0]);
+                out.Settings.BloomDepthVeilTintG = Math::Clamp01(bloom->DepthVeilTint[1]);
+                out.Settings.BloomDepthVeilTintB = Math::Clamp01(bloom->DepthVeilTint[2]);
                 out.Settings.BloomLensDirtEnabled = bloom->LensDirtEnabled ? 1 : 0;
                 out.Settings.BloomLensDirtVignette = bloom->LensDirtVignette ? 1 : 0;
-                out.Settings.BloomLensDirtVignetteIntensity = std::clamp(bloom->LensDirtVignetteIntensity, 0.0f, 1.0f);
-                out.Settings.BloomLensDirtVignetteRadius = std::clamp(bloom->LensDirtVignetteRadius, 0.0f, 1.0f);
-                out.Settings.BloomLensDirtVignetteSmoothness = std::clamp(bloom->LensDirtVignetteSmoothness, 0.0f, 1.0f);
+                out.Settings.BloomLensDirtVignetteIntensity = Math::Clamp01(bloom->LensDirtVignetteIntensity);
+                out.Settings.BloomLensDirtVignetteRadius = Math::Clamp01(bloom->LensDirtVignetteRadius);
+                out.Settings.BloomLensDirtVignetteSmoothness = Math::Clamp01(bloom->LensDirtVignetteSmoothness);
                 out.Settings.BloomLensDirtVignetteRounded = bloom->LensDirtVignetteRounded ? 1 : 0;
-                out.Settings.BloomLensDirtVignetteColorR = std::clamp(bloom->LensDirtVignetteColor[0], 0.0f, 1.0f);
-                out.Settings.BloomLensDirtVignetteColorG = std::clamp(bloom->LensDirtVignetteColor[1], 0.0f, 1.0f);
-                out.Settings.BloomLensDirtVignetteColorB = std::clamp(bloom->LensDirtVignetteColor[2], 0.0f, 1.0f);
+                out.Settings.BloomLensDirtVignetteColorR = Math::Clamp01(bloom->LensDirtVignetteColor[0]);
+                out.Settings.BloomLensDirtVignetteColorG = Math::Clamp01(bloom->LensDirtVignetteColor[1]);
+                out.Settings.BloomLensDirtVignetteColorB = Math::Clamp01(bloom->LensDirtVignetteColor[2]);
                 out.Settings.BloomLensDirtIntensity = std::clamp(bloom->LensDirtIntensity, 0.0f, 10.0f);
-                out.Settings.BloomLensDirtScatter = std::clamp(bloom->LensDirtScatter, 0.0f, 1.0f);
+                out.Settings.BloomLensDirtScatter = Math::Clamp01(bloom->LensDirtScatter);
                 out.BloomLensDirtAssetGuid = bloom->LensDirtTexture.ToGuid();
                 out.HasBloomLensDirtAsset = !out.BloomLensDirtAssetGuid.IsNull();
 
@@ -1213,7 +1214,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.VhsFeedbackDecay =
                     std::clamp(vhs->FeedbackDecay, 0.0f, 0.98f);
                 out.Settings.VhsFeedbackMotionThreshold =
-                    std::clamp(vhs->FeedbackMotionThreshold, 0.0f, 1.0f);
+                    Math::Clamp01(vhs->FeedbackMotionThreshold);
                 out.Settings.VhsFeedbackTrailLength =
                     std::clamp(vhs->FeedbackTrailLength, 0.0f, 24.0f);
                 out.Settings.VhsCompositeSignalMode =
@@ -1240,22 +1241,22 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                     std::clamp(vhs->Speed, 0.0f, VHS::kSpeedMax);
                 out.Settings.VhsOverlayEnabled = vhs->OverlayEnabled ? 1.0f : 0.0f;
                 out.Settings.VhsOverlayColorR =
-                    std::clamp(vhs->OverlayColor[0], 0.0f, 1.0f);
+                    Math::Clamp01(vhs->OverlayColor[0]);
                 out.Settings.VhsOverlayColorG =
-                    std::clamp(vhs->OverlayColor[1], 0.0f, 1.0f);
+                    Math::Clamp01(vhs->OverlayColor[1]);
                 out.Settings.VhsOverlayColorB =
-                    std::clamp(vhs->OverlayColor[2], 0.0f, 1.0f);
+                    Math::Clamp01(vhs->OverlayColor[2]);
                 out.Settings.VhsOverlayOpacity =
-                    std::clamp(vhs->OverlayOpacity, 0.0f, 1.0f);
+                    Math::Clamp01(vhs->OverlayOpacity);
                 out.Settings.VhsOverlaySize =
                     std::clamp(vhs->OverlaySize, VHS::kOverlaySizeMin,
                                VHS::kOverlaySizeMax);
                 out.Settings.VhsOverlayFont =
                     static_cast<float32>(std::min(vhs->OverlayFont, VHS::kOverlayFontMax));
                 out.Settings.VhsOverlayPositionX =
-                    std::clamp(vhs->OverlayPositionX, 0.0f, 1.0f);
+                    Math::Clamp01(vhs->OverlayPositionX);
                 out.Settings.VhsOverlayPositionY =
-                    std::clamp(vhs->OverlayPositionY, 0.0f, 1.0f);
+                    Math::Clamp01(vhs->OverlayPositionY);
 
                 const std::string_view overlayText = vhs->GetOverlayText();
                 out.Settings.VhsOverlayTextLength =
@@ -1276,18 +1277,18 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.VhsDateBurnEnabled =
                     vhs->DateBurnEnabled ? 1.0f : 0.0f;
                 out.Settings.VhsDateBurnColorR =
-                    std::clamp(vhs->DateBurnColor[0], 0.0f, 1.0f);
+                    Math::Clamp01(vhs->DateBurnColor[0]);
                 out.Settings.VhsDateBurnColorG =
-                    std::clamp(vhs->DateBurnColor[1], 0.0f, 1.0f);
+                    Math::Clamp01(vhs->DateBurnColor[1]);
                 out.Settings.VhsDateBurnColorB =
-                    std::clamp(vhs->DateBurnColor[2], 0.0f, 1.0f);
+                    Math::Clamp01(vhs->DateBurnColor[2]);
                 out.Settings.VhsDateBurnSize =
                     std::clamp(vhs->DateBurnSize, VHS::kOverlaySizeMin,
                                VHS::kOverlaySizeMax);
                 out.Settings.VhsDateBurnPositionX =
-                    std::clamp(vhs->DateBurnPositionX, 0.0f, 1.0f);
+                    Math::Clamp01(vhs->DateBurnPositionX);
                 out.Settings.VhsDateBurnPositionY =
-                    std::clamp(vhs->DateBurnPositionY, 0.0f, 1.0f);
+                    Math::Clamp01(vhs->DateBurnPositionY);
                 out.Settings.VhsDateBurnYear =
                     static_cast<float32>(std::clamp(vhs->DateBurnYear,
                                                     VHS::kDateBurnYearMin,
@@ -1438,7 +1439,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
             (void)ctx;
             if (auto* cas = world.GetComponent<GameEngine::Components::ContrastAdaptiveSharpenEffect>(entity); cas && cas->Enabled)
             {
-                out.Settings.CasStrength = std::clamp(cas->Strength, 0.0f, 1.0f);
+                out.Settings.CasStrength = Math::Clamp01(cas->Strength);
                 out.Settings.CasStackOrder = cas->StackOrder;
             }
         },
@@ -1460,7 +1461,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
             (void)ctx;
             if (auto* fastBlur = world.GetComponent<GameEngine::Components::FastBlurEffect>(entity); fastBlur && fastBlur->Enabled)
             {
-                out.Settings.FastBlurIntensity = std::clamp(fastBlur->Intensity, 0.0f, 1.0f);
+                out.Settings.FastBlurIntensity = Math::Clamp01(fastBlur->Intensity);
                 out.Settings.FastBlurFocusDistance = std::max(fastBlur->FocusDistance, 0.01f);
                 out.Settings.FastBlurFocusRange = std::max(fastBlur->FocusRange, 0.01f);
                 out.Settings.FastBlurMaxRadius = std::clamp(fastBlur->MaxRadius, 0.0f, 24.0f);
@@ -1516,8 +1517,8 @@ void RegisterBuiltInPostProcessEffectDescriptors()
             if (auto* vig = world.GetComponent<GameEngine::Components::VignetteEffect>(entity);
                 vig && vig->Enabled)
             {
-                out.Settings.VignetteIntensity  = std::clamp(vig->Intensity, 0.0f, 1.0f);
-                out.Settings.VignetteSmoothness = std::clamp(vig->Smoothness, 0.0f, 1.0f);
+                out.Settings.VignetteIntensity  = Math::Clamp01(vig->Intensity);
+                out.Settings.VignetteSmoothness = Math::Clamp01(vig->Smoothness);
                 out.Settings.VignetteRounded    = vig->Rounded ? 1 : 0;
                 out.Settings.VignetteColorR     = vig->Color[0];
                 out.Settings.VignetteColorG     = vig->Color[1];
@@ -1596,10 +1597,10 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.ColorGradeInLog          = grade->GradeInLog ? 1 : 0;
                 // Band limits clamp to the encoded axis here; ordering is
                 // sanitized once in FillColorGradeParamsUBO.
-                out.Settings.ColorGradeShadowsStart    = std::clamp(grade->ShadowsStart, 0.0f, 1.0f);
-                out.Settings.ColorGradeShadowsEnd      = std::clamp(grade->ShadowsEnd, 0.0f, 1.0f);
-                out.Settings.ColorGradeHighlightsStart = std::clamp(grade->HighlightsStart, 0.0f, 1.0f);
-                out.Settings.ColorGradeHighlightsEnd   = std::clamp(grade->HighlightsEnd, 0.0f, 1.0f);
+                out.Settings.ColorGradeShadowsStart    = Math::Clamp01(grade->ShadowsStart);
+                out.Settings.ColorGradeShadowsEnd      = Math::Clamp01(grade->ShadowsEnd);
+                out.Settings.ColorGradeHighlightsStart = Math::Clamp01(grade->HighlightsStart);
+                out.Settings.ColorGradeHighlightsEnd   = Math::Clamp01(grade->HighlightsEnd);
             }
         },
     });
@@ -1627,7 +1628,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 chromatic && chromatic->Enabled)
             {
                 out.Settings.ChromaticAberrationIntensity = std::clamp(chromatic->Intensity, 0.0f, GameEngine::Components::ChromaticAberrationEffect::kIntensityMax);
-                out.Settings.ChromaticAberrationStartOffset = std::clamp(chromatic->StartOffset, 0.0f, 1.0f);
+                out.Settings.ChromaticAberrationStartOffset = Math::Clamp01(chromatic->StartOffset);
                 out.Settings.ChromaticAberrationSaturation = std::clamp(chromatic->Saturation, 0.0f, 2.0f);
                 out.Settings.ChromaticAberrationLongitudinal = std::clamp(chromatic->LongitudinalIntensity, 0.0f, GameEngine::Components::ChromaticAberrationEffect::kLongitudinalMax);
                 out.Settings.ChromaticAberrationComa = std::clamp(chromatic->ComaIntensity, 0.0f, GameEngine::Components::ChromaticAberrationEffect::kComaMax);
@@ -1702,7 +1703,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                     out.Settings.FilmSimulationGrainIntensity = std::clamp(film->GrainIntensity, 0.0f, GameEngine::Components::FilmSimulationEffect::kGrainIntensityMax);
                     out.Settings.FilmSimulationGrainSize = std::clamp(film->GrainSize, GameEngine::Components::FilmSimulationEffect::kGrainSizeMin, GameEngine::Components::FilmSimulationEffect::kGrainSizeMax);
                     out.Settings.FilmSimulationGrainSmooth = film->GrainSmooth ? 1 : 0;
-                    out.Settings.FilmSimulationGrainDensity = std::clamp(film->GrainDensity, 0.0f, 1.0f);
+                    out.Settings.FilmSimulationGrainDensity = Math::Clamp01(film->GrainDensity);
                     out.Settings.FilmSimulationGrainShadowResponse = std::clamp(film->GrainShadowResponse, 0.0f, GameEngine::Components::FilmSimulationEffect::kGrainResponseMax);
                     out.Settings.FilmSimulationGrainMidtoneResponse = std::clamp(film->GrainMidtoneResponse, 0.0f, GameEngine::Components::FilmSimulationEffect::kGrainResponseMax);
                     out.Settings.FilmSimulationGrainHighlightResponse = std::clamp(film->GrainHighlightResponse, 0.0f, GameEngine::Components::FilmSimulationEffect::kGrainResponseMax);
@@ -1717,9 +1718,9 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                     GameEngine::Components::FilmSimulationEffect::kArtifactIntensityMax;
                 out.Settings.FilmSimulationHairWidth = std::clamp(film->HairWidth, GameEngine::Components::FilmSimulationEffect::kHairWidthMin, GameEngine::Components::FilmSimulationEffect::kHairWidthMax);
                 out.Settings.FilmSimulationHairLength = std::clamp(film->HairLength, GameEngine::Components::FilmSimulationEffect::kHairLengthMin, GameEngine::Components::FilmSimulationEffect::kHairLengthMax);
-                out.Settings.FilmSimulationHairRandomSize = std::clamp(film->HairRandomSize, 0.0f, 1.0f);
+                out.Settings.FilmSimulationHairRandomSize = Math::Clamp01(film->HairRandomSize);
                 out.Settings.FilmSimulationHairCurl = std::clamp(film->HairCurl, -1.0f, 1.0f);
-                out.Settings.FilmSimulationHairCurlRandomness = std::clamp(film->HairCurlRandomness, 0.0f, 1.0f);
+                out.Settings.FilmSimulationHairCurlRandomness = Math::Clamp01(film->HairCurlRandomness);
                 out.Settings.FilmSimulationScratchesEnabled = film->ScratchesEnabled ? 1 : 0;
                 out.Settings.FilmSimulationScratchAmount =
                     std::clamp(film->ScratchAmount, 0.0f, GameEngine::Components::FilmSimulationEffect::kScratchAmountMax) /
@@ -1737,7 +1738,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                     std::clamp(film->DustIntensity, 0.0f, GameEngine::Components::FilmSimulationEffect::kArtifactIntensityMax) /
                     GameEngine::Components::FilmSimulationEffect::kArtifactIntensityMax;
                 out.Settings.FilmSimulationDustSize = std::clamp(film->DustSize, GameEngine::Components::FilmSimulationEffect::kDustSizeMin, GameEngine::Components::FilmSimulationEffect::kDustSizeMax);
-                out.Settings.FilmSimulationDustRandomSize = std::clamp(film->DustRandomSize, 0.0f, 1.0f);
+                out.Settings.FilmSimulationDustRandomSize = Math::Clamp01(film->DustRandomSize);
                 out.Settings.FilmSimulationGateWeaveEnabled = film->GateWeaveEnabled ? 1 : 0;
                 out.Settings.FilmSimulationGateWeaveHorizontal = std::clamp(film->GateWeaveHorizontal, 0.0f, GameEngine::Components::FilmSimulationEffect::kGateWeaveOffsetMax);
                 out.Settings.FilmSimulationGateWeaveVertical = std::clamp(film->GateWeaveVertical, 0.0f, GameEngine::Components::FilmSimulationEffect::kGateWeaveOffsetMax);
@@ -1777,7 +1778,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.ShadowSettings.MaxShadowDistance = std::max(shadow->MaxShadowDistance, 0.01f);
                 out.ShadowSettings.DistanceFadeFraction = std::clamp(shadow->DistanceFadeFraction, 0.0f,
                     Components::ShadowSettingsEffect::kDistanceFadeFractionMax);
-                out.ShadowSettings.SplitLambda = std::clamp(shadow->SplitLambda, 0.0f, 1.0f);
+                out.ShadowSettings.SplitLambda = Math::Clamp01(shadow->SplitLambda);
                 out.ShadowSettings.DepthBias = std::clamp(shadow->DepthBias, 0.0f, 0.01f);
                 out.ShadowSettings.NormalBias = std::clamp(shadow->NormalBias, 0.0f, 5.0f);
             }
@@ -1807,7 +1808,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.CubeLutAssetGuid = clut->LutAssetGuid.ToGuid();
                 out.HasCubeLutAsset = !out.CubeLutAssetGuid.IsNull();
                 // An effect with no LUT picked grades nothing: no intensity reaches the pass.
-                out.Settings.LutIntensity = out.HasCubeLutAsset ? std::clamp(clut->Intensity, 0.0f, 1.0f) : 0.0f;
+                out.Settings.LutIntensity = out.HasCubeLutAsset ? Math::Clamp01(clut->Intensity) : 0.0f;
                 out.Settings.LutStage = static_cast<int32>(clut->Stage);
             }
         },
@@ -1860,7 +1861,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.VolumetricFogDensity = std::max(fog->Density, 0.0f);
                 out.Settings.VolumetricFogBaseHeight = fog->BaseHeight;
                 out.Settings.VolumetricFogHeightFalloff = std::max(fog->HeightFalloff, 0.01f);
-                out.Settings.VolumetricFogSkyFade = std::clamp(fog->SkyFade, 0.0f, 1.0f);
+                out.Settings.VolumetricFogSkyFade = Math::Clamp01(fog->SkyFade);
                 out.Settings.VolumetricFogAlbedoR = fog->Albedo[0];
                 out.Settings.VolumetricFogAlbedoG = fog->Albedo[1];
                 out.Settings.VolumetricFogAlbedoB = fog->Albedo[2];
@@ -1878,7 +1879,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.VolumetricFogAmbientTintB = fog->AmbientScatteringTint[2];
                 out.Settings.VolumetricFogNoiseEnabled = fog->NoiseEnabled ? 1 : 0;
                 out.Settings.VolumetricFogNoiseScale = std::max(fog->NoiseScale, 0.01f);
-                out.Settings.VolumetricFogNoiseStrength = std::clamp(fog->NoiseStrength, 0.0f, 1.0f);
+                out.Settings.VolumetricFogNoiseStrength = Math::Clamp01(fog->NoiseStrength);
                 out.Settings.VolumetricFogNoiseVelocityX = fog->NoiseVelocity[0];
                 out.Settings.VolumetricFogNoiseVelocityY = fog->NoiseVelocity[1];
                 out.Settings.VolumetricFogNoiseVelocityZ = fog->NoiseVelocity[2];
@@ -1887,11 +1888,11 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.VolumetricFogNoiseChannelWeightG = std::max(fog->NoiseChannelWeights[1], 0.0f);
                 out.Settings.VolumetricFogNoiseChannelWeightB = std::max(fog->NoiseChannelWeights[2], 0.0f);
                 out.Settings.VolumetricFogNoiseChannelWeightA = std::max(fog->NoiseChannelWeights[3], 0.0f);
-                out.Settings.VolumetricFogDensityThreshold = std::clamp(fog->DensityThreshold, 0.0f, 1.0f);
+                out.Settings.VolumetricFogDensityThreshold = Math::Clamp01(fog->DensityThreshold);
                 out.Settings.VolumetricFogDensityThresholdSoftness = std::max(fog->DensityThresholdSoftness, 0.0001f);
                 out.Settings.VolumetricFogTemporalEnabled = fog->TemporalEnabled ? 1 : 0;
                 out.Settings.VolumetricFogTemporalBlend = std::clamp(fog->TemporalBlend, 0.0f, 0.99f);
-                out.Settings.VolumetricFogJitterStrength = std::clamp(fog->JitterStrength, 0.0f, 1.0f);
+                out.Settings.VolumetricFogJitterStrength = Math::Clamp01(fog->JitterStrength);
                 out.Settings.VolumetricFogJitterMotion = fog->JitterMotion ? 1 : 0;
                 out.Settings.VolumetricFogCompositeDepthBias = fog->CompositeDepthBias;
                 out.Settings.VolumetricFogShadowBias = fog->ShadowBias;
@@ -1902,7 +1903,7 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                     out.Settings.FogGlowIntensity = std::max(fog->FogGlowIntensity, 0.0f);
                     out.Settings.FogGlowRadius = std::clamp(fog->FogGlowRadius, 1.0f, 7.0f);
                     out.Settings.FogGlowOctaves = std::clamp(fog->FogGlowOctaves, 3, 8);
-                    out.Settings.FogGlowScatter = std::clamp(fog->FogGlowScatter, 0.0f, 1.0f);
+                    out.Settings.FogGlowScatter = Math::Clamp01(fog->FogGlowScatter);
                     out.Settings.FogGlowThreshold = std::max(fog->FogGlowThreshold, 0.0f);
                     out.Settings.FogGlowKnee = std::max(fog->FogGlowKnee, 0.0f);
                     out.Settings.FogGlowFadeStart = std::clamp(fog->FogGlowFadeStart, 0.0f, 0.999f);
@@ -1930,8 +1931,8 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 std::memcpy(out.LocalFogVolume.emission, fog->Emission, sizeof(out.LocalFogVolume.emission));
                 std::memcpy(out.LocalFogVolume.gradientLowTint, fog->GradientLowTint, sizeof(out.LocalFogVolume.gradientLowTint));
                 std::memcpy(out.LocalFogVolume.gradientHighTint, fog->GradientHighTint, sizeof(out.LocalFogVolume.gradientHighTint));
-                out.LocalFogVolume.gradientStrength = std::clamp(fog->GradientStrength, 0.0f, 1.0f);
-                out.LocalFogVolume.densityThreshold = std::clamp(fog->DensityThreshold, 0.0f, 1.0f);
+                out.LocalFogVolume.gradientStrength = Math::Clamp01(fog->GradientStrength);
+                out.LocalFogVolume.densityThreshold = Math::Clamp01(fog->DensityThreshold);
                 out.LocalFogVolume.densityThresholdSoftness = std::max(fog->DensityThresholdSoftness, 0.0001f);
             }
         },
@@ -1991,8 +1992,8 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 layer && layer->Enabled)
             {
                 out.HasAtmosphericCloud = true;
-                out.Settings.AtmosphericCloudSkyFill = std::clamp(layer->SkyFill, 0.0f, 1.0f);
-                out.Settings.AtmosphericCloudVaporMass = std::clamp(layer->VaporMass, 0.0f, 1.0f);
+                out.Settings.AtmosphericCloudSkyFill = Math::Clamp01(layer->SkyFill);
+                out.Settings.AtmosphericCloudVaporMass = Math::Clamp01(layer->VaporMass);
                 out.Settings.AtmosphericCloudColorR = std::clamp(layer->CloudColor[0], 0.0f, kAtmosphericCloudColorMaxIntensity);
                 out.Settings.AtmosphericCloudColorG = std::clamp(layer->CloudColor[1], 0.0f, kAtmosphericCloudColorMaxIntensity);
                 out.Settings.AtmosphericCloudColorB = std::clamp(layer->CloudColor[2], 0.0f, kAtmosphericCloudColorMaxIntensity);
@@ -2001,13 +2002,13 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.AtmosphericCloudLayerDepth = std::max(layer->LayerDepth, 1.0f);
                 out.Settings.AtmosphericCloudBodyFrequency = std::max(layer->BodyFrequency, 0.01f);
                 out.Settings.AtmosphericCloudEdgeFrequency = std::max(layer->EdgeFrequency, 0.01f);
-                out.Settings.AtmosphericCloudEdgeBreakup = std::clamp(layer->EdgeBreakup, 0.0f, 1.0f);
+                out.Settings.AtmosphericCloudEdgeBreakup = Math::Clamp01(layer->EdgeBreakup);
                 out.Settings.AtmosphericCloudDriftAngle = layer->DriftAngle;
                 out.Settings.AtmosphericCloudDriftRate = layer->DriftRate;
-                out.Settings.AtmosphericCloudSunFade = std::clamp(layer->SunFade, 0.0f, 1.0f);
+                out.Settings.AtmosphericCloudSunFade = Math::Clamp01(layer->SunFade);
                 out.Settings.AtmosphericCloudSkyBounce = std::clamp(layer->SkyBounce, 0.0f, 2.0f);
                 out.Settings.AtmosphericCloudRimBoost = std::clamp(layer->RimBoost, 0.0f, 2.0f);
-                out.Settings.AtmosphericCloudOcclusion = std::clamp(layer->Occlusion, 0.0f, 1.0f);
+                out.Settings.AtmosphericCloudOcclusion = Math::Clamp01(layer->Occlusion);
                 out.Settings.AtmosphericCloudHistoryWeight = std::clamp(layer->HistoryWeight, 0.0f, 0.99f);
                 out.Settings.AtmosphericCloudPixelScale = std::clamp(layer->PixelScale, 0.25f, 1.0f);
             }
@@ -2068,11 +2069,11 @@ void RegisterBuiltInPostProcessEffectDescriptors()
             s.CloudsDetailOffsetZ = clouds->DetailOffset[2];
             s.CloudsAbsorptionThroughCloud = std::max(clouds->LightAbsorptionThroughCloud, 0.0f);
             s.CloudsAbsorptionTowardSun = std::max(clouds->LightAbsorptionTowardSun, 0.0f);
-            s.CloudsDarknessThreshold = std::clamp(clouds->DarknessThreshold, 0.0f, 1.0f);
-            s.CloudsPhaseForward = std::clamp(clouds->ForwardScattering, 0.0f, 1.0f);
-            s.CloudsPhaseBack = std::clamp(clouds->BackScattering, 0.0f, 1.0f);
-            s.CloudsPhaseBase = std::clamp(clouds->BaseBrightness, 0.0f, 1.0f);
-            s.CloudsPhaseFactor = std::clamp(clouds->PhaseFactor, 0.0f, 1.0f);
+            s.CloudsDarknessThreshold = Math::Clamp01(clouds->DarknessThreshold);
+            s.CloudsPhaseForward = Math::Clamp01(clouds->ForwardScattering);
+            s.CloudsPhaseBack = Math::Clamp01(clouds->BackScattering);
+            s.CloudsPhaseBase = Math::Clamp01(clouds->BaseBrightness);
+            s.CloudsPhaseFactor = Math::Clamp01(clouds->PhaseFactor);
             s.CloudsTimeScale = clouds->TimeScale;
             s.CloudsBaseSpeed = clouds->BaseSpeed;
             s.CloudsDetailSpeed = clouds->DetailSpeed;

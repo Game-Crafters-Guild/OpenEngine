@@ -5,6 +5,7 @@
 
 #include "Graph/NodeColorSettings.h"
 #include "Graph/GraphNodeOverlap.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Graph/GraphCanvasEditKeys.h"
@@ -85,7 +86,7 @@ void LoadNodeDropShadowStyleIfNeeded()
     loadFloat(GraphCanvas::kNodeDropShadowBlurPreference, g_NodeDropShadowBlur);
     loadFloat(GraphCanvas::kNodeDropShadowOpacityPreference, g_NodeDropShadowOpacity);
     g_NodeDropShadowBlur = std::max(0.0f, g_NodeDropShadowBlur);
-    g_NodeDropShadowOpacity = std::clamp(g_NodeDropShadowOpacity, 0.0f, 1.0f);
+    g_NodeDropShadowOpacity = Math::Clamp01(g_NodeDropShadowOpacity);
     g_NodeDropShadowStyleLoaded = true;
 }
 
@@ -121,7 +122,7 @@ std::string NormalizeSelectedNodeWireEmphasis(std::string value)
    the emphasis only lifts it toward white or fades it into a halo. */
 uint32_t WireColorWithAlpha(uint32_t rgba, float alpha)
 {
-    const uint32_t a = static_cast<uint32_t>(std::clamp(alpha, 0.f, 1.f) * 255.f + 0.5f);
+    const uint32_t a = static_cast<uint32_t>(Math::Clamp01(alpha) * 255.f + 0.5f);
     return (rgba & 0x00FFFFFFu) | (a << 24);
 }
 
@@ -220,7 +221,7 @@ void GraphCanvas::SetNodeDropShadowStyle(float offsetX, float offsetY, float blu
     g_NodeDropShadowOffsetX = offsetX;
     g_NodeDropShadowOffsetY = offsetY;
     g_NodeDropShadowBlur = std::max(0.0f, blur);
-    g_NodeDropShadowOpacity = std::clamp(opacity, 0.0f, 1.0f);
+    g_NodeDropShadowOpacity = Math::Clamp01(opacity);
     g_NodeDropShadowStyleLoaded = true;
     MarkLiveCanvasesDirty();
 }
@@ -303,7 +304,7 @@ void GraphCanvas::ApplyNodeDropShadows()
                       static_cast<double>(g_NodeDropShadowOffsetX),
                       static_cast<double>(g_NodeDropShadowOffsetY),
                       static_cast<double>(g_NodeDropShadowBlur),
-                      static_cast<double>(std::clamp(g_NodeDropShadowOpacity, 0.0f, 1.0f)));
+                      static_cast<double>(Math::Clamp01(g_NodeDropShadowOpacity)));
     else
         std::snprintf(shadow, sizeof(shadow), "none");
     Overrides().SetCustom(HashStringId("--graph-node-shadow"), std::string(shadow));
@@ -4669,7 +4670,7 @@ void GraphCanvas::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
             return true;
         }
 
-        float remaining = std::clamp(t, 0.0f, 1.0f) * total;
+        float remaining = Math::Clamp01(t) * total;
         for (size_t i = 0; i + 1 < xs.size(); ++i)
         {
             const float dx = xs[i + 1] - xs[i];
@@ -4698,7 +4699,7 @@ void GraphCanvas::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
         float cx1 = 0.0f;
         float cy1 = 0.0f;
         ComputeConnectionBezierControls(sx0, sy0, sx1, sy1, m_Zoom, cx0, cy0, cx1, cy1);
-        t = std::clamp(t, 0.0f, 1.0f);
+        t = Math::Clamp01(t);
         const float u = 1.0f - t;
         const float u2 = u * u;
         const float u3 = u2 * u;

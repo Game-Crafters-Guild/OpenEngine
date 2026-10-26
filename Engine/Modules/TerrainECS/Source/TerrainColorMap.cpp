@@ -1,5 +1,6 @@
 #include "TerrainECS/TerrainColorMap.h"
 
+#include "Mathematics/Interpolation.h"
 #include "TerrainColorMapCompose.h"
 
 #include "TerrainECS/TerrainGrassField.h"
@@ -50,8 +51,8 @@ struct ZoneSampler
 float32 SampleBytesBilinear(const uint8* texels, uint32 width, uint32 height, uint32 channels, uint32 channel,
                             float32 u, float32 v)
 {
-    const float32 fx = std::clamp(u, 0.0f, 1.0f) * static_cast<float32>(width - 1);
-    const float32 fz = std::clamp(v, 0.0f, 1.0f) * static_cast<float32>(height - 1);
+    const float32 fx = Math::Clamp01(u) * static_cast<float32>(width - 1);
+    const float32 fz = Math::Clamp01(v) * static_cast<float32>(height - 1);
     const uint32 x0 = std::min(static_cast<uint32>(fx), width - 1);
     const uint32 z0 = std::min(static_cast<uint32>(fz), height - 1);
     const uint32 x1 = std::min(x0 + 1, width - 1);
@@ -137,8 +138,8 @@ bool ZoneReaches(const ResolvedModifier& zone, const TerrainColorComposeInputs& 
 // filter, so a written texel beside an unwritten one filters to the half mix.
 void SampleZonePremultiplied(const ModifierColorZoneParams& zone, float32 u, float32 v, float32 (&out)[4])
 {
-    u = std::clamp(u, 0.0f, 1.0f);
-    v = std::clamp(v, 0.0f, 1.0f);
+    u = Math::Clamp01(u);
+    v = Math::Clamp01(v);
     const float32 fx = u * static_cast<float32>(zone.Width - 1);
     const float32 fz = v * static_cast<float32>(zone.Height - 1);
     const uint32 x0 = static_cast<uint32>(fx);
@@ -155,11 +156,11 @@ void SampleZonePremultiplied(const ModifierColorZoneParams& zone, float32 u, flo
     {
         const float32* texel =
             zone.Color + (static_cast<size_t>(zs[c]) * zone.Width + xs[c]) * kZonePayloadColorChannels;
-        const float32 weight = std::clamp(texel[3], 0.0f, 1.0f);
+        const float32 weight = Math::Clamp01(texel[3]);
         const float32 k = corners[c] * weight;
-        out[0] += std::clamp(texel[0], 0.0f, 1.0f) * k;
-        out[1] += std::clamp(texel[1], 0.0f, 1.0f) * k;
-        out[2] += std::clamp(texel[2], 0.0f, 1.0f) * k;
+        out[0] += Math::Clamp01(texel[0]) * k;
+        out[1] += Math::Clamp01(texel[1]) * k;
+        out[2] += Math::Clamp01(texel[2]) * k;
         out[3] += k;
     }
 }
@@ -171,7 +172,7 @@ void ComposeZone(const ZoneSampler& sampler, float32 worldX, float32 worldZ, flo
         || worldZ > zone.BoundsMaxZ)
         return;
     const float32 rawFalloff = ComputeWeight(zone, worldX, worldZ);
-    const float32 falloff = std::isfinite(rawFalloff) ? std::clamp(rawFalloff, 0.0f, 1.0f) : 0.0f;
+    const float32 falloff = std::isfinite(rawFalloff) ? Math::Clamp01(rawFalloff) : 0.0f;
     if (falloff <= 0.0f)
         return;
     if (IsColorEffectWriter(zone))
@@ -204,7 +205,7 @@ float32 TerrainColorGroundWriteWeight(const TerrainColorGroundWrite& write, cons
     const float32 coverage = Terrain::GrassFieldCoverage(
         Terrain::GrassSplatCoverage(weights, write.GrassLayer, write.MaskThreshold, hasSplatmap), heightScale,
         densityScale);
-    return std::clamp(write.Amount, 0.0f, 1.0f) * std::clamp(darkeningScale, 0.0f, 1.0f) * coverage;
+    return Math::Clamp01(write.Amount) * Math::Clamp01(darkeningScale) * coverage;
 }
 
 // True when a writer reaches the lattice, so the map has content to hold.
@@ -220,17 +221,17 @@ bool TerrainColorHasWriters(const TerrainColorComposeInputs& inputs)
 
 uint8 EncodeLinearToSrgbByte(float32 linear)
 {
-    const float32 clamped = std::isfinite(linear) ? std::clamp(linear, 0.0f, 1.0f) : 0.0f;
+    const float32 clamped = std::isfinite(linear) ? Math::Clamp01(linear) : 0.0f;
     return SrgbEncodeTable()[static_cast<uint32>(clamped * static_cast<float32>(kSrgbEncodeSteps) + 0.5f)];
 }
 
 void CompositePremultipliedOver(float32 (&texel)[4], const float32 (&premultipliedColor)[3], float32 weight)
 {
-    const float32 keep = 1.0f - std::clamp(weight, 0.0f, 1.0f);
+    const float32 keep = 1.0f - Math::Clamp01(weight);
     texel[0] = premultipliedColor[0] + texel[0] * keep;
     texel[1] = premultipliedColor[1] + texel[1] * keep;
     texel[2] = premultipliedColor[2] + texel[2] * keep;
-    texel[3] = std::clamp(weight, 0.0f, 1.0f) + texel[3] * keep;
+    texel[3] = Math::Clamp01(weight) + texel[3] * keep;
 }
 
 void ComposeTerrainColorMap(TerrainColorMap& map, const TerrainColorComposeInputs& inputs, int32 minX, int32 minZ,
@@ -324,7 +325,7 @@ void ComposeTerrainColorMap(TerrainColorMap& map, const TerrainColorComposeInput
                 ComposeZone(zone, worldX, worldZ, texel);
             const uint8 encoded[4] = {EncodeLinearToSrgbByte(texel[0]), EncodeLinearToSrgbByte(texel[1]),
                                       EncodeLinearToSrgbByte(texel[2]),
-                                      static_cast<uint8>(std::lround(std::clamp(texel[3], 0.0f, 1.0f) * 255.0f))};
+                                      static_cast<uint8>(std::lround(Math::Clamp01(texel[3]) * 255.0f))};
             uint8* stored = map.Pixels.data() + (static_cast<size_t>(z) * width + x) * kTerrainColorMapChannels;
             if (std::equal(encoded, encoded + 4, stored))
                 continue;

@@ -985,6 +985,16 @@ TEST(GraphNodeLayoutTests, NodePortLabelsAbbreviateButTooltipsKeepFullNames)
         << "the tooltip keeps the full name";
 }
 
+// A port with no display name reads its id as words, acronyms kept whole.
+TEST(GraphNodeLayoutTests, PortWithoutDisplayNameReadsItsIdAsWords)
+{
+    Graph::Port port;
+    port.Id = "worldUVScale";
+    EXPECT_EQ(GraphNodeMetrics::PortDisplayLabel(port), "World UV Scale");
+    port.DisplayName = "Scale";
+    EXPECT_EQ(GraphNodeMetrics::PortDisplayLabel(port), "Scale");
+}
+
 TEST(GraphNodeLayoutTests, StackedFloatBoxesShareTheMostConstrainedWidth)
 {
     UIRegistration::RegisterBuiltInControls();

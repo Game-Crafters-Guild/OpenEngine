@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -133,7 +134,7 @@ inline float32 GrassDensityAtDistance(const GrassPlacementParams& params, float3
 {
     if (params.FarRadius <= 0.0f)
         return 0.0f;
-    const float32 t = std::clamp(1.0f - distanceMeters / params.FarRadius, 0.0f, 1.0f);
+    const float32 t = Math::Clamp01(1.0f - distanceMeters / params.FarRadius);
     return std::max(params.NearDensity, 0.0f) * std::pow(t, std::max(params.Falloff, 0.0f));
 }
 
@@ -150,7 +151,7 @@ inline float32 GrassSlotsWantedForCell(const GrassPlacementParams& params, float
 inline float32 GrassGrowthForSlot(float32 slotsWanted, uint32 slot)
 {
     const float32 growWidth = std::max(1.0f, slotsWanted * kGrassGrowthSlotFraction);
-    return std::clamp((slotsWanted - static_cast<float32>(slot)) / growWidth, 0.0f, 1.0f);
+    return Math::Clamp01((slotsWanted - static_cast<float32>(slot)) / growWidth);
 }
 
 // Slots the compute iterates for a cell: every slot that could clear kGrassMinGrowth.

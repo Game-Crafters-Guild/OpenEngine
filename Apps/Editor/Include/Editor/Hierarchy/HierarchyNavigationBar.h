@@ -3,6 +3,7 @@
 #include "UI/UIElement.h"
 
 #include <functional>
+#include <string>
 
 namespace GameEngine
 {
@@ -14,10 +15,11 @@ class ItemSizeSlider;
 namespace Editor
 {
 
-// The Hierarchy's bottom bar: the item size slider, pinned to the panel's bottom edge wherever
-// the panel search sits (the search is the panel's own child and moves with the search bar
-// placement setting). The layout comes from
-// UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.css, requested for this bar's subtree.
+// The Hierarchy's bottom bar: a rows glyph, then the item size slider, pinned to the panel's
+// bottom edge wherever the panel search sits (the search is the panel's own child and moves with
+// the search bar placement setting). The glyph is
+// UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.uxml; the look comes from
+// HierarchyNavigationBar.css beside it, requested for this bar's subtree.
 //
 // The slider sets the Hierarchy's tree icon size. The bar reports sizes through two callbacks and
 // is told the current size back; the panel owns the size.
@@ -46,6 +48,7 @@ public:
     void SetAboveHorizontalScrollbar(bool above);
 
 private:
+    void AddSizeGlyph(const std::string& tooltip);
     void ReportDrag(float px);
     void ApplyResizeGesture(float scrollY);
 

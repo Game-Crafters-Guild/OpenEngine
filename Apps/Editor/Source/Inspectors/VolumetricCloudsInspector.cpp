@@ -9,6 +9,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <algorithm>
@@ -177,27 +178,27 @@ void RegisterVolumetricCloudsInspector()
 
         AddComponentFloatRowWithDrag<Clouds>(ctx.Parent, "DarknessThreshold", clouds->DarknessThreshold, w, e, n,
             undo, "Change Clouds Darkness Threshold",
-            [](Clouds& u, float v) { u.DarknessThreshold = std::clamp(v, 0.0f, 1.0f); },
+            [](Clouds& u, float v) { u.DarknessThreshold = Math::Clamp01(v); },
             0.2f, "Floor on shadowed cloud brightness", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Clouds>(ctx.Parent, "ForwardScattering", clouds->ForwardScattering, w, e, n,
             undo, "Change Clouds Forward Scattering",
-            [](Clouds& u, float v) { u.ForwardScattering = std::clamp(v, 0.0f, 1.0f); },
+            [](Clouds& u, float v) { u.ForwardScattering = Math::Clamp01(v); },
             0.83f, "Henyey-Greenstein forward lobe (silver lining toward the sun)", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Clouds>(ctx.Parent, "BackScattering", clouds->BackScattering, w, e, n,
             undo, "Change Clouds Back Scattering",
-            [](Clouds& u, float v) { u.BackScattering = std::clamp(v, 0.0f, 1.0f); },
+            [](Clouds& u, float v) { u.BackScattering = Math::Clamp01(v); },
             0.3f, "Henyey-Greenstein backward lobe", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Clouds>(ctx.Parent, "BaseBrightness", clouds->BaseBrightness, w, e, n,
             undo, "Change Clouds Base Brightness",
-            [](Clouds& u, float v) { u.BaseBrightness = std::clamp(v, 0.0f, 1.0f); },
+            [](Clouds& u, float v) { u.BaseBrightness = Math::Clamp01(v); },
             0.8f, "Phase-independent brightness floor", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Clouds>(ctx.Parent, "PhaseFactor", clouds->PhaseFactor, w, e, n,
             undo, "Change Clouds Phase Factor",
-            [](Clouds& u, float v) { u.PhaseFactor = std::clamp(v, 0.0f, 1.0f); },
+            [](Clouds& u, float v) { u.PhaseFactor = Math::Clamp01(v); },
             0.15f, "How strongly the phase function modulates brightness", {}, 0.0f, 1.0f);
 
         // Animation

@@ -1,5 +1,6 @@
 #include "Rendering/ShaderGraph/SgGraphFileIO.h"
 
+#include "Rendering/Core/HotReloadIntegration.h"
 #include "Rendering/ShaderGraph/SgGraphCompiler.h"
 #include "Rendering/ShaderGraph/SgNodeReflector.h"
 #include "Rendering/ShaderGraph/SgPseudoNodes.h"
@@ -86,8 +87,13 @@ bool WriteGraphFileTextIfChanged(const std::filesystem::path& path, const std::s
                 return true;
         }
 
-        std::ofstream out(path);
-        out << text;
+        {
+            std::ofstream out(path);
+            out << text;
+        }
+        // Generated surfaces live under the shader cache root, which no file watcher
+        // reports, so the writer announces its own edit to the compile path's source cache.
+        Rendering::NotifyShaderSourcesChanged();
         return true;
     }
     catch (...)

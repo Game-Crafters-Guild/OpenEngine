@@ -1,5 +1,6 @@
 #include "TerrainECS/TerrainRoutePolyline.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Spline/SplineData.h"
 #include "Spline/SplineEvaluator.h"
 
@@ -67,8 +68,7 @@ RouteSample ClosestStationXZ(const RoutePolyline& polyline, float32 worldX, floa
         if (lengthSq < 1e-9f)
             continue; // Coincident stations describe no segment to project onto.
 
-        const float32 t = std::clamp(((worldX - a.X) * dx + (worldZ - a.Z) * dz) / lengthSq,
-                                     0.0f, 1.0f);
+        const float32 t = Math::Clamp01(((worldX - a.X) * dx + (worldZ - a.Z) * dz) / lengthSq);
         const float32 offX = worldX - (a.X + t * dx);
         const float32 offZ = worldZ - (a.Z + t * dz);
         const float32 distance = std::sqrt(offX * offX + offZ * offZ);

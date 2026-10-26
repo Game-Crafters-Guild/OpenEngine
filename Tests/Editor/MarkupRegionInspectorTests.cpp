@@ -1,5 +1,5 @@
 // A region mark-up's authoring surfaces: the inspector's Region block (the height's commit rule,
-// the member list), Convert to region on a box, the panel row's kind and outline badge, and the
+// the member list), Convert to Region on a box, the panel row's kind and outline badge, and the
 // Mark-up tool's lasso.
 
 #include "Markups/MarkupEditorBridge.h"
@@ -398,7 +398,7 @@ TEST_F(MarkupRegionInspectorTest, TheMemberCheckboxesAndSwitchWriteTheListOneUnd
     EXPECT_FALSE(Undo.CanUndo());
 }
 
-// Convert to region on a box is one undo step: the box becomes a region over its footprint at its
+// Convert to Region on a box is one undo step: the box becomes a region over its footprint at its
 // height, its thread says it was converted (not moved and resized), and undo gives the box back.
 TEST_F(MarkupRegionInspectorTest, ConvertToRegionIsOneUndoStepAndUndoGivesTheBoxBack)
 {
@@ -411,11 +411,12 @@ TEST_F(MarkupRegionInspectorTest, ConvertToRegionIsOneUndoStepAndUndoGivesTheBox
         {
             if (button->HasClass("markup-convert-to-region"))
             {
+                EXPECT_EQ(button->GetText(), "Convert to Region");
                 button->TriggerClick();
                 clicked = true;
             }
         }
-        ASSERT_TRUE(clicked) << "a box's volume section offers no Convert to region";
+        ASSERT_TRUE(clicked) << "a box's volume section offers no Convert to Region";
     }
     const MarkupECS::MarkupNotes* notes = MarkupECS::MarkupService::Get().FindNotes(World, box);
     ASSERT_NE(notes, nullptr);
@@ -466,7 +467,7 @@ TEST_F(MarkupRegionInspectorTest, ARegionRowShowsItsKindAndAnOutlineThatNeedsAPo
     EXPECT_TRUE(badge);
 }
 
-// A path's Mark-up section carries its Path block (its points and Edit path) and its panel row the
+// A path's Mark-up section carries its Path block (its points and Edit Path) and its panel row the
 // path glyph; a region's carries neither.
 TEST_F(MarkupRegionInspectorTest, APathShowsItsBlockAndItsKind)
 {
@@ -484,6 +485,27 @@ TEST_F(MarkupRegionInspectorTest, APathShowsItsBlockAndItsKind)
 
     const ECS::EntityHandle forest = CreateRegion(kForest);
     EXPECT_FALSE(HasClassBelow(*BuildSection<Components::Markup>(forest), "markup-path-edit"));
+}
+
+// Edit Outline on a region and Edit Path on a path are buttons, so they read in title case.
+TEST_F(MarkupRegionInspectorTest, TheEditKnotsButtonsReadInTitleCase)
+{
+    const std::vector<Vector3> points{{0.0f, 0.0f, 0.0f}, {30.0f, 0.0f, 5.0f}};
+    const ECS::EntityHandle road = BeginMarkup(Editor::NewPathPlacement(points));
+    Editor::AddPathParts(World, road, World.GetComponent<Components::Transform>(road)->matrix, points,
+                         Spline::SplineType::Linear);
+    const ECS::EntityHandle forest = CreateRegion(kForest);
+    std::vector<std::string> texts;
+    for (const ECS::EntityHandle entity : {forest, road})
+    {
+        const std::unique_ptr<UIElement> section = BuildSection<Components::Markup>(entity);
+        for (Button* button : FindAll<Button>(*section))
+        {
+            if (button->HasClass("markup-region-edit-outline") || button->HasClass("markup-path-edit"))
+                texts.push_back(button->GetText());
+        }
+    }
+    EXPECT_EQ(texts, (std::vector<std::string>{"Edit Outline", "Edit Path"}));
 }
 
 // The spline inspector's Closed row says why it cannot change in its owner's words: a region's

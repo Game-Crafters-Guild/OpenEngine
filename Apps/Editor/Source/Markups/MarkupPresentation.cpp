@@ -5,14 +5,15 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
 #include "MarkupECS/MarkupService.h"
+#include "Mathematics/Interpolation.h"
 #include "SceneViewController.h"
 #include "Types/Color.h"
 #include "Types/ColorUtils.h"
+#include "Types/StringUtils.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIElement.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <optional>
@@ -35,11 +36,11 @@ constexpr float kMinFrameDistance = 0.5f;
 // A field of view narrower than about 0.1 degree frames as if it were that wide.
 constexpr float kMinTanHalfFov = 1.0e-3f;
 // --ui_color_markup_unknown_status (tokens.css), for a status the vocabulary does not hold.
-constexpr float32 kUnknownStatusRgb[4] = {0.5f, 0.5f, 0.5f, 1.0f};
+const ColorSRGB kUnknownStatusColor(0.5f, 0.5f, 0.5f);
 
 uint32_t ChannelByte(float32 channel)
 {
-    return static_cast<uint32_t>(std::lround(std::clamp(channel, 0.0f, 1.0f) * 255.0f));
+    return static_cast<uint32_t>(std::lround(Math::Clamp01(channel) * 255.0f));
 }
 } // namespace
 
@@ -73,19 +74,7 @@ std::string MarkupTagLabel(uint32 tagId)
     const MarkupECS::MarkupTag* tag = service ? service->GetTag(tagId) : nullptr;
     if (!tag)
         return std::string();
-    std::string label;
-    for (size_t i = 0; i < tag->Name.size(); ++i)
-    {
-        const unsigned char c = static_cast<unsigned char>(tag->Name[i]);
-        if (i > 0 && std::isupper(c) && std::islower(static_cast<unsigned char>(tag->Name[i - 1])))
-        {
-            label.push_back(' ');
-            label.push_back(static_cast<char>(std::tolower(c)));
-            continue;
-        }
-        label.push_back(static_cast<char>(c));
-    }
-    return label;
+    return IdentifierToWords(tag->Name);
 }
 
 std::string_view MarkupTitleView(const ECS::World& world, ECS::EntityHandle entity)
@@ -120,22 +109,24 @@ bool MarkupHasOwnColor(const Components::Markup& markup)
     return markup.Color[0] != 0.0f || markup.Color[1] != 0.0f || markup.Color[2] != 0.0f || markup.Color[3] != 0.0f;
 }
 
-std::array<float32, 3> MarkupDisplayRgb(const Components::Markup& markup)
+ColorSRGB MarkupDisplayRgb(const Components::Markup& markup)
 {
     const float32* source = markup.Color;
     if (!MarkupHasOwnColor(markup))
     {
         const auto* service = MarkupECS::MarkupService::TryGet();
         const MarkupECS::MarkupTag* tag = service ? service->GetTag(markup.Status) : nullptr;
-        source = tag ? tag->Color : kUnknownStatusRgb;
+        if (!tag)
+            return kUnknownStatusColor;
+        source = tag->Color;
     }
-    return {std::clamp(source[0], 0.0f, 1.0f), std::clamp(source[1], 0.0f, 1.0f), std::clamp(source[2], 0.0f, 1.0f)};
+    return ColorSRGB(Math::Clamp01(source[0]), Math::Clamp01(source[1]), Math::Clamp01(source[2]));
 }
 
 uint32_t MarkupDisplayArgb(const Components::Markup& markup)
 {
-    const std::array<float32, 3> rgb = MarkupDisplayRgb(markup);
-    return 0xFF000000u | (ChannelByte(rgb[0]) << 16) | (ChannelByte(rgb[1]) << 8) | ChannelByte(rgb[2]);
+    const ColorSRGB color = MarkupDisplayRgb(markup);
+    return 0xFF000000u | (ChannelByte(color.r) << 16) | (ChannelByte(color.g) << 8) | ChannelByte(color.b);
 }
 
 void SetMarkupColorArgb(Components::Markup& markup, uint32_t argb)
@@ -288,7 +279,7 @@ std::optional<MarkupWorldVolume> MarkupWorldVolumeFromMatrix(Components::MarkupV
     MarkupWorldVolume volume;
     volume.Shape = shape;
     volume.Center = Vector3(matrix[12], matrix[13], matrix[14]);
-    float scale[3];
+    Vector3 scale;
     for (int axis = 0; axis < 3; ++axis)
     {
         scale[axis] = columns[axis].Length();
@@ -304,7 +295,7 @@ std::optional<MarkupWorldVolume> MarkupWorldVolumeFromMatrix(Components::MarkupV
         volume.TopY = volume.Center.y + radius;
         return volume;
     }
-    volume.HalfExtents = Vector3(scale[0], scale[1], scale[2]) * 0.5f;
+    volume.HalfExtents = scale * 0.5f;
     volume.BoundingRadius = volume.HalfExtents.Length();
     volume.TopY = volume.Center.y + std::abs(volume.Axes[0].y) * volume.HalfExtents.x +
                   std::abs(volume.Axes[1].y) * volume.HalfExtents.y + std::abs(volume.Axes[2].y) * volume.HalfExtents.z;
@@ -326,10 +317,9 @@ bool MarkupVolumeContains(const MarkupWorldVolume& volume, const Mathematics::Ve
     const Vector3 offset = point - volume.Center;
     if (volume.Shape == Components::MarkupVolumeShape::Sphere)
         return offset.LengthSquared() <= volume.BoundingRadius * volume.BoundingRadius;
-    const float halfExtents[3] = {volume.HalfExtents.x, volume.HalfExtents.y, volume.HalfExtents.z};
     for (int axis = 0; axis < 3; ++axis)
     {
-        if (std::abs(Vector3::Dot(offset, volume.Axes[axis])) > halfExtents[axis])
+        if (std::abs(Vector3::Dot(offset, volume.Axes[axis])) > volume.HalfExtents[axis])
             return false;
     }
     return true;

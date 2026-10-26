@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "Mathematics/Interpolation.h"
 #include "UI/UIElement.h"
 #include "UI/UIPrimitive.h"
 
@@ -192,7 +193,7 @@ class ChartView : public UIElement
         };
         auto valueToPy = [&](float v) {
             const float ny = (v - yMin) / yRange;
-            return y + h - std::clamp(ny, 0.0f, 1.0f) * h;
+            return y + h - Math::Clamp01(ny) * h;
         };
 
         switch (m_Mode)

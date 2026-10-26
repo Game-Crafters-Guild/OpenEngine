@@ -2,6 +2,7 @@
 
 #include "InspectorRegistry.h"           // InspectorContext
 #include "EditorChangeNotifications.h"
+#include "Mathematics/Interpolation.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "Inspectors/InspectorDragHelpers.h"  // AddFloatRowWithDrag / AddIntRowWithDrag / AddToggleRow
 #include "Inspectors/InspectorUIHelpers.h"    // InspectorUI::AddLine
@@ -544,7 +545,7 @@ bool EmitPlanarReflectionControlsRow(UIElement* parent,
     ReadPod(bytes, toggleOffset, toggleValue);
     float strengthValue = 1.0f;
     ReadPod(bytes, strengthOffset, strengthValue);
-    strengthValue = std::clamp(strengthValue, 0.0f, 1.0f);
+    strengthValue = Math::Clamp01(strengthValue);
 
     UIElement* row = InspectorUI::AddRow(parent);
     Label* label = InspectorUI::AddLabel(row, std::string(FieldDisplayName(field)), tooltip);
@@ -587,7 +588,7 @@ bool EmitPlanarReflectionControlsRow(UIElement* parent,
     std::function<void(float)> onStrengthChanged;
     WireEdit<float>(strengthEditState, strengthFec,
         [strengthOffset](Snapshot& b, float v) {
-            const float stored = std::clamp(v, 0.0f, 1.0f);
+            const float stored = Math::Clamp01(v);
             if (strengthOffset + sizeof(float) <= b.size())
                 std::memcpy(b.data() + strengthOffset, &stored, sizeof(float));
         },
@@ -1032,7 +1033,7 @@ std::span<const UIntPreset> ComponentUIntPresetsForField(ECS::ComponentTypeId co
     {
         if (fieldName == "LodDataResolution")
             return kOceanCascadeResolutionPresets;
-        if (fieldName == "RasterDepthCaptureResolution")
+        if (fieldName == "RasterDepthResolution")
             return kOceanRasterDepthResolutionPresets;
     }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Quaternion.h"
 
 #include <glm/glm.hpp>
@@ -38,7 +39,7 @@ inline Mathematics::Quaternion SlerpShort(const Mathematics::Quaternion& a,
                                           const Mathematics::Quaternion& b,
                                           float t)
 {
-    const float tt = (t < 0.0f) ? 0.0f : ((t > 1.0f) ? 1.0f : t);
+    const float tt = Math::Clamp01(t);
     glm::quat ga = a.GetGLM();
     glm::quat gb = b.GetGLM();
     if (glm::dot(ga, gb) < 0.0f)
@@ -53,7 +54,7 @@ inline Mathematics::Quaternion LerpShortNormalized(const Mathematics::Quaternion
                                                    const Mathematics::Quaternion& b,
                                                    float t)
 {
-    const float tt = (t < 0.0f) ? 0.0f : ((t > 1.0f) ? 1.0f : t);
+    const float tt = Math::Clamp01(t);
     glm::quat ga = a.GetGLM();
     glm::quat gb = b.GetGLM();
     if (glm::dot(ga, gb) < 0.0f)

@@ -3,6 +3,7 @@
 #include "InspectorRegistry.h"
 
 #include "Components/Terrain/Terrain.h"
+#include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainTypes.h"
 #include "Components/Terrain/TerrainModifierEffects.h"
 #include "ECS/World.h"
@@ -869,7 +870,7 @@ void AddRuleRow(const InspectorContext& ctx, UIElement* parent, const RulesEffec
         auto handlers = MakeRuleDragHandlers<float>(
             ctx, "Rule Strength",
             [ruleIndex](RulesEffect& u, float v) {
-                u.Rules[ruleIndex].Strength = std::clamp(v, 0.0f, 1.0f);
+                u.Rules[ruleIndex].Strength = Math::Clamp01(v);
             },
             [slider = row.Slider, field = row.ValueField, target, ruleIndex,
              conditionRefreshers]() {

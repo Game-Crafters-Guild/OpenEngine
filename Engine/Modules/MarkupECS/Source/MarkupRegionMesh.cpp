@@ -3,6 +3,7 @@
 #include "MarkupECS/MarkupRegionBoolean.h"
 #include "MarkupECS/MarkupRegionOutline.h"
 #include "Mathematics/Geometry.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Triangulation.h"
 
 #include <algorithm>
@@ -199,7 +200,7 @@ class LidRefiner
             const Vector2 ab = b - a;
             const float32 lengthSquared = LengthSquared(ab);
             const float32 s = lengthSquared > 0.0f
-                                  ? std::clamp(((point.x - a.x) * ab.x + (point.y - a.y) * ab.y) / lengthSquared, 0.0f, 1.0f)
+                                  ? Math::Clamp01(((point.x - a.x) * ab.x + (point.y - a.y) * ab.y) / lengthSquared)
                                   : 0.0f;
             const float32 distance = LengthSquared(a + ab * s - point);
             if (distance < bestDistance)

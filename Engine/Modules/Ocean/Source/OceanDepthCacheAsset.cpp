@@ -1,6 +1,7 @@
 #include "Ocean/OceanDepthCacheAsset.h"
 
 #include "AssetCore/SharedFileRead.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,8 +52,8 @@ bool IsValidHeightfieldSource(const OceanDepthCacheHeightfieldSource& source, Re
 float32 SampleHeightfieldSource(const OceanDepthCacheHeightfieldSource& source, float32 worldX,
                                 float32 worldZ)
 {
-    const float32 u = std::clamp((worldX - source.OriginX) / source.SizeX, 0.0f, 1.0f);
-    const float32 v = std::clamp((worldZ - source.OriginZ) / source.SizeZ, 0.0f, 1.0f);
+    const float32 u = Math::Clamp01((worldX - source.OriginX) / source.SizeX);
+    const float32 v = Math::Clamp01((worldZ - source.OriginZ) / source.SizeZ);
     const float32 gx = u * static_cast<float32>(source.Width > 1 ? source.Width - 1 : 0);
     const float32 gz = v * static_cast<float32>(source.Height > 1 ? source.Height - 1 : 0);
     const float32 fx = std::floor(gx);

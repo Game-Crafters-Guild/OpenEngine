@@ -1242,7 +1242,7 @@ json UpdateMarkup(const MarkupRequestContext& context, const json& params)
     if (IsMarkupPath(*context.World, entity) &&
         (params.contains("kind") || params.contains("points") || HasRegionParameter(params) ||
          HasVolumeParameter(params)))
-        return Refusal("A path keeps its kind and its points here: move its points with Edit path in the "
+        return Refusal("A path keeps its kind and its points here: move its points with Edit Path in the "
                        "inspector, or create the path again with markup_create");
     RegionUpdate region;
     if (const auto refusal = ReadRegionUpdate(context, params, entity, region))

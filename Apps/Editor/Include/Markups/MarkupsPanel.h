@@ -65,7 +65,7 @@ private:
     void RefreshTimesIfShown();
     // Whether the editor's selection differs from the one the rows were last built with.
     bool SelectionChangedSinceRebuild() const;
-    // Show all / Hide all: every mark-up of the open world in one viewer-state write.
+    // Show All / Hide All: every mark-up of the open world in one viewer-state write.
     void SetAllHidden(bool hidden);
     void RequestRebuild();
     void Rebuild();

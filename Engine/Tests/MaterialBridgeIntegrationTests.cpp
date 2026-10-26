@@ -17,6 +17,8 @@
 #include <string_view>
 #include <vector>
 
+#include "AssetCore/AssetEvents.h"
+#include "AssetCore/AssetTypes.h"
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Engine/Rendering/Material.h"
@@ -37,6 +39,7 @@
 #include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Rendering/Materials/MaterialBuildService.h"
 #include "Rendering/Materials/MaterialDocument.h"
+#include "Rendering/Materials/ShaderCompileService.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
 using namespace GameEngine;
@@ -131,6 +134,69 @@ class MaterialPipelineCompilationTest : public ::testing::Test
             m_rs->Shutdown();
         if (m_device)
             m_device->Shutdown();
+    }
+
+    // A surface shader at `path` whose base color is `colorExpr`, a vec3 expression.
+    static void WriteSurface(const std::filesystem::path& path, const char* colorExpr)
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good()) << "could not open " << path.string();
+        out << "SurfaceOutput EvaluateSurface(SurfaceInput sIn) {\n"
+               "    SurfaceOutput o = DefaultSurfaceOutput();\n"
+               "    o.baseColor = "
+            << colorExpr
+            << ";\n"
+               "    return o;\n"
+               "}\n";
+    }
+
+    // A StandardPBR material named `name` on `surface`, registered: it has its graphics pipeline.
+    Material* RegisterOn(const char* name, const char* surface)
+    {
+        MaterialDocument doc{};
+        doc.materialName = name;
+        doc.lightingModel = "StandardPBR";
+        doc.surfaceShader = surface;
+        Material* mat = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+        EXPECT_NE(mat, nullptr);
+        EXPECT_TRUE(mat && mat->GetGraphicsPipelineId().IsValid());
+        return mat;
+    }
+
+    // The include `path`, defining `float function()` to return `value`. Values of one length write
+    // files of one length, so only the content tells two versions apart.
+    static void WriteProbeInclude(const std::filesystem::path& path, const char* function, const char* value)
+    {
+        std::ofstream(path, std::ios::binary) << "float " << function << "() { return " << value << "; }\n";
+    }
+
+    // A fragment program `name` in `root`, an inline source that includes `include` and outputs
+    // `function()`.
+    static ShaderProgramCompileRequest ProbeProgramRequest(const std::filesystem::path& root, const char* name,
+                                                           const char* include, const char* function)
+    {
+        ShaderProgramCompileRequest request{};
+        request.debugName = name;
+        request.baseDirectory = root;
+        request.cacheRoot = root / "Cache";
+        ShaderStageCompileSpec stage{};
+        stage.stage = "fs";
+        stage.sourcePath = root / (std::string(name) + ".frag");
+        stage.inlineSource = std::string("#version 450\n#include \"") + include +
+                             "\"\nlayout(location = 0) out vec4 oColor;\nvoid main() { oColor = vec4(" + function +
+                             "()); }\n";
+        request.stages.push_back(stage);
+        return request;
+    }
+
+    // The program `request` compiled to the cache; a failure fails the test.
+    static ShaderProgramCompileResult CompileProgram(const ShaderProgramCompileRequest& request)
+    {
+        ShaderProgramCompileResult result{};
+        std::string error;
+        EXPECT_TRUE(ShaderCompileService::CompileProgramToCache(request, ShaderSourceKind::SpirV, result, &error))
+            << error;
+        return result;
     }
 
     std::filesystem::path m_shaderDir;
@@ -1104,20 +1170,8 @@ TEST_F(MaterialPipelineCompilationTest, ShaderSourceEditPropagatesToRegisteredMa
     // No mtime handling: the disk shaderpkg key hashes the CONTENT of the surface
     // the composer substitutes as a literal #include, so a same-tick rewrite keys
     // differently and the pipeline-id assertions below cannot see a stale package.
-    auto writeSurface = [&](const char* file, const char* colorExpr)
-    {
-        const fs::path path = projectRoot / file;
-        std::ofstream out(path, std::ios::binary);
-        out << "SurfaceOutput EvaluateSurface(SurfaceInput sIn) {\n"
-               "    SurfaceOutput o = DefaultSurfaceOutput();\n"
-               "    o.baseColor = "
-            << colorExpr
-            << ";\n"
-               "    return o;\n"
-               "}\n";
-    };
-    writeSurface("edit_me.glsl", "vec3(0.0, 1.0, 0.0)");
-    writeSurface("bystander.glsl", "vec3(0.5, 0.5, 0.5)");
+    WriteSurface(projectRoot / "edit_me.glsl", "vec3(0.0, 1.0, 0.0)");
+    WriteSurface(projectRoot / "bystander.glsl", "vec3(0.5, 0.5, 0.5)");
 
     MaterialBuildContext ctx{};
     ctx.AdapterShaderDir = m_shaderDir;
@@ -1146,7 +1200,7 @@ TEST_F(MaterialPipelineCompilationTest, ShaderSourceEditPropagatesToRegisteredMa
     const auto idB1 = matB->GetGraphicsPipelineId();
 
     // Valid edit: new SPIR-V -> new interned pipeline id for A; B untouched.
-    writeSurface("edit_me.glsl", "vec3(1.0, 0.0, 0.0)");
+    WriteSurface(projectRoot / "edit_me.glsl", "vec3(1.0, 0.0, 0.0)");
     m_rs->Materials().NotifyShaderSourceEdited(projectRoot / "edit_me.glsl");
     m_rs->Materials().DrainPendingShaderSourceEdits();
     ASSERT_TRUE(matA->GetGraphicsPipelineId().IsValid());
@@ -1158,7 +1212,7 @@ TEST_F(MaterialPipelineCompilationTest, ShaderSourceEditPropagatesToRegisteredMa
 
     // Broken edit: compile fails, the previous pipeline must survive
     // (fail-visible: mesh keeps rendering with the last good shader).
-    writeSurface("edit_me.glsl", "vec3(1.0, 0.0, 0.0"); // unbalanced paren
+    WriteSurface(projectRoot / "edit_me.glsl", "vec3(1.0, 0.0, 0.0"); // unbalanced paren
     m_rs->Materials().NotifyShaderSourceEdited(projectRoot / "edit_me.glsl");
     m_rs->Materials().DrainPendingShaderSourceEdits();
     ASSERT_TRUE(matA->GetGraphicsPipelineId().IsValid());
@@ -1167,12 +1221,168 @@ TEST_F(MaterialPipelineCompilationTest, ShaderSourceEditPropagatesToRegisteredMa
 
     // Fix it: the failure memo must not wedge the material — the next edit
     // recompiles and publishes a fresh pipeline.
-    writeSurface("edit_me.glsl", "vec3(0.0, 0.0, 1.0)");
+    WriteSurface(projectRoot / "edit_me.glsl", "vec3(0.0, 0.0, 1.0)");
     m_rs->Materials().NotifyShaderSourceEdited(projectRoot / "edit_me.glsl");
     m_rs->Materials().DrainPendingShaderSourceEdits();
     ASSERT_TRUE(matA->GetGraphicsPipelineId().IsValid());
     EXPECT_NE(matA->GetGraphicsPipelineId().Value, idA2.Value)
         << "a fixed surface must recompile after a failed edit";
+
+    std::error_code ec;
+    fs::remove_all(projectRoot, ec);
+}
+
+// The compile path holds every shader source it has read and reads one again
+// only after an announcement. In the editor that announcement is the file
+// watcher's shader event, which reaches the source cache through
+// MaterialSystem's shader-source lane on the watcher thread itself, so a build
+// that runs before the next frame's drain already reads the edited bytes.
+TEST_F(MaterialPipelineCompilationTest, AWatcherEventForAnEditedIncludeMakesTheNextBuildReadIt)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+                          ("ge_watched_include_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path include = root / "watched_probe.glsl";
+    const ShaderProgramCompileRequest request =
+        ProbeProgramRequest(root, "watched_include", "watched_probe.glsl", "GE_WatchedProbe");
+
+    WriteProbeInclude(include, "GE_WatchedProbe", "1.0");
+    const ShaderProgramCompileResult before = CompileProgram(request);
+    ASSERT_FALSE(before.stageBytes.empty());
+
+    // Edited on disk, nothing reported yet: the held bytes still key and
+    // compile the program, so no file is read per build.
+    WriteProbeInclude(include, "GE_WatchedProbe", "2.0");
+    const ShaderProgramCompileResult unreported = CompileProgram(request);
+    EXPECT_EQ(unreported.outputDir, before.outputDir) << "an unreported edit was read from disk";
+
+    // The watcher's report of the edit, delivered the way AssetManager delivers
+    // it: a Shader-typed content event on the dispatcher MaterialSystem
+    // subscribed to. The next build folds and compiles the new bytes.
+    AssetEventDispatcher dispatcher;
+    m_rs->Materials().InstallReloadInvalidator(dispatcher);
+    dispatcher.DispatchEvent(
+        AssetEvent(AssetEventType::AssetModified, GUID::Generate(), AssetType::Shader, include.string()));
+    const ShaderProgramCompileResult reported = CompileProgram(request);
+    EXPECT_NE(reported.outputDir, before.outputDir) << "the watcher's event did not make the build read the edit";
+    EXPECT_NE(reported.stageBytes.at("fs"), before.stageBytes.at("fs"))
+        << "the program compiled from the bytes held before the edit";
+
+    // The subscription refers to this dispatcher: detach before it goes.
+    m_rs->Shutdown();
+    m_rs.reset();
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+// A Slang module is a shader source too: the Slang lane checks the modules a
+// program imports against the held bytes, so an edit to one must be announced.
+// The event carries the type the asset manager classifies from the extension.
+TEST_F(MaterialPipelineCompilationTest, AWatcherEventForAnEditedSlangModuleIsAnnounced)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+                          ("ge_watched_slang_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path include = root / "slang_probe.glsl";
+    const ShaderProgramCompileRequest request =
+        ProbeProgramRequest(root, "watched_slang", "slang_probe.glsl", "GE_SlangProbe");
+    WriteProbeInclude(include, "GE_SlangProbe", "1.0");
+    const ShaderProgramCompileResult before = CompileProgram(request);
+    ASSERT_FALSE(before.stageBytes.empty());
+
+    // The held bytes go stale on disk; only an announcement makes a build read them.
+    WriteProbeInclude(include, "GE_SlangProbe", "2.0");
+    const fs::path module = root / "lighting.slang";
+    AssetEventDispatcher dispatcher;
+    m_rs->Materials().InstallReloadInvalidator(dispatcher);
+    dispatcher.DispatchEvent(AssetEvent(AssetEventType::AssetModified, GUID::Generate(),
+                                        GetAssetTypeFromExtension(module.extension().string()), module.string()));
+    const ShaderProgramCompileResult reported = CompileProgram(request);
+    EXPECT_NE(reported.outputDir, before.outputDir) << "the edit to a .slang module was not announced";
+
+    // The subscription refers to this dispatcher: detach before it goes.
+    m_rs->Shutdown();
+    m_rs.reset();
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+// The inspector's Recompile Shader button is the way out of an edit nobody
+// reported, and it passes the material's surfaceShader, which is empty for a
+// material on the default surface. The edit it recovers can be in any include
+// (the default surface, an engine include), so an empty path must still empty
+// the source cache.
+TEST_F(MaterialPipelineCompilationTest, AnEditNoticeWithNoSurfaceStillMakesTheNextBuildReadAnUnreportedEdit)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+                          ("ge_recompile_no_surface_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path include = root / "recompile_probe.glsl";
+    const ShaderProgramCompileRequest request =
+        ProbeProgramRequest(root, "recompile_no_surface", "recompile_probe.glsl", "GE_RecompileProbe");
+
+    WriteProbeInclude(include, "GE_RecompileProbe", "1.0");
+    const ShaderProgramCompileResult before = CompileProgram(request);
+    ASSERT_FALSE(before.stageBytes.empty());
+
+    WriteProbeInclude(include, "GE_RecompileProbe", "2.0");
+    const ShaderProgramCompileResult unreported = CompileProgram(request);
+    EXPECT_EQ(unreported.outputDir, before.outputDir) << "an unreported edit was read from disk";
+
+    m_rs->Materials().NotifyShaderSourceEdited({});
+    const ShaderProgramCompileResult recompiled = CompileProgram(request);
+    EXPECT_NE(recompiled.outputDir, before.outputDir)
+        << "a recompile of a material with no surfaceShader did not make the build read the edit";
+    EXPECT_NE(recompiled.stageBytes.at("fs"), before.stageBytes.at("fs"))
+        << "the program compiled from the bytes held before the edit";
+
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+// The same button on a material on the default surface: the edit it recovers can
+// be in that surface, so the registered pipelines of the materials composed with
+// it recompile, as those of the materials on a named surface do, and the
+// viewport shows the edit, not only the inspector. The project's own copy of the
+// default surface shadows the engine's, so the test can edit it.
+TEST_F(MaterialPipelineCompilationTest, AnEditNoticeWithNoSurfaceRecompilesTheMaterialsOnTheDefaultSurface)
+{
+    namespace fs = std::filesystem;
+    const fs::path projectRoot =
+        fs::temp_directory_path() /
+        ("ge_recompile_default_surface_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
+    fs::remove_all(projectRoot);
+    fs::create_directories(projectRoot / "Surfaces");
+    WriteSurface(projectRoot / "Surfaces" / "standard_surface.glsl", "vec3(0.0, 1.0, 0.0)");
+    WriteSurface(projectRoot / "named_surface.glsl", "vec3(0.5, 0.5, 0.5)");
+
+    MaterialBuildContext ctx{};
+    ctx.AdapterShaderDir = m_shaderDir;
+    ctx.CacheRoot = projectRoot / ".Cache" / "Shaders";
+    ctx.IncludeDirs = {m_shaderDir};
+    ctx.ProjectRoots = {projectRoot};
+    m_rs->Materials().SetMaterialBuildContext(ctx);
+
+    Material* onDefault = RegisterOn("OnDefaultSurface", "");
+    Material* onNamed = RegisterOn("OnNamedSurface", "named_surface.glsl");
+    ASSERT_TRUE(onDefault && onNamed);
+    const uint32_t idDefault = onDefault->GetGraphicsPipelineId().Value;
+    const uint32_t versionNamed = onNamed->GetVersion();
+
+    // An edit to the default surface that nothing reported, then the button.
+    WriteSurface(projectRoot / "Surfaces" / "standard_surface.glsl", "vec3(1.0, 0.0, 0.0)");
+    m_rs->Materials().NotifyShaderSourceEdited({});
+    for (size_t drains = 0; drains < 32 && onDefault->GetGraphicsPipelineId().Value == idDefault; ++drains)
+        m_rs->Materials().DrainPendingShaderSourceEdits();
+    EXPECT_NE(onDefault->GetGraphicsPipelineId().Value, idDefault)
+        << "a recompile of a material with no surfaceShader left its registered pipeline in place";
+    EXPECT_EQ(onNamed->GetVersion(), versionNamed) << "a material on another surface must not recompile";
 
     std::error_code ec;
     fs::remove_all(projectRoot, ec);
@@ -1418,21 +1628,8 @@ TEST_F(MaterialPipelineCompilationTest, ShaderEditRecompilesAreBudgetedAcrossFra
     // package, the recompile would yield byte-identical SPIR-V and therefore an
     // unchanged pipeline id, and that reads as a budget failure rather than the
     // cache artifact it is.
-    auto writeSurface = [&](const char* file, const char* colorExpr)
-    {
-        const fs::path path = projectRoot / file;
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        ASSERT_TRUE(out.good()) << "could not open " << path.string();
-        out << "SurfaceOutput EvaluateSurface(SurfaceInput sIn) {\n"
-               "    SurfaceOutput o = DefaultSurfaceOutput();\n"
-               "    o.baseColor = "
-            << colorExpr
-            << ";\n"
-               "    return o;\n"
-               "}\n";
-    };
-    writeSurface("shared_edit.glsl", "vec3(0.0, 1.0, 0.0)");
-    writeSurface("bystander.glsl", "vec3(0.5, 0.5, 0.5)");
+    WriteSurface(projectRoot / "shared_edit.glsl", "vec3(0.0, 1.0, 0.0)");
+    WriteSurface(projectRoot / "bystander.glsl", "vec3(0.5, 0.5, 0.5)");
 
     MaterialBuildContext ctx{};
     ctx.AdapterShaderDir = m_shaderDir;
@@ -1479,7 +1676,7 @@ TEST_F(MaterialPipelineCompilationTest, ShaderEditRecompilesAreBudgetedAcrossFra
         return n;
     };
 
-    writeSurface("shared_edit.glsl", "vec3(1.0, 0.0, 0.0) * 0.25"); // different length too
+    WriteSurface(projectRoot / "shared_edit.glsl", "vec3(1.0, 0.0, 0.0) * 0.25"); // different length too
     m_rs->Materials().NotifyShaderSourceEdited(projectRoot / "shared_edit.glsl");
 
     // Drain 1: the budget must clip. Asserted as a range rather than the exact
@@ -1576,20 +1773,9 @@ TEST_F(MaterialPipelineCompilationTest, IncludeEditPropagatesToMaterialsWhoseSur
     ctx.ProjectRoots = {projectRoot};
     m_rs->Materials().SetMaterialBuildContext(ctx);
 
-    auto registerOn = [&](const char* name, const char* surface)
-    {
-        MaterialDocument doc{};
-        doc.materialName = name;
-        doc.lightingModel = "StandardPBR";
-        doc.surfaceShader = surface;
-        Material* mat = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
-        EXPECT_NE(mat, nullptr);
-        EXPECT_TRUE(mat && mat->GetGraphicsPipelineId().IsValid());
-        return mat;
-    };
-    Material* matA = registerOn("IncUserA", "inc_user_a.glsl");
-    Material* matB = registerOn("IncUserB", "inc_user_b.glsl");
-    Material* bystander = registerOn("IncBystander", "inc_bystander.glsl");
+    Material* matA = RegisterOn("IncUserA", "inc_user_a.glsl");
+    Material* matB = RegisterOn("IncUserB", "inc_user_b.glsl");
+    Material* bystander = RegisterOn("IncBystander", "inc_bystander.glsl");
     ASSERT_TRUE(matA && matB && bystander);
     const uint32_t idA1 = matA->GetGraphicsPipelineId().Value;
     const uint32_t idB1 = matB->GetGraphicsPipelineId().Value;

@@ -18,6 +18,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
 #include "Rendering/Sky/AtmosphereTransmittance.h"
@@ -351,7 +352,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
         settings.skyboxRotationRadians = skyboxComp.RotationDegrees * 0.01745329251994329577f;
         settings.iblIntensity = std::max(0.0f, skyboxComp.IblIntensity);
         settings.iblLowerHemisphereDarkness =
-            std::clamp(skyboxComp.IblLowerHemisphereDarkness, 0.0f, 1.0f);
+            Math::Clamp01(skyboxComp.IblLowerHemisphereDarkness);
 
         GUID guid(std::string(skyboxComp.GetHDRIAssetGuid()));
 
@@ -480,14 +481,11 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
             comp.BelowHorizonBlendSharpnessShapeMode,
             comp.BelowHorizonBlendSharpnessBezier,
             tod));
-    settings.belowHorizonDarkness = std::clamp(
-        Components::EvaluateSkyScalarDayCurve(
+    settings.belowHorizonDarkness = Math::Clamp01(Components::EvaluateSkyScalarDayCurve(
             comp.BelowHorizonDarknessKeys,
             comp.BelowHorizonDarknessShapeMode,
             comp.BelowHorizonDarknessBezier,
-            tod),
-        0.0f,
-        1.0f);
+            tod));
     settings.belowHorizonMode = static_cast<uint32_t>(comp.BelowHorizonMode);
     settings.groundHazeStrength = comp.GroundHazeStrength;
     SampleSkyVec3KeyframeCurve(tod,
@@ -537,11 +535,11 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     settings.starLimitingMagnitude = std::clamp(comp.StarLimitingMagnitude, 0.0f, 8.0f);
     settings.starGlow = std::clamp(comp.StarGlow, 0.0f, 4.0f);
     settings.starHighlightCompression = std::clamp(comp.StarHighlightCompression, 0.1f, 1.0f);
-    settings.starTwinkleAmount = std::clamp(comp.StarTwinkleAmount, 0.0f, 1.0f);
+    settings.starTwinkleAmount = Math::Clamp01(comp.StarTwinkleAmount);
     settings.starTwinkleRate = std::clamp(comp.StarTwinkleRate, 0.0f, Components::kStarTwinkleRateMax);
     settings.starObserver = static_cast<uint32_t>(comp.StarObserver);
     settings.starCoreScale = std::clamp(comp.StarCoreScale, 0.5f, 3.0f);
-    settings.starSpikes = std::clamp(comp.StarSpikes, 0.0f, 1.0f);
+    settings.starSpikes = Math::Clamp01(comp.StarSpikes);
     settings.starSpikeLength = std::clamp(comp.StarSpikeLength, 0.5f, 4.0f);
     settings.starShape = static_cast<uint32_t>(comp.StarShape);
     settings.showSunDisk = comp.ShowSun;
@@ -558,7 +556,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     settings.skyPan2D = std::clamp(comp.SkyPan2D, -1.0f, 1.0f);
     settings.moonExposureEV = std::clamp(comp.MoonExposureEV, -8.0f, 8.0f);
     settings.fallingStarsEnabled = comp.FallingStarsEnabled;
-    settings.fallingStarAmount = std::clamp(comp.FallingStarAmount, 0.0f, 1.0f);
+    settings.fallingStarAmount = Math::Clamp01(comp.FallingStarAmount);
     settings.fallingStarFrequency = std::clamp(comp.FallingStarFrequency, 0.0f, 4.0f);
     settings.fallingStarSpeed = std::clamp(comp.FallingStarSpeed, 0.2f, 50.0f);
     settings.fallingStarLength = std::clamp(comp.FallingStarLength, 0.2f, 4.0f);
@@ -635,7 +633,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
 
     if (comp.AutoSunMoon)
     {
-        settings.moonArcPosition = std::clamp(comp.MoonArcPosition, 0.0f, 1.0f);
+        settings.moonArcPosition = Math::Clamp01(comp.MoonArcPosition);
         settings.moonAngularRadius =
             kDefaultMoonAngularRadiusRad * std::clamp(comp.MoonSize, 0.1f, 6.0f);
         Rendering::ComputeSimpleSunMoon(settings, config, solarFrame, state);
@@ -689,7 +687,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
         settings.moonDirWS[2] = -dir[2];
         settings.moonIntensity = 0.0f;
         sunState = Rendering::ComputeSkySunState(solarFrame, state.sunDirWS, settings.moonDirWS,
-                                                 std::clamp(comp.MoonArcPosition, 0.0f, 1.0f), cameraAltitude,
+                                                 Math::Clamp01(comp.MoonArcPosition), cameraAltitude,
                                                  planetRadius);
 
         // This branch never runs the sun/moon blend, so the source is the sun's alone and the tint
@@ -783,7 +781,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     }
 
     settings.iblIntensity = std::max(0.0f, comp.IblIntensity);
-    settings.iblLowerHemisphereDarkness = std::clamp(comp.IblLowerHemisphereDarkness, 0.0f, 1.0f);
+    settings.iblLowerHemisphereDarkness = Math::Clamp01(comp.IblLowerHemisphereDarkness);
     for (int i = 0; i < 3; ++i)
     {
         settings.ambientTintSky[i]     = comp.AmbientTintSky[i];
@@ -806,7 +804,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     // nightSkyBlend must always be driven by the real sun elevation, not
     // primarySunDir (which can blend toward the moon near sunset).
     float sunDotUp = state.sunDirWS[1];
-    settings.nightSkyBlend = 1.0f - std::clamp((sunDotUp + 0.15f) / 0.15f, 0.0f, 1.0f);
+    settings.nightSkyBlend = 1.0f - Math::Clamp01((sunDotUp + 0.15f) / 0.15f);
 
     // Accumulate sky time for star animation
     m_AccumulatedSkyTime += deltaTime;

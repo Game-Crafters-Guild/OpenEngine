@@ -4,6 +4,7 @@
 #include "Animation/PoseToSkinMatrices.h"
 #include "ECSModules/Rendering/ClipStore.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -166,7 +167,7 @@ void SampleAnimationPose(const SkeletonData& skeleton,
             const AnimKeyframe& k0 = keys[lo];
             const AnimKeyframe& k1 = keys[hi];
             const float dt = k1.time - k0.time;
-            const float alpha = (dt > 0.0f) ? glm::clamp((time - k0.time) / dt, 0.0f, 1.0f) : 0.0f;
+            const float alpha = (dt > 0.0f) ? Math::Clamp01((time - k0.time) / dt) : 0.0f;
             const AnimInterp segInterp = k0.hasSegmentInterpOverride ? k0.segmentInterp : interp;
             const bool useStep = (segInterp == AnimInterp::Step) || (dt <= 0.0f);
 
@@ -460,7 +461,7 @@ void BlendLocalPoses(PoseSampleWorkspace& current,
                      float32 alpha)
 {
     const uint32 n = static_cast<uint32>(std::min(current.Pose.size(), previous.Pose.size()));
-    const float w = std::clamp(alpha, 0.0f, 1.0f);
+    const float w = Math::Clamp01(alpha);
     for (uint32 i = 0; i < n; ++i)
     {
         current.Pose[i].t = glm::mix(previous.Pose[i].t, current.Pose[i].t, w);

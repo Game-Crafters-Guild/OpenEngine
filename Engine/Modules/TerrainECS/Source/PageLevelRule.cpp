@@ -1,5 +1,7 @@
 #include "TerrainECS/PageLevelRule.h"
 
+#include "Mathematics/Interpolation.h"
+
 
 #include <algorithm>
 #include <cmath>
@@ -58,7 +60,7 @@ float32 GeometryPageLevel(float32 distance, float32 level0Texel, const PageLevel
 float32 PageParentBlend(float32 level)
 {
     const float32 inRing = level - std::floor(level);
-    return std::clamp((inRing - kBlendStart) / (1.0f - kBlendStart), 0.0f, 1.0f);
+    return Math::Clamp01((inRing - kBlendStart) / (1.0f - kBlendStart));
 }
 
 uint32 FirstPinnedPageLevel(const PageRequestTerrain& terrain, std::span<const PageStreaming::PageStoreLevel> levels)

@@ -1,6 +1,7 @@
 #include "Inspectors/AtmosphericCloudLayerInspector.h"
 
 #include "InspectorRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include "Components/Rendering/PostProcessEffects/AtmosphericCloudLayer.h"
@@ -107,12 +108,12 @@ void RegisterAtmosphericCloudLayerInspector()
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "SkyFill", layer->SkyFill, w, e, n,
             undo, "Change Cloud Sky Fill",
-            [](Layer& u, float v) { u.SkyFill = std::clamp(v, 0.0f, 1.0f); },
+            [](Layer& u, float v) { u.SkyFill = Math::Clamp01(v); },
             0.48f, "How much of the open sky can be occupied", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "VaporMass", layer->VaporMass, w, e, n,
             undo, "Change Cloud Vapor Mass",
-            [](Layer& u, float v) { u.VaporMass = std::clamp(v, 0.0f, 1.0f); },
+            [](Layer& u, float v) { u.VaporMass = Math::Clamp01(v); },
             0.62f, "Overall visual weight of the layer", {}, 0.0f, 1.0f);
 
         {
@@ -274,7 +275,7 @@ void RegisterAtmosphericCloudLayerInspector()
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "EdgeBreakup", layer->EdgeBreakup, w, e, n,
             undo, "Change Cloud Edge Breakup",
-            [](Layer& u, float v) { u.EdgeBreakup = std::clamp(v, 0.0f, 1.0f); },
+            [](Layer& u, float v) { u.EdgeBreakup = Math::Clamp01(v); },
             0.58f, "How strongly small patterns carve the edges", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "DriftAngle", layer->DriftAngle, w, e, n,
@@ -289,7 +290,7 @@ void RegisterAtmosphericCloudLayerInspector()
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "SunFade", layer->SunFade, w, e, n,
             undo, "Change Cloud Sun Fade",
-            [](Layer& u, float v) { u.SunFade = std::clamp(v, 0.0f, 1.0f); },
+            [](Layer& u, float v) { u.SunFade = Math::Clamp01(v); },
             0.55f, "Backlit fade near the upper sky direction", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "SkyBounce", layer->SkyBounce, w, e, n,
@@ -304,7 +305,7 @@ void RegisterAtmosphericCloudLayerInspector()
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "Occlusion", layer->Occlusion, w, e, n,
             undo, "Change Cloud Occlusion",
-            [](Layer& u, float v) { u.Occlusion = std::clamp(v, 0.0f, 1.0f); },
+            [](Layer& u, float v) { u.Occlusion = Math::Clamp01(v); },
             0.55f, "Self-shadowing amount for heavier regions", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "HistoryWeight", layer->HistoryWeight, w, e, n,

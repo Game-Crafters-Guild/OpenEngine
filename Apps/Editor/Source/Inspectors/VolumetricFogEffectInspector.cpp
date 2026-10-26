@@ -1,6 +1,7 @@
 #include "Inspectors/VolumetricFogEffectInspector.h"
 
 #include "InspectorRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include "Components/Rendering/PostProcessEffects/VolumetricFogEffect.h"
@@ -421,7 +422,7 @@ void RegisterVolumetricFogEffectInspector()
 
         AddComponentFloatRowWithDrag<Fog>(ctx.Parent, "Sky Fade", effect->SkyFade, w, e, n,
             undo, "Change Fog Sky Fade",
-            [](Fog& u, float v) { u.SkyFade = std::clamp(v, 0.0f, 1.0f); },
+            [](Fog& u, float v) { u.SkyFade = Math::Clamp01(v); },
             0.5f, "Softness of the distant fog-to-sky transition above the horizon (0 = hard edge)");
 
         AddComponentFloatRowWithDrag<Fog>(ctx.Parent, "Anisotropy", effect->Anisotropy, w, e, n,
@@ -486,7 +487,7 @@ void RegisterVolumetricFogEffectInspector()
 
         AddComponentFloatRowWithDrag<Fog>(ctx.Parent, "Noise Strength", effect->NoiseStrength, w, e, n,
             undo, "Change Fog Noise Strength",
-            [](Fog& u, float v) { u.NoiseStrength = std::clamp(v, 0.0f, 1.0f); },
+            [](Fog& u, float v) { u.NoiseStrength = Math::Clamp01(v); },
             0.28f, "Amount of noise modulation");
 
         AddComponentFloatRowWithDrag<Fog>(ctx.Parent, "Noise Contrast", effect->NoiseContrast, w, e, n,
@@ -513,7 +514,7 @@ void RegisterVolumetricFogEffectInspector()
 
         AddComponentFloatRowWithDrag<Fog>(ctx.Parent, "Density Threshold", effect->DensityThreshold, w, e, n,
             undo, "Change Fog Density Threshold",
-            [](Fog& u, float v) { u.DensityThreshold = std::clamp(v, 0.0f, 1.0f); },
+            [](Fog& u, float v) { u.DensityThreshold = Math::Clamp01(v); },
             0.0f, "Cuts low density values from generated 3D noise");
 
         AddComponentFloatRowWithDrag<Fog>(ctx.Parent, "Threshold Softness", effect->DensityThresholdSoftness, w, e, n,
@@ -554,7 +555,7 @@ void RegisterVolumetricFogEffectInspector()
 
         AddComponentFloatRowWithDrag<Fog>(ctx.Parent, "Gradient Strength", effect->GradientStrength, w, e, n,
             undo, "Change Fog Gradient Strength",
-            [](Fog& u, float v) { u.GradientStrength = std::clamp(v, 0.0f, 1.0f); },
+            [](Fog& u, float v) { u.GradientStrength = Math::Clamp01(v); },
             0.0f, "Blend from albedo toward the gradient tint");
 
         AddFogColorRow(ctx.Parent, "Gradient Low", "Gradient low tint", w, e, n, undo, ctx.OpenColorPickerWindow,
@@ -578,7 +579,7 @@ void RegisterVolumetricFogEffectInspector()
 
         addFogFloatSlider(ctx.Parent, "Jitter Scale", effect->JitterStrength, 0.0f, 1.0f, 0.0f, 0.45f,
             "Change Fog Jitter Scale",
-            [](Fog& u, float v) { u.JitterStrength = std::clamp(v, 0.0f, 1.0f); },
+            [](Fog& u, float v) { u.JitterStrength = Math::Clamp01(v); },
             "Froxel jitter amplitude. Lower values are calmer; higher values hide stepping better.");
 
         AddToggleRow(ctx.Parent, "Jitter Motion", effect->JitterMotion,
@@ -646,7 +647,7 @@ void RegisterVolumetricFogEffectInspector()
 
         AddComponentFloatRowWithDrag<Fog>(pyramidOnlyControlsRaw, "Scatter", effect->FogGlowScatter, w, e, n,
             undo, "Change Fog Glow Scatter",
-            [](Fog& u, float v) { u.FogGlowScatter = std::clamp(v, 0.0f, 1.0f); },
+            [](Fog& u, float v) { u.FogGlowScatter = Math::Clamp01(v); },
             0.7f, "Bias between narrow and broad pyramid levels", {}, 0.0f, 1.0f);
         glowControlsRaw->AddChild(std::move(pyramidOnlyControls));
 
@@ -662,12 +663,12 @@ void RegisterVolumetricFogEffectInspector()
 
         AddComponentFloatRowWithDrag<Fog>(glowControlsRaw, "Fade Start", effect->FogGlowFadeStart, w, e, n,
             undo, "Change Fog Glow Fade Start",
-            [](Fog& u, float v) { u.FogGlowFadeStart = std::clamp(v, 0.0f, 1.0f); },
+            [](Fog& u, float v) { u.FogGlowFadeStart = Math::Clamp01(v); },
             0.05f, "Fog opacity where scattering begins", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Fog>(glowControlsRaw, "Fade End", effect->FogGlowFadeEnd, w, e, n,
             undo, "Change Fog Glow Fade End",
-            [](Fog& u, float v) { u.FogGlowFadeEnd = std::clamp(v, 0.0f, 1.0f); },
+            [](Fog& u, float v) { u.FogGlowFadeEnd = Math::Clamp01(v); },
             0.8f, "Fog opacity where scattering reaches full strength", {}, 0.0f, 1.0f);
 
         AddFogColorRow(glowControlsRaw, "Tint", "HDR tint for scattered fog", w, e, n, undo,

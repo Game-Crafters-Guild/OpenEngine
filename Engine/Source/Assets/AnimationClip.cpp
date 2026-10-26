@@ -3,6 +3,7 @@
 #include "AnimationClipSchema.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Serialization/JsonRead.h"
 
 #include <algorithm>
@@ -295,7 +296,7 @@ AnimKeyframe MakeInterpolatedKeyframe(const AnimChannel& channel, float time)
             continue;
 
         const float span = std::max(kKeyTimeEpsilon, second.time - first.time);
-        const float alpha = std::clamp((keyframe.time - first.time) / span, 0.0f, 1.0f);
+        const float alpha = Math::Clamp01((keyframe.time - first.time) / span);
 
         keyframe = first;
         keyframe.time = std::max(0.0f, time);
@@ -892,7 +893,7 @@ bool AnimationClip::LoadFromData(const Vector<uint8>& data)
                     const auto& k = ch.keys[i];
                     // q = inv(k0) * k. Quaternion conjugate inv: (-x,-y,-z,w)
                     const float w_ = w0_*k.rotation[3] + x0_*k.rotation[0] + y0_*k.rotation[1] + z0_*k.rotation[2];
-                    const float w_clamped = std::min(std::max(std::abs(w_), 0.0f), 1.0f);
+                    const float w_clamped = Math::Clamp01(std::abs(w_));
                     const float ang = 2.0f * std::acos(w_clamped) * 57.29577951f;
                     if (ang > maxAngle) maxAngle = ang;
 

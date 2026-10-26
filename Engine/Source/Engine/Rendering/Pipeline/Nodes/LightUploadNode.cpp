@@ -4,6 +4,7 @@
 #include "Engine/Rendering/RenderServices.h"
 
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -171,7 +172,7 @@ void LightUploadNode::DeclareForView(ViewDeclare& d)
         p.decay = std::max(in.decay, 0.0f);
         p.fogContribution = std::max(in.fogContribution, 0.0f);
         p.fogDensityBoost = std::max(in.fogDensityBoost, 0.0f);
-        p.fogOriginFade = std::clamp(in.fogOriginFade, 0.0f, 1.0f);
+        p.fogOriginFade = Math::Clamp01(in.fogOriginFade);
         p.fogAnisotropy = std::clamp(in.fogAnisotropy, -0.95f, 0.95f);
         p.shadowSlot = writeIdx < shadowSlotOfCluster.size()
                            ? shadowSlotOfCluster[writeIdx]

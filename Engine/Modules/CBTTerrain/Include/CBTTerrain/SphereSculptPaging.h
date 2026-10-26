@@ -15,6 +15,7 @@
 
 #include "CBTTerrain/CBTLayout.h"        // kSculptPageDim / kSculptMaxPagesPerFaceAxis / kSculptNoPage / ring
 #include "CBTTerrain/CBTSphereFaceMap.h" // WorldDirToFaceUV / SphereFaceUV
+#include "Mathematics/Interpolation.h"
 
 namespace GameEngine::CBTTerrain
 {
@@ -262,8 +263,8 @@ inline float SampleSculptFaceUVWith(EntryAt&& entryAt, const float* pool,
                                     float v)
 {
     const float dim = static_cast<float>(geom.VirtualDim);
-    const float tu = std::min(std::max(u, 0.0f), 1.0f) * (dim - 1.0f);
-    const float tv = std::min(std::max(v, 0.0f), 1.0f) * (dim - 1.0f);
+    const float tu = Math::Clamp01(u) * (dim - 1.0f);
+    const float tv = Math::Clamp01(v) * (dim - 1.0f);
     const uint32_t x0 = static_cast<uint32_t>(std::floor(tu));
     const uint32_t y0 = static_cast<uint32_t>(std::floor(tv));
     const uint32_t x1 = x0 + 1u < geom.VirtualDim ? x0 + 1u : geom.VirtualDim - 1u;

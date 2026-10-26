@@ -6,6 +6,7 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorTextureSlotPreview.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainRoleMaterials.h"
 #include "UndoRedo/UndoRedoService.h"
 
@@ -36,14 +37,14 @@ namespace
 // the terrain.
 uint32_t EncodeSrgbByte(float linear)
 {
-    const float c = std::clamp(linear, 0.0f, 1.0f);
+    const float c = Math::Clamp01(linear);
     const float s = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
     return static_cast<uint32_t>(s * 255.0f + 0.5f);
 }
 
 float DecodeSrgbByte(uint32_t byteValue)
 {
-    const float s = std::clamp(static_cast<float>(byteValue) / 255.0f, 0.0f, 1.0f);
+    const float s = Math::Clamp01(static_cast<float>(byteValue) / 255.0f);
     return s <= 0.04045f ? s / 12.92f : std::pow((s + 0.055f) / 1.055f, 2.4f);
 }
 

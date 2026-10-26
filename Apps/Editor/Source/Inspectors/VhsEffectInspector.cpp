@@ -8,6 +8,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/TextField.h"
@@ -32,7 +33,7 @@ uint32_t ColorToArgb(const float (&color)[3])
 {
     const auto channel = [](float value)
     {
-        return static_cast<uint8_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+        return static_cast<uint8_t>(Math::Clamp01(value) * 255.0f + 0.5f);
     };
     return 0xFF000000u
          | (static_cast<uint32_t>(channel(color[0])) << 16)
@@ -233,7 +234,7 @@ void RegisterVhsEffectInspector()
             [](VHS& updated, float value)
             {
                 updated.FeedbackMotionThreshold =
-                    std::clamp(value, 0.0f, 1.0f);
+                    Math::Clamp01(value);
             },
             0.06f, "Minimum frame difference before feedback trails appear.",
             {}, 0.0f, 1.0f);
@@ -560,7 +561,7 @@ void RegisterVhsEffectInspector()
             "Move VHS Date Burn Horizontally",
             [](VHS& updated, float value)
             {
-                updated.DateBurnPositionX = std::clamp(value, 0.0f, 1.0f);
+                updated.DateBurnPositionX = Math::Clamp01(value);
             },
             0.031875f, "Horizontal date-burn position: 0 is left and 1 is right.",
             {}, 0.0f, 1.0f);
@@ -571,7 +572,7 @@ void RegisterVhsEffectInspector()
             "Move VHS Date Burn Vertically",
             [](VHS& updated, float value)
             {
-                updated.DateBurnPositionY = std::clamp(value, 0.0f, 1.0f);
+                updated.DateBurnPositionY = Math::Clamp01(value);
             },
             0.072773f, "Vertical date-burn position: 0 is bottom and 1 is top.",
             {}, 0.0f, 1.0f);
@@ -714,7 +715,7 @@ void RegisterVhsEffectInspector()
             world, entity, notifications, undo, "Move VHS Transport Overlay Horizontally",
             [](VHS& updated, float value)
             {
-                updated.OverlayPositionX = std::clamp(value, 0.0f, 1.0f);
+                updated.OverlayPositionX = Math::Clamp01(value);
             },
             0.01957f, "Horizontal screen position: 0 is left, 1 is right.",
             {}, 0.0f, 1.0f);
@@ -724,7 +725,7 @@ void RegisterVhsEffectInspector()
             world, entity, notifications, undo, "Move VHS Transport Overlay Vertically",
             [](VHS& updated, float value)
             {
-                updated.OverlayPositionY = std::clamp(value, 0.0f, 1.0f);
+                updated.OverlayPositionY = Math::Clamp01(value);
             },
             0.0f, "Vertical screen position: 0 is top, 1 is bottom.",
             {}, 0.0f, 1.0f);
@@ -844,7 +845,7 @@ void RegisterVhsEffectInspector()
             world, entity, notifications, undo, "Change VHS Transport Opacity",
             [](VHS& updated, float value)
             {
-                updated.OverlayOpacity = std::clamp(value, 0.0f, 1.0f);
+                updated.OverlayOpacity = Math::Clamp01(value);
             },
             0.85f, "Opacity of the recorded camcorder OSD.",
             {}, 0.0f, 1.0f);

@@ -7,6 +7,7 @@
 
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 
@@ -34,7 +35,7 @@ void RegisterFastBlurEffectInspector()
 
         AddComponentFloatRowWithDrag<FB>(ctx.Parent, "Intensity", effect->Intensity, w, e, n,
             undo, "Change Fast Blur Intensity",
-            [](FB& u, float v) { u.Intensity = std::clamp(v, 0.0f, 1.0f); },
+            [](FB& u, float v) { u.Intensity = Math::Clamp01(v); },
             0.0f,
             "0 = off, 1 = full depth-of-field blur.",
             {},

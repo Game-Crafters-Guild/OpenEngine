@@ -1,6 +1,7 @@
 #include "Ocean/Systems/OceanExtractionSystem.h"
 
 #include "AssetCore/SharedFileRead.h"
+#include "Mathematics/Interpolation.h"
 #include "Ocean/OceanCollisionProvider.h"
 #include "Ocean/OceanFFTCollisionAsset.h"
 #include "Ocean/OceanInputDrawSource.h"
@@ -61,7 +62,7 @@ float OceanDepthBandSaturation(const OceanParamsGPU& params)
 
 float SrgbChannelToLinear(float value)
 {
-    value = std::clamp(value, 0.0f, 1.0f);
+    value = Math::Clamp01(value);
     if (value <= 0.04045f)
         return value / 12.92f;
     return std::pow((value + 0.055f) / 1.055f, 2.4f);
@@ -588,7 +589,7 @@ void PackShallowClarityWindow(const Components::OceanSurface& surface, OceanPara
                                      ? surface.ShallowClarityFloor
                                      : kDefaultShallowClarityFloor;
     params.ShallowClarityDistance = std::max(distance, kMinShallowClarityDistance);
-    params.ShallowClarityFloor = std::clamp(fogAtSurface, 0.0f, 1.0f);
+    params.ShallowClarityFloor = Math::Clamp01(fogAtSurface);
 }
 
 OceanExtractionSystem::OceanExtractionSystem(Engine::Renderer::RenderServices* renderServices)
@@ -952,7 +953,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             params.NormalsStrength = ocean.NormalsStrength;
             params.NormalsScale = std::max(ocean.NormalsScale, 0.001f);
             params.FoamNormalStrength = std::clamp(ocean.FoamNormalStrength, 0.0f, 2.0f);
-            params.FoamBubbleCoverage = std::clamp(ocean.FoamBubbleCoverage, 0.0f, 1.0f);
+            params.FoamBubbleCoverage = Math::Clamp01(ocean.FoamBubbleCoverage);
             params.FoamBubbleParallax = std::clamp(ocean.FoamBubbleParallax, 0.0f, 0.5f);
             params.FoamRoughness = std::clamp(ocean.FoamRoughness, 0.04f, 1.0f);
             params.SubSurfaceDepthMax = ocean.SubSurfaceDepthMax;
@@ -981,7 +982,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 static_cast<float32>(static_cast<uint32>(ocean.DepthFogFalloff));
             params.RefractionStrength = ocean.RefractionStrength;
             params.ShallowRefractionReflectionSuppression =
-                std::clamp(ocean.ShallowRefractionReflectionSuppression, 0.0f, 1.0f);
+                Math::Clamp01(ocean.ShallowReflectionSuppression);
             PackShallowClarityWindow(ocean, params);
 
             // Underwater caustics. CausticsAvailable is stamped by the contributor
@@ -1541,7 +1542,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 g.OriginExtent[3] = dc.ExtentZ;
                 g.DepthShape[0] = dc.Depth;
                 g.DepthShape[1] = std::max(dc.Feather, 0.0f);
-                g.DepthShape[2] = std::clamp(dc.Roundness, 0.0f, 1.0f);
+                g.DepthShape[2] = Math::Clamp01(dc.Roundness);
                 inputs.AddDepthContributor(g);
             });
 
@@ -1587,7 +1588,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 g.OriginExtent[3] = extentZ;
                 g.DepthShape[0] = depth;
                 g.DepthShape[1] = std::max(mc.Feather, 0.0f);
-                g.DepthShape[2] = std::clamp(mc.Roundness, 0.0f, 1.0f);
+                g.DepthShape[2] = Math::Clamp01(mc.Roundness);
                 inputs.AddDepthContributor(g);
             });
 
@@ -1888,7 +1889,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             source.OriginExtent[3] = packet.ExtentZ;
             source.DepthShape[0] = std::max(packet.Value[0], 0.0f);
             source.DepthShape[1] = packet.Feather;
-            source.DepthShape[2] = std::clamp(packet.Value[1], 0.0f, 1.0f);
+            source.DepthShape[2] = Math::Clamp01(packet.Value[1]);
             inputs.AddDepthContributor(source);
             break;
         }
@@ -2253,7 +2254,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 g.ScaleBias[2] = ms.WeightBias;
                 g.ScaleBias[3] = ms.ChopBias;
                 g.FeatherCoverage[0] = std::max(ms.Feather, 0.0f);
-                g.FeatherCoverage[1] = std::clamp(ms.Coverage, 0.0f, 1.0f);
+                g.FeatherCoverage[1] = Math::Clamp01(ms.Coverage);
                 if (!inputs.AddWaveMaskTextureSource(g))
                     return;
 
@@ -2626,7 +2627,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                         if (surfaceSample.Valid && inter.WaveMotionCompensation > 0.0f)
                         {
                             const float32 compensation =
-                                std::clamp(inter.WaveMotionCompensation, 0.0f, 1.0f);
+                                Math::Clamp01(inter.WaveMotionCompensation);
                             velocityX -= surfaceSample.VelocityWS[0] * compensation;
                             velocityY -= surfaceSample.VelocityWS[1] * compensation;
                             velocityZ -= surfaceSample.VelocityWS[2] * compensation;
@@ -2663,7 +2664,7 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                         const uint32 pathSteps = std::clamp(inter.DebugSubsteps, 1u, 4u);
                         const uint32 spheres = std::clamp(inter.NestedSphereCount, 1u, 3u);
                         const float32 radiusScale = std::clamp(inter.NestedRadiusScale, 0.1f, 1.0f);
-                        const float32 weightScale = std::clamp(inter.NestedWeight, 0.0f, 1.0f);
+                        const float32 weightScale = Math::Clamp01(inter.NestedWeight);
                         for (uint32 pathStep = 0u; pathStep < pathSteps; ++pathStep)
                         {
                             const float32 t = static_cast<float32>(pathStep + 1u) /
@@ -2744,10 +2745,10 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
         feature.SetCascadeBaseScale(renderer.MinScale);
         feature.SetCascadeResolution(renderer.LodDataResolution);
         feature.SetGeometryGridSize(geometryGridSize);
-        feature.SetCombineEnabled(renderer.CombineDisplacementCascade);
+        feature.SetCombineEnabled(renderer.CombineCascade);
         OceanRasterDepthCaptureSettings rasterSettings{};
         rasterSettings.Enabled = renderer.RasterDepthCapture;
-        rasterSettings.Resolution = renderer.RasterDepthCaptureResolution;
+        rasterSettings.Resolution = renderer.RasterDepthResolution;
         rasterSettings.CaptureLayers = renderer.RasterDepthCaptureLayers;
         rasterSettings.SizeX = renderer.RasterDepthCaptureSizeX;
         rasterSettings.SizeZ = renderer.RasterDepthCaptureSizeZ;

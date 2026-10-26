@@ -241,6 +241,19 @@ inline std::string ToUpperSnakeCase(const std::string& name)
     return result;
 }
 
+/// The name after its last "::" or "." qualifier: "GameEngine::Components::Light" reads "Light" and
+/// "MyGame.Combat.HealthPool" reads "HealthPool". A name with no qualifier is returned as it is.
+inline std::string_view UnqualifiedName(std::string_view qualifiedName)
+{
+    const size_t scope = qualifiedName.rfind("::");
+    const size_t dot = qualifiedName.rfind('.');
+    if (scope != std::string_view::npos && (dot == std::string_view::npos || scope > dot))
+        return qualifiedName.substr(scope + 2);
+    if (dot != std::string_view::npos)
+        return qualifiedName.substr(dot + 1);
+    return qualifiedName;
+}
+
 /// A code identifier as words for a label: "castsShadows" and "CastsShadows" read "Casts Shadows",
 /// "initial_linear_velocity" reads "Initial Linear Velocity" and "m_SheetColumns" reads "Sheet
 /// Columns". Acronym and digit runs stay together ("GPUSkin" reads "GPU Skin", "World3D" reads

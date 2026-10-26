@@ -889,6 +889,11 @@ add_library(GameEngineRendering OBJECT
 	# PRIVATE — Engine.dll splices FileSystem in itself; test executables that
 	# link this object library directly name FileSystemObjects instead.
 	target_link_libraries(GameEngineRendering PRIVATE FileSystem)
+	# AssetCore: shader sources are read through SharedFileRead, so an editor's
+	# safe-save can replace a header while a compile reads it. PRIVATE: Engine.dll
+	# splices AssetCore in itself; test executables get it through
+	# rendering_test_link_image.
+	target_link_libraries(GameEngineRendering PRIVATE AssetCore)
 
 	# Image: SkyRenderer decodes the full-moon texture for the procedural sky.
 	# PRIVATE: Engine.dll splices Image in itself; test executables splice its
@@ -1631,11 +1636,13 @@ endfunction()
 
 # Helper: supply the OBJECT-library object files that GameEngineRendering's
 # consumers need but do not receive transitively: Logger and Memory (see
-# rendering_test_link_logger) and Image, whose decode SkyRenderer.cpp calls. Engine
-# splices Image in itself for app builds.
+# rendering_test_link_logger), Image, whose decode SkyRenderer.cpp calls, and
+# AssetCore, whose SharedFileRead reads shader sources. Engine splices Image and
+# AssetCore in itself for app builds.
 function(rendering_test_link_image target)
 	rendering_test_link_logger(${target})
 	target_sources(${target} PRIVATE $<TARGET_OBJECTS:Image>)
+	target_link_libraries(${target} PRIVATE AssetCore)
 endfunction()
 
 # GPU Culling automated test suite (built when BUILD_TESTING is enabled)
@@ -3613,10 +3620,10 @@ endif()
 # -----------------------------------------------------------------------------
 
 # Every executable that links the GameEngineRendering OBJECT library directly hits
-# the same latent rot: OBJECT->OBJECT object files (Logger, Memory, Image) are not
-# spliced transitively on the VS generator, so they come up as unresolved externals
-# at link time. Rather than hand-maintain a rendering_test_link_image call next to
-# each of the ~150 test targets above, sweep this directory's executables once: any
+# the same latent rot: OBJECT->OBJECT object files (Logger, Memory, Image,
+# AssetCore) are not spliced transitively on the VS generator, so they come up as
+# unresolved externals at link time. Rather than hand-maintain a rendering_test_link_image
+# call next to each of the ~150 test targets above, sweep this directory's executables once: any
 # that link GameEngineRendering and have not already been spliced (no Logger objects
 # in their SOURCES yet) get the full helper here.
 get_property(_GE_RENDERING_DIR_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

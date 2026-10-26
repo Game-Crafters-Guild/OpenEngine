@@ -6,6 +6,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Assets/AssetRegistry.h"
@@ -305,7 +306,7 @@ void RegisterSplinePlacementInspector()
 
             AddComponentFloatRowWithDrag<SplinePlacement>(
                 ctx.Parent, "Slope Blend", comp->SlopeBlend, w, e, n, undo, "Change Slope Blend",
-                [](SplinePlacement& u, float v) { u.SlopeBlend = std::clamp(v, 0.0f, 1.0f); },
+                [](SplinePlacement& u, float v) { u.SlopeBlend = Math::Clamp01(v); },
                 1.0f, "0 = tiles stay world-up, 1 = tiles align fully to the surface normal",
                 extras, 0.0f, 1.0f);
 
@@ -359,7 +360,7 @@ void RegisterSplinePlacementInspector()
 
             AddComponentFloatRowWithDrag<SplinePlacement>(
                 ctx.Parent, "Dropout", comp->DropoutChance, w, e, n, undo, "Change Dropout",
-                [](SplinePlacement& u, float v) { u.DropoutChance = std::clamp(v, 0.0f, 1.0f); },
+                [](SplinePlacement& u, float v) { u.DropoutChance = Math::Clamp01(v); },
                 0.0f,
                 "Fraction of stations left empty. 0 places every tile, 1 places none — gaps are "
                 "what stop a run reading as a manufactured strip",

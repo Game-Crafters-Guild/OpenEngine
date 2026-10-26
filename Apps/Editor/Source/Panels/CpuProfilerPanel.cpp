@@ -1,5 +1,6 @@
 #include "Panels/CpuProfilerPanel.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include <algorithm>
@@ -457,7 +458,7 @@ void CpuProfilerPanel::OnChartClicked(float localX, float chartWidth)
     const std::size_t n = m_FrozenCpuHistory.size();
     if (n == 0)
         return;
-    const float t = std::clamp(localX / chartWidth, 0.0f, 1.0f);
+    const float t = Math::Clamp01(localX / chartWidth);
     const int frame = static_cast<int>(t * static_cast<float>(n - 1) + 0.5f);
     m_CursorFrame = frame;
     m_CursorDirty = true;
