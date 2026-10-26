@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SkySystemConfig.h"
 #include "Rendering/Sky/SolarPath.h"
@@ -32,7 +33,7 @@ inline float Smoothstep01(float edge0, float edge1, float x)
 {
     if (edge1 <= edge0)
         return (x >= edge1) ? 1.0f : 0.0f;
-    float t = std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+    float t = Math::Clamp01((x - edge0) / (edge1 - edge0));
     return t * t * (3.0f - 2.0f * t);
 }
 
@@ -110,7 +111,7 @@ inline float SampleSkyScalarKeyframeCurve(float timeOfDayHours,
     const float wrapEnd = keyTimes[0] + kDayHours;
     const float wrappedT = (t < keyTimes[0]) ? (t + kDayHours) : t;
     const float wrapDenom = std::max(kEpsilon, wrapEnd - wrapStart);
-    const float u = std::clamp((wrappedT - wrapStart) / wrapDenom, 0.0f, 1.0f);
+    const float u = Math::Clamp01((wrappedT - wrapStart) / wrapDenom);
     return lerp(values[3], values[0], u);
 }
 

@@ -7,6 +7,11 @@
 #include <filesystem>
 #include <mutex>
 #include <thread>
+#include <vector>
+
+#ifdef PLATFORM_WINDOWS
+struct _OVERLAPPED;
+#endif
 
 namespace GameEngine
 {
@@ -38,7 +43,12 @@ struct FileChangeEvent
 using FileChangeCallback = Function<void(const FileChangeEvent&)>;
 
 /**
- * @brief Cross-platform file system watcher
+ * @brief Cross-platform file system watcher.
+ *
+ * After the platform loses change events, the lost changes arrive later as ordinary
+ * per-file events from a rescan, with no event of their own for the loss; on any
+ * platform a directory created, renamed or deleted can arrive as per-file events
+ * instead of one event for the directory, and a change can occasionally be heard twice.
  */
 class FileWatcher
 {
@@ -130,6 +140,12 @@ class FileWatcher
     void WatchWindows();
 
     /**
+     * @brief Arm the next ReadDirectoryChangesW request on the watched directory.
+     * @return ERROR_SUCCESS when a request is pending, otherwise the reason there is none.
+     */
+    uint32 IssueDirectoryRead(void* directory, _OVERLAPPED& overlapped, std::vector<uint8>& buffer);
+
+    /**
      * @brief Process Windows file change notifications
      */
     void ProcessWindowsFileChanges(uint8* buffer, uint32 bufferSize);
@@ -141,10 +157,51 @@ class FileWatcher
     void WatchPolling();
 
     /**
+     * @brief Record every watched file in the snapshot the next scan diffs against.
+     */
+    void SnapshotWatchedFiles();
+
+    /**
+     * @brief Notify a change the platform reported itself, after recording it in the
+     * snapshot, so a later rescan reports only the changes whose events were lost.
+     */
+    void NotifyReportedChange(const FileChangeEvent& event);
+
+    /**
+     * @brief Move the snapshot entries of the files under a renamed directory to its
+     * new path.
+     */
+    void MoveSnapshotEntriesUnder(const std::filesystem::path& oldDirectory,
+                                  const std::filesystem::path& newDirectory);
+
+    /**
+     * @brief Drop the snapshot entries of the files under a deleted directory.
+     */
+    void EraseSnapshotEntriesUnder(const std::filesystem::path& directory);
+
+    /**
+     * @brief React to the platform reporting that change events were lost (its
+     * notification buffer overflowed): rescan the tree against the snapshot and report
+     * every difference as an ordinary Created / Modified / Deleted / Renamed event, so
+     * subscribers see the lost changes the way they see any other. A walk that
+     * fails leaves the rescan owed to RetryOwedLostEventsRescan.
+     */
+    void RescanAfterLostEvents();
+
+    /**
+     * @brief Walk again for a lost-events rescan whose walk failed, if one is owed
+     * and the last walk for it is at least one poll interval old. The Windows loop
+     * calls it on each slice in which the platform reported nothing, until a walk
+     * succeeds. The polling backend owes nothing: every poll walks the tree.
+     */
+    void RetryOwedLostEventsRescan();
+
+    /**
      * @brief Visits every regular file under the watch directory that passes
      *        the extension and excluded-directory filters.
+     * @return false when the watcher was asked to stop before the walk finished.
      */
-    void ForEachWatchedFile(const Function<void(const std::filesystem::directory_entry&)>& visit);
+    bool ForEachWatchedFile(const Function<void(const std::filesystem::directory_entry&)>& visit);
 
     /**
      * @brief One polling scan: diffs the tree against the previous scan and
@@ -207,21 +264,33 @@ class FileWatcher
     void* m_ChangeSignalQueue = nullptr;
 #endif
 
-    // Polling backend: what the previous scan saw for each watched file. The
-    // identity pairs a path that vanished with one that appeared in the same
-    // scan into a single Renamed event. It is read when a path is first seen
-    // and again when its timestamp changes, because a safe-save replaces the
-    // file behind the path and with it the identity.
+    // Snapshot of the watched tree: what the last scan, or the last event the
+    // platform reported, saw for each watched file. The polling backend diffs
+    // every scan against it. The Windows backend keeps it current from the
+    // events it reports, an event for a directory moving or dropping the entries
+    // of the files under it, and diffs a rescan against it when the platform
+    // says events were lost. The identity pairs a path that vanished with one that
+    // appeared in the same scan into a single Renamed event. It is read when a
+    // path is first seen and again when its timestamp changes, because a
+    // safe-save replaces the file behind the path and with it the identity.
+    // Watcher thread only.
     struct PolledFile
     {
         std::filesystem::file_time_type LastWrite;
         FileIdentity Identity;
     };
-    HashMap<std::filesystem::path, PolledFile> m_PolledFiles;
+    FastHashMap<std::filesystem::path, PolledFile> m_PolledFiles;
     // Whether the watch root was absent on the previous poll, so its going and
     // coming back are each logged once instead of every poll. A missing root is
     // a state (an asset mount mid-restage), not an error. Watcher thread only.
     bool m_WatchDirectoryMissing = false;
+    // Whether a lost-events rescan's walk failed and none has succeeded since,
+    // so the changes it was to report are still unreported. Watcher thread only.
+    bool m_LostEventsRescanOwed = false;
+    // When an owed rescan last walked. A walk of a large tree takes
+    // hundreds of milliseconds, so an owed rescan walks at most once per poll
+    // interval. Watcher thread only.
+    std::chrono::steady_clock::time_point m_LastOwedRescanWalk;
 
     // Debouncing and duplicate prevention. All accessed from watcher thread only.
     HashMap<std::filesystem::path, std::chrono::steady_clock::time_point> m_LastEventTimes;
@@ -252,6 +321,7 @@ class FileWatcher
     DISALLOW_COPY_AND_ASSIGN(FileWatcher);
 
     friend class FileWatcherExclusionTest;
+    friend class FileWatcherLostEventsTest;
 };
 
 } // namespace GameEngine

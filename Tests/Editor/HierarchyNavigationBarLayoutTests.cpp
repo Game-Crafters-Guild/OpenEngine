@@ -44,10 +44,12 @@ constexpr float kFrameSeconds = 1.0f / 60.0f;
 constexpr float kLayoutTolerancePx = 0.01f;
 
 // The size bar's resting inset from the panel edge, its left edge on the tree's first icon
-// column (HierarchyNavigationBar.css), and the width every item size slider shares
-// (ItemSizeSlider.css).
+// column, the 16px rows glyph that leads it and the 8px gap after the glyph
+// (HierarchyNavigationBar.css), and the width every item size slider shares (ItemSizeSlider.css).
 constexpr float kBarInsetPx = 8.0f;
 constexpr float kBarLeftPx = 23.0f;
+constexpr float kSizeIconPx = 16.0f;
+constexpr float kSizeIconGapPx = 8.0f;
 constexpr float kSliderWidthPx = 102.0f;
 // The panel search: 24px tall, 6px from the panel edge at the top, and 6px above the 22px size
 // bar at the bottom (theme/views.css).
@@ -90,6 +92,7 @@ struct HierarchyParts
 {
     UIElement* Panel = nullptr;
     HierarchyNavigationBar* Bar = nullptr;
+    UIElement* SizeIcon = nullptr;
     UIElement* Slider = nullptr;
     UIElement* Search = nullptr;
 };
@@ -116,6 +119,8 @@ struct NavigationBarFixture
         panel->AddChild(std::move(search.Root));
         for (const auto& child : bar->GetChildren())
         {
+            if (child->HasClass("hierarchy-navigation-bar-size-icon"))
+                Parts.SizeIcon = child.get();
             if (child->HasClass("hierarchy-size-slider"))
                 Parts.Slider = child.get();
         }
@@ -223,6 +228,25 @@ TEST(HierarchyNavigationBarLayout, TheSizeBarSitsAtTheBottomOnTheIconColumn)
     EXPECT_NEAR(parts.Slider->GetLayoutWidth(), kSliderWidthPx, kLayoutTolerancePx);
     EXPECT_NEAR(parts.Bar->GetLayoutX() - parts.Panel->GetLayoutX(), kBarLeftPx, kLayoutTolerancePx);
     EXPECT_NEAR(Bottom(*parts.Panel) - Bottom(*parts.Bar), kBarInsetPx, kLayoutTolerancePx);
+}
+
+// The bar leads with a 16px rows glyph on the icon column, as the Assets bar leads with its view
+// glyph, and the slider follows it.
+TEST(HierarchyNavigationBarLayout, ARowsGlyphLeadsTheSizeSlider)
+{
+    NavigationBarFixture fixture;
+    if (!fixture.Build())
+        GTEST_SKIP() << fixture.Diagnostic;
+    const HierarchyParts& parts = fixture.Parts;
+
+    ASSERT_NE(parts.SizeIcon, nullptr);
+    ASSERT_NE(parts.Slider, nullptr);
+    EXPECT_TRUE(parts.SizeIcon->GetResolvedStyle().Visual.BackgroundImage.HasImage) << "the glyph has no image";
+    EXPECT_NEAR(parts.SizeIcon->GetLayoutWidth(), kSizeIconPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.SizeIcon->GetLayoutHeight(), kSizeIconPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.SizeIcon->GetLayoutX() - parts.Panel->GetLayoutX(), kBarLeftPx, kLayoutTolerancePx);
+    EXPECT_NEAR(parts.Slider->GetLayoutX() - parts.SizeIcon->GetLayoutX(), kSizeIconPx + kSizeIconGapPx,
+                kLayoutTolerancePx);
 }
 
 // The size bar and a bottom search ride above the tree's horizontal scrollbar together.

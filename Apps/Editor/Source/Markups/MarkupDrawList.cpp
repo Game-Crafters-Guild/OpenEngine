@@ -15,6 +15,7 @@
 #include "Rendering/Common/Frustum.h"
 #include "Spline/SplineData.h"
 #include "SplineECS/SplineService.h"
+#include "Types/Color.h"
 
 #include <algorithm>
 #include <cmath>
@@ -31,6 +32,13 @@ using Mathematics::Vector3;
 
 namespace
 {
+
+// MarkupDisplayRgb as the draw item's channels.
+std::array<float32, 3> DisplayRgb(const Markup& markup)
+{
+    const ColorSRGB color = MarkupDisplayRgb(markup);
+    return {color.r, color.g, color.b};
+}
 
 // What one collection reads per mark-up.
 struct ItemSource
@@ -57,7 +65,7 @@ void AddDrawItem(const ItemSource& source, ECS::EntityHandle entity, const Marku
     MarkupDrawItem& item = source.Items.emplace_back();
     item.Entity = entity;
     item.Volume = *volume;
-    item.Rgb = MarkupDisplayRgb(markup);
+    item.Rgb = DisplayRgb(markup);
     item.DistanceSq = (volume->Center - source.CameraPos).LengthSquared();
     item.Selected = source.Highlight.IsSelected(entity);
     item.Hovered = source.Highlight.IsHovered(entity);
@@ -129,7 +137,7 @@ void AddSplineShapeItem(ItemSource& source, ECS::EntityHandle entity, const Mark
     item.Volume.Center = ground.Center + Vector3(0.0f, halfHeight, 0.0f);
     item.Volume.BoundingRadius = std::sqrt(ground.Radius * ground.Radius + halfHeight * halfHeight) + halfHeight;
     item.Volume.TopY = display->Mesh.Label.y;
-    item.Rgb = MarkupDisplayRgb(markup);
+    item.Rgb = DisplayRgb(markup);
     item.DistanceSq = (item.Volume.Center - source.CameraPos).LengthSquared();
     item.Selected = source.Highlight.IsSelected(entity);
     item.Hovered = source.Highlight.IsHovered(entity);

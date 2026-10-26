@@ -1,5 +1,7 @@
 #include "TerrainECS/TerrainAtlas.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -272,8 +274,8 @@ std::vector<TileCoord> NeighborsNeedingApronRefresh(const AtlasIndirectionTable&
 
 float32 AtlasHeightSampler::SampleHeightNormalized(float32 u, float32 v) const
 {
-    u = std::clamp(u, 0.0f, 1.0f);
-    v = std::clamp(v, 0.0f, 1.0f);
+    u = Math::Clamp01(u);
+    v = Math::Clamp01(v);
 
     auto coarseSample = [&]() -> float32 {
         if (Coarse && Coarse->IsValid())
@@ -292,8 +294,8 @@ float32 AtlasHeightSampler::SampleHeightNormalized(float32 u, float32 v) const
                                 static_cast<int32>(Geometry.TilesPerAxisX) - 1);
     const int32 tz = std::clamp(static_cast<int32>(std::floor(fz)), 0,
                                 static_cast<int32>(Geometry.TilesPerAxisZ) - 1);
-    const float32 localU = std::clamp(fx - static_cast<float32>(tx), 0.0f, 1.0f);
-    const float32 localV = std::clamp(fz - static_cast<float32>(tz), 0.0f, 1.0f);
+    const float32 localU = Math::Clamp01(fx - static_cast<float32>(tx));
+    const float32 localV = Math::Clamp01(fz - static_cast<float32>(tz));
 
     const TileAtlasSlot& row = Rows[Geometry.TileIndex(tx, tz)];
     if (row.Slot == kAtlasNoSlot || !Atlas)
@@ -310,8 +312,8 @@ bool AtlasHeightSampler::IsResidentAt(float32 u, float32 v) const
 {
     if (!Rows || !Geometry.IsValid() || Geometry.TilesPerAxisX == 0 || Geometry.TilesPerAxisZ == 0)
         return false;
-    u = std::clamp(u, 0.0f, 1.0f);
-    v = std::clamp(v, 0.0f, 1.0f);
+    u = Math::Clamp01(u);
+    v = Math::Clamp01(v);
     const int32 tx = std::clamp(static_cast<int32>(std::floor(u * static_cast<float32>(Geometry.TilesPerAxisX))),
                                 0, static_cast<int32>(Geometry.TilesPerAxisX) - 1);
     const int32 tz = std::clamp(static_cast<int32>(std::floor(v * static_cast<float32>(Geometry.TilesPerAxisZ))),
@@ -341,13 +343,13 @@ void BuildCoarseHeightField(uint32 coarseDim, uint32 tilesX, uint32 tilesZ, floa
         const float32 v = static_cast<float32>(cz) * invCoarse;
         const float32 tfz = v * static_cast<float32>(tilesZ);
         const int32 tz = std::clamp(static_cast<int32>(tfz), 0, static_cast<int32>(tilesZ) - 1);
-        const float32 lv = std::clamp(tfz - static_cast<float32>(tz), 0.0f, 1.0f);
+        const float32 lv = Math::Clamp01(tfz - static_cast<float32>(tz));
         for (uint32 cx = 0; cx < coarseDim; ++cx)
         {
             const float32 u = static_cast<float32>(cx) * invCoarse;
             const float32 tfx = u * static_cast<float32>(tilesX);
             const int32 tx = std::clamp(static_cast<int32>(tfx), 0, static_cast<int32>(tilesX) - 1);
-            const float32 lu = std::clamp(tfx - static_cast<float32>(tx), 0.0f, 1.0f);
+            const float32 lu = Math::Clamp01(tfx - static_cast<float32>(tx));
             const CoarseTileSource src = getTile(tx, tz);
             if (src.Heights && src.Width >= 2 && src.Height >= 2)
                 out[static_cast<size_t>(cz) * coarseDim + cx] = SampleGridBilinearTexel(
@@ -407,8 +409,8 @@ void AtlasComponentSampler::Sample(float32 u, float32 v, float32* out) const
 {
     if (!out || Components == 0)
         return;
-    u = std::clamp(u, 0.0f, 1.0f);
-    v = std::clamp(v, 0.0f, 1.0f);
+    u = Math::Clamp01(u);
+    v = Math::Clamp01(v);
 
     auto coarseSample = [&]() {
         if (Coarse && Coarse->IsValid() && Coarse->Components == Components)
@@ -433,8 +435,8 @@ void AtlasComponentSampler::Sample(float32 u, float32 v, float32* out) const
                                 static_cast<int32>(Geometry.TilesPerAxisX) - 1);
     const int32 tz = std::clamp(static_cast<int32>(std::floor(fz)), 0,
                                 static_cast<int32>(Geometry.TilesPerAxisZ) - 1);
-    const float32 localU = std::clamp(fx - static_cast<float32>(tx), 0.0f, 1.0f);
-    const float32 localV = std::clamp(fz - static_cast<float32>(tz), 0.0f, 1.0f);
+    const float32 localU = Math::Clamp01(fx - static_cast<float32>(tx));
+    const float32 localV = Math::Clamp01(fz - static_cast<float32>(tz));
 
     const TileAtlasSlot& row = Rows[Geometry.TileIndex(tx, tz)];
     if (row.Slot == kAtlasNoSlot || !Atlas)
@@ -456,8 +458,8 @@ bool AtlasComponentSampler::IsResidentAt(float32 u, float32 v) const
 {
     if (!Rows || !Geometry.IsValid() || Geometry.TilesPerAxisX == 0 || Geometry.TilesPerAxisZ == 0)
         return false;
-    u = std::clamp(u, 0.0f, 1.0f);
-    v = std::clamp(v, 0.0f, 1.0f);
+    u = Math::Clamp01(u);
+    v = Math::Clamp01(v);
     const int32 tx = std::clamp(static_cast<int32>(std::floor(u * static_cast<float32>(Geometry.TilesPerAxisX))),
                                 0, static_cast<int32>(Geometry.TilesPerAxisX) - 1);
     const int32 tz = std::clamp(static_cast<int32>(std::floor(v * static_cast<float32>(Geometry.TilesPerAxisZ))),
@@ -486,13 +488,13 @@ void BuildCoarseComponentField(uint32 coarseDim, uint32 tilesX, uint32 tilesZ, u
         const float32 v = static_cast<float32>(cz) * invCoarse;
         const float32 tfz = v * static_cast<float32>(tilesZ);
         const int32 tz = std::clamp(static_cast<int32>(tfz), 0, static_cast<int32>(tilesZ) - 1);
-        const float32 lv = std::clamp(tfz - static_cast<float32>(tz), 0.0f, 1.0f);
+        const float32 lv = Math::Clamp01(tfz - static_cast<float32>(tz));
         for (uint32 cx = 0; cx < coarseDim; ++cx)
         {
             const float32 u = static_cast<float32>(cx) * invCoarse;
             const float32 tfx = u * static_cast<float32>(tilesX);
             const int32 tx = std::clamp(static_cast<int32>(tfx), 0, static_cast<int32>(tilesX) - 1);
-            const float32 lu = std::clamp(tfx - static_cast<float32>(tx), 0.0f, 1.0f);
+            const float32 lu = Math::Clamp01(tfx - static_cast<float32>(tx));
             const CoarseTileSourceN src = getTile(tx, tz);
             if (src.Data && src.Width >= 2 && src.Height >= 2 && src.Components == components)
             {
@@ -638,13 +640,13 @@ void BuildCoarseFieldU8(uint32 coarseDim, uint32 tilesX, uint32 tilesZ, uint32 c
         const float32 v = static_cast<float32>(cz) * invCoarse;
         const float32 tfz = v * static_cast<float32>(tilesZ);
         const int32 tz = std::clamp(static_cast<int32>(tfz), 0, static_cast<int32>(tilesZ) - 1);
-        const float32 lv = std::clamp(tfz - static_cast<float32>(tz), 0.0f, 1.0f);
+        const float32 lv = Math::Clamp01(tfz - static_cast<float32>(tz));
         for (uint32 cx = 0; cx < coarseDim; ++cx)
         {
             const float32 u = static_cast<float32>(cx) * invCoarse;
             const float32 tfx = u * static_cast<float32>(tilesX);
             const int32 tx = std::clamp(static_cast<int32>(tfx), 0, static_cast<int32>(tilesX) - 1);
-            const float32 lu = std::clamp(tfx - static_cast<float32>(tx), 0.0f, 1.0f);
+            const float32 lu = Math::Clamp01(tfx - static_cast<float32>(tx));
             const CoarseTileSourceU8 src = getTile(tx, tz);
             if (src.Data && src.Width >= 2 && src.Height >= 2 && src.Channels == channels)
             {

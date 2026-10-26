@@ -2,6 +2,7 @@
 #include "ECS/Components.h"
 #include "ECS/Entity.h"
 #include "ECS/OrderedHandleSet.h"
+#include "Mathematics/Interpolation.h"
 #include "Types/ColorUtils.h"
 
 #include "ECS/ECSTemplates.h"
@@ -2575,7 +2576,7 @@ void RenderExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                       out.fogContribution = std::max(light.FogContribution, 0.0f);
                       out.fogDensityBoost = std::max(light.FogDensityBoost, 0.0f);
                       out.fogAnisotropy = std::clamp(light.FogAnisotropy, -0.95f, 0.95f);
-                      out.fogOriginFade = std::clamp(light.FogOriginFade, 0.0f, 1.0f);
+                      out.fogOriginFade = Math::Clamp01(light.FogOriginFade);
                       out.castsLight = light.CastsLight ? 1u : 0u;
                       out.castsShadows = light.CastsShadows ? 1u : 0u;
                       out.cascadeCount = light.CascadeCount;

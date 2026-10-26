@@ -56,26 +56,6 @@ inline bool EqualsIgnoreCase(std::string_view a, std::string_view b)
     return true;
 }
 
-/* Parameter ids are camelCase; labels read as words: "fadeSeconds" ->
-   "Fade Seconds". Names that already contain spaces pass through. */
-inline std::string PrettifyParamKey(std::string_view key)
-{
-    if (key.find(' ') != std::string_view::npos)
-        return std::string(key);
-    std::string out;
-    out.reserve(key.size() + 4);
-    for (size_t i = 0; i < key.size(); ++i)
-    {
-        char c = key[i];
-        if (i == 0 && c >= 'a' && c <= 'z')
-            c = static_cast<char>(c - 32);
-        else if (c >= 'A' && c <= 'Z' && i > 0)
-            out += ' ';
-        out += c;
-    }
-    return out;
-}
-
 inline std::string AbbreviateForNode(std::string_view name, int maxChars = kMaxNodeLabelChars)
 {
     if (static_cast<int>(name.size()) <= maxChars)

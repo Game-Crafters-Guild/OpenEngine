@@ -2,6 +2,7 @@
 
 #include "Graph/GraphModel.h"
 #include "Graph/GraphPortLabels.h"
+#include "Types/StringUtils.h"
 
 #include <cmath>
 
@@ -100,12 +101,12 @@ inline void CountPorts(const Graph::Node& node, int& outInputs, int& outOutputs)
     }
 }
 
-/* The label a port renders: its DisplayName, or its id prettified — material
+/* The label a port renders: its DisplayName, or its id as words — material
    registrations often carry bare ids ("normal"), and a raw id on a node is
    an unfinished look. Every measurement uses the same label. */
 inline std::string PortDisplayLabel(const Graph::Port& port)
 {
-    return port.DisplayName.empty() ? GraphPortLabels::PrettifyParamKey(port.Id)
+    return port.DisplayName.empty() ? IdentifierToWords(port.Id)
                                    : port.DisplayName;
 }
 
@@ -441,7 +442,7 @@ inline float NodeEditorStartGraph(const Graph::Node& node, bool drawsInlineEdito
     ForEachDetailParam(node, drawsInlineEditors, hasCentralEditors, expandedView,
                        [&widen](const std::string& key, const Graph::GraphValue&)
     {
-        widen(GraphPortLabels::PrettifyParamKey(key));
+        widen(IdentifierToWords(key));
     });
     if (chars <= 0)
         return 0.f;

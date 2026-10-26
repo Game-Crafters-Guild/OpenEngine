@@ -3,6 +3,7 @@
 #include "Core/CpuProfiler.h"
 #include "Logger/Logger.h"
 #include "Mathematics/HalfFloat.h"
+#include "Mathematics/Interpolation.h"
 #include "Panels/LogView.h"
 #include "UI/UIManager.h"
 #include "UI/UIElement.h"
@@ -779,8 +780,8 @@ bool UiReplayRunner::ResolveTarget(UIManager& ui, const json& targetSpec, float&
         const float y = el->GetLayoutY();
         const float w = el->GetLayoutWidth();
         const float h = el->GetLayoutHeight();
-        outX = x + std::clamp(relX, 0.0f, 1.0f) * w;
-        outY = y + std::clamp(relY, 0.0f, 1.0f) * h;
+        outX = x + Math::Clamp01(relX) * w;
+        outY = y + Math::Clamp01(relY) * h;
         return true;
     };
 

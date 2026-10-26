@@ -7,6 +7,7 @@
 #include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SunScreenProjection.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
@@ -40,7 +41,7 @@ constexpr float kNdcPerScaleUnit = 0.01f;
 // stand-in until keyframed curves are imported.
 float EvalDefaultEdgeCurve(float t)
 {
-    t = std::clamp(t, 0.0f, 1.0f);
+    t = Math::Clamp01(t);
     return t <= 0.5f ? t * 2.0f : 2.0f - t * 2.0f;
 }
 
@@ -144,7 +145,7 @@ void BuildViewInstances(const std::vector<ResolvedFlare>& flares,
             distanceFalloff = 1.0f - viewDepth / maxDistance;
             if (distanceFalloff < 0.001f && !g.NeverCull)
                 continue;
-            distanceFalloff = std::clamp(distanceFalloff, 0.0f, 1.0f);
+            distanceFalloff = Math::Clamp01(distanceFalloff);
         }
 
         // Angle falloff: angle between the flare's own forward and the vector
@@ -162,7 +163,7 @@ void BuildViewInstances(const std::vector<ResolvedFlare>& flares,
                 const float angleDeg = std::acos(cosA) / kDegToRad;
                 angleFalloff = angleDeg > g.MaxAngle
                                    ? 0.0f
-                                   : std::clamp(1.0f - angleDeg / (g.MaxAngle * 0.5f), 0.0f, 1.0f);
+                                   : Math::Clamp01(1.0f - angleDeg / (g.MaxAngle * 0.5f));
                 if (g.UseAngleCurve && !rf.AngleCurve.empty())
                     angleFalloff = std::max(
                         0.0f, ::GameEngine::Math::EvaluateCurveKeys(rf.AngleCurve.data(),
@@ -199,7 +200,7 @@ void BuildViewInstances(const std::vector<ResolvedFlare>& flares,
         float offScreenFade = 1.0f;
         if (rEdge > 1.0f && !g.NeverCull)
             offScreenFade =
-                std::clamp(1.0f - (rEdge - 1.0f) / std::max(g.OffScreenFadeDist, 1e-3f), 0.0f, 1.0f);
+                Math::Clamp01(1.0f - (rEdge - 1.0f) / std::max(g.OffScreenFadeDist, 1e-3f));
 
         // Dynamic boosts are per ELEMENT (an element may override the flare's
         // coefficient): add the boost to the element's alpha term, then apply
@@ -245,8 +246,8 @@ void BuildViewInstances(const std::vector<ResolvedFlare>& flares,
             // not a size stretch.
             float posX = ndcX + axisX * e.Position;
             float posY = ndcY + axisY * e.Position;
-            posX += (ndcX - posX) * std::clamp(e.AnamorphicX, 0.0f, 1.0f) + e.OffsetX;
-            posY += (ndcY - posY) * std::clamp(e.AnamorphicY, 0.0f, 1.0f) + e.OffsetY;
+            posX += (ndcX - posX) * Math::Clamp01(e.AnamorphicX) + e.OffsetX;
+            posY += (ndcY - posY) * Math::Clamp01(e.AnamorphicY) + e.OffsetY;
             // Per-element size boost (element override or the flare's global).
             float elemScaleBoost = 0.0f;
             if (g.UseDynamicEdgeScale)

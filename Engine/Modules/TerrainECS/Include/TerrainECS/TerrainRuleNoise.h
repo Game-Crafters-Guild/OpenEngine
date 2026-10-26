@@ -1,9 +1,8 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "Noise/GradientNoise2D.h"
 #include "Types/Types.h"
-
-#include <algorithm>
 
 namespace GameEngine::TerrainECS
 {
@@ -26,9 +25,7 @@ namespace GameEngine::TerrainECS
 inline float32 SurfaceRuleNoiseSample(float32 worldX, float32 worldZ, float32 frequency,
                                       uint32 seed)
 {
-    return std::clamp(
-        0.5f + 0.5f * Noise::GradientNoise2D(worldX * frequency, worldZ * frequency, seed),
-        0.0f, 1.0f);
+    return Math::Clamp01(0.5f + 0.5f * Noise::GradientNoise2D(worldX * frequency, worldZ * frequency, seed));
 }
 
 } // namespace GameEngine::TerrainECS

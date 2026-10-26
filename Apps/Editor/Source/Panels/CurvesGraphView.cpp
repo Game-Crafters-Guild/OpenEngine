@@ -1,5 +1,6 @@
 #include "Panels/CurvesGraphView.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Panels/Animation/KeyTimeMatch.h"
 
 #include "Assets/AnimationClip.h"
@@ -1236,7 +1237,7 @@ void CurvesGraphView::OnEvent(UIEvent& e)
         {
             const size_t keyIndex = static_cast<size_t>(selectedKeyIndex);
             const float pointerTime = m_RangeStart + (clampedLocalX / W) * rangeDuration;
-            const float pointerValue = m_ValueMin + (1.0f - std::clamp(localY / H, 0.0f, 1.0f)) * valueRange;
+            const float pointerValue = m_ValueMin + (1.0f - Math::Clamp01(localY / H)) * valueRange;
             bool editedHandle = false;
 
             {
@@ -1354,7 +1355,7 @@ void CurvesGraphView::OnEvent(UIEvent& e)
         }
         float newTime = m_RangeStart + (clampedLocalX / W) * rangeDuration;
         newTime = std::clamp(newTime, m_RangeStart, m_RangeEnd);
-        float valueAlpha = 1.0f - std::clamp(localY / H, 0.0f, 1.0f);
+        float valueAlpha = 1.0f - Math::Clamp01(localY / H);
         float newValue = m_ValueMin + valueAlpha * valueRange;
         // Apply constraint: hold shift to constrain to time (horizontal) or value (vertical)
         if (m_DragConstrained)
@@ -1471,7 +1472,7 @@ void CurvesGraphView::OnEvent(UIEvent& e)
     }
     if (e.Id == kEventMouseMove && m_ScalingSelectionValue && m_OnKeyframeEdited && W > 0.0f && H > 0.0f && m_ScaleInitialValueExtent > 0.0f)
     {
-        const float pointerValue = m_ValueMin + (1.0f - std::clamp(localY / H, 0.0f, 1.0f)) * valueRange;
+        const float pointerValue = m_ValueMin + (1.0f - Math::Clamp01(localY / H)) * valueRange;
         const float rawScale = m_ScaleValueFromBottom
             ? (m_ScaleAnchorValue - pointerValue) / m_ScaleInitialValueExtent
             : (pointerValue - m_ScaleAnchorValue) / m_ScaleInitialValueExtent;
@@ -1570,7 +1571,7 @@ void CurvesGraphView::OnEvent(UIEvent& e)
                     float d;
                     if (useBezier)
                     {
-                        const float u = std::clamp((entry.Time - tFirst) / span, 0.0f, 1.0f);
+                        const float u = Math::Clamp01((entry.Time - tFirst) / span);
                         d = EvaluateBezierBasis(deltas.data(), n, u);
                     }
                     else
@@ -1619,7 +1620,7 @@ void CurvesGraphView::OnEvent(UIEvent& e)
             return m_RangeStart + (std::clamp(px, 0.0f, W) / W) * (m_RangeEnd - m_RangeStart);
         };
         auto timeToPx = [&](float t) {
-            return std::clamp((t - m_RangeStart) / std::max(1e-6f, m_RangeEnd - m_RangeStart), 0.0f, 1.0f) * W;
+            return Math::Clamp01((t - m_RangeStart) / std::max(1e-6f, m_RangeEnd - m_RangeStart)) * W;
         };
         constexpr float kHandleHitPx = 6.0f; // pixel distance for region edge grab
 
@@ -2051,7 +2052,7 @@ void CurvesGraphView::OnEvent(UIEvent& e)
             return m_RangeStart + (std::clamp(px, 0.0f, W) / W) * (m_RangeEnd - m_RangeStart);
         };
         auto pyToValue = [&](float py) {
-            const float t = std::clamp(py / std::max(1.0f, H), 0.0f, 1.0f);
+            const float t = Math::Clamp01(py / std::max(1.0f, H));
             return m_ValueMax - t * (m_ValueMax - m_ValueMin);
         };
 
@@ -2153,7 +2154,7 @@ void CurvesGraphView::OnEvent(UIEvent& e)
                             d2 = pt * pt + pv * pv;
                         else
                         {
-                            const float t = std::clamp((pt * ndt + pv * ndv) / lenSq, 0.0f, 1.0f);
+                            const float t = Math::Clamp01((pt * ndt + pv * ndv) / lenSq);
                             const float qx = t * ndt - pt;
                             const float qy = t * ndv - pv;
                             d2 = qx * qx + qy * qy;
@@ -2495,7 +2496,7 @@ void CurvesGraphView::OnEvent(UIEvent& e)
         {
             const float pointerTime =
                 std::clamp(m_RangeStart + (clampedLocalX / W) * rangeDuration, m_RangeStart, m_RangeEnd);
-            const float valueAlpha = 1.0f - std::clamp(localY / H, 0.0f, 1.0f);
+            const float valueAlpha = 1.0f - Math::Clamp01(localY / H);
             const float pointerValue = m_ValueMin + valueAlpha * valueRange;
             m_SelectedKeyTime = m_SelectedKeys.front().KeyTime;
             m_SelectedKeyIndex = -1;
@@ -3770,10 +3771,10 @@ void CurvesGraphView::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
     {
         const float vRange = std::max(1e-6f, m_ValueMax - m_ValueMin);
         auto sampleX = [&](float t) {
-            return x + std::clamp((t - m_RangeStart) / std::max(1e-6f, m_RangeEnd - m_RangeStart), 0.0f, 1.0f) * W;
+            return x + Math::Clamp01((t - m_RangeStart) / std::max(1e-6f, m_RangeEnd - m_RangeStart)) * W;
         };
         auto sampleY = [&](float v) {
-            return y + (1.0f - std::clamp((v - m_ValueMin) / vRange, 0.0f, 1.0f)) * H;
+            return y + (1.0f - Math::Clamp01((v - m_ValueMin) / vRange)) * H;
         };
         const uint32_t strokeCol = PackColor(1.0f, 0.85f, 0.30f, 0.95f);
         const float thickness = 2.0f * cs;

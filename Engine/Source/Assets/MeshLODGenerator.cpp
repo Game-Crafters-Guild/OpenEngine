@@ -4,6 +4,7 @@
 
 #include "Logger/Logger.h"
 #include "Mathematics/Geometry.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <array>
@@ -1327,7 +1328,7 @@ MeshLODs GenerateMeshLODs(const Mesh& mesh, const MeshLODConfig& config) {
         if (cancelRequested && cancelRequested->load(std::memory_order_acquire))
             break;
 
-        const float ratio = std::clamp(config.TargetRatios[lod], 0.0f, 1.0f);
+        const float ratio = Math::Clamp01(config.TargetRatios[lod]);
         size_t targetIndexCount = RoundToTriangles(static_cast<size_t>(srcIndexCount * ratio));
         targetIndexCount = std::max<size_t>(targetIndexCount, 3);
 

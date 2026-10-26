@@ -1,6 +1,7 @@
 #include "Inspectors/LightInspector.h"
 
 #include "InspectorRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include "Components/Rendering/Light.h"
@@ -193,7 +194,7 @@ static void RefreshLightColorRow(ECS::World* world, ECS::EntityHandle entity,
 static uint32_t LinearToSrgbArgb(const float lin[3])
 {
     auto u8 = [](float c) {
-        c = std::clamp(c, 0.0f, 1.0f);
+        c = Math::Clamp01(c);
         const float s = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
         return static_cast<uint32_t>(s * 255.0f + 0.5f);
     };
@@ -211,7 +212,7 @@ static uint32_t KelvinToBoostedSrgbArgb(float kelvin, float boost)
     Components::KelvinToLinearRGB(kelvin, lin);
     const float lum = ColorUtils::LinearRec709Luminance(lin);
     for (float& c : lin)
-        c = std::clamp(lum + (c - lum) * boost, 0.0f, 1.0f);
+        c = Math::Clamp01(lum + (c - lum) * boost);
     return LinearToSrgbArgb(lin);
 }
 
@@ -317,7 +318,7 @@ class KelvinSlider : public Slider
 
         // Downward triangle indicator at the current value (the inherited ring thumb is hidden via
         // CSS). A dark outline triangle behind the blue one keeps it readable over any gradient hue.
-        const float norm = std::clamp((GetValue() - lo) / (hi - lo), 0.0f, 1.0f);
+        const float norm = Math::Clamp01((GetValue() - lo) / (hi - lo));
         const float vx = trackX + trackW * norm;
         const float halfW = 6.0f * cs;            // wider than before
         const float triTop = barY - 2.0f * cs;    // base sits just above the bar top (less proud)
@@ -988,7 +989,7 @@ void RegisterLightInspector()
 
             AddComponentFloatRowWithDrag<Components::Light>(ctx.Parent, "Fog Origin Fade", light->FogOriginFade, w, e, n,
                 undo, "Change Light Fog Origin Fade",
-                [](Components::Light& u, float v) { u.FogOriginFade = std::clamp(v, 0.0f, 1.0f); },
+                [](Components::Light& u, float v) { u.FogOriginFade = Math::Clamp01(v); },
                 0.2f, "Fraction of light range used to fade fog near the light source and reduce near-origin noise", extras);
         }
 

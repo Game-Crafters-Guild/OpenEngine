@@ -4,6 +4,7 @@
 #include "Animation/AnimationPose.h"
 #include "Animation/EvaluationContext.h"
 #include "Assets/AnimationClip.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -56,7 +57,7 @@ void SampleChannel(const AnimChannel& channel, float time, AnimationPose& pose)
     const AnimKeyframe& k0 = keys[lo];
     const AnimKeyframe& k1 = keys[hi];
     float dt = k1.time - k0.time;
-    float alpha = (dt > 0.0f) ? glm::clamp((time - k0.time) / dt, 0.0f, 1.0f) : 0.0f;
+    float alpha = (dt > 0.0f) ? Math::Clamp01((time - k0.time) / dt) : 0.0f;
     bool useStep = (channel.interp == AnimInterp::Step) || (dt <= 0.0f);
 
     if (channel.path == AnimPath::Translation)

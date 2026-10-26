@@ -1,4 +1,5 @@
 #include "Panels/AnimationWindowPanel.h"
+#include "Mathematics/Interpolation.h"
 #include "Panels/Animation/CurveReduction.h"
 #include "AssetCore/SharedFileRead.h"
 #include "EditorPanelIds.h"
@@ -6290,7 +6291,7 @@ float EvalKeyframeCurveValue(const std::vector<AnimKeyframe>& keys,
     const float dt = k1.time - k0.time;
     if (dt <= 0.0f) return GetKeyComponentByPath(k0, path, component);
 
-    const float alpha = std::clamp((time - k0.time) / dt, 0.0f, 1.0f);
+    const float alpha = Math::Clamp01((time - k0.time) / dt);
     const AnimInterp segInterp = k0.hasSegmentInterpOverride ? k0.segmentInterp : baseInterp;
 
     const float v0 = GetKeyComponentByPath(k0, path, component);
@@ -9055,7 +9056,7 @@ void AnimationWindowPanel::ApplyTimelineZoom(float scrollY, float mouseX)
         const float contentX = m_ContentArea->GetLayoutX();
         const float contentW = m_ContentArea->GetLayoutWidth();
         if (contentW > 0.0f)
-            mouseTime = viewStart + std::clamp((mouseX - contentX) / contentW, 0.0f, 1.0f) * duration;
+            mouseTime = viewStart + Math::Clamp01((mouseX - contentX) / contentW) * duration;
     }
 
     const float zoomFactor = (scrollY < 0.0f) ? 1.0f / 1.15f : 1.15f;

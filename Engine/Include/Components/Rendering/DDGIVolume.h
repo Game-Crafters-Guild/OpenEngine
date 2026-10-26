@@ -163,7 +163,7 @@ struct DDGIVolume {
     // transform, because in that mode the transform describes nothing the user
     // can see — the box is not where the entity is. Each fit mode therefore has
     // exactly one source of truth for size: Manual reads the transform, and
-    // FollowCamera reads this. Probe spacing follows from it and ProbesLongAxis
+    // FollowCamera reads this. Probe spacing follows from it and Divisions
     // (range * 2 / (probes - 1)), which is the number that actually decides
     // whether small geometry is resolved.
     // @ge-tooltip How far GI reaches from the camera, in world units, when Fit is Follow Camera. Larger covers more of the level but spreads the same probe count thinner - probe spacing is range * 2 / (Divisions - 1). Ignored when Fit is Manual, where the entity's scale sizes the volume instead.
@@ -218,8 +218,7 @@ struct DDGIVolume {
     // Their knob is also a spacing divisor rather than a probe count, so 16
     // there is ~17 probes here; the number was never directly transferable.
     // @ge-tooltip Probe count along the grid's longest axis; the other two axes scale by aspect ratio. Higher = finer indirect detail at a roughly cubic cost in trace/blend/upload work. Clamped 2-32; a resolution change rebuilds the probe grid after a short idle delay, not every frame while dragging.
-    // @ge-label Divisions
-    int32 ProbesLongAxis = 12;
+    int32 Divisions = 12;
 
     // Rays traced per probe per tick. Clamped 32..256 by the feature. The
     // trace kernels stride a 64-thread workgroup over the ray set, so a probe
@@ -265,7 +264,6 @@ struct DDGIVolume {
     // the raster path's ambient already composes them.
     // @ge-tooltip How much sky light the probes pick up on rays that hit nothing. 0 ignores the sky completely (indoor-only GI, miss rays are black), 1 is the environment's own brightness. Multiplies with the scene's global sky IBL intensity rather than replacing it. Applied live, no grid rebuild.
     // @ge-range 0 2
-    // @ge-label Sky Light
     float32 SkyIntensity = 1.0f;
 
     // Luminance ceiling on the recursive bounce term. A ceiling, not an
@@ -397,7 +395,6 @@ struct DDGIVolume {
     bool EnableGlossy = false;
     // @ge-tooltip How strongly probe reflections displace the environment reflection. At 0 the environment cube is used unchanged; at 1 the probes take full authority wherever they actually saw geometry.
     // @ge-range 0 1
-    // @ge-label Local Reflections
     float32 ReflectionIntensity = 1.0f;
 
     // Screen-space resolution of the glossy-reflection resolve (see

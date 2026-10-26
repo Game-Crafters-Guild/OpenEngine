@@ -1,6 +1,7 @@
 #include "Rendering/Materials/ShaderPropertyTable.h"
 
 #include "Rendering/Materials/MaterialParamsLayout.h"
+#include "Rendering/Materials/MaterialPropertyBinding.h"
 #include "Rendering/ShaderGraph/SgTagParser.h"
 #include "Types/ParseNumber.h"
 #include "Types/StringUtils.h"
@@ -70,30 +71,6 @@ bool IsQuoted(std::string_view s)
 std::string Unquote(std::string_view s)
 {
     return IsQuoted(s) ? std::string(s.substr(1, s.size() - 2)) : std::string(s);
-}
-
-// "pulseSpeed" -> "Pulse Speed", "ao" -> "AO", "fresnelRimCap" -> "Fresnel Rim Cap".
-std::string DeriveDisplayName(std::string_view name)
-{
-    if (name == "ao")
-        return "AO";
-    std::string out;
-    out.reserve(name.size() + 4);
-    for (size_t i = 0; i < name.size(); ++i)
-    {
-        const char c = name[i];
-        if (c == '_')
-        {
-            out.push_back(' ');
-            continue;
-        }
-        const bool boundary = i > 0 && std::isupper(static_cast<unsigned char>(c)) &&
-                              !std::isupper(static_cast<unsigned char>(name[i - 1]));
-        if (boundary)
-            out.push_back(' ');
-        out.push_back(i == 0 ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c);
-    }
-    return out;
 }
 
 bool ParseType(std::string_view token, ShaderPropertyType& out)
@@ -382,7 +359,7 @@ struct Parser
         if (!ParseDefault(prop, hasDefault, defaultText, scan.Line))
             return;
         if (prop.DisplayName.empty())
-            prop.DisplayName = DeriveDisplayName(prop.Name);
+            prop.DisplayName = MaterialPropertyBinding::PropertyKeyLabel(prop.Name);
 
         for (const ShaderProperty& existing : Table.Properties)
         {

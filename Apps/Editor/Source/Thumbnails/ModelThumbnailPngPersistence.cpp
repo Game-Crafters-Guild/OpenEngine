@@ -1,6 +1,7 @@
 // ModelThumbnailHandler, part: Persisting finished renders: the readback of a settled slot and the
 // PNG write.
 
+#include "Mathematics/Interpolation.h"
 #include "Thumbnails/ModelThumbnailHandler.h"
 
 #include "Assets/AssetManager.h"
@@ -303,7 +304,7 @@ void ModelThumbnailHandler::PollDiskCacheReadback()
             auto toChannel = [&](uint16_t half) -> uint8_t
             {
                 const float v = halfToFloat(half);
-                const float out = encode ? linearToSrgb(v) : std::clamp(v, 0.0f, 1.0f);
+                const float out = encode ? linearToSrgb(v) : Math::Clamp01(v);
                 return static_cast<uint8_t>(out * 255.0f + 0.5f);
             };
             for (size_t i = 0; i < pixelCount; ++i)
@@ -312,7 +313,7 @@ void ModelThumbnailHandler::PollDiskCacheReadback()
                 rgba8[i * 4 + 1] = toChannel(src[i * 4 + 1]);
                 rgba8[i * 4 + 2] = toChannel(src[i * 4 + 2]);
                 // Alpha is coverage, never curve-mapped.
-                float a = std::clamp(halfToFloat(src[i * 4 + 3]), 0.0f, 1.0f);
+                float a = Math::Clamp01(halfToFloat(src[i * 4 + 3]));
                 rgba8[i * 4 + 3] = static_cast<uint8_t>(a * 255.0f + 0.5f);
             }
             pngSrc = rgba8.data();

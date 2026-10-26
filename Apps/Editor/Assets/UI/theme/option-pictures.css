@@ -9,8 +9,9 @@
  * `Icons/OptionPictures/<stem>.png`. OptionPicturesTests asserts every class a source declares has a
  * rule here, every rule is declared, and every file exists.
  *
- * The star pictures are 144 x 96 crops of the Scene View at the pose in
- * Icons/OptionPictures/star-pictures.txt, so they can be made again when a look changes. */
+ * The pictures are 144 x 96 crops of the Scene View at the poses in
+ * Icons/OptionPictures/star-pictures.txt and grass-pictures.txt, so they can be made again when a
+ * preset changes. */
 
 .option-picture--star-look-vivid {
 	background-image: url("editor:Icons/OptionPictures/star-look-vivid.png");
@@ -34,4 +35,16 @@
 
 .option-picture--star-seen-by-camera {
 	background-image: url("editor:Icons/OptionPictures/star-seen-by-camera.png");
+}
+
+.option-picture--grass-meadow {
+	background-image: url("editor:Icons/OptionPictures/grass-meadow.png");
+}
+
+.option-picture--grass-lawn {
+	background-image: url("editor:Icons/OptionPictures/grass-lawn.png");
+}
+
+.option-picture--grass-steppe {
+	background-image: url("editor:Icons/OptionPictures/grass-steppe.png");
 }

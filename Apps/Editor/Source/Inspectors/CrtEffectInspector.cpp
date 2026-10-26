@@ -7,6 +7,7 @@
 
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,7 +36,7 @@ void RegisterCrtEffectInspector()
 
         AddComponentFloatRowWithDrag<CRT>(ctx.Parent, "Intensity", effect->Intensity, w, e, n,
             undo, "Change CRT Intensity",
-            [](CRT& u, float v) { u.Intensity = std::clamp(v, 0.0f, 1.0f); },
+            [](CRT& u, float v) { u.Intensity = Math::Clamp01(v); },
             0.05f, "Overall CRT blend (0 = off)",
             {},
             0.0f,
@@ -51,7 +52,7 @@ void RegisterCrtEffectInspector()
 
         AddComponentFloatRowWithDrag<CRT>(ctx.Parent, "Scanlines", effect->Scanlines, w, e, n,
             undo, "Change CRT Scanlines",
-            [](CRT& u, float v) { u.Scanlines = std::clamp(v, 0.0f, 1.0f); },
+            [](CRT& u, float v) { u.Scanlines = Math::Clamp01(v); },
             0.05f, "Horizontal scanline visibility",
             {},
             0.0f,
@@ -75,11 +76,11 @@ void RegisterCrtEffectInspector()
             0.05f);
 
         AddComponentFloatRowWithDrag<CRT>(ctx.Parent, "Softness",
-            std::clamp(std::isfinite(effect->Softness) ? effect->Softness : 0.0f, 0.0f, 1.0f),
+            Math::Clamp01(std::isfinite(effect->Softness) ? effect->Softness : 0.0f),
             w, e, n,
             undo, "Change CRT Softness",
             [](CRT& u, float v) {
-                u.Softness = std::clamp(std::isfinite(v) ? v : 0.0f, 0.0f, 1.0f);
+                u.Softness = Math::Clamp01(std::isfinite(v) ? v : 0.0f);
             },
             0.05f,
             "Phosphor blend softness (0 = sharp, 1 = soft)",

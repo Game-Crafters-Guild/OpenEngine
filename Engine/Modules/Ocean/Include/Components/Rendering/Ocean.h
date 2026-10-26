@@ -199,7 +199,6 @@ struct OceanSurface
     // 2 = wave foam, 3 = shoreline/contact foam, 4 = freshness, 5 = latest deposit,
     // 6 = raw seabed depth ramp, 7 = normalized shallow mask, 8 = invalid/deep tiles.
     // @ge-tooltip Debug overlay mode for inspecting foam, shoreline, and depth data.
-    // @ge-label Foam Debug
     uint32 FoamDebugMode = 0;
 
     // --- Shoreline foam (driven by the sea-floor depth cascade) ---
@@ -294,13 +293,11 @@ struct OceanSurface
     // objects.
     // @ge-tooltip How strongly the planar capture covers the reflected environment; above 1 it brightens the captured objects.
     // @ge-range 0 3
-    // @ge-label Planar Strength
     float32 PlanarReflectionStrength = 1.0f;
 
     // Resolution scale of the planar reflection capture relative to the main
-    // view. 0.5 keeps the previous half-res cost; 1.0 captures at full view size.
+    // view. 0.5 captures at half resolution; 1.0 captures at full view size.
     // @ge-tooltip Resolution scale of the planar reflection capture relative to the main view.
-    // @ge-label Planar Scale
     float32 PlanarReflectionScale = 0.5f;
 
     // --- Procedural sky dome ---
@@ -352,8 +349,7 @@ struct OceanSurface
     // current strong shallow-water reduction.
     // @ge-tooltip Reduces sky and planar reflection only where shallow refraction is clear, keeping seabed caustics visible. 0 leaves reflection unchanged.
     // @ge-range 0 1
-    // @ge-label Shallow Reflection Suppression
-    float32 ShallowRefractionReflectionSuppression = 1.0f;
+    float32 ShallowReflectionSuppression = 1.0f;
 
     // Shallow clarity window: the depth fog ramps up over the first meters of the
     // view ray's path through the water, so the seabed and its caustics stay
@@ -666,8 +662,7 @@ struct OceanRenderer
     // @ge-tooltip Captures dynamic mesh geometry into the seabed-depth texture from a top-down pass.
     bool RasterDepthCapture = false;
     // @ge-tooltip Resolution of the dynamic raster seabed-depth capture.
-    // @ge-label Raster Depth Resolution
-    uint32 RasterDepthCaptureResolution = 512u;
+    uint32 RasterDepthResolution = 512u;
     // @ge-tooltip The render layers the raster seabed-depth capture draws.
     Rendering::RenderLayerMask RasterDepthCaptureLayers = Rendering::RenderLayerMask::All();
     // @ge-tooltip World X size of the top-down raster seabed-depth capture.
@@ -722,8 +717,7 @@ struct OceanRenderer
     // bypassed for visible waves/foam until it can be made world-stable; the direct
     // 16-cascade path remains authoritative.
     // @ge-tooltip Experimental path that combines FFT displacement cascades once per frame.
-    // @ge-label Combine Cascade
-    bool CombineDisplacementCascade = false;
+    bool CombineCascade = false;
 };
 
 // Identifies one scene-authored field by its full preset path, including the

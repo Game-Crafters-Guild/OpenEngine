@@ -1,5 +1,6 @@
 #include "Panels/AssetsPanel.h"
 #include "Editor/EditorTreeTitleIconVars.h"
+#include "Mathematics/Interpolation.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/AddTagModal.h"
 
@@ -151,7 +152,7 @@ float GridToolbarSliderTFromIconPx(float px)
 
 float IconPxFromGridToolbarSliderT(float t)
 {
-    t = std::clamp(t, 0.0f, 1.0f);
+    t = Math::Clamp01(t);
     const float ratio = kGridToolbarIconMaxPx / kGridToolbarIconMinPx;
     return kGridToolbarIconMinPx * std::pow(ratio, t);
 }

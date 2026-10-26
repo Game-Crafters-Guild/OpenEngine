@@ -1,5 +1,6 @@
 #include "Panels/MonitorsPanel.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include <algorithm>
@@ -654,7 +655,7 @@ void MonitorsPanel::OnChartClicked(ChartView* chart, float localX, float chartWi
     if (it == m_FrozenSeries.end() || it->second.empty())
         return;
     const std::size_t n = it->second.size();
-    const float t = std::clamp(localX / chartWidth, 0.0f, 1.0f);
+    const float t = Math::Clamp01(localX / chartWidth);
     const int frame = static_cast<int>(t * static_cast<float>(n - 1) + 0.5f);
     m_CursorFrame = frame;
     ApplyCursorToCharts();

@@ -1,4 +1,5 @@
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "Mathematics/Interpolation.h"
 #include "TerrainGrassCompose.h"
 #include "TerrainRowBands.h"
 #include "TerrainECS/TerrainBakeCache.h"
@@ -261,7 +262,7 @@ static_assert(Components::kMaxNoiseOctaves == Noise::kMaxOctaves,
 // Undefined at k <= 0 — callers guard.
 float32 PolynomialSmoothMin(float32 a, float32 b, float32 k)
 {
-    const float32 t = std::clamp(0.5f + 0.5f * (b - a) / k, 0.0f, 1.0f);
+    const float32 t = Math::Clamp01(0.5f + 0.5f * (b - a) / k);
     return (b + (a - b) * t) - k * t * (1.0f - t);
 }
 
@@ -453,8 +454,8 @@ constexpr float32 kDegToRad = 0.01745329251994329577f;
 float32 SampleMaskBilinear(const float32* texels, uint32 width, uint32 height,
                            float32 u, float32 v)
 {
-    u = std::clamp(u, 0.0f, 1.0f);
-    v = std::clamp(v, 0.0f, 1.0f);
+    u = Math::Clamp01(u);
+    v = Math::Clamp01(v);
 
     const float32 fx = u * static_cast<float32>(width - 1);
     const float32 fz = v * static_cast<float32>(height - 1);
@@ -595,8 +596,8 @@ void ComputeModifierBounds(ResolvedModifier& mod)
 float32 SampleMaskR8Bilinear(const uint8* texels, uint32 width, uint32 height,
                              float32 u, float32 v)
 {
-    u = std::clamp(u, 0.0f, 1.0f);
-    v = std::clamp(v, 0.0f, 1.0f);
+    u = Math::Clamp01(u);
+    v = Math::Clamp01(v);
     const float32 fx = u * static_cast<float32>(width - 1);
     const float32 fz = v * static_cast<float32>(height - 1);
     const uint32 x0 = static_cast<uint32>(fx);
@@ -638,10 +639,10 @@ void ComputeZonePayloadWorldRect(ResolvedModifier& mod, const TerrainZonePayload
     const float32 invW = 1.0f / static_cast<float32>(payload.Width - 1);
     const float32 invH = 1.0f / static_cast<float32>(payload.Height - 1);
     // Expand the texel rect by one texel (bilinear reach) before mapping to UV.
-    const float32 u0 = std::clamp((payload.DirtyMinX - 1) * invW, 0.0f, 1.0f);
-    const float32 u1 = std::clamp(payload.DirtyMaxX * invW, 0.0f, 1.0f);
-    const float32 v0 = std::clamp((payload.DirtyMinZ - 1) * invH, 0.0f, 1.0f);
-    const float32 v1 = std::clamp(payload.DirtyMaxZ * invH, 0.0f, 1.0f);
+    const float32 u0 = Math::Clamp01((payload.DirtyMinX - 1) * invW);
+    const float32 u1 = Math::Clamp01(payload.DirtyMaxX * invW);
+    const float32 v0 = Math::Clamp01((payload.DirtyMinZ - 1) * invH);
+    const float32 v1 = Math::Clamp01(payload.DirtyMaxZ * invH);
 
     // UV -> zone-local (the payload spans [-RectHalf, +RectHalf] in each axis).
     const float32 lx[2] = {(2.0f * u0 - 1.0f) * mod.RectHalfX, (2.0f * u1 - 1.0f) * mod.RectHalfX};

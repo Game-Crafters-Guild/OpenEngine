@@ -19,6 +19,7 @@
 #include "Engine/Rendering/Pipeline/Nodes/PipelineNodeUtils.h"  // Pipeline::Nodes::Detail::BindStorageImageByName
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Core/NamedDescriptorWriter.h"
@@ -284,15 +285,15 @@ void DDGIProbeFeature::SetActiveVolume(const DDGIVolumeDesc& desc)
     clamped.ChangeThreshold = std::clamp(clamped.ChangeThreshold, 0.5f, 8.0f);
     clamped.SnapAmount = std::clamp(clamped.SnapAmount, 0.0f, 0.9f);
     clamped.NormalBiasScale = std::clamp(clamped.NormalBiasScale, 0.0f, 8.0f);
-    clamped.ChebyshevStrength = std::clamp(clamped.ChebyshevStrength, 0.0f, 1.0f);
-    clamped.ClassifyStrength = std::clamp(clamped.ClassifyStrength, 0.0f, 1.0f);
+    clamped.ChebyshevStrength = Math::Clamp01(clamped.ChebyshevStrength);
+    clamped.ClassifyStrength = Math::Clamp01(clamped.ClassifyStrength);
     clamped.SkyIntensity = std::max(clamped.SkyIntensity, 0.0f);
     // Floored above 0 on purpose: the blend kernel raises each ray's cosine
     // weight to this power, and pow(0, 0) is 1 — a zero exponent would give
     // every backfacing ray full authority over the depth moments.
     clamped.DepthSharpness = std::clamp(clamped.DepthSharpness, 0.01f, 200.0f);
-    clamped.FilterStrength = std::clamp(clamped.FilterStrength, 0.0f, 1.0f);
-    clamped.FilterSmoothness = std::clamp(clamped.FilterSmoothness, 0.0f, 1.0f);
+    clamped.FilterStrength = Math::Clamp01(clamped.FilterStrength);
+    clamped.FilterSmoothness = Math::Clamp01(clamped.FilterSmoothness);
     // Serialized as a raw int32; an out-of-table value degrades to the
     // nearest valid scale rather than an undefined resolve extent.
     clamped.GlossyResolveScale =
@@ -1927,7 +1928,7 @@ bool DDGIProbeFeature::EnsureReflectionResources(float /*deltaTimeSeconds*/)
     {
         Logger::Log::Warning(
             "DDGIProbeFeature: glossy reflection lobe disabled at {} probes — history would need {} MB "
-            "({}x{} atlas). Reduce ProbesLongAxis or turn EnableGlossy off.",
+            "({}x{} atlas). Reduce Divisions or turn EnableGlossy off.",
             m_C0.ProbeTotal, c0GlossyBytes / (1024ull * 1024ull), c0Layout.WidthTexels,
             c0Layout.HeightTexels);
         ReleaseReflectionResources();
@@ -3318,7 +3319,7 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
         p.decay = std::max(in.decay, 0.0f);
         p.fogContribution = std::max(in.fogContribution, 0.0f);
         p.fogDensityBoost = std::max(in.fogDensityBoost, 0.0f);
-        p.fogOriginFade = std::clamp(in.fogOriginFade, 0.0f, 1.0f);
+        p.fogOriginFade = Math::Clamp01(in.fogOriginFade);
         p.fogAnisotropy = std::clamp(in.fogAnisotropy, -0.95f, 0.95f);
         outLights[li] = p;
     }

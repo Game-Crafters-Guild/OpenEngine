@@ -2,6 +2,7 @@
 
 #include "Components/Rendering/Camera.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Mathematics/Interpolation.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -33,11 +34,11 @@ inline ViewRegistry::CameraExposure ToCameraExposure(const Components::Camera& c
     e.ApertureBladeCount = static_cast<int32>(std::clamp(
         c.ApertureBladeCount, Components::Camera::kApertureBladeCountMin,
         Components::Camera::kApertureBladeCountMax));
-    e.ApertureRoundness = std::clamp(c.ApertureRoundness, 0.0f, 1.0f);
+    e.ApertureRoundness = Math::Clamp01(c.ApertureRoundness);
     e.ApertureRotation = std::clamp(c.ApertureRotation, 0.0f, 360.0f);
     e.AnamorphicSqueeze = std::clamp(c.AnamorphicSqueeze, 1.0f, 4.0f);
     e.FocusDebugMode = c.FocusDebugMode != 0 ? 1 : 0;
-    e.FocusDebugAlpha = std::clamp(c.FocusDebugAlpha, 0.0f, 1.0f);
+    e.FocusDebugAlpha = Math::Clamp01(c.FocusDebugAlpha);
     // Focal length from the vertical FOV against the camera's sensor height:
     // f = (sensorHeight/2) / tan(fovY/2). Orthographic views keep the default.
     e.SensorHeightMm = std::max(c.SensorHeightMm, 1.0f);

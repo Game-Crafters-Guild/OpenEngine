@@ -5,6 +5,7 @@
 #include "Graph/GraphPortDropSlot.h"
 #include "Graph/GraphVariableValues.h"
 #include "Graph/NodeColorSettings.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/TextField.h"
@@ -62,7 +63,7 @@ std::uint32_t PackSrgbSwatchArgb(const float* rgb)
 {
     auto toU8 = [](float v) -> std::uint32_t
     {
-        v = std::clamp(v, 0.0f, 1.0f);
+        v = Math::Clamp01(v);
         return static_cast<std::uint32_t>(v * 255.0f + 0.5f);
     };
     return (255u << 24) | (toU8(rgb[0]) << 16) | (toU8(rgb[1]) << 8) | toU8(rgb[2]);

@@ -2,6 +2,7 @@
 #include "Assets/PolyhavenDownloadManager.h"
 #include "Assets/PolyhavenService.h"
 #include "ECS/Entity.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Controls/Label.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "UI/StyleProperties.h"
@@ -21,7 +22,7 @@ namespace
 {
 int PercentOf(float fraction)
 {
-    return static_cast<int>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f + 0.5f);
+    return static_cast<int>(Math::Clamp01(fraction) * 100.0f + 0.5f);
 }
 } // namespace
 
@@ -90,7 +91,7 @@ void DownloadPillOverlay::ApplyState(Widgets& w, const std::string& name, float 
     if (w.Fill)
     {
         // Indeterminate until the file count is known: a short teaser fill.
-        const float f = hasFraction ? std::clamp(fraction, 0.0f, 1.0f) : 0.12f;
+        const float f = hasFraction ? Math::Clamp01(fraction) : 0.12f;
         w.Fill->Overrides().Set(Style::Width, StyleLength::Percent(f * 100.0f));
     }
 

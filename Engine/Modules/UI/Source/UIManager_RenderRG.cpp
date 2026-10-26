@@ -1,3 +1,4 @@
+#include "Mathematics/Interpolation.h"
 #include "UI/UIManager.h"
 
 #include "Logger/Logger.h"
@@ -60,7 +61,7 @@ UIManager::TextCoverageConstants UIManager::ResolveTextCoverageConstants(
     // source-over — Chrome's SK_GAMMA_SRGB configuration).
     const int blendSpaceEncoded =
         targetSpace.GetKind() == UI::UITargetSpace::Kind::EncodedSrgb ? 1 : 0;
-    return TextCoverageConstants{std::clamp(contrast, 0.0f, 1.0f),
+    return TextCoverageConstants{Math::Clamp01(contrast),
                                  std::clamp(blendGamma, 0.0f, 4.0f), blendSpaceEncoded};
 }
 

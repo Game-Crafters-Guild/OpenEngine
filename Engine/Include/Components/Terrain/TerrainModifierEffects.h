@@ -3,11 +3,11 @@
 #include "Components/AssetRef.h"
 #include "Components/Terrain/TerrainModifierBlend.h"
 #include "Components/Terrain/TerrainSurfaceRules.h"
+#include "Mathematics/Interpolation.h"
 #include "Types/StringUtils.h"
 #include "Types/Types.h"
 
 #include <cstddef>
-#include <algorithm>
 #include <cmath>
 #include <string_view>
 #include <type_traits>
@@ -380,7 +380,7 @@ struct TerrainGrassEffect
 // Script writes also pass through this finite, bounded admission at gather.
 inline float32 ClampTerrainGrassEffectScale(float32 value)
 {
-    return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+    return std::isfinite(value) ? Math::Clamp01(value) : 1.0f;
 }
 
 // The height multiplier below which a region stops reading as short grass and starts reading as
@@ -417,7 +417,7 @@ struct TerrainColorEffect
 // and at gather: clamped to [0,1], and 0 when nonfinite, so a bad value writes nothing.
 inline float32 ClampTerrainColorEffectValue(float32 value)
 {
-    return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+    return std::isfinite(value) ? Math::Clamp01(value) : 0.0f;
 }
 
 static_assert(std::is_trivially_copyable_v<TerrainColorEffect>);

@@ -1,6 +1,7 @@
 #include "Graph/GraphInspectorRows.h"
 
 #include "Graph/GraphTypeRegistry.h"
+#include "Types/StringUtils.h"
 #include "UI/Controls/FloatField.h"
 
 #include <cstdlib>
@@ -229,7 +230,7 @@ std::vector<GraphInspectorRow> PlanGraphInspectorRows(
         row.Kind = (spec && !spec->Options.empty()) ? GraphInspectorRowKind::NodeEnum
                                                     : ScalarKindFromSchemaOrText(spec, value);
         row.Key = key;
-        row.Label = (row.Kind == GraphInspectorRowKind::NodeAsset) ? "Clip" : key;
+        row.Label = (row.Kind == GraphInspectorRowKind::NodeAsset) ? "Clip" : IdentifierToWords(key);
         rows.push_back(std::move(row));
     };
 

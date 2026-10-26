@@ -2,6 +2,7 @@
 #include "Assets/MaterialXImport.h"
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Materials/ShaderVariantKey.h"
 #include "Rendering/Materials/UserKeyword.h"
 #include "Types/ParseNumber.h"
@@ -507,14 +508,14 @@ static bool ParseUnityMaterial(const std::string& text,
 
     float value = 0.0f;
     if (TryFindFloat(text, "_Metallic", value))
-        doc.properties["metallic"] = std::clamp(value, 0.0f, 1.0f);
+        doc.properties["metallic"] = Math::Clamp01(value);
     if (TryFindFloat(text, "_Roughness", value))
         doc.properties["roughness"] = std::clamp(value, 0.04f, 1.0f);
     else if (TryFindFloat(text, "_Smoothness", value) || TryFindFloat(text, "_Glossiness", value))
         doc.properties["roughness"] = std::clamp(1.0f - value, 0.04f, 1.0f);
 
     if (TryFindFloat(text, "_Cutoff", value))
-        doc.properties["alphaCutoff"] = std::clamp(value, 0.0f, 1.0f);
+        doc.properties["alphaCutoff"] = Math::Clamp01(value);
 
     if (TryFindFloat(text, "_Mode", value))
     {

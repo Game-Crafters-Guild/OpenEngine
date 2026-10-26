@@ -9,6 +9,7 @@
 #include "Assets/LensFlareDefinitionAsset.h"
 #include "Components/Rendering/LensFlareSource.h"
 #include "Core/Engine.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/EditorIcons.h"
 #include "Editor/Assets/AsyncAssetHelpers.h"
 #include "ECS/Entity.h"
@@ -796,7 +797,7 @@ std::vector<Math::CurveKey> NormalizeFlareEditorKeys(std::vector<Math::CurveKey>
                 outTangent = Math::ResolveKeySlope(source.data(), static_cast<uint32_t>(source.size()),
                                                    static_cast<uint32_t>(i), false);
         }
-        keys[i].Time = std::clamp(keys[i].Time, 0.0f, 1.0f);
+        keys[i].Time = Math::Clamp01(keys[i].Time);
         keys[i].InTangent = inTangent;
         keys[i].OutTangent = outTangent;
         keys[i].Interp = Math::CurveInterp::Smooth;
@@ -1052,8 +1053,8 @@ void BuildCurveEditor(UIElement* parent,
         curve.Keys = graphRaw->GetKeys();
         for (Math::CurveKey& key : curve.Keys)
         {
-            key.Time = std::clamp(key.Time, 0.0f, 1.0f);
-            key.Value = std::clamp(key.Value, 0.0f, 1.0f);
+            key.Time = Math::Clamp01(key.Time);
+            key.Value = Math::Clamp01(key.Value);
         }
         CurvePresets::UserPresetLibrary::Get().Add(CurvePresets::NextUserPresetName(), curve);
         pickerRaw->Refresh();

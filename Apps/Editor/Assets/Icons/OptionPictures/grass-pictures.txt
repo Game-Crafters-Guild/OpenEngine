@@ -1,0 +1,26 @@
+The grass pictures in this folder, 144 x 96 PNG each (shown at 72 x 48 logical pixels), are crops of
+the editor's Scene View, taken through its render-graph readback (take_screenshot --target viewport,
+a 3067 x 900 frame).
+
+Scene: the Basic3D project template with a terrain added (Terrain BaseSource Flat, 256 x 256 m
+centered on the origin, no material) and TerrainGrass at its defaults. Sky Environment:
+TimeOfDayHours 10, AnimateTimeOfDay false; the Post Process Volume as the template ships it.
+Scene View camera: position (0, 0.15, -131.5), 3.5 m outside the terrain's edge at z -128, yaw 90
+(facing +Z, into the field), pitch 3, vertical field of view 60 degrees, the view's default auto
+exposure; gizmos off. The field is seen side on, so the blades stand against the sky and their height
+reads at the picture's size.
+
+grass-<preset>.png: the preset picked from the Preset list. A 360 x 240 crop with its top-left
+corner at (1300, 282) in the frame, scaled to 144 x 96 (Lanczos) with no gain. The crop ends on the
+terrain's front edge, above the gray ground past it, and its top row holds Steppe's tallest tips.
+
+Build: 037e7e83a5. Retake a picture when its preset's values, or Ground Tint Height's default, change.
+
+The values each picture was taken with, one line per picture: the preset picked, the gain, the
+preset's dials (colors as the stored sRGB word in hex, root auto for the automatic root color), then
+Ground Tint Height, which no preset sets but which changes how each preset looks.
+TerrainGrassPresetRowTests compares these lines to the preset table, so a preset whose values change
+fails the test until its picture is retaken and its line updated.
+grass-meadow.png: preset=Meadow gain=1 tip=FF79954D root=auto backlight=FFBCCE61 density=21 height=0.72 width=0.036 tilt=0.25 ground-tint-height=0.5
+grass-lawn.png: preset=Lawn gain=1 tip=FF6C8E4B root=auto backlight=FFAAC859 density=64 height=0.4 width=0.024 tilt=0.1 ground-tint-height=0.5
+grass-steppe.png: preset=Steppe gain=1 tip=FFA29B61 root=auto backlight=FFCEC581 density=12 height=0.9 width=0.02 tilt=0.35 ground-tint-height=0.5

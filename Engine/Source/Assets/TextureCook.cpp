@@ -5,6 +5,7 @@
 #include "Image/Decode.h"
 #include "Image/Resample.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <array>
@@ -557,7 +558,7 @@ namespace
 
     uint8 SaturateToUnorm8(float value)
     {
-        return static_cast<uint8>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+        return static_cast<uint8>(Math::Clamp01(value) * 255.0f + 0.5f);
     }
 
     // One texel of the level as RGBA8 in memory order (R first), as bc7e reads it.

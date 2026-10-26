@@ -1,6 +1,7 @@
 #include "SplineLayout/FenceLayout.h"
 
 #include "Components/Spline/SplinePoolSelection.h"
+#include "Mathematics/Interpolation.h"
 #include "SplineLayout/PieceBasis.h"
 #include "SplineLayout/SeamShear.h"
 #include "SplineLayout/SpanMitre.h"
@@ -1285,9 +1286,8 @@ bool CrestPoseOnRun(const Run& run, const CrestAxis& axis, const FenceLayoutPara
     V3 to;
     SpanEndBases(run.Poses[index], run.Poses[index + 1u], params.SpanGrade, from, to);
     const float32 along = axis.Stations[index + 1u] - axis.Stations[index];
-    const float32 u = std::clamp((placement.Centre - axis.Stations[index]) /
-                                     std::max(along, kMinRunLengthMetres),
-                                 0.0f, 1.0f);
+    const float32 u = Math::Clamp01((placement.Centre - axis.Stations[index]) /
+                                     std::max(along, kMinRunLengthMetres));
 
     TilePose pose;
     pose.Forward = NormalizedOrFallback(span.Forward, kWorldForward);
@@ -1535,7 +1535,7 @@ Components::SplineFence SanitizeFenceRecipe(const Components::SplineFence& autho
     clean.PostPitch = std::max(SanitizedFloat(authored.PostPitch, defaults.PostPitch),
                                kMinPitchMetres);
     clean.SlopeBlend =
-        std::clamp(SanitizedFloat(authored.SlopeBlend, defaults.SlopeBlend), 0.0f, 1.0f);
+        Math::Clamp01(SanitizedFloat(authored.SlopeBlend, defaults.SlopeBlend));
     clean.SpanMaxStretch = std::max(
         SanitizedFloat(authored.SpanMaxStretch, defaults.SpanMaxStretch), 1.0f);
     // A negative pitch spaces nothing, so it reads as the default 0 — the

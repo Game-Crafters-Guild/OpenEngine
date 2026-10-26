@@ -30,6 +30,7 @@
 #include "Animation/SkeletonProfile.h"
 
 #include "Core/Engine.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -163,7 +164,7 @@ float SampleScalarChannel(const AnimChannel& channel, float time)
     const AnimKeyframe& k0 = channel.keys[lo];
     const AnimKeyframe& k1 = channel.keys[hi];
     const float dt = k1.time - k0.time;
-    const float alpha = (dt > 0.0f) ? std::clamp((time - k0.time) / dt, 0.0f, 1.0f) : 0.0f;
+    const float alpha = (dt > 0.0f) ? Math::Clamp01((time - k0.time) / dt) : 0.0f;
     const AnimInterp segInterp = k0.hasSegmentInterpOverride ? k0.segmentInterp : channel.interp;
     if (segInterp == AnimInterp::Step || dt <= 0.0f)
         return k0.translation[0];

@@ -1,5 +1,7 @@
 #include "Thumbnails/CubeLutStripRequest.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -80,7 +82,7 @@ std::string MakeCubeLutStripKey(const CubeLutStripRequest& request)
     // look-alone band does not depend on the LUT's intensity or stage, so they are not named.
     const bool usesLut = request.Content != CubeLutStripContent::LookAlone;
     const int32_t intensity =
-        usesLut ? static_cast<int32_t>(std::lround(std::clamp(request.Intensity, 0.0f, 1.0f) * kIntensityUnitsPerOne))
+        usesLut ? static_cast<int32_t>(std::lround(Math::Clamp01(request.Intensity) * kIntensityUnitsPerOne))
                 : 0;
     const uint32_t stage = usesLut ? std::min(request.Stage, kStageCount - 1u) : 0u;
     // The sheet holds both sources; its name carries the ramp's.

@@ -7,6 +7,7 @@
 #include "EditorChangeNotifications.h"
 #include "Engine/Rendering/CameraAspectRatio.h"
 #include "Components/Rendering/PostProcessVolume.h"
+#include "Mathematics/Interpolation.h"
 #include "Panels/CameraCustomAspectModal.h"
 
 #include "Inspectors/ExposureCompensationCurveRow.h"
@@ -757,7 +758,7 @@ void RegisterCameraInspector()
             extras, Components::Camera::kFocusDistanceMin);
         AddComponentFloatRowWithDrag<Components::Camera>(ctx.Parent, "Focus Debug Blend", cam->FocusDebugAlpha, w, e, n,
             undo, "Change Focus Debug Blend",
-            [](Components::Camera& u, float v) { u.FocusDebugAlpha = std::clamp(v, 0.0f, 1.0f); },
+            [](Components::Camera& u, float v) { u.FocusDebugAlpha = Math::Clamp01(v); },
             0.5f, "How much the camera's focus-range diagnostic tint is mixed over the image.", extras, 0.0f, 1.0f);
         AddToggleRow(ctx.Parent, "Focus Range Debug", cam->FocusDebugMode != 0,
             [w, e, n, undo](bool v) {
@@ -780,7 +781,7 @@ void RegisterCameraInspector()
                                  static_cast<int>(Components::Camera::kApertureBladeCountMax));
         AddComponentFloatRowWithDrag<Components::Camera>(ctx.Parent, "Aperture Roundness", cam->ApertureRoundness, w, e, n,
             undo, "Change Aperture Roundness",
-            [](Components::Camera& u, float v) { u.ApertureRoundness = std::clamp(v, 0.0f, 1.0f); },
+            [](Components::Camera& u, float v) { u.ApertureRoundness = Math::Clamp01(v); },
             1.0f, "Shape of physical DoF bokeh: 0 = straight polygonal blades, 1 = circular aperture.", extras, 0.0f, 1.0f);
         AddComponentFloatRowWithDrag<Components::Camera>(ctx.Parent, "Aperture Rotation", cam->ApertureRotation, w, e, n,
             undo, "Change Aperture Rotation",

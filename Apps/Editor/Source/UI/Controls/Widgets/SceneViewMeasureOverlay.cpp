@@ -8,6 +8,7 @@
 #include "ECS/ECS.h"
 #include "ECS/ECSTemplates.h"
 #include "Editor/Settings/SceneViewSettings.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector2.h"
 #include "Mathematics/Vector3.h"
@@ -77,7 +78,7 @@ uint32_t PillFillColor()
 uint32_t SceneMeasureColor(float alphaScale = 1.0f)
 {
     const uint32_t argb = Editor::SceneViewSettings::Get().GetMeasureColor();
-    const float a = std::clamp(((argb >> 24) & 0xFF) / 255.0f * alphaScale, 0.0f, 1.0f);
+    const float a = Math::Clamp01(((argb >> 24) & 0xFF) / 255.0f * alphaScale);
     const float r = ((argb >> 16) & 0xFF) / 255.0f;
     const float g = ((argb >> 8) & 0xFF) / 255.0f;
     const float b = (argb & 0xFF) / 255.0f;
@@ -88,14 +89,14 @@ uint32_t MeasureComponentColor(const Components::MeasureComponent& measure,
                                float alphaScale = 1.0f,
                                float brighten = 0.0f)
 {
-    const float mix = std::clamp(brighten, 0.0f, 1.0f);
-    const float r = std::clamp(measure.Color[0], 0.0f, 1.0f);
-    const float g = std::clamp(measure.Color[1], 0.0f, 1.0f);
-    const float b = std::clamp(measure.Color[2], 0.0f, 1.0f);
+    const float mix = Math::Clamp01(brighten);
+    const float r = Math::Clamp01(measure.Color[0]);
+    const float g = Math::Clamp01(measure.Color[1]);
+    const float b = Math::Clamp01(measure.Color[2]);
     return UI::PackColor(r + (1.0f - r) * mix,
                          g + (1.0f - g) * mix,
                          b + (1.0f - b) * mix,
-                         std::clamp(measure.Color[3] * alphaScale, 0.0f, 1.0f));
+                         Math::Clamp01(measure.Color[3] * alphaScale));
 }
 
 void EmitTextOutlined(UI::PrimitiveEmitContext& ctx,
