@@ -20,6 +20,12 @@
 #include <string>
 #include <vector>
 
+namespace GameEngine::Mathematics
+{
+struct Matrix4x4;
+struct Vector4;
+}  // namespace GameEngine::Mathematics
+
 namespace GameEngine::Rendering
 {
 class IDevice;
@@ -52,8 +58,8 @@ struct DDGIVolumeDesc
 {
     bool Enabled = false;
     uint64_t WorldId = 0;  // whose RenderServices::GetWorldLights() feeds NEE
-    float GridMinWS[3] = {0.0f, 0.0f, 0.0f};
-    float GridSizeWS[3] = {1.0f, 1.0f, 1.0f};
+    Mathematics::Vector3 GridMinWS{0.0f, 0.0f, 0.0f};
+    Mathematics::Vector3 GridSizeWS{1.0f, 1.0f, 1.0f};
     // Adaptive (default) = uniform lattice topology plus the per-probe
     // relocation/classification pass. Grid = the bare lattice, no classify
     // pass, probes never relocate or deactivate. See Components::DDGIVolume.
@@ -382,7 +388,7 @@ class DDGIProbeFeature final : public IRenderFeature
     // clamped 2..32) — the same derivation EnsureCascadeGpuResources uses to
     // size the GPU grid. Exposed statically so editor-side gizmos can
     // preview the exact probe layout without a live feature instance.
-    static void ComputeProbeGridLayout(const float gridSizeWS[3], int32_t probesLongAxis,
+    static void ComputeProbeGridLayout(const Mathematics::Vector3& gridSizeWS, int32_t probesLongAxis,
                                        int32_t outCounts[3]);
 
     // World-space half-extents of a DDGIVolume whose entity has the given
@@ -397,7 +403,7 @@ class DDGIProbeFeature final : public IRenderFeature
     // with itself. Degenerate (zero/negative) scale clamps to a small
     // positive extent so a collapsed transform cannot produce an empty or
     // inverted grid.
-    static void ComputeVolumeHalfExtents(const float worldMatrix[16], float outHalfExtents[3]);
+    static Mathematics::Vector3 ComputeVolumeHalfExtents(const Mathematics::Matrix4x4& worldMatrix);
 
     // Centre for a DDGIVolumeFit::FollowCamera volume: `cameraWS` quantised to
     // whole probe cells of the grid `gridSizeWS`/`probesLongAxis` describes.
@@ -411,10 +417,8 @@ class DDGIProbeFeature final : public IRenderFeature
     // Exposed statically for the same reason as the two above: the editor
     // gizmo must draw the box the feature actually samples, and a followed
     // volume's box is not the one on the entity's transform.
-    // `gridSizeWS` stays a raw array because it is read straight off
-    // DDGIVolumeDesc, whose layout mirrors the GPU-side UBO.
     static Mathematics::Vector3 SnapCentreToProbeGrid(const Mathematics::Vector3& cameraWS,
-                                                      const float gridSizeWS[3],
+                                                      const Mathematics::Vector3& gridSizeWS,
                                                       int32_t probesLongAxis);
 
   private:
@@ -606,7 +610,7 @@ class DDGIProbeFeature final : public IRenderFeature
     // `depthTile` is the depth-moment tile edge the volume's DepthResolution
     // resolves to this tick (kTile or kDepthTileFine); a change reallocates
     // through the same idle gate a probe-count change does.
-    bool EnsureCascadeGpuResources(CascadeGrid& grid, const float gridSizeWS[3], int32_t probesLongAxis,
+    bool EnsureCascadeGpuResources(CascadeGrid& grid, const Mathematics::Vector3& gridSizeWS, int32_t probesLongAxis,
                                    int32_t rawRaysPerProbe, int32_t depthTile, float deltaTimeSeconds,
                                    const CascadeDebugNames& names);
     void ReleaseCascadeGpuResources(CascadeGrid& grid);
@@ -616,15 +620,15 @@ class DDGIProbeFeature final : public IRenderFeature
     // and probe-state clears — see ddgi_clear.comp's doc on why one generic
     // kernel serves all three.
     void DispatchClear(Rendering::RenderGraph::RGFrame& frame, Rendering::BufferHandle target,
-                       uint32_t elementCount, const float fillValue[4], const char* passName);
+                       uint32_t elementCount, const Mathematics::Vector4& fillValue, const char* passName);
 
     // Shared implementation behind UploadVolumeData/UploadVolumeDataFine —
     // uploads ONE cascade's DDGIVolumeData UBO element (Includes/ddgi_probes.glsl)
     // from `grid`'s resolved probe count/cell size plus the given world-space
     // placement. A member function (not an anonymous-namespace free function
     // in the .cpp) because CascadeGrid is private.
-    Rendering::BufferHandle UploadCascadeVolumeData(CascadeGrid& grid, const float gridMinWS[3],
-                                                     const float gridSizeWS[3], float normalBiasScale,
+    Rendering::BufferHandle UploadCascadeVolumeData(CascadeGrid& grid, const Mathematics::Vector3& gridMinWS,
+                                                     const Mathematics::Vector3& gridSizeWS, float normalBiasScale,
                                                      float intensity, bool convergedEnabled,
                                                      bool glossyEnabled, float reflectionIntensity,
                                                      const DDGIGlossyAtlasLayout& glossyLayout,
@@ -733,7 +737,7 @@ class DDGIProbeFeature final : public IRenderFeature
     // window against a cascade's cursor that DeclareCascadeGridPasses has
     // already advanced.
     void DeclareCascadeGridPasses(Rendering::RenderGraph::RGFrame& frame, CascadeGrid& grid,
-                                  const float gridMinWS[3], const float gridSizeWS[3],
+                                  const Mathematics::Vector3& gridMinWS, const Mathematics::Vector3& gridSizeWS,
                                   const SharedTickInputs& shared, const CascadeDebugNames& names,
                                   uint32_t* outProbeBaseThisTick = nullptr,
                                   uint32_t* outProbesThisTick = nullptr);
@@ -822,8 +826,8 @@ class DDGIProbeFeature final : public IRenderFeature
     bool AllocateReflectionCascade(const CascadeGrid& grid, ReflectionCascade& refl,
                                    const char* debugPrefix, bool allocateGlossy);
     void DeclareReflectionPasses(Rendering::RenderGraph::RGFrame& frame, CascadeGrid& grid,
-                                 ReflectionCascade& refl, const float gridMinWS[3],
-                                 const float gridSizeWS[3], uint32_t probeBaseThisTick,
+                                 ReflectionCascade& refl, const Mathematics::Vector3& gridMinWS,
+                                 const Mathematics::Vector3& gridSizeWS, uint32_t probeBaseThisTick,
                                  uint32_t probesThisTick, const SharedTickInputs& shared,
                                  const CascadeDebugNames& names);
 

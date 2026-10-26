@@ -4,6 +4,7 @@
 #include "Inspectors/InspectorColorSwatchRow.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/Particles/ParticleStackEditor.h"
+#include "Panels/ColorPicker.h"
 #include "Particles/ParticleParameterAccess.h"
 #include "Types/Color.h"
 #include "UI/Controls/CurveField.h"
@@ -30,7 +31,6 @@ namespace
 using namespace Particles;
 
 constexpr float kCurveHeadroom = 0.1f;
-constexpr float kColorPickerMaxIntensity = 8.0f;
 
 // The field of one processor a row edits: writes go through the editor as a function of the
 // document, so an undo or a rebuild never holds a pointer into it.

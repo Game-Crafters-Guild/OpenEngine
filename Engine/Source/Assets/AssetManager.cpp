@@ -2343,6 +2343,9 @@ void AssetManager::CheckForReloads()
         }
     }
 
+    if (!toReload.empty())
+        FilesChanged.Invoke(toReload);
+
     std::vector<GUID> timestampCandidates;
     const auto now = std::chrono::steady_clock::now();
     if (now - m_LastTimestampReloadCheck >= kTimestampReloadCheckInterval)

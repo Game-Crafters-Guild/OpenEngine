@@ -68,8 +68,10 @@
 #include "TerrainGrass/RegisterTerrainGrass.h"
 #include "Ocean/Systems/RegisterOceanSystems.h"
 #include "MarkupECS/MarkupService.h"
+#include "SplineECS/SplineNetwork.h"
 #include "SplineECS/SplineService.h"
 #include "SplineECS/Systems/RegisterSplineSystems.h"
+#include "SplineRecipes/SplineRecipeSystem.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Systems/RegisterPathfindingSystems.h"
 // ECS integration
@@ -83,6 +85,7 @@
 #include "ECS/Entity.h"
 #include "ECS/SystemScheduling.h"
 #include "ECS/World.h"
+#include "Scene/PrefabLibrary.h"
 #include "Scene/SceneSchemaRegistry.h" // built-in schema registration, C12 load-abort purge
 #include "Engine/Rendering/FrameOrchestrator.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -274,6 +277,8 @@ const WorldServiceLifecycle kWorldServices[] = {
      &TerrainECS::TerrainService::Shutdown},
     {&SplineECS::SplineService::IsInitialized, &SplineECS::SplineService::Initialize,
      &SplineECS::SplineService::Shutdown},
+    {&SplineECS::SplineNetwork::IsInitialized, &SplineECS::SplineNetwork::Initialize,
+     &SplineECS::SplineNetwork::Shutdown},
     {&MarkupECS::MarkupService::IsInitialized, &MarkupECS::MarkupService::Initialize,
      &MarkupECS::MarkupService::Shutdown},
     {&PathfindingECS::NavigationService::IsInitialized, &PathfindingECS::NavigationService::Initialize,
@@ -612,6 +617,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         return false;
     }
     Logger::Log::Info("[Startup] AssetManager: {:.1f}ms", MsSince(tPhase));
+    m_PrefabLibrary = MakeUnique<Scene::PrefabLibrary>(*m_AssetManager);
 
     // Native C++ user-script manager (watches sources; build/load pipeline lands in C10+).
     // After AssetManager + FileWatchingService so its watch subscriptions are valid.
@@ -1140,6 +1146,7 @@ void EngineCore::Shutdown()
         Logger::Log::Info("Audio system shutdown");
     }
 
+    m_PrefabLibrary.reset();
     if (m_AssetManager)
     {
         // If we registered the rendering hot-reload bridge, unregister it before tearing down assets
@@ -1269,6 +1276,9 @@ void EngineCore::Update(float64 deltaTime)
     {
         m_AssetManager->Update();
     }
+    // The library's frame boundary, after the reloads the update completed.
+    if (m_PrefabLibrary)
+        m_PrefabLibrary->CollectAtFrameBoundary();
 
     // Update audio system once per frame on the main thread.
     if (m_AudioSystem)
@@ -1499,6 +1509,7 @@ bool EngineCore::EnableRenderingLoop(Engine::Renderer::RenderServices* renderSer
             {"RenderExtraction", "TerrainExtraction"},
             renderServices ? renderServices->GetDevice() : nullptr, renderServices);
         SplineECS::AddSplineSystemsToSchedule(schedule);
+        SplineRecipes::AddSplineRecipeSystemsToSchedule(schedule, renderServices);
         PathfindingECS::AddPathfindingSystemsToSchedule(schedule);
         // Associate contributions with their plugin so reload reconciliation
         // can replace or retire that plugin's systems.

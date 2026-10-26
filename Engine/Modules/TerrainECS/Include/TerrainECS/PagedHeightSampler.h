@@ -23,6 +23,8 @@ class PageCache;
 namespace GameEngine::TerrainECS
 {
 
+class PageTable;
+
 /// The physical cache texture of one field: square-packed slots of kPageStrideSamples texels a side
 /// (each page's owned samples and its apron).
 struct PageCacheGeometry
@@ -52,21 +54,6 @@ struct PageTexel
 /// (BuildPageStoreLevels): level-0 sample i sits at i / (samples - 1), level-L sample j at
 /// level-0 sample j * 2^L.
 PageTexel LocatePageTexel(std::span<const PageStreaming::PageStoreLevel> levels, uint32 level, float32 u, float32 v);
-
-/// The page table of one field: one entry per page of every level (PackPageEntry(slot, level) when
-/// resident, kNoPage when not) and the arrival fade of each slot. The GPU holds the entries as a
-/// mip-mapped R32UI texture, level N of the table the pages of pyramid level N.
-struct PageTable
-{
-    std::vector<PageStreaming::PageStoreLevel> Levels; ///< the field's pyramid (BuildPageStoreLevels)
-    std::vector<uint32> Entries;                       ///< every level's pages, level-major, row-major
-    std::vector<float32> SlotFade;                     ///< per slot: 0 just assigned, 1 settled
-
-    /// An empty table (every entry kNoPage) for a field of samplesX x samplesZ and slotCount slots.
-    void Reset(uint32 samplesX, uint32 samplesZ, uint32 slotCount);
-    uint32 Entry(uint32 level, uint32 pageX, uint32 pageZ) const;
-    void SetEntry(uint32 level, uint32 pageX, uint32 pageZ, uint32 entry);
-};
 
 /// Brings `table`, stream `stream`'s page table, up to date with this frame of its field's `cache`:
 /// the entries of the stream's pages that were assigned or released, and the fades of the slots of

@@ -97,6 +97,7 @@ void RegisterBuiltInInspectors()
     RegisterWindVolumeInspector();
     RegisterNavigationAgentInspector();
     RegisterNavigationSurfaceInspector();
+    RegisterSplineRecipeInspectors();
     RegisterNavigationSourceComponentTraits();
     RegisterBloomEffectInspector();
     RegisterChromaticAberrationEffectInspector();

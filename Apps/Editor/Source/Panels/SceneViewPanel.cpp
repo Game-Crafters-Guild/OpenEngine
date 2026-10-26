@@ -11,7 +11,6 @@
 #include "UI/EditorIcons.h"
 #include "UI/StyleProperties.h"
 #include "Core/Engine.h"
-#include "Editor/Assets/AssetRelativePath.h"
 #include "Core/Application.h"
 #include "Core/CpuProfiler.h"
 #include "Assets/AssetCreation.h"
@@ -74,7 +73,7 @@
 #include "Components/Hierarchy.h"
 #include "Components/Measure/MeasureComponent.h"
 #include "Components/Name.h"
-#include "Components/SceneBlueprintInstance.h"
+#include "Components/PrefabInstance.h"
 #include "Components/Transform.h"
 #include "ECS/Components.h"
 #include "ECS/ComponentFieldRegistry.h"
@@ -4420,18 +4419,9 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             world->AddComponentImmediate(e, dropXf);
         }
 
-        Components::SceneBlueprintInstance inst{};
-        std::memset(inst.sourcePath, 0, sizeof(inst.sourcePath));
-        std::memset(inst.sourceGuid, 0, sizeof(inst.sourceGuid));
-        // Drop payloads carry registry paths, which are folded on
-        // case-insensitive platforms while the root carries its own spelling;
-        // a lexical subtraction compares case and would persist an absolute
-        // path into the scene file.
-        std::string relStr = Editor::TryMakeAssetRelativePathString(
-            EngineCore::GetInstance().GetAssetManager(), absPath);
-        if (relStr.empty())
-            relStr = absPath.generic_string();
-        std::strncpy(inst.sourcePath, relStr.c_str(), sizeof(inst.sourcePath) - 1);
+        // The marker names the source by GUID; the next load fills the instance from it.
+        Components::PrefabInstance inst{};
+        inst.Source = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(absPath);
         world->AddComponentImmediate(e, inst);
         Editor::AppendUnorderedRootsToHierarchyEnd(*world, std::span(&e, 1));
         droppedRoots.push_back(e);

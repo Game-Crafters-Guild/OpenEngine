@@ -3,7 +3,9 @@
 #include "Assets/RenderPipelineAsset.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
 #include "Rendering/CameraTypes.h"
+#include "Types/FlatMap.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -256,6 +258,14 @@ class RenderPipelineInstance
     PipelineBufferBindingRG MaterializeBuffer(Rendering::RenderGraph::RGFrame& frame,
                                               Rendering::ViewId viewId, const std::string& name,
                                               uint32_t renderW, uint32_t renderH);
+    // A "perFrameCopies" buffer: this frame's copy, which starts as the previous frame's contents.
+    PipelineBufferBindingRG MaterializeBufferCopies(Rendering::RenderGraph::RGFrame& frame,
+                                                    const std::string& name, const std::string& poolName,
+                                                    Rendering::BufferDesc desc);
+    static void DeclareBufferCarry(Rendering::RenderGraph::RGFrame& frame,
+                                   Rendering::RenderGraph::RGBuffer previous,
+                                   Rendering::RenderGraph::RGBuffer current, size_t sizeBytes,
+                                   const char* passName);
     struct ResourceDescription;
     const ResourceDescription* FindResourceDescription(const std::string& name) const;
 
@@ -286,6 +296,23 @@ class RenderPipelineInstance
 
     // RenderGraph path: the per-frame blackboard (reset at the top of every Declare).
     PipelineFrameResources m_FrameResources;
+
+    // Copies of each "perFrameCopies" buffer: one per frame the device can keep in flight.
+    static constexpr uint32_t kBufferCopies = Rendering::IDevice::kMaxSupportedFramesInFlight;
+    // The copy a view's buffer used in the last frame that declared it, and the names built once
+    // when the buffer is first declared: each copy's pool name and the two passes' names.
+    struct BufferCopiesState
+    {
+        std::array<std::string, kBufferCopies> CopyNames;
+        std::string CarryPassName;
+        std::string ZeroInitPassName;
+        uint64_t Frame = 0;
+        uint32_t Current = 0;
+        uint32_t Previous = 0;
+        bool HasFrame = false;
+        bool HasPrevious = false;
+    };
+    FlatMap<std::string, BufferCopiesState> m_BufferCopies; // keyed by the buffer's pool name
 
     // Late declares queued during the current Declare's node loop (cleared
     // with the blackboard at the top of every Declare).

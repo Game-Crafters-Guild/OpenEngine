@@ -115,3 +115,75 @@ kStringLiteral = re.compile(r'"(?:\\.|[^"\\])*"')
 def strip_strings(code):
     """Blanks string literals so a keyword inside a message is not a site."""
     return kStringLiteral.sub('""', code)
+
+
+def literal_end(raw, index):
+    """Returns the index after the string or character literal that opens at raw[index], or the line's end when it does not close."""
+    quote = raw[index]
+    index += 1
+    while index < len(raw):
+        if raw[index] == "\\":
+            index += 2
+            continue
+        if raw[index] == quote:
+            return index + 1
+        index += 1
+    return len(raw)
+
+
+def is_digit_separator(raw, index):
+    """True when the ' at raw[index] separates digits, as in 1'000, and does not open a character literal, as in L'x'."""
+    before = raw[index - 1] if index > 0 else ""
+    after = raw[index + 1] if index + 1 < len(raw) else ""
+    closing = raw[index + 2] if index + 2 < len(raw) else ""
+    return before.isalnum() and after.isalnum() and closing != "'"
+
+
+def comment_lines(lines):
+    """Yields (line_number, comment_text, code_text): the text of the line's // and /* */ comments joined, and the rest of the line.
+    comment_text is None on a line with no comment, and "" on an empty line inside a block comment. A comment marker inside a
+    string, character or raw string literal is code."""
+    in_block_comment = False
+    raw_string_end = None
+    for line_number, raw in enumerate(lines, 1):
+        comment = []
+        code = []
+        has_comment = in_block_comment
+        index = 0
+        while index < len(raw):
+            if raw_string_end is not None:
+                end = raw.find(raw_string_end, index)
+                stop = len(raw) if end < 0 else end + len(raw_string_end)
+                code.append(raw[index:stop])
+                raw_string_end = raw_string_end if end < 0 else None
+                index = stop
+                continue
+            if in_block_comment:
+                end = raw.find("*/", index)
+                comment.append(raw[index:] if end < 0 else raw[index:end])
+                in_block_comment = end < 0
+                index = len(raw) if end < 0 else end + 2
+                continue
+            if raw.startswith("//", index):
+                comment.append(raw[index + 2:])
+                has_comment = True
+                break
+            if raw.startswith("/*", index):
+                in_block_comment = True
+                has_comment = True
+                index += 2
+                continue
+            opening = kRawStringOpening.match(raw, index) if raw[index] in "uULR" else None
+            if opening:
+                code.append(raw[index:opening.end()])
+                raw_string_end = ")" + opening.group(1) + '"'
+                index = opening.end()
+                continue
+            if raw[index] == '"' or (raw[index] == "'" and not is_digit_separator(raw, index)):
+                end = literal_end(raw, index)
+                code.append(raw[index:end])
+                index = end
+                continue
+            code.append(raw[index])
+            index += 1
+        yield line_number, " ".join(comment) if has_comment else None, "".join(code)

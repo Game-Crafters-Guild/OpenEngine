@@ -3,6 +3,8 @@
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialRegistry.h"
 #include "Engine/Rendering/MaterialSystem.h"
+#include "Mathematics/Vector3.h"
+#include "Types/Color.h"
 #include "Types/StringId.h"
 
 namespace GameEngine::Engine::Renderer
@@ -36,11 +38,13 @@ void DDGIEmitterMaterials::Refresh(const MaterialSystem& materials)
             const uint32_t slotIndex = material.GetGpuSceneMaterialIndex();
             if (slotIndex == kUnassignedMaterialSlot)
                 return;
-            float tint[3] = {0.0f, 0.0f, 0.0f};
-            material.GetVector(kEmissiveColorName, tint, 3);
+            // Material::GetVector fills raw lanes; the tint is a scene-linear color.
+            Mathematics::Vector3 tintLanes(0.0f, 0.0f, 0.0f);
+            material.GetVector(kEmissiveColorName, tintLanes.v, 3);
+            const ColorLinear tint(tintLanes.x, tintLanes.y, tintLanes.z);
             const float nits = material.GetFloat(kEmissionLuminanceName, 0.0f);
-            const DDGIEmissive emissive = ComputeDDGIEmissive(tint[0], tint[1], tint[2], nits);
-            if (!(emissive.Color[0] > 0.0f || emissive.Color[1] > 0.0f || emissive.Color[2] > 0.0f))
+            const DDGIEmissive emissive = ComputeDDGIEmissive(tint, nits);
+            if (!(emissive.Color.r > 0.0f || emissive.Color.g > 0.0f || emissive.Color.b > 0.0f))
                 return;
             if (slotIndex >= m_BySlot.size())
                 m_BySlot.resize(slotIndex + 1);

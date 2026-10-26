@@ -91,9 +91,9 @@ ParticleSubEmitter: element struct, mirrored inside its owner
 ParticleWorldSettings: game data, a full mirror
 PolyhavenPlaceholder: editor-only, no mirror (@ge-editor-only)
 PostProcessVolume: game data, a full mirror
+PrefabInstance: engine-internal, no mirror (@ge-engine-internal)
 ReflectionProbe: game data, a full mirror
 RuntimeOnlyEntity: engine-internal, no mirror (@ge-engine-internal)
-SceneBlueprintInstance: engine-internal, no mirror (@ge-engine-internal)
 SceneEntityTag: engine-internal, no mirror (@ge-engine-internal)
 SceneSubsceneInstance: engine-internal, no mirror (@ge-engine-internal)
 SceneViewHidden: game data, a full mirror
@@ -112,6 +112,9 @@ SplineExtrude: game data, a full mirror
 SplineFence: game data, a full mirror
 SplineFenceSpanPiece: engine-internal, no mirror (@ge-engine-internal)
 SplineGroundProvisioned: game data, a full mirror
+SplineNetworkMember: game data, a full mirror
+SplineNetworkOverride: element struct, mirrored inside its owner
+SplineNetworkOverrides: game data, a full mirror
 SplinePlacement: game data, a full mirror
 SplineSpanOverride: element struct, mirrored inside its owner
 SplineWall: game data, a full mirror

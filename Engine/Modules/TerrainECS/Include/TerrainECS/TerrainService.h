@@ -391,6 +391,13 @@ struct TiledTerrainConfig
     uint32 TilesPerAxisZ = 0;
 };
 
+/// How the surface stream shows a changed surface rect: an edit at once, a refinement faded in.
+enum class SurfaceRefreshReason : uint8
+{
+    Edit,
+    Refinement,
+};
+
 // All data for a tiled terrain: the tile grid and the whole-terrain fields built over it.
 struct TiledTerrainData
 {
@@ -511,6 +518,14 @@ struct TiledTerrainData
     bool PageOverlayOffGrid = false;
     bool PageOverlayRefusedOffGrid = false;
 
+    // Surface pages (TerrainModifierSystem): each bake that changes the surface increments SurfaceVersion
+    // and sets the level-0 sample rect it changed relative to SurfaceChangedSince.
+    // The surface pages that read SurfaceChanged bake again (TerrainSurfacePageDriver).
+    uint64 SurfaceVersion = 0;
+    PageStreaming::PageSampleRect SurfaceChanged;
+    uint64 SurfaceChangedSince = 0;
+    SurfaceRefreshReason SurfaceRefresh = SurfaceRefreshReason::Edit;
+
     /// True when the terrain has height pages and its overlay is neither built nor refused: the
     /// modifier system bakes it at its next update.
     bool AwaitsPageOverlay() const
@@ -519,6 +534,13 @@ struct TiledTerrainData
                !PageOverlayRefusedOffGrid;
     }
 };
+
+// The world position of the first sample of tile `tile` along one axis, for a terrain whose tile 0
+// starts at `terrainOrigin`. Every tile and every surface page place their samples from it.
+inline float32 TileWorldOrigin(float32 terrainOrigin, int32 tile, float32 tileWorldSize)
+{
+    return terrainOrigin + static_cast<float32>(tile) * tileWorldSize;
+}
 
 // Handle to a tiled terrain within TerrainService.
 struct TiledTerrainHandle

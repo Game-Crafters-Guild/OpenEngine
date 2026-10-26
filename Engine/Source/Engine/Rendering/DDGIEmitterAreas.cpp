@@ -112,10 +112,10 @@ void DDGIEmitterAreas::Update(const Rendering::MeshGPURegistry& registry,
             geometry->Vertices.size() < 3 ||
             (!geometry->Indices.empty() && geometry->Indices.size() < 3))
             continue;
-        std::array<float, 9> linear{};
-        for (size_t column = 0; column < 3; ++column)
-            for (size_t row = 0; row < 3; ++row)
-                linear[column * 3 + row] = instance.transform.Data()[column * 4 + row];
+        Mathematics::Matrix3x3 linear;
+        for (int column = 0; column < 3; ++column)
+            for (int row = 0; row < 3; ++row)
+                linear[column][row] = instance.transform[column][row];
         while (previous != m_Entries.end() && previous->InstanceIndex < index)
             ++previous;
         const bool cached = previous != m_Entries.end() && previous->InstanceIndex == index;
@@ -123,7 +123,7 @@ void DDGIEmitterAreas::Update(const Rendering::MeshGPURegistry& registry,
         entry.InstanceIndex = index;
         if (!cached || entry.MeshIndex != instance.meshIndex ||
             entry.ContentHash != source.ContentHash || entry.RegistryRevision != m_Revision ||
-            entry.LinearTransform != linear)
+            entry.LinearTransform.GetGLM() != linear.GetGLM())
         {
             entry.MeshIndex = instance.meshIndex;
             entry.ContentHash = source.ContentHash;

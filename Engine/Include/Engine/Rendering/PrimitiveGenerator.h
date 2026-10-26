@@ -10,9 +10,10 @@
 //   - Generate vertex/index data for each primitive type
 //   - Provide well-known GUIDs for each primitive
 //   - Register all primitives in MeshGPURegistry
+//   - Keep one CPU mesh per primitive for CPU raycasts (CachedMeshByGuid)
 //
 // Ownership:
-//   - Stateless utility (generation functions are static).
+//   - Generation functions are static and stateless.
 //   - GPU resources are owned by MeshGPURegistry after registration.
 
 #include "AssetCore/GUID.h"
@@ -39,10 +40,9 @@ class PrimitiveGenerator
     static GUID SphereGuid();
     static GUID CapsuleGuid();
     static GUID PlaneGuid();
-    /// Same XZ quad as Plane with normal +Y, but with sprite-oriented UVs so
-    /// the first image row (PNG top-of-file via STBi) aligns with billboard
-    /// "screen up" after rotating the quad for 2D cameras (fixes upside-down
-    /// sprites without double-sided materials).
+    /// One quad: the Plane's 1 m XZ square, normal +Y and winding, with sprite-oriented
+    /// UVs. The first image row (the top of a PNG) is billboard "screen up" after the quad
+    /// is rotated for a 2D camera.
     static GUID PlaneSpriteUvGuid();
     /// The default ground: the Plane's 1 m XZ square, normal, UV layout and winding,
     /// cut into 120 x 120 cells, so a ground scaled to 6000 m has 50 m cells.
@@ -55,9 +55,11 @@ class PrimitiveGenerator
     static Mesh GenerateCube(float halfExtent = 0.5f);
     static Mesh GenerateSphere(float radius = 0.5f, uint32_t segments = 64, uint32_t rings = 32);
     static Mesh GenerateCapsule(float radius = 0.5f, float halfHeight = 0.5f, uint32_t segments = 32, uint32_t rings = 8);
+    /// The XZ square facing +Y, cut into 32 x 32 cells so a Plane scaled to a large
+    /// floor draws steady near the camera.
     static Mesh GeneratePlane(float halfExtent = 0.5f);
-    /// GeneratePlane geometry with sprite-oriented UV coordinates (same geometry
-    /// and winding).
+    /// The Plane's square, normal and winding as a single quad (two triangles), with
+    /// sprite-oriented UV coordinates.
     static Mesh GeneratePlaneSpriteUv(float halfExtent = 0.5f);
 
     /// Generate the primitive that a well-known GUID names, at its default size.
@@ -89,6 +91,12 @@ class PrimitiveGenerator
 
     // Check if a GUID is a known primitive.
     static bool IsPrimitive(const GUID& guid);
+
+    /// The process-wide CPU mesh of the primitive a well-known GUID names, generated on the first
+    /// call (GenerateByGuid) and kept for the process. Null when the GUID is not a primitive.
+    /// Primitives are not ModelAssets, so a CPU raycast reads their geometry here. Thread-safe;
+    /// the pointer stays valid for the process.
+    static const Mesh* CachedMeshByGuid(const GUID& guid);
 
     // Create a fully populated MeshRenderer component for a primitive mesh.
     // Sets meshGpuHandleId (if rs available), modelAssetGuid, and materialAssetGuid.

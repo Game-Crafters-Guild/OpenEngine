@@ -89,7 +89,7 @@ bool StripEditorOnlyComponentsFromStagedScenes(const std::filesystem::path& cont
     {
         if (cancelRequested && cancelRequested())
             return false;
-        if (entry.type != AssetType::Scene)
+        if (entry.type != AssetType::Scene && entry.type != AssetType::Prefab)
             continue;
         std::string reason;
         if (!StripStagedScene(contentRoot / entry.outputPath, editorOnly, reason))

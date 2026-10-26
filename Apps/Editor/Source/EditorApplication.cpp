@@ -211,10 +211,10 @@
 #include "Markups/MarkupEditorBridge.h"
 #include "Markups/MarkupEditorSurfaces.h"
 #include "SceneView/BuiltInSceneViewTools.h"
-#include "Placement/RecipeControllers.h"
 #include "PlayMode/PlayModeEntryModal.h"
 #include "PlayMode/PlayModeManager.h"
 #include "PlayMode/GameViewPointerLock.h"
+#include "PlayMode/WindowCursorLock.h"
 #include "PlayMode/RuntimeInputConnection.h"
 #include "Scene/SceneEditorController.h"
 #include "Scene/SceneThumbnailCapture.h"
@@ -1518,18 +1518,13 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
     // queued startup scene to be requested.
     m_SceneEditor->SetBootFlowActiveProbe(
         [this]() { return ShouldIdleWorldPathForProjectPicker() || !m_DeferredStartupSceneWorkspace.empty(); });
-    // The recipe controllers' generated entities are scoped to the open scene
-    // (RecipeControllers::ReleaseSceneScoped). Release them at the swap, while the
-    // outgoing world is still the one they describe. Wired here rather than at the
-    // panel-construction site because a scene can be swapped with no panel in
-    // play (--scene, MCP open_scene).
+    // The editor services release their scene-scoped state at a swap, against the
+    // outgoing world. Wired here, not at panel construction: a scene can swap with
+    // no panel (--scene, MCP open_scene).
     m_SceneEditor->SetSceneScopedGeneratorRelease([this]()
     {
-        auto* world = EngineCore::GetInstance().EnsurePrimaryWorld();
-        if (!world)
-            return;
-        if (m_RecipeControllers)
-            m_RecipeControllers->ReleaseSceneScoped(*world, MainRenderServices());
+        if (auto* world = EngineCore::GetInstance().EnsurePrimaryWorld())
+            m_EditorServices.ReleaseSceneScoped(*world);
     });
     Editor::RegisterAssetPipelineCommands([this]() -> std::optional<std::filesystem::path>
     {
@@ -2547,6 +2542,7 @@ bool EditorApplication::Initialize()
             {
                 if (auto* rgBuild = sm->GetSystem<Engine::Renderer::RenderGraphBuildSystem>())
                     rgBuild->SetSkipFrameGraphBuild(true);
+                m_EditorServices.Start({m_UndoRedo.get(), *sm});
             }
         }
 
@@ -2822,7 +2818,8 @@ bool EditorApplication::Initialize()
             Editor::ApplySavedHiDpiPlatformSettings(main->uiPlatform.get());
 
             // Set cursor callback to change OS cursor based on hovered UI element's CSS cursor property.
-            SetupUICursorCallback(main->ui.get(), main->window.get());
+            main->cursorLock = std::make_unique<Editor::WindowCursorLock>(*main->window);
+            SetupUICursorCallback(main->ui.get(), main->window.get(), main->cursorLock.get());
         }
 
         // Wire tooltip settings into UIManager so it respects user preferences.
@@ -6674,19 +6671,6 @@ void EditorApplication::Update(float64 deltaTime)
         }
     }
 
-    // Maintain what the recipe components on splines generate, and the terrain
-    // effects under a generated run (Placement/RecipeControllers.h).
-    {
-        GE_CPU_PROFILE_SCOPE("EditorApplication.Update.RecipeControllers");
-        if (auto* world = EngineCore::GetInstance().EnsurePrimaryWorld())
-        {
-            if (!m_RecipeControllers)
-                m_RecipeControllers = std::make_unique<Editor::RecipeControllers>();
-            m_RecipeControllers->Update(*world, MainRenderServices(), m_UndoRedo.get(),
-                                        static_cast<float>(deltaTime));
-        }
-    }
-
     // Drive scene document UX (Ctrl+S save/save-as, dirty prompt, scene open requests).
     if (m_SceneEditor)
     {
@@ -6941,7 +6925,7 @@ void EditorApplication::Update(float64 deltaTime)
 
         if (m_RuntimeInput)
             m_GameViewPointerLock->Update(*m_RuntimeInput,
-                                          gameViewHost ? gameViewHost->window.get() : nullptr,
+                                          gameViewHost ? gameViewHost->cursorLock.get() : nullptr,
                                           m_PlayMode &&
                                               m_PlayMode->GetState() == GameEngine::Editor::PlayModeState::Play);
     }
@@ -8155,7 +8139,8 @@ void EditorApplication::Render()
             }
             if (win && win->window)
             {
-                m_GameViewPointerLock->ForgetWindow(win->window.get());
+                m_GameViewPointerLock->ForgetCursorLock(win->cursorLock.get());
+                win->cursorLock.reset();
                 win->window->Destroy();
                 win->window.reset();
             }
@@ -8204,7 +8189,7 @@ WindowInputRouterConfig::PlaySurface EditorApplication::GetPlaySurface(Platform:
             return surface;
         surface.gameplaySink = m_RuntimeInput.get();
         surface.gameUi = win->gameView ? win->gameView->GetGameUI() : nullptr;
-        surface.pointerLocked = m_GameViewPointerLock->IsLockedTo(window);
+        surface.pointerLocked = m_GameViewPointerLock->IsLockedTo(win->cursorLock.get());
         // The mapper maps from the context resolved here instead of finding the
         // window again. Holding it raw is safe because a surface is built and
         // spent inside one routing call (WindowInputRouter::RouteMouseMove), with
@@ -8336,6 +8321,9 @@ void EditorApplication::OnShutdown()
     // and with it every ECS system holding a subscription.
     FileWatchingService::GetInstance().StopWatching();
 
+    // The editor services hold systems of the schedule; they go before the loop
+    // destroys the systems.
+    m_EditorServices.Stop();
     // Disable engine-managed rendering loop early so ECS rendering systems
     // can no longer submit GPU work during teardown.
     EngineCore::GetInstance().DisableRenderingLoop();
@@ -8504,6 +8492,9 @@ void EditorApplication::OnShutdown()
         // Window
         if (win->window)
         {
+            if (m_GameViewPointerLock)
+                m_GameViewPointerLock->ForgetCursorLock(win->cursorLock.get());
+            win->cursorLock.reset();
             win->window->Destroy();
             win->window.reset();
         }
@@ -8613,7 +8604,7 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
     }
     if (routing.gvPanel && ctx->ui)
         routing.gvPanel->PrepareForFirstMount(ctx->ui.get());
-    routing.forceGameViewRecord = ctx->gameView && ctx->gameView->GetMovieCapture().IsRecording();
+    routing.forceGameViewRecord = ctx->gameView && ctx->gameView->GetMovieCapture().IsSessionOpen();
     if (routing.rg2Scene && ctx->gameView)
     {
         if (routing.forceGameViewRecord)

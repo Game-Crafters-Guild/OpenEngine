@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <optional>
 #include <shared_mutex>
 #include <span>
 #include <tuple>
@@ -26,6 +27,8 @@ namespace ECS {
 // Forward declarations
 class World;
 class UnresolvedComponentStore; // ECS/UnresolvedComponentStore.h
+class ClonePlan;                // ECS/ClonePlan.h
+class EntityRemap;              // ECS/EntityRemap.h
 struct ScriptWritableRange;     // ECS/ComponentFieldRegistry.h
 struct ComponentLayoutChange;   // ECS/ComponentMigration.h
 struct FieldByteMove;           // ECS/ComponentMigration.h
@@ -384,6 +387,10 @@ public:
     ~World();
 
     uint64 GetWorldId() const { return m_WorldId; }
+    /// The entity handle epoch (GetEntityHandleEpoch) of the world with id `worldId` (GetWorldId),
+    /// or nullopt when no such world exists in this process. Main thread: the epoch is read
+    /// without the world's lock.
+    static std::optional<uint64> FindLiveEntityHandleEpoch(uint64 worldId);
 
     // Side-table of scene components whose type was not registered at load time (e.g. a user
     // native module still compiling). Preserved verbatim so a save round-trips them, and the
@@ -678,6 +685,38 @@ public:
 
     // Batch create entities from bundle
     std::vector<EntityHandle> CreateBatchFromBundle(size_t count, const ComponentBundle& bundle);
+
+    /**
+     * Plans copies of `entities` of this world for CreateBatchFromWorld: the
+     * entities grouped by archetype and every entity field of their rows
+     * (Parent, and each reflected EntityHandle field) with the entity of the
+     * list it names. A field that names an entity outside the list is copied
+     * as the invalid handle. A source entity listed k times yields k copies;
+     * copy k's fields point at copy k's entities (see ClonePlan).
+     *
+     * Returns false and leaves `plan` empty when an entity is not alive.
+     * The world must not be written during the call.
+     */
+    [[nodiscard]] bool PlanClone(std::span<const EntityHandle> entities, ClonePlan& plan) const;
+
+    /**
+     * Creates one entity in this world for each entry of `plan`, a copy of
+     * its row in `source`, the world the plan was built from: every
+     * component's bytes, then every entity field re-pointed as the plan says.
+     * Rows are copied a chunk run at a time: one memcpy per column for each
+     * run of rows consecutive in a source chunk and in a target chunk. The
+     * source's preserved unknown components and fields are copied with the
+     * rows.
+     *
+     * One lock of this world, one reserve and one Added batch per archetype, so
+     * lifecycle consumers see ordinary adds. Add hooks are not run, as for
+     * CreateBatchFromBundle. Entities are created in plan order.
+     *
+     * `source` must be another world and must not be written during the call.
+     * Returns false and creates nothing when `source` is not the plan's world,
+     * or a planned entity is no longer alive or has changed archetype.
+     */
+    [[nodiscard]] bool CreateBatchFromWorld(const World& source, const ClonePlan& plan, EntityRemap& remap);
 
     // Component operations (thread-safe, deferred by default) -
     // implementations in WorldTemplateImplementations.inl
@@ -1380,6 +1419,11 @@ private:
 
     // Create entity without acquiring mutex (for internal use when mutex is already held)
     EntityHandle CreateEntityUnsafe();
+    // CreateBatchFromWorld's row copy, with worldMutex held: puts the entities of plan group
+    // `group` in `target` as runs of consecutive rows, and copies with one memcpy per column
+    // each part of a run whose source rows are consecutive in one source chunk.
+    void CopyGroupRows(const World& source, const ClonePlan& plan, uint32 group, Archetype& target,
+                       const EntityRemap& remap);
     // The version the next entity in `index` takes: one past the highest the slot issued in
     // this run of handles. Caller holds worldMutex.
     EntityVersion NextIssuedVersion(EntityIndex index) const;

@@ -1132,16 +1132,17 @@ if(EMSCRIPTEN)
     add_subdirectory(Engine/Modules/SplineGeometry)
     add_subdirectory(Engine/Modules/SplineLayout)
     add_subdirectory(Engine/Modules/SplineECS)
+    add_subdirectory(Engine/Modules/SplineRecipes)
     add_subdirectory(Engine/Modules/MarkupECS)
     add_subdirectory(Engine/Modules/PathfindingECS)
+    add_subdirectory(Engine/Modules/MeshPicking)
     # This list must cover every entry of Engine/CMakeLists.txt's
     # GE_ENGINE_MODULES: Engine splices each one's objects in, so a module
     # added there but not added here fails at generate time with only
     # "no such target exists" to go on.
     add_subdirectory(Engine)
-    # Phase 7 (web Editor): the two modules the Editor splices as objects
+    # Phase 7 (web Editor): the module the Editor splices as objects
     # rather than reaching through Engine's link interface.
-    add_subdirectory(Engine/Modules/MeshPicking)
     add_subdirectory(Engine/Modules/VCSIntegration)
     # Apps consume the engine-package helpers (ge_add_engine_package_module,
     # ge_stage_packages); the desktop path includes this after its
@@ -1214,8 +1215,8 @@ add_subdirectory(Engine/Modules/PhysicsECS)
 add_subdirectory(Engine/Modules/Pathfinding)
 add_subdirectory(Engine/Modules/PathfindingECS)
 
-# CPU mesh picking primitives (BVH, ray-triangle). Editor-side glue (asset
-# lookup, terrain raymarch, scene walk) lives in Apps/Editor/Source/Picking.
+# CPU mesh picking primitives (BVH, ray-triangle). The scene raycast over them
+# (asset lookup, terrain raymarch, scene walk) is Engine/Source/Scene/SceneRaycast.cpp.
 add_subdirectory(Engine/Modules/MeshPicking)
 
 # Scene-level CPU spatial index (TLAS over per-entity AABBs). Shared by
@@ -1240,6 +1241,7 @@ add_subdirectory(Engine/Modules/Spline)
 add_subdirectory(Engine/Modules/SplineGeometry)
 add_subdirectory(Engine/Modules/SplineLayout)
 add_subdirectory(Engine/Modules/SplineECS)
+add_subdirectory(Engine/Modules/SplineRecipes)
 add_subdirectory(Engine/Modules/MarkupECS)
 
 # Rendering post-process modules

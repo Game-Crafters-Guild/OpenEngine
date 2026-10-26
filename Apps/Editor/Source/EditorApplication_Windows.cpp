@@ -26,6 +26,7 @@
 #include "Panels/GameViewPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "PlayMode/GameViewPointerLock.h"
+#include "PlayMode/WindowCursorLock.h"
 #include "Rendering/Core/Device.h"
 #include "Platform/Capabilities.h"
 #include "Platform/Display.h"
@@ -426,7 +427,8 @@ void EditorApplication::UndockToFloatingWindow(const std::string& panelId)
         Editor::ApplySavedHiDpiPlatformSettings(ctx->uiPlatform.get());
 
         // Set cursor callback for floating windows.
-        SetupUICursorCallback(ctx->ui.get(), ctx->window.get());
+        ctx->cursorLock = std::make_unique<Editor::WindowCursorLock>(*ctx->window);
+        SetupUICursorCallback(ctx->ui.get(), ctx->window.get(), ctx->cursorLock.get());
     }
     // Floating window styling must be fully ready immediately; async-only style load can
     // leave torn windows visually blank/uninteractive for some users/build configs.

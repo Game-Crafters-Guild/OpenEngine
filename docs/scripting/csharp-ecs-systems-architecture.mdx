@@ -149,12 +149,18 @@ it through the IDE's generated sources instead of maintaining a handwritten copy
 ```csharp title="The GameSystem base class"
 /// <summary>
 /// Base class for global per-frame systems (spawners, managers, state machines).
-/// Not source-generated. Access ECS manually if needed.
+/// Not source-generated. Commands spawns prefabs and queues structural changes; World reads and writes at once.
 /// </summary>
 public abstract class GameSystem
 {
     /// <summary>The primary ECS world.</summary>
     protected internal GameEngine.ECS.WorldHandle World { get; internal set; }
+
+    /// <summary>
+    /// Commands on this system's world. Spawn and CreateEntity act at once; the other commands run after all
+    /// systems complete.
+    /// </summary>
+    protected EntityCommands Commands { get; }
 
     /// <summary>Enable/disable this system at runtime.</summary>
     public bool Enabled { get; set; } = true;
@@ -170,7 +176,28 @@ public abstract class GameSystem
 }
 ```
 
-### Example
+### Create entities
+
+A `GameSystem` creates entities in two ways:
+
+- `Commands` holds the same `EntityCommands` that an entity system gets in `Execute`. `Commands.Spawn` creates a [prefab](prefabs.mdx) instance at once and returns its root. `Commands.CreateEntity` returns a new entity at once. `AddComponent`, `SetComponent`, `RemoveComponent` and `DestroyEntity` run after all systems complete, so a system does not change the chunks that another system iterates.
+- `World.CreateEmptyEntity` and `World.CreatePrimitive` create a named entity with its components at once.
+
+Use `Commands` to spawn a prefab or to change entities during `OnUpdate`. Use `World` for a single named entity or primitive.
+
+### Examples
+
+```csharp title="Spawn a loot satchel for each drop"
+public class LootDrops : GameSystem
+{
+    public override void OnUpdate(float deltaTime)
+    {
+        // PendingDrops is the game's own source; each drop holds a PrefabRef and a Transform.
+        foreach (LootDrop drop in Network.PendingDrops())
+            Commands.Spawn(drop.Satchel, drop.At);
+    }
+}
+```
 
 ```csharp title="A wave spawner"
 public class WaveSpawner : GameSystem

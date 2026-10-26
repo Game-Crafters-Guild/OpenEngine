@@ -3457,9 +3457,9 @@ TEST(AssetDbHardening, ResolvePathTargetIteratesAllSources)
     fs::create_directories(editorRoot / "Icons", ec);
 
     const fs::path projectAsset = projectRoot / "models" / "knight.fbx";
-    const fs::path editorAsset  = editorRoot  / "Icons" / "play.png";
+    const fs::path editorAsset  = editorRoot  / "Icons" / "play.svg";
     WriteTextFile(projectAsset, "fbx");
-    WriteTextFile(editorAsset, "png");
+    WriteTextFile(editorAsset, "svg");
 
     JobSystem::WorkStealingThreadPool pool(2);
 
@@ -3814,7 +3814,7 @@ TEST(AssetDbHardening, SceneAssetParserEmitsEntityComponentEdges)
     md.Path = scenePath;
     const GUID referrer("c0c0c0c0-aaaa-bbbb-cccc-dddddddddddd");
 
-    SceneAssetParser parser;
+    SceneAssetParser parser(AssetType::Scene, ".scene");
     CapturingDepEdgeSink sink;
     ASSERT_TRUE(parser.ExtractDependencies(referrer, md, sink));
 
@@ -3888,7 +3888,7 @@ TEST(AssetDbHardening, SceneAssetParserHandlesEmptyAndCommentLines)
     md.Path = scenePath;
     const GUID referrer("c0c0c0c0-aaaa-bbbb-cccc-dddddddddddd");
 
-    SceneAssetParser parser;
+    SceneAssetParser parser(AssetType::Scene, ".scene");
     CapturingDepEdgeSink sink;
     ASSERT_TRUE(parser.ExtractDependencies(referrer, md, sink));
     ASSERT_EQ(sink.edges.size(), 1u);
@@ -3915,7 +3915,7 @@ TEST(AssetDbHardening, SceneAssetParserEmptyFileFallsBack)
     md.Path = scenePath;
     const GUID referrer("c0c0c0c0-aaaa-bbbb-cccc-dddddddddddd");
 
-    SceneAssetParser parser;
+    SceneAssetParser parser(AssetType::Scene, ".scene");
     CapturingDepEdgeSink sink;
     EXPECT_FALSE(parser.ExtractDependencies(referrer, md, sink));
     EXPECT_TRUE(sink.edges.empty());
@@ -3924,7 +3924,7 @@ TEST(AssetDbHardening, SceneAssetParserEmptyFileFallsBack)
 }
 
 // #2652: a [resource] header declares an asset the scene uses through an id: the
-// blueprint a [blueprint ... source=<id>] instance spawns, or a `#id` field value.
+// prefab a [prefab ... source=<id>] instance spawns, or a `#id` field value.
 // Each header is a SceneResource edge, located "resources[<id>]": the GUID's, then
 // the path's, as the load falls back to the path when the GUID is unknown; the path
 // alone when the GUID is absent or null. Headers before the first [entity] count.
@@ -3939,15 +3939,15 @@ TEST(AssetDbHardening, SceneAssetParserEmitsResourceHeaderEdges)
     const fs::path scenePath = tmpRoot / "resources.scene";
     const std::string body =
         "[scene name=\"Resources\" version=1]\n"
-        "[resource id=\"well\" path=\"Blueprints/Env/Well.blueprint\"]\n"
-        "[resource id=\"rock\" path=\"Blueprints/Rock.blueprint\" guid=\"12345678-9abc-def0-1234-56789abcdef0\"]\n"
-        "  [resource id=\"cleared\" path=\"Blueprints\\Old.blueprint\" guid=\"00000000-0000-0000-0000-000000000000\"]\n"
+        "[resource id=\"well\" path=\"Prefabs/Env/Well.prefab\"]\n"
+        "[resource id=\"rock\" path=\"Prefabs/Rock.prefab\" guid=\"12345678-9abc-def0-1234-56789abcdef0\"]\n"
+        "  [resource id=\"cleared\" path=\"Prefabs\\Old.prefab\" guid=\"00000000-0000-0000-0000-000000000000\"]\n"
         "[resource id=\"nothing\" path=\"\"]\n"
         "\n"
         "[entity id=\"e_1\"]\n"
         "MeshRenderer.mesh = \"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"\n"
         "\n"
-        "[blueprint id=\"well_0\" source=\"well\"]\n"
+        "[prefab id=\"well_0\" source=\"well\"]\n"
         "Transform.position = (1, 2, 3)\n";
     {
         std::ofstream out(scenePath, std::ios::binary | std::ios::trunc);
@@ -3958,7 +3958,7 @@ TEST(AssetDbHardening, SceneAssetParserEmitsResourceHeaderEdges)
     md.Path = scenePath;
     const GUID referrer("c0c0c0c0-aaaa-bbbb-cccc-dddddddddddd");
 
-    SceneAssetParser parser;
+    SceneAssetParser parser(AssetType::Scene, ".scene");
     CapturingDepEdgeSink sink;
     ASSERT_TRUE(parser.ExtractDependencies(referrer, md, sink));
     ASSERT_EQ(sink.edges.size(), 5u);
@@ -3977,7 +3977,7 @@ TEST(AssetDbHardening, SceneAssetParserEmitsResourceHeaderEdges)
         EXPECT_EQ(well[0]->Referrer, referrer);
         EXPECT_STREQ(ToString(well[0]->Kind), "SceneResource");
         EXPECT_TRUE(well[0]->Target.IsNull());
-        EXPECT_EQ(well[0]->TargetPath, "Blueprints/Env/Well.blueprint");
+        EXPECT_EQ(well[0]->TargetPath, "Prefabs/Env/Well.prefab");
     }
     {
         const auto rock = allByLocator("resources[rock]");
@@ -3985,7 +3985,7 @@ TEST(AssetDbHardening, SceneAssetParserEmitsResourceHeaderEdges)
         EXPECT_EQ(rock[0]->Target, GUID("12345678-9abc-def0-1234-56789abcdef0"));
         EXPECT_TRUE(rock[0]->TargetPath.empty());
         EXPECT_TRUE(rock[1]->Target.IsNull());
-        EXPECT_EQ(rock[1]->TargetPath, "Blueprints/Rock.blueprint");
+        EXPECT_EQ(rock[1]->TargetPath, "Prefabs/Rock.prefab");
         EXPECT_LT(rock[0]->Ordinal, rock[1]->Ordinal);
         EXPECT_STREQ(ToString(rock[1]->Kind), "SceneResource");
     }
@@ -3993,7 +3993,7 @@ TEST(AssetDbHardening, SceneAssetParserEmitsResourceHeaderEdges)
         const auto cleared = allByLocator("resources[cleared]");
         ASSERT_EQ(cleared.size(), 1u);
         EXPECT_TRUE(cleared[0]->Target.IsNull());
-        EXPECT_EQ(cleared[0]->TargetPath, "Blueprints/Old.blueprint");
+        EXPECT_EQ(cleared[0]->TargetPath, "Prefabs/Old.prefab");
     }
     EXPECT_TRUE(allByLocator("resources[nothing]").empty());
     const auto mesh = allByLocator("entities[e_1].MeshRenderer.mesh");
@@ -4003,9 +4003,42 @@ TEST(AssetDbHardening, SceneAssetParserEmitsResourceHeaderEdges)
     fs::remove_all(tmpRoot, ec);
 }
 
+// A .prefab's edges are PrefabComponent edges: its components' asset references, and its
+// [resource] headers, which name its nested prefabs and a variant's base.
+TEST(AssetDbHardening, SceneAssetParserEmitsPrefabComponentEdgesForAPrefab)
+{
+    namespace fs = std::filesystem;
+    const fs::path tmpRoot = TestUtils::MakeUniqueTempDirectory("ge_assetdb_prefab_edges");
+    std::error_code ec;
+    fs::create_directories(tmpRoot, ec);
+    const fs::path prefabPath = tmpRoot / "Cart.prefab";
+    {
+        std::ofstream out(prefabPath, std::ios::binary | std::ios::trunc);
+        out << "[prefab version=1]\n"
+               "[resource id=\"wheel\" path=\"Props/Wheel.prefab\"]\n"
+               "[entity id=\"root\"]\n"
+               "MeshRenderer.mesh = \"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"\n"
+               "[prefab id=\"wheel_l\" source=\"wheel\" parent=\"root\"]\n"
+               "hub/MeshRenderer.material = \"12345678-9abc-def0-1234-56789abcdef0\"\n";
+    }
 
-// #2652: override lines in a [blueprint id=... source=...] instance section are fields of
-// the instance's root, located "blueprints[<id>]...", whether or not an [entity] comes
+    AssetMetadata md;
+    md.Path = prefabPath;
+    SceneAssetParser parser(AssetType::Prefab, ".prefab");
+    CapturingDepEdgeSink sink;
+    ASSERT_TRUE(parser.ExtractDependencies(GUID::Generate(), md, sink));
+    ASSERT_EQ(sink.edges.size(), 3u);
+    for (const auto& e : sink.edges)
+        EXPECT_EQ(e.Kind, DepEdgeKind::PrefabComponent) << e.FieldLocator;
+    EXPECT_EQ(sink.edges[0].TargetPath, "Props/Wheel.prefab");
+    EXPECT_EQ(sink.edges[2].FieldLocator, "prefabs[wheel_l].hub/MeshRenderer.material");
+
+    fs::remove_all(tmpRoot, ec);
+}
+
+
+// #2652: override lines in a [prefab id=... source=...] instance section are fields of
+// the instance's root, located "prefabs[<id>]...", whether or not an [entity] comes
 // first. Every section header ends the section before it: a line under [resource] or
 // [subscene] is not a field of the section above it. A `[path=... guid=...]` value with
 // both is two edges.
@@ -4021,18 +4054,18 @@ TEST(AssetDbHardening, SceneAssetParserLocatesInstanceOverrides)
     {
         std::ofstream out(scenePath, std::ios::binary | std::ios::trunc);
         out << "[scene name=\"Overrides\" version=1]\n"
-               "[resource id=\"well\" path=\"Blueprints/Well.blueprint\"]\n"
+               "[resource id=\"well\" path=\"Prefabs/Well.prefab\"]\n"
                "\n"
-               "[blueprint id=\"well_0\" source=\"well\"]\n"
+               "[prefab id=\"well_0\" source=\"well\"]\n"
                "-Collider\n"
                "MeshRenderer.material = [path=\"Textures/Override.png\"]\n"
                "\n"
                "[entity id=\"e_1\"]\n"
                "MeshRenderer.mesh = \"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"\n"
-               "[resource id=\"late\" path=\"Blueprints/Late.blueprint\"]\n"
+               "[resource id=\"late\" path=\"Prefabs/Late.prefab\"]\n"
                "Mesh.late = \"Textures/NotAFieldEither.png\"\n"
                "\n"
-               "[blueprint id=\"well_1\" source=\"well\"]\n"
+               "[prefab id=\"well_1\" source=\"well\"]\n"
                "MeshRenderer.material = [path=\"Textures/Rock.png\" guid=\"12345678-9abc-def0-1234-56789abcdef0\"]\n"
                "\n"
                "[subscene id=\"sub_0\" source=\"well\"]\n"
@@ -4043,7 +4076,7 @@ TEST(AssetDbHardening, SceneAssetParserLocatesInstanceOverrides)
     md.Path = scenePath;
     const GUID referrer("c0c0c0c0-aaaa-bbbb-cccc-dddddddddddd");
 
-    SceneAssetParser parser;
+    SceneAssetParser parser(AssetType::Scene, ".scene");
     CapturingDepEdgeSink sink;
     ASSERT_TRUE(parser.ExtractDependencies(referrer, md, sink));
 
@@ -4055,12 +4088,12 @@ TEST(AssetDbHardening, SceneAssetParserLocatesInstanceOverrides)
                 found.push_back(&e);
         return found;
     };
-    const auto first = allByLocator("blueprints[well_0].MeshRenderer.material");
+    const auto first = allByLocator("prefabs[well_0].MeshRenderer.material");
     ASSERT_EQ(first.size(), 1u) << "an override before any [entity] is not walked";
     EXPECT_EQ(first[0]->TargetPath, "Textures/Override.png");
     EXPECT_EQ(first[0]->Kind, DepEdgeKind::SceneEntityComponent);
 
-    const auto second = allByLocator("blueprints[well_1].MeshRenderer.material");
+    const auto second = allByLocator("prefabs[well_1].MeshRenderer.material");
     ASSERT_EQ(second.size(), 2u) << "an override after an [entity] is located as the instance's";
     EXPECT_EQ(second[0]->Target, GUID("12345678-9abc-def0-1234-56789abcdef0"));
     EXPECT_EQ(second[1]->TargetPath, "Textures/Rock.png");
@@ -4068,7 +4101,7 @@ TEST(AssetDbHardening, SceneAssetParserLocatesInstanceOverrides)
     EXPECT_EQ(allByLocator("entities[e_1].MeshRenderer.mesh").size(), 1u);
     EXPECT_TRUE(allByLocator("entities[e_1].MeshRenderer.material").empty());
     EXPECT_TRUE(allByLocator("entities[e_1].Mesh.late").empty()) << "a line after a [resource] header taken as a field";
-    EXPECT_TRUE(allByLocator("blueprints[well_1].Mesh.path").empty()) << "a [subscene] line taken as a field";
+    EXPECT_TRUE(allByLocator("prefabs[well_1].Mesh.path").empty()) << "a [subscene] line taken as a field";
     EXPECT_EQ(allByLocator("resources[late]").size(), 1u);
     EXPECT_EQ(sink.edges.size(), 6u);
 
@@ -4101,7 +4134,7 @@ TEST(AssetDbHardening, SceneAssetParserStripsTrailingInlineComment)
     md.Path = scenePath;
     const GUID referrer("c0c0c0c0-aaaa-bbbb-cccc-dddddddddddd");
 
-    SceneAssetParser parser;
+    SceneAssetParser parser(AssetType::Scene, ".scene");
     CapturingDepEdgeSink sink;
     ASSERT_TRUE(parser.ExtractDependencies(referrer, md, sink));
     ASSERT_EQ(sink.edges.size(), 2u);

@@ -1,6 +1,6 @@
 #include "PageStreaming/PageStoreReader.h"
 
-#include "PageStreaming/HeightPageCodec.h"
+#include "PageCodec.h"
 #include "PageStoreSerialization.h"
 
 #include "AssetCore/SharedFileRead.h"
@@ -11,7 +11,8 @@ namespace GameEngine::PageStreaming
 PageStoreReader::PageStoreReader() = default;
 PageStoreReader::~PageStoreReader() = default;
 
-std::string PageStoreReader::Open(const std::filesystem::path& file, uint64 baseOffset, uint64 storeBytes)
+std::string PageStoreReader::Open(const std::filesystem::path& file, PageFieldKind kind, uint64 baseOffset,
+                                  uint64 storeBytes)
 {
     m_IsOpen = false;
     m_Layout = {};
@@ -29,11 +30,12 @@ std::string PageStoreReader::Open(const std::filesystem::path& file, uint64 base
         available = storeBytes;
     }
     PageStoreLayout layout;
-    if (std::string reason = ReadPageStoreHead(*reader, baseOffset, available, layout); !reason.empty())
+    if (std::string reason = ReadPageStoreHead(*reader, kind, baseOffset, available, layout); !reason.empty())
         return reason + " (" + file.string() + ")";
 
     m_File = file;
     m_BaseOffset = baseOffset;
+    m_Codec = MakePageCodec(layout.Header);
     m_Layout = std::move(layout);
     m_Reader = std::move(reader);
     m_IsOpen = true;
@@ -45,18 +47,36 @@ bool PageStoreReader::ReadPageBytes(const PageAddress& address, std::vector<uint
     const PageIndexEntry* entry = m_IsOpen ? m_Layout.FindPresent(address) : nullptr;
     if (!entry)
         return false;
-    outBytes.resize(entry->Size);
+    outBytes.resize(m_Layout.StoredBytes(*entry));
     std::lock_guard lock(m_ReadMutex);
     return m_Reader->SeekTo(m_BaseOffset + entry->Offset) &&
-           m_Reader->Read(outBytes.data(), entry->Size) == static_cast<int64>(entry->Size);
+           m_Reader->Read(outBytes.data(), outBytes.size()) == static_cast<int64>(outBytes.size());
 }
 
-bool PageStoreReader::ReadHeightPage(const PageAddress& address, std::span<float32> outSamples) const
+bool PageStoreReader::ReadPageSamples(const PageAddress& address, std::span<uint8> outSamples) const
 {
+    const uint32 stride = PageStrideTexels(m_Layout.Header.Format);
     std::vector<uint8> bytes;
-    if (outSamples.size() != kPageSampleCount || !ReadPageBytes(address, bytes))
+    if (outSamples.size() != static_cast<std::size_t>(stride) * stride * PageTexelBytes(m_Layout.Header.Format) ||
+        !ReadPageBytes(address, bytes))
         return false;
-    DecodeHeightPage(m_Layout.Header, bytes, outSamples);
+    m_Codec->Decode(address.Level, *m_Layout.FindPresent(address), bytes, outSamples);
+    return true;
+}
+
+bool PageStoreReader::DecodePayload(const PageAddress& address, std::span<const uint8> stored,
+                                    std::vector<uint8>& outPayload) const
+{
+    const PageIndexEntry* entry = m_IsOpen ? m_Layout.FindPresent(address) : nullptr;
+    if (!entry || stored.size() != m_Layout.StoredBytes(*entry))
+        return false;
+    if (IsBlockFormat(m_Layout.Header.Format))
+    {
+        outPayload.assign(stored.begin(), stored.end());
+        return true;
+    }
+    outPayload.resize(PagePayloadBytes(m_Layout.Header.Format));
+    m_Codec->Decode(address.Level, *entry, stored, outPayload);
     return true;
 }
 

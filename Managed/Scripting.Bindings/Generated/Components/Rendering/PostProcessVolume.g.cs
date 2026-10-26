@@ -33,7 +33,7 @@ namespace GameEngine.Scripting
         Lights = 1,
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 44)]
+    [StructLayout(LayoutKind.Explicit, Size = 48)]
     [BuiltInComponent("GameEngine::Components::PostProcessVolume")]
     public partial struct PostProcessVolume : IComponent
     {
@@ -83,13 +83,7 @@ namespace GameEngine.Scripting
         [FieldOffset(28)]
         public float NightTintStrength;
 
-        [InlineArray(3)]
-        public struct NightTintColorArray
-        {
-            private float m_Element;
-        }
-
         [FieldOffset(32)]
-        public NightTintColorArray NightTintColor;
+        public ColorLinear NightTintColor;
     }
 }

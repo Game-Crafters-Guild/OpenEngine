@@ -1,0 +1,9 @@
+[blueprint name="Barrel" version=1]
+[entity id="root"]
+Name.value = "Barrel"
+Transform.position = (0, 0, 0)
+
+[entity id="mesh" parent="root"]
+Name.value = "Cube.029"
+MeshRenderer.meshAsset = [path="Models/SM_Barrel.fbx" guid="1b4dea68-665e-4f28-bca1-8eb915f2dd55"]
+MeshRenderer.material = [path="Materials/RtsBlueprint.material" guid="8157f2ac-2c97-4058-8b38-585d4f72045e"]

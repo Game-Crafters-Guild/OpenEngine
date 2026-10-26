@@ -5,6 +5,7 @@
 #include "AssetCore/SharedFileRead.h"
 #include "FileSystem/FileSystem.h"
 #include "NonInheritedFile.h"
+#include "PageStoreSerialization.h"
 
 #include <cstring>
 #include <system_error>
@@ -61,6 +62,8 @@ std::string WriteTerrainContainer(const std::filesystem::path& target, std::span
         for (const TerrainContainerField& other : fields)
             if (&other != &field && other.Kind == field.Kind)
                 return "a terrain container holds one store per field";
+        if (field.Kind == PageFieldKind::NormalSamples)
+            return "the normal samples store is a bake cache and never ships: pack the normal store";
         std::error_code ec;
         sizes.push_back(std::filesystem::file_size(field.Store, ec));
         if (ec)
@@ -109,8 +112,8 @@ std::string OpenTerrainContainerField(const std::filesystem::path& container, Pa
     if (header[0] != kContainerMagic)
         return container.string() + " is not a terrain container";
     if (header[1] != kPageStoreFormatVersion)
-        return "the terrain container " + container.string() + " was written by another version of the engine; "
-               "export the game again";
+        return "the terrain container " + container.string() + " is format " + std::to_string(header[1]) +
+               " and this engine reads format " + std::to_string(kPageStoreFormatVersion) + ": export the game again";
     const uint32 fieldCount = header[2];
     if (fieldCount == 0 || fieldCount > kMaxContainerFields)
         return "the terrain container " + container.string() + " has a corrupt field directory";
@@ -126,14 +129,17 @@ std::string OpenTerrainContainerField(const std::filesystem::path& container, Pa
         std::memcpy(&storedKind, entry, sizeof(storedKind));
         std::memcpy(&offset, entry + 4, sizeof(offset));
         std::memcpy(&size, entry + 12, sizeof(size));
+        if (storedKind > static_cast<uint32>(PageFieldKind::Color))
+            return "the terrain container " + container.string() + " has a field this engine does not know: " +
+                   std::string(kNewerPageStoreRefusal);
         if (storedKind != static_cast<uint32>(kind))
             continue;
         if (size == 0 || offset > static_cast<uint64>(fileBytes) || size > static_cast<uint64>(fileBytes) - offset)
             return "the terrain container " + container.string() + " has a field outside the file";
         reader.Close();
-        return out.Open(container, offset, size);
+        return out.Open(container, kind, offset, size);
     }
-    return "the terrain container " + container.string() + " has no height field: export the game again";
+    return "the terrain container " + container.string() + " has no " + PageFieldKindName(kind) + " field: export the game again";
 }
 
 } // namespace GameEngine::PageStreaming

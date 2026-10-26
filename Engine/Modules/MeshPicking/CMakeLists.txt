@@ -23,14 +23,13 @@ target_include_directories(MeshPicking
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
         # Core/CpuProfiler.h. NOT header-only: ScopedCpuProfile embeds a
-        # ScopedNvtxRange whose ctor/dtor are defined in Engine, so anything
-        # that links MeshPicking's objects must also link Engine (see
-        # MeshPickingTests below).
+        # ScopedNvtxRange whose ctor/dtor are defined in Engine, which these
+        # objects are spliced into.
         ${CMAKE_SOURCE_DIR}/Engine/Include
 )
 
 # Core/CpuProfiler.h gates ScopedCpuProfile's layout on GE_ENABLE_CPU_PROFILING
-# and defaults it to 1 when undefined. MeshPicking cannot link Engine, so
+# and defaults it to 1 when undefined. MeshPicking cannot link Engine (it is part of it), so
 # replay Engine's INTERFACE definitions the way TerrainECS does — otherwise a
 # -DENABLE_CPU_PROFILING=OFF build compiles the stub inside Engine and the full
 # layout here, which is an ODR mismatch rather than a missing optimisation.
@@ -53,14 +52,10 @@ if(BUILD_TESTING)
     add_executable(MeshPickingTests
         Tests/MeshBvhTests.cpp
     )
-    # Engine, not just MeshPicking: MeshBvh.cpp's GE_CPU_PROFILE_SCOPE pulls in
-    # ScopedNvtxRange, which is defined in Engine.dll. MeshPicking is an
-    # editor-only OBJECT lib and is deliberately not spliced into Engine.dll,
-    # so its objects arrive here unresolved without this. EditorTests links the
-    # same pair for the same reason (Tests/Editor/CMakeLists.txt).
+    # Engine alone: MeshPicking is spliced into Engine.dll, and a second copy
+    # here would fail the engine module duplication check.
     target_link_libraries(MeshPickingTests PRIVATE
         Engine
-        MeshPicking
         GTest::gtest
         GTest::gtest_main
     )

@@ -47,7 +47,8 @@ struct SceneLoadContext
     // Entity-reference resolution for EntityHandle fields. EntityIdMap maps a scene
     // entity-id string -> the live handle created this load; it is fully populated
     // before any component is applied, so forward references resolve directly.
-    // EntityIdPrefix namespaces ids for instanced blueprints/subscenes.
+    // EntityIdPrefix namespaces ids for subscenes and additive loads; a prefab file's lines resolve
+    // against a map of the file's own ids, with no prefix.
     const std::unordered_map<std::string, ECS::EntityHandle>* EntityIdMap = nullptr;
     std::string EntityIdPrefix;
 
@@ -93,6 +94,13 @@ struct SceneSaveContext
     // The saved world's unresolved scene data, if it has any: FormatAssetReferenceForSave reads the
     // authored path of a reference whose GUID still names no asset from it.
     const ECS::UnresolvedComponentStore* Unresolved = nullptr; // not owned
+
+    // Write a line for every field a schema can write, a field at its empty state included: a null
+    // asset reference as its clear form `0`, an unset entity reference as `""`, an empty string as
+    // `""`, every struct-array element. A plain save leaves those lines out, because a load starts
+    // from the same state; the prefab override writer sets it for the two texts it compares, so a
+    // field an instance clears differs from the prefab's line and is saved.
+    bool WriteEveryField = false;
 };
 
 } // namespace GameEngine::Scene

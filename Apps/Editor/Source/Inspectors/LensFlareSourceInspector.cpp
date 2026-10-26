@@ -17,6 +17,7 @@
 #include "Inspectors/InspectorColorSwatchRow.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Panels/ColorPicker.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/CurveField.h"
 #include "UI/Controls/CurvePresetPicker.h"
@@ -184,7 +185,6 @@ void AddFlareToggle(UIElement* parent,
         }, tooltip);
 }
 
-constexpr float kFlareColorPickerMaxIntensity = 8.0f;
 constexpr float kFlareElementPreviewSize = 24.0f;
 constexpr float kFlareElementHeaderSwatchSize = 10.0f;
 using FlareColorAccess = std::function<LensFlare::Color*(FlareAsset&)>;
@@ -488,14 +488,14 @@ private:
 void FlareColorToPickerState(const LensFlare::Color& color, uint32_t& outArgb, float& outIntensity)
 {
     const auto state =
-        InspectorUI::HdrColorToPickerState({color.R, color.G, color.B, color.A}, kFlareColorPickerMaxIntensity);
+        InspectorUI::HdrColorToPickerState({color.R, color.G, color.B, color.A}, kColorPickerMaxIntensity);
     outArgb = state.Argb;
     outIntensity = state.Intensity;
 }
 
 LensFlare::Color PickerStateToFlareColor(uint32_t argb, float intensity)
 {
-    const ColorLinear linear = InspectorUI::PickerStateToHdrColor(argb, intensity, kFlareColorPickerMaxIntensity);
+    const ColorLinear linear = InspectorUI::PickerStateToHdrColor(argb, intensity, kColorPickerMaxIntensity);
     LensFlare::Color color;
     color.R = linear.r;
     color.G = linear.g;

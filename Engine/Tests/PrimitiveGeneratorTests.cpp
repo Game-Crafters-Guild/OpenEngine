@@ -7,6 +7,7 @@
 #include "Engine/Rendering/MeshReprovisionSource.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Mathematics/Vector3.h"
 #include "Rendering/Core/Device.h"
 
 #include <algorithm>
@@ -17,6 +18,7 @@
 using namespace GameEngine;
 using namespace GameEngine::Engine::Renderer;
 using namespace GameEngine::Rendering;
+using GameEngine::Mathematics::Vector3;
 
 #include "TestDeviceHelper.h"
 
@@ -63,107 +65,102 @@ TEST(PrimitiveGeneratorTest, Cube_HasCorrectTopology)
     EXPECT_EQ(cube.Name, "Cube");
 }
 
-TEST(PrimitiveGeneratorTest, Plane_HasCorrectTopology)
-{
-    Mesh plane = PrimitiveGenerator::GeneratePlane();
-    EXPECT_EQ(plane.Vertices.size(), 4u);
-    EXPECT_EQ(plane.Indices.size(), 6u);
-    EXPECT_EQ(plane.Name, "Plane");
-}
-
-TEST(PrimitiveGeneratorTest, Plane_HasExpectedDefaultUvOrientation)
-{
-    Mesh plane = PrimitiveGenerator::GeneratePlane();
-    ASSERT_EQ(plane.Vertices.size(), 4u);
-
-    EXPECT_FLOAT_EQ(plane.Vertices[0].TexCoords[0], 1.0f);
-    EXPECT_FLOAT_EQ(plane.Vertices[0].TexCoords[1], 0.0f);
-    EXPECT_FLOAT_EQ(plane.Vertices[1].TexCoords[0], 0.0f);
-    EXPECT_FLOAT_EQ(plane.Vertices[1].TexCoords[1], 0.0f);
-    EXPECT_FLOAT_EQ(plane.Vertices[2].TexCoords[0], 0.0f);
-    EXPECT_FLOAT_EQ(plane.Vertices[2].TexCoords[1], 1.0f);
-    EXPECT_FLOAT_EQ(plane.Vertices[3].TexCoords[0], 1.0f);
-    EXPECT_FLOAT_EQ(plane.Vertices[3].TexCoords[1], 1.0f);
-}
-
-TEST(PrimitiveGeneratorTest, PlaneSpriteUv_SameTopologyAsPlane_KeepsSpriteUvOrientation)
-{
-    Mesh a = PrimitiveGenerator::GeneratePlane();
-    Mesh b = PrimitiveGenerator::GeneratePlaneSpriteUv();
-    EXPECT_EQ(b.Vertices.size(), 4u);
-    EXPECT_EQ(b.Indices.size(), 6u);
-    EXPECT_EQ(b.Name, "PlaneSpriteUv");
-    EXPECT_EQ(b.Indices, a.Indices);
-    for (size_t i = 0; i < a.Vertices.size(); ++i)
-    {
-        EXPECT_FLOAT_EQ(a.Vertices[i].Position[0], b.Vertices[i].Position[0]);
-        EXPECT_FLOAT_EQ(a.Vertices[i].Position[1], b.Vertices[i].Position[1]);
-        EXPECT_FLOAT_EQ(a.Vertices[i].Position[2], b.Vertices[i].Position[2]);
-        EXPECT_FLOAT_EQ(a.Vertices[i].TexCoords[0], 1.0f - b.Vertices[i].TexCoords[0]);
-        EXPECT_FLOAT_EQ(a.Vertices[i].TexCoords[1], 1.0f - b.Vertices[i].TexCoords[1]);
-    }
-}
-
 namespace
 {
-// The y component of (b - a) x (c - a) for the triangle whose first index is `first`.
+Vector3 PositionOf(const Vertex& vertex)
+{
+    return {vertex.Position[0], vertex.Position[1], vertex.Position[2]};
+}
+
+// The y component of (p1 - p0) x (p2 - p0) for the triangle whose first index is `first`.
 float TriangleCrossY(const Mesh& mesh, size_t first)
 {
-    const float* a = mesh.Vertices[mesh.Indices[first]].Position;
-    const float* b = mesh.Vertices[mesh.Indices[first + 1]].Position;
-    const float* c = mesh.Vertices[mesh.Indices[first + 2]].Position;
-    return (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+    const Vector3 p0 = PositionOf(mesh.Vertices[mesh.Indices[first]]);
+    const Vector3 p1 = PositionOf(mesh.Vertices[mesh.Indices[first + 1]]);
+    const Vector3 p2 = PositionOf(mesh.Vertices[mesh.Indices[first + 2]]);
+    return Vector3::Cross(p1 - p0, p2 - p0).y;
 }
-} // namespace
 
-// The Ground is the Plane's 1 m square, UV layout and winding, cut into 120 x 120
-// cells (GroundGuid's contract), and its triangles cover the square exactly once.
-TEST(PrimitiveGeneratorTest, Ground_IsThePlaneCutIntoCells)
+// The 1 m XZ square cut into segments x segments cells: the Plane's UV layout
+// (u = 0.5 - x, v = z + 0.5), every triangle wound (-X-Z, +X+Z, +X-Z), no edge longer
+// than a cell, and the triangles cover the square exactly once.
+void ExpectSquareCutIntoCells(const Mesh& mesh, uint32_t segments)
 {
-    constexpr uint32_t kSegments = 120;
-    const Mesh plane = PrimitiveGenerator::GeneratePlane();
-    const Mesh ground = PrimitiveGenerator::GenerateByGuid(PrimitiveGenerator::GroundGuid());
-    EXPECT_EQ(ground.Name, "Ground");
-    ASSERT_EQ(ground.Vertices.size(), (kSegments + 1) * (kSegments + 1));
-    ASSERT_EQ(ground.Indices.size(), kSegments * kSegments * 6);
+    ASSERT_EQ(mesh.Vertices.size(), (segments + 1) * (segments + 1));
+    ASSERT_EQ(mesh.Indices.size(), segments * segments * 6);
 
-    for (const Vertex& v : ground.Vertices)
+    for (const Vertex& v : mesh.Vertices)
     {
         EXPECT_FLOAT_EQ(v.Position[1], 0.0f);
-        // The Plane's UV is linear in position: u = 0.5 - x, v = z + 0.5.
         EXPECT_NEAR(v.TexCoords[0], 0.5f - v.Position[0], 1e-6f);
         EXPECT_NEAR(v.TexCoords[1], v.Position[2] + 0.5f, 1e-6f);
     }
     for (int axis : {0, 2})
     {
-        EXPECT_FLOAT_EQ(ground.MinBounds[axis], plane.MinBounds[axis]);
-        EXPECT_FLOAT_EQ(ground.MaxBounds[axis], plane.MaxBounds[axis]);
+        EXPECT_FLOAT_EQ(mesh.MinBounds[axis], -0.5f);
+        EXPECT_FLOAT_EQ(mesh.MaxBounds[axis], 0.5f);
     }
 
-    // Winding: each triangle turns the same way as the Plane's. Coverage: the triangles'
-    // areas sum to the square's and every vertex is used, so no cell is missing or doubled.
-    const bool planeSign = TriangleCrossY(plane, 0) > 0.0f;
-    const double planeArea = static_cast<double>(plane.MaxBounds[0] - plane.MinBounds[0]) *
-                             static_cast<double>(plane.MaxBounds[2] - plane.MinBounds[2]);
-    const float cell = 1.0f / static_cast<float>(kSegments);
+    // Coverage: the triangles' areas sum to the square's and every vertex is used, so no
+    // cell is missing or doubled.
+    const float cell = 1.0f / static_cast<float>(segments);
     double area = 0.0;
-    std::vector<bool> used(ground.Vertices.size(), false);
-    for (size_t t = 0; t < ground.Indices.size(); t += 3)
+    std::vector<bool> used(mesh.Vertices.size(), false);
+    for (size_t first = 0; first < mesh.Indices.size(); first += 3)
     {
-        const float crossY = TriangleCrossY(ground, t);
-        EXPECT_EQ(crossY > 0.0f, planeSign) << "triangle " << t / 3;
+        const float crossY = TriangleCrossY(mesh, first);
+        EXPECT_GT(crossY, 0.0f) << "triangle " << first / 3;
         area += 0.5 * std::abs(static_cast<double>(crossY));
-        for (size_t k = 0; k < 3; ++k)
+        for (size_t corner = 0; corner < 3; ++corner)
         {
-            used[ground.Indices[t + k]] = true;
-            const float* a = ground.Vertices[ground.Indices[t + k]].Position;
-            const float* b = ground.Vertices[ground.Indices[t + (k + 1) % 3]].Position;
-            EXPECT_LE(std::abs(b[0] - a[0]), cell * 1.001f);
-            EXPECT_LE(std::abs(b[2] - a[2]), cell * 1.001f);
+            used[mesh.Indices[first + corner]] = true;
+            const Vector3 edge = PositionOf(mesh.Vertices[mesh.Indices[first + (corner + 1) % 3]]) -
+                                 PositionOf(mesh.Vertices[mesh.Indices[first + corner]]);
+            EXPECT_LE(std::abs(edge.x), cell * 1.001f);
+            EXPECT_LE(std::abs(edge.z), cell * 1.001f);
         }
     }
-    EXPECT_NEAR(area, planeArea, 1e-5 * planeArea);
+    EXPECT_NEAR(area, 1.0, 1e-5);
     EXPECT_EQ(std::count(used.begin(), used.end(), false), 0) << "unreferenced vertices";
+}
+} // namespace
+
+// A Plane drawn as one quad jumps near the camera by tens of pixels for a frame while a
+// far corner crosses the camera's eye plane: the GPU's interpolation across the triangle
+// loses precision. The cells keep every triangle small.
+TEST(PrimitiveGeneratorTest, Plane_IsTheSquareCutIntoCells)
+{
+    const Mesh plane = PrimitiveGenerator::GeneratePlane();
+    EXPECT_EQ(plane.Name, "Plane");
+    ExpectSquareCutIntoCells(plane, 32);
+}
+
+// Sprites stay one quad: particles draw it in the thousands.
+TEST(PrimitiveGeneratorTest, PlaneSpriteUv_IsOneQuadWithSpriteUvOrientation)
+{
+    const Mesh sprite = PrimitiveGenerator::GeneratePlaneSpriteUv();
+    EXPECT_EQ(sprite.Name, "PlaneSpriteUv");
+    ASSERT_EQ(sprite.Vertices.size(), 4u);
+    ASSERT_EQ(sprite.Indices.size(), 6u);
+    for (const Vertex& v : sprite.Vertices)
+    {
+        EXPECT_FLOAT_EQ(std::abs(v.Position[0]), 0.5f);
+        EXPECT_FLOAT_EQ(std::abs(v.Position[2]), 0.5f);
+        // The Plane's UV flipped on both axes.
+        EXPECT_NEAR(v.TexCoords[0], v.Position[0] + 0.5f, 1e-6f);
+        EXPECT_NEAR(v.TexCoords[1], 0.5f - v.Position[2], 1e-6f);
+    }
+    EXPECT_GT(TriangleCrossY(sprite, 0), 0.0f);
+    EXPECT_GT(TriangleCrossY(sprite, 3), 0.0f);
+}
+
+// The Ground is the Plane's square, UV layout and winding cut into 120 x 120 cells
+// (GroundGuid's contract).
+TEST(PrimitiveGeneratorTest, Ground_IsThePlaneCutIntoCells)
+{
+    const Mesh ground = PrimitiveGenerator::GenerateByGuid(PrimitiveGenerator::GroundGuid());
+    EXPECT_EQ(ground.Name, "Ground");
+    ExpectSquareCutIntoCells(ground, 120);
 }
 
 TEST(PrimitiveGeneratorTest, GuidFromName_AcceptsSerializedPlaneSpriteUv)

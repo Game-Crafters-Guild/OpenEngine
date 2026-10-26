@@ -61,8 +61,7 @@ bool MarkupTagReadsDarkText(uint32 tagId)
     if (!tag)
         return false;
     const ColorLinear linear = ColorSRGB(tag->Color[0], tag->Color[1], tag->Color[2]).ToLinear();
-    const float32 rgb[3] = {linear.r, linear.g, linear.b};
-    const float32 luminance = ColorUtils::LinearRec709Luminance(rgb);
+    const float32 luminance = ColorUtils::LinearRec709Luminance(linear);
     const float32 againstBlack = (luminance + kContrastOffset) / kContrastOffset;
     const float32 againstWhite = (1.0f + kContrastOffset) / (luminance + kContrastOffset);
     return againstBlack >= againstWhite;

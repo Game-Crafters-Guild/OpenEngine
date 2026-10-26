@@ -54,7 +54,8 @@ class SkyRenderNode final : public IRenderPipelineNode
     Rendering::BufferHandle GetOrCreatePerViewSkyUBO(Rendering::IDevice* dev, uint32_t viewKey, uint32_t slot);
     void RecordStars(Rendering::RenderGraph::RGContext& passCtx, Rendering::SkyRenderer& renderer, uint32_t viewKey,
                      uint32_t vpX, uint32_t vpY, uint32_t vpW, uint32_t vpH, const PipelineBufferBindingRG& exposure,
-                     const PipelineBufferBindingRG& compensation, uint32_t starCount, const SkyHeightFog& fog);
+                     const PipelineBufferBindingRG& compensation, uint32_t starCount, uint32_t instanceCount,
+                     const SkyHeightFog& fog);
 
     std::string m_Id;
     std::string m_Json;

@@ -21,6 +21,7 @@
 #include "Mathematics/Vector3.h"
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Core/ViewParamsLayout.h"
 #include "Rendering/Passes/TonemapPass.h"
 #include "Thumbnails/ModelThumbnailHandler.h"
@@ -630,7 +631,7 @@ void GraphPreviewAtlas::TickRG(uint64_t windowId, UIManager* ui, RG::RGFrame& fr
             depthOps.Load = RG::RGLoadOp::Clear;
             depthOps.Store = RG::RGStoreOp::Store;
             // Reverse-Z: the far value is 0.
-            depthOps.Clear.Depth = 0.0f;
+            depthOps.Clear.Depth = Rendering::ReverseZ::kClearFar;
             p.AttachDepth(depth, depthOps, RG::RGDepthAccess::ReadWrite);
         },
         [this, draws = std::move(draws), resources = std::move(resources), sphere, sphereBindings,

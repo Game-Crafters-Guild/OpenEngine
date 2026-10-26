@@ -181,7 +181,7 @@ class SceneEditorController
     void SetEditorCameraCaptureForSave(std::function<Scene::SceneEditorCamera()> capture);
     std::optional<Scene::SceneEditorCameraFromFile> ConsumeEditorCameraFromLastDocumentLoad();
 
-    // Releases the editor-side spline generators against the outgoing world on
+    // Releases the generated entities of the outgoing world on
     // every scene swap (SceneDocumentManager::SetSceneScopedGeneratorRelease).
     void SetSceneScopedGeneratorRelease(std::function<void()> release);
 

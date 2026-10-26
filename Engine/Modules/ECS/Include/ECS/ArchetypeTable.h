@@ -185,6 +185,14 @@ inline std::vector<ComponentMeta> BuildSortedComponentMetas(
     return metas;
 }
 
+// Consecutive rows [FirstIndex, FirstIndex + Count) of one chunk.
+struct RowRun
+{
+    uint32_t ChunkIndex = 0;
+    uint32_t FirstIndex = 0;
+    uint32_t Count = 0;
+};
+
 // ============================================================================
 // ArchetypeChunk — a cache-line-aligned SoA block, normally 16KB.
 // ============================================================================
@@ -269,6 +277,17 @@ class ArchetypeChunk
         return idx;
     }
 
+    // Append entities as consecutive rows. Returns the index of the first.
+    // Caller must have verified the chunk has room for all of them. Component
+    // data of the new rows is uninitialized; caller must write into it.
+    uint32_t AppendRun(std::span<const EntityHandle> entities)
+    {
+        const uint32_t first = m_Count;
+        std::memcpy(GetEntityHandles() + first, entities.data(), entities.size_bytes());
+        m_Count += static_cast<uint32_t>(entities.size());
+        return first;
+    }
+
     // Remove entity at index via swap-and-pop with the last element.
     // Returns the entity that was moved into `index`, or Invalid if
     // `index` was the last element (no swap needed).
@@ -301,6 +320,15 @@ class ArchetypeChunk
     static void CopyRow(const ArchetypeChunk& src, uint32_t srcIndex,
                         ArchetypeChunk& dst, uint32_t dstIndex)
     {
+        CopyRows(src, srcIndex, dst, dstIndex, 1);
+    }
+
+    // Copy matching columns of `count` consecutive rows from src[srcIndex] into
+    // dst[dstIndex]: one memcpy per column when both strides agree, else one per
+    // row of the shorter stride. Both layouts must have columns sorted by TypeId.
+    static void CopyRows(const ArchetypeChunk& src, uint32_t srcIndex,
+                         ArchetypeChunk& dst, uint32_t dstIndex, uint32_t count)
+    {
         const auto& srcCols = src.m_Layout->Columns;
         const auto& dstCols = dst.m_Layout->Columns;
         int si = 0, di = 0;
@@ -325,7 +353,16 @@ class ArchetypeChunk
                     src.m_Memory + sc.Offset + static_cast<std::size_t>(srcIndex) * sc.Size;
                 std::byte* dstPtr =
                     dst.m_Memory + dc.Offset + static_cast<std::size_t>(dstIndex) * dc.Size;
-                std::memcpy(dstPtr, srcPtr, std::min(sc.Size, dc.Size));
+                if (sc.Size == dc.Size)
+                {
+                    std::memcpy(dstPtr, srcPtr, static_cast<std::size_t>(count) * sc.Size);
+                }
+                else
+                {
+                    for (uint32_t row = 0; row < count; ++row)
+                        std::memcpy(dstPtr + static_cast<std::size_t>(row) * dc.Size,
+                                    srcPtr + static_cast<std::size_t>(row) * sc.Size, std::min(sc.Size, dc.Size));
+                }
                 ++si;
                 ++di;
             }
@@ -429,8 +466,8 @@ class ArchetypeTable
     // ZERO-INIT = "NEVER CHANGED" (design C7) — under the monotonic compare,
     // stamp 0 is the OLDEST possible value, not the newest. New-chunk
     // visibility depends ENTIRELY on the write-path stamping rules (rows
-    // enter chunks only via Append, whose caller stamps all columns). Do not
-    // treat zero-init as a safety net.
+    // enter chunks only via Append or AppendRun, whose callers stamp all
+    // columns). Do not treat zero-init as a safety net.
     //
     // The array swaps entries in CompactChunks alongside m_Chunks /
     // m_ChunkMemory, travels with move ctor/assign, and grows in
@@ -526,6 +563,21 @@ class ArchetypeTable
         uint32_t indexInChunk = target->Append(entity);
         ++m_EntityCount;
         return {chunkIdx, indexInChunk};
+    }
+
+    // Adds entities as one run of consecutive rows in the chunk AddEntity would
+    // pick. The run holds fewer rows than asked when that chunk fills: add the
+    // rest with another call. The component data in the run is not initialized.
+    RowRun AddEntities(std::span<const EntityHandle> entities)
+    {
+        if (m_Chunks.empty() || m_Chunks.back().IsFull())
+            AllocateNewChunk();
+        ArchetypeChunk& target = m_Chunks.back();
+        const uint32_t count =
+            std::min(static_cast<uint32_t>(entities.size()), target.GetCapacity() - target.GetCount());
+        const uint32_t first = target.AppendRun(entities.first(count));
+        m_EntityCount += count;
+        return {static_cast<uint32_t>(m_Chunks.size() - 1), first, count};
     }
 
     // Remove entity at the given location via swap-and-pop within the chunk.

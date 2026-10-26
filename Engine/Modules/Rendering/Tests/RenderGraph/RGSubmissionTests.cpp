@@ -969,3 +969,129 @@ TEST(RGSubmission, ExportAfterCrossQueueReadersDerivesTheWARWait)
     ASSERT_NE(raw, nullptr);
     EXPECT_EQ(raw->Value, s0.SignalValue);
 }
+
+// Frames overlap in flight: the next frame's compute work can start while this frame's graphics
+// work still runs. A persistent buffer the graphics queue reads late in one frame and the compute
+// queue rewrites early in the next (the pre-exposure the tonemap divides by) must order the rewrite
+// after the read, or the tonemap reads the next frame's value.
+namespace
+{
+constexpr uint64_t kExposurePhysical = 0x5eed;
+
+// One frame of the exposure shape: a compute pass rewrites the imported buffer, a graphics pass
+// reads it and writes the presented color.
+void DeclareExposureFrame(RGGraph& g, uint64_t exposurePhysical = kExposurePhysical)
+{
+    g.BeginFrame();
+    const RGResourceId exposure = Buf(g, "ExposureHistory");
+    g.MarkImported(exposure, RGImageLayout::Undefined);
+    g.SetCrossFramePhysical(exposure, exposurePhysical);
+    const RGResourceId color = Tex(g, "Color");
+    g.MarkExternal(color);
+    const RGPassId snapshot = g.AddPass({"PreExposureSnapshot", 0, RGQueue::Compute});
+    g.Read(snapshot, exposure, RGAccess::StorageRead);
+    g.Write(snapshot, exposure, RGAccess::StorageWrite);
+    const RGPassId tonemap = g.AddPass({"Tonemap", 0, RGQueue::Graphics});
+    g.Read(tonemap, exposure, RGAccess::StorageRead);
+    g.Write(tonemap, color, RGAccess::ColorAttachment);
+    Bake(g);
+}
+
+const RGSubmission& SubmissionOn(const RGGraph& g, RGQueue queue)
+{
+    for (const RGSubmission& s : g.Submissions())
+        if (s.Queue == queue)
+            return s;
+    ADD_FAILURE() << "no submission on the queue";
+    return g.Submissions().front();
+}
+
+// One pass on `queue` that touches the imported buffer, plus a sink so the pass stays live.
+void DeclareSingleAccessFrame(RGGraph& g, RGQueue queue, bool writes)
+{
+    g.BeginFrame();
+    const RGResourceId shared = Buf(g, "Shared");
+    g.MarkImported(shared, RGImageLayout::Undefined);
+    g.SetCrossFramePhysical(shared, kExposurePhysical);
+    const RGResourceId sink = Buf(g, "Sink");
+    g.MarkExternal(sink);
+    const RGPassId pass = g.AddPass({"Access", 0, queue});
+    if (writes)
+        g.Write(pass, shared, RGAccess::StorageWrite);
+    else
+        g.Read(pass, shared, RGAccess::StorageRead);
+    g.Write(pass, sink, RGAccess::StorageWrite);
+    Bake(g);
+}
+} // namespace
+
+TEST(RGSubmissionCrossFrame, ComputeRewriteWaitsForThePreviousFramesGraphicsRead)
+{
+    RGGraph g;
+    DeclareExposureFrame(g);
+    const uint64_t previousTonemap = SubmissionOn(g, RGQueue::Graphics).SignalValue;
+
+    DeclareExposureFrame(g);
+    const RGSemaphoreWait* wait = FindWait(SubmissionOn(g, RGQueue::Compute), RGQueue::Graphics);
+    ASSERT_NE(wait, nullptr) << "the snapshot may overwrite the buffer the previous frame's tonemap reads";
+    EXPECT_EQ(wait->Value, previousTonemap);
+}
+
+TEST(RGSubmissionCrossFrame, GraphicsReadWaitsForThePreviousFramesComputeWrite)
+{
+    RGGraph g;
+    DeclareSingleAccessFrame(g, RGQueue::Compute, /*writes=*/true);
+    const uint64_t previousWrite = SubmissionOn(g, RGQueue::Compute).SignalValue;
+
+    DeclareSingleAccessFrame(g, RGQueue::Graphics, /*writes=*/false);
+    const RGSemaphoreWait* wait = FindWait(SubmissionOn(g, RGQueue::Graphics), RGQueue::Compute);
+    ASSERT_NE(wait, nullptr);
+    EXPECT_EQ(wait->Value, previousWrite);
+}
+
+TEST(RGSubmissionCrossFrame, ReadsOnTwoQueuesInSuccessiveFramesDoNotWait)
+{
+    RGGraph g;
+    DeclareSingleAccessFrame(g, RGQueue::Graphics, /*writes=*/false);
+    DeclareSingleAccessFrame(g, RGQueue::Compute, /*writes=*/false);
+    EXPECT_EQ(TotalWaits(g), 0u);
+}
+
+TEST(RGSubmissionCrossFrame, AResetForgetsThePreviousFramesAccesses)
+{
+    RGGraph g;
+    DeclareExposureFrame(g);
+    g.ResetCrossFrameAccesses();
+    DeclareExposureFrame(g);
+    EXPECT_EQ(FindWait(SubmissionOn(g, RGQueue::Compute), RGQueue::Graphics), nullptr);
+}
+
+// The owner of a small persistent buffer that one queue writes and another reads keeps one copy per
+// frame in flight. A frame writes the copy that the frame kFramesInFlight earlier used, and the
+// device has finished that frame before this one is planned, so the plan adds no wait between the
+// queues: the compute work of a frame does not wait for the end of the previous frame's graphics.
+TEST(RGSubmissionCrossFrame, OneCopyPerFrameInFlightAddsNoWaitInSteadyState)
+{
+    constexpr uint64_t kFramesInFlight = 2;
+    constexpr uint64_t kFrames = 6;
+    constexpr uint32_t kGraphics = static_cast<uint32_t>(RGQueue::Graphics);
+    constexpr uint32_t kCompute = static_cast<uint32_t>(RGQueue::Compute);
+    uint64_t graphicsSignal[kFrames] = {};
+    uint64_t computeSignal[kFrames] = {};
+    RGGraph g;
+    for (uint64_t frame = 0; frame < kFrames; ++frame)
+    {
+        uint64_t completed[kQueueCount] = {0, 0, 0};
+        if (frame >= kFramesInFlight)
+        {
+            completed[kGraphics] = graphicsSignal[frame - kFramesInFlight];
+            completed[kCompute] = computeSignal[frame - kFramesInFlight];
+        }
+        g.SetCompletedTimelineValues(completed);
+        DeclareExposureFrame(g, kExposurePhysical + frame % kFramesInFlight);
+        graphicsSignal[frame] = SubmissionOn(g, RGQueue::Graphics).SignalValue;
+        computeSignal[frame] = SubmissionOn(g, RGQueue::Compute).SignalValue;
+        EXPECT_EQ(FindWait(SubmissionOn(g, RGQueue::Compute), RGQueue::Graphics), nullptr)
+            << "frame " << frame << ": the snapshot waits for graphics work of an earlier frame";
+    }
+}

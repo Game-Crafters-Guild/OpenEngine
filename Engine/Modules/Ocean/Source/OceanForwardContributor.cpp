@@ -144,8 +144,7 @@ bool OceanForwardContributor::BuildForwardCommand(
     // Never emit the surface into auxiliary ocean scene-capture views. The
     // reflection view must not recurse the ocean into its own mirror, and the
     // raster-depth view must not capture the water plane as seabed.
-    const auto reflectionViewId = m_Feature.GetPlanarReflection().GetReflectionViewId();
-    if (reflectionViewId != 0 && viewId == reflectionViewId)
+    if (m_Feature.GetPlanarReflection().IsReflectionView(viewId))
         return false;
     const auto rasterDepthViewId = m_Feature.GetRasterDepthCapture().GetCaptureViewId();
     if (rasterDepthViewId != 0 && viewId == rasterDepthViewId)
@@ -219,10 +218,11 @@ bool OceanForwardContributor::BuildForwardCommand(
     // reads the procedural sky dome (PlanarReflectionAvailable stays 0).
     const bool allowPlanarReflection =
         ctx.Purpose != Engine::Renderer::ForwardEmitPurpose::ReflectionProbeCapture;
-    const bool planarReflectionReady =
-        allowPlanarReflection &&
-        m_Feature.GetParams().PlanarReflections != 0u &&
-        m_Feature.GetPlanarReflection().IsReady(frameIndex);
+    const OceanPlanarReflection::Mirror* planarReflection =
+        allowPlanarReflection && m_Feature.GetParams().PlanarReflections != 0u
+            ? m_Feature.GetPlanarReflection().Find(viewId)
+            : nullptr;
+    const bool planarReflectionReady = planarReflection && planarReflection->IsReady(frameIndex);
 
     // Combine cascade: currently only bound if a world-stable bake was scheduled.
     // Otherwise the surface sums the FFT cascades directly (CombineWavesAvailable 0).
@@ -577,17 +577,13 @@ bool OceanForwardContributor::BuildForwardCommand(
     // the binder's default-slot fallback covers the unbound case.
     if (planarReflectionReady)
     {
-        const auto reflTex = m_Feature.GetPlanarReflection().GetReflectionTexture();
-        if (reflTex.IsValid())
-        {
-            DrawBindings::TextureEntry tex{};
-            tex.Name = HashStringId("uOceanReflection");
-            tex.Texture = reflTex;
-            tex.Sampler = m_Feature.GetPlanarReflection().GetSampler();
-            tex.ArrayIndex = 0;
-            scratch.Textures.push_back(tex);
-            collectRG([&] { return m_Feature.GetPlanarReflection().ImportForSampling(*ctx.Frame, frameIndex); });
-        }
+        DrawBindings::TextureEntry tex{};
+        tex.Name = HashStringId("uOceanReflection");
+        tex.Texture = planarReflection->ColorTexture;
+        tex.Sampler = m_Feature.GetPlanarReflection().GetSampler();
+        tex.ArrayIndex = 0;
+        scratch.Textures.push_back(tex);
+        collectRG([&] { return m_Feature.GetPlanarReflection().ImportForSampling(*ctx.Frame, viewId, frameIndex); });
     }
 
     // Image-based lighting: ocean uses an interned custom grid pipeline, so it

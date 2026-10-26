@@ -97,7 +97,7 @@ ParsedScene Parse(std::string_view content)
             const std::string id = Attribute(line, "id");
             const std::string path = Attribute(line, "path");
             const std::string parent = Attribute(line, "parent");
-            const bool isEntity = type == "entity" || type == "blueprint" || type == "subscene";
+            const bool isEntity = type == "entity" || type == "prefab" || type == "subscene";
 
             // The scene header is metadata rather than an inspectable object.
             if (type == "scene")

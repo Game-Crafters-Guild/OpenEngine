@@ -31,6 +31,7 @@
 #include "ECS/World.h"
 #include "Engine/Rendering/Exposure.h"
 #include "Scene/SceneIO.h"
+#include "Types/ColorUtils.h"
 
 #include <algorithm>
 #include <cmath>
@@ -54,16 +55,6 @@ constexpr float kMidGreyAlbedo = 0.18f;
 
 // The scene-linear value the pinned stop maps to white.
 constexpr float kStopWhite = 1.0f;
-
-// Rec. 709 luma weights, for judging one gradient band against the stop.
-constexpr float kLumaR = 0.2126f;
-constexpr float kLumaG = 0.7152f;
-constexpr float kLumaB = 0.0722f;
-
-float Luma(const float rgb[3])
-{
-    return kLumaR * rgb[0] + kLumaG * rgb[1] + kLumaB * rgb[2];
-}
 
 // How far from middle grey a shipped scene's key surface may sit. Generous on
 // purpose — this gate exists to catch a scene that is unlit by orders of
@@ -207,9 +198,9 @@ TEST(ShippedSceneExposure, WebSmokeSeedSceneCarriesASkyLitForTheSameStop)
     const float gradientScale =
         sky.GradientSkyIntensity / GameEngine::Components::kReferenceWhiteNits;
     const float brightestBandLuma =
-        std::max({Luma(sky.GradientSkyTopColor),
-                  Luma(sky.GradientSkyHorizonColor),
-                  Luma(sky.GradientSkyBottomColor)}) *
+        std::max({GameEngine::ColorUtils::LinearRec709Luminance(sky.GradientSkyTopColor),
+                  GameEngine::ColorUtils::LinearRec709Luminance(sky.GradientSkyHorizonColor),
+                  GameEngine::ColorUtils::LinearRec709Luminance(sky.GradientSkyBottomColor)}) *
         gradientScale * exposure;
 
     EXPECT_GT(brightestBandLuma, kMidGreyAlbedo)

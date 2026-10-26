@@ -284,11 +284,8 @@ const float CBT_LEB_PARENT_EDGE_SCALE = 1.41421356;
 // arm). So this rule keeps the same per-facet asymmetry the domain metric had, and can raise merge
 // demand for one sibling only.
 //
-// It is left per-facet deliberately rather than by oversight: the domain metric's fix
-// (CBT_ParentSplitEdgeFar, measured on the parent's edge) applies here too, but changing this bound
-// moves the near field, which is the part of the frame the eye is most sensitive to, and it is a
-// separate change with its own gate. The domain metric decides its merge on the parent's split edge
-// (see the planar branch in Kernel_Classify); this one does not, yet.
+// It is per-facet on purpose. The domain metric's merge runs the parent's split test
+// (CBT_PlanarParentMergeWish). A parent-edge merge here would move the near field.
 //
 // Stability WITHIN this branch: split fires above nearTargetM and merge below nearTargetM/sqrt(2),
 // so a coarsened facet lands at sqrt(2) x its old edge — inside the dead band, never back across the
@@ -312,43 +309,31 @@ bool CBT_NearFieldWantMerge(float nearTargetM, float nearEdgeM)
     return nearTargetM > 0.0 && nearEdgeM < nearTargetM * CBT_NEAR_FIELD_MERGE_FRAC;
 }
 
-// The FAR end of the parent's split edge, reconstructed from a child's own corners — the piece a
-// parent-level merge test needs and the only piece a facet does not already hold.
-//
-// LEB bisection leaves both children holding the parent's hypotenuse MIDPOINT as corner1, and one
-// hypotenuse ENDPOINT as the corner the sibling does not share: the even child holds it as corner0,
-// the odd as corner2. (Locked over the whole live population, not assumed from the decode's
-// documentation, by CBTPlanarDemandGate.SiblingMergeMetricCensus's shared-corner matrix.)
-// Reflecting the held endpoint through the midpoint recovers the other endpoint without reading the
-// sibling's slot.
-//
-// EXACT IN XZ, EXTRAPOLATED IN Y. The domain position is linear under subdivision, so the reflection
-// reproduces the sibling's x and z bit-for-bit. The y is the SAMPLED HEIGHT (VertexEval writes
-// h(uv) into corner.y), so the reflection yields 2*h(mid) - h(held), which equals the true h at the
-// far endpoint only where the height is linear along that edge. At heightScale 0 that is every edge
-// and the two children reconstruct one identical segment; with relief they reconstruct two segments
-// that share XZ and differ in Y, so a pair whose projected parent edge sits within that error of the
-// threshold can still split its decision.
-//
-// Measured (CBTParentMergeMetric, shipped 512 m / heightScale 60 relief): 0 disagreeing pairs flat,
-// 53 of 11,408 (mid) and 627 of 268,434 (walk) on relief — and every one of those is predicted by
-// this extrapolation, so the residual has no second cause. That is the price of the metric; the
-// per-child rule it replaced disagreed on 5,699 of 11,408 and 99,215 of 269,199 of the same pairs.
-//
-// Corners are render-origin-RELATIVE; rebasing is a translation, so it does not affect any of this.
-vec3 CBT_ParentSplitEdgeFar(CBT_HEAPID_T h, vec3 e0, vec3 e1, vec3 e2)
+// The far end of the parent's split edge, read bit for bit from the sibling's stored corners: the even
+// child holds one end as corner0, the odd child the other as corner2. Classify reads frozen, cached
+// corners, so both siblings get the same edge. Returns false when the sibling is not a leaf.
+bool CBT_ParentSplitEdgeFar(uint slot, CBT_HEAPID_T h, CBTFrameParams fp, out vec3 parentFar)
 {
-    return ((uint(h) & 1u) == 0u) ? (2.0 * e1 - e0) : (2.0 * e1 - e2);
+    parentFar = vec3(0.0);
+    bool oddChild = (uint(h) & 1u) != 0u;
+    uvec4 neighbors = CBT_ReadCur(slot);
+    uint sibling = oddChild ? neighbors.y : neighbors.x;
+    if (sibling >= CBT_POOL_SIZE)
+        return false;
+#if defined(GE_CBT_HEAP32)
+    // The narrow heap packs two ids per uvec2 slot; only the loader knows the lane.
+    if (CBT_LoadHeapID(sibling) != CBT_SiblingHeapID(h))
+#else
+    if (gHeap.HeapID[sibling] != CBT_SiblingHeapID(h))
+#endif
+        return false;
+    parentFar = CBT_FetchCorner(sibling, oddChild ? 0u : 2u, fp);
+    return true;
 }
 
-// View-priority coarsening factor (arc slice S2) at `distM` meters from the camera. Split and merge
-// thresholds scale by this SAME factor, so the hysteresis dead band is preserved wherever both are
-// evaluated at one point. The planar split reads it at its node's view depth bound (the ramp grows
-// with distance, so a child is never coarsened less than its parent); the edge rule's merge (the
-// arms without a pyramid) at the PARENT's midpoint, which is the corner both siblings hold
-// bit-identically. contention <= 0 (A/B off
-// or an unsaturated pool) returns exactly 1.0, leaving the thresholds byte-identical to the pre-slice
-// metric.
+// View-priority coarsening factor at `distM` meters. Split and merge thresholds scale by this same factor,
+// so the dead band holds where both read it at one point: the planar split at its node's view depth bound,
+// the edge rule at the midpoint of the split edge. contention <= 0 returns exactly 1.0.
 float CBT_NearBiasCoarsen(CBTFrameParams fp, float contention, float distM)
 {
     if (contention <= 0.0)
@@ -1157,7 +1142,7 @@ bool CBT_PlanarRangeBelowPx(CBTFrameParams fp, vec3 origin, vec3 camRel, vec2 uv
     return strict ? rangePx < limitPx : rangePx <= limitPx;
 }
 
-// In motion a pair merges once the PARENT's range projects below half of flatPx at the nearest point
+// A pair merges once the PARENT's range projects below half of flatPx at the nearest point
 // of the parent's box. Both siblings rebuild that box identically (their own corners plus the reflected
 // far endpoint), so they agree; and a parent that merged reads the same box at its own split test, so it
 // stays merged. The factor of two is the band that keeps a pair whose range sits near the threshold
@@ -1189,8 +1174,11 @@ struct CBTPlanarDemand
 // metric otherwise, and the content-aware veto on either. The depth cap, the near-field occupancy gate
 // (CBT_NearFieldGateAllows) and the off-frustum gate are the caller's; nearField reports which branch
 // decided. Kernel_Classify asks it on the planar arms the criterion does not decide (CBT_PlanarCriterionOn:
-// the atlas source, a lattice without a pyramid, the narrow heap); at rest it splits at the merge end of
-// the band.
+// the atlas source, a lattice without a pyramid, the narrow heap).
+//
+// The wish uses a moving camera's thresholds while the camera holds still too. The screen-space merge
+// runs this test on the parent (CBT_PlanarParentMergeWish). The near-field merge measures the child's own
+// edge against CBT_NEAR_FIELD_MERGE_FRAC of the target, so it does not restate its split.
 //
 // Water plane: a triangle whose three corners all sit more than the margin below the calm water
 // surface is hidden by the water whenever the camera is above that surface (every view ray to it
@@ -1213,8 +1201,9 @@ bool CBT_ProjectPixelsPrecise(vec3 relPos, CBTFrameParams fp, out vec2 pixels)
     return true;
 }
 
-bool CBT_PlanarSplitWish(CBTFrameParams fp, CBTPlanarDemand d, vec3 e0, vec3 e1, vec3 e2, vec2 uv0, vec2 uv1,
-                         vec2 uv2, out bool nearField)
+// The scale on the edge rule's thresholds for one triangle: the near-bias at its split-edge midpoint, the
+// pool pressure, and the water plane when all three corners are hidden below it.
+float CBT_PlanarEdgeCoarsen(CBTFrameParams fp, CBTPlanarDemand d, vec3 e0, vec3 e1, vec3 e2)
 {
     float submergedCoarsen = 1.0;
     if (fp.waterPlane.z > 1.0)
@@ -1227,29 +1216,48 @@ bool CBT_PlanarSplitWish(CBTFrameParams fp, CBTPlanarDemand d, vec3 e0, vec3 e1,
     precise float coarsen =
         CBT_NearBiasCoarsen(fp, d.Contention, distance(0.5 * (e0 + e2), d.CamRel)) * d.PressureScale *
         submergedCoarsen;
-    // While the camera holds still (pc.settle) the wish uses the fine end of the hysteresis band the
-    // merges keep in motion: the split edge against the merge threshold restated on a parent edge
-    // (mergePx x sqrt(2)), the near-field target at CBT_NEAR_FIELD_MERGE_FRAC of itself and the flat
-    // veto at the flat merge's half. Every tree a moving camera can hold lies between the two ends, so
-    // a stop only ever adds detail and the rest mesh is never coarser than the motion mesh it replaces.
-    bool atRest = pc.settle != 0u;
-    precise float splitPx = (atRest ? fp.screen.w * CBT_LEB_PARENT_EDGE_SCALE : fp.screen.z) * coarsen;
-    float nearTargetM = atRest ? d.NearTargetM * CBT_NEAR_FIELD_MERGE_FRAC : d.NearTargetM;
+    return coarsen;
+}
+
+bool CBT_PlanarSplitWish(CBTFrameParams fp, CBTPlanarDemand d, vec3 e0, vec3 e1, vec3 e2, vec2 uv0, vec2 uv1,
+                         vec2 uv2, out bool nearField)
+{
+    precise float splitPx = fp.screen.z * CBT_PlanarEdgeCoarsen(fp, d, e0, e1, e2);
     vec2 p0, p1, p2;
     bool v0In = CBT_ProjectPixelsPrecise(e0, fp, p0);
     bool v1In = CBT_ProjectPixelsPrecise(e1, fp, p1);
     bool v2In = CBT_ProjectPixelsPrecise(e2, fp, p2);
     precise float edgePx = distance(p0, p2);
     nearField = !v0In || !v2In;
-    bool wish = nearField ? CBT_NearFieldSplitWish(fp, nearTargetM, splitPx, e0, e2, d.CamRel, !v0In && !v1In && !v2In)
+    bool wish = nearField ? CBT_NearFieldSplitWish(fp, d.NearTargetM, splitPx, e0, e2, d.CamRel, !v0In && !v1In && !v2In)
                           : edgePx > splitPx;
 #if !defined(CBT_DECODE_INT32)
     if (wish && CBT_PlanarFlatTestOn(fp))
         wish = !CBT_PlanarRangeBelowPx(fp, d.Origin, d.CamRel, min(uv0, min(uv1, uv2)), max(uv0, max(uv1, uv2)),
-                                       min(e0.y, min(e1.y, e2.y)), max(e0.y, max(e1.y, e2.y)),
-                                       atRest ? 0.5 * fp.waterPlane.w : fp.waterPlane.w, false);
+                                       min(e0.y, min(e1.y, e2.y)), max(e0.y, max(e1.y, e2.y)), fp.waterPlane.w,
+                                       false);
 #endif
     return wish;
+}
+
+// The parent's split test at the merge threshold. Both tests measure one edge with one arithmetic, so the gap
+// between the two thresholds is a real dead band: a parent that splits cannot merge back until its edge falls
+// below the merge bound. parentProjects is false when an end of the parent's split edge is at or behind the eye plane.
+bool CBT_PlanarParentMergeWish(CBTFrameParams fp, CBTPlanarDemand d, CBT_HEAPID_T h, vec3 e0, vec3 e2,
+                               vec3 parentFar, out bool parentProjects)
+{
+    bool oddChild = (uint(h) & 1u) != 0u;
+    vec3 parent0 = oddChild ? e2 : parentFar;
+    vec3 parent1 = oddChild ? e0 : e2;
+    vec3 parent2 = oddChild ? parentFar : e0;
+    vec2 q0, q2;
+    bool q0In = CBT_ProjectPixelsPrecise(parent0, fp, q0);
+    bool q2In = CBT_ProjectPixelsPrecise(parent2, fp, q2);
+    parentProjects = q0In && q2In;
+    precise float edgePx = distance(q0, q2);
+    precise float mergeBoundPx =
+        fp.screen.w * CBT_PlanarEdgeCoarsen(fp, d, parent0, parent1, parent2) * CBT_LEB_PARENT_EDGE_SCALE;
+    return parentProjects && edgePx < mergeBoundPx;
 }
 
 #if !defined(CBT_DECODE_INT32)
@@ -1804,45 +1812,15 @@ void Kernel_Classify()
             }
             else
             {
-                // A merge is a decision about the PARENT, so it is measured on the parent. Deciding it
-                // on the facet's OWN split edge asks a question the diamond cannot answer: that edge is
-                // one LEG of the parent and the sibling's is the other, and under a grazing camera the
-                // two legs project up to ~10x apart. So exactly one sibling ever asked to merge,
-                // PrepareSimplify's pair-state test rejected every candidate, and the unserved SIMPLIFY
-                // flags went on starving neighboring splits through Split's facing-neighbor bail.
-                //
-                // THE PARENT EDGE IS SHARED IN XZ, NOT IN Y. Corner1 is the parent's hypotenuse midpoint
-                // for both children and is bit-identical between them, so the threshold below is
-                // diamond-consistent. The reconstructed far endpoint is exact in XZ but extrapolates the
-                // sampled height (see CBT_ParentSplitEdgeFar), so on relief the two children measure
-                // segments that differ in Y and a pair near the threshold can still split its decision.
-                // Do not restate this as "the one edge both siblings agree on", and do not claim the two
-                // legs are congruent in world space: that holds only at heightScale 0, and a converged
-                // relief tree measures the odd/even world length ratio at 0.680-1.480 at these poses
-                // (0.249-3.917 on the steeper census arm). The residual is 53 of 11,408 pairs (mid) and
-                // 646 of 268,435 (walk); a rule on each child's own split edge disagrees on 5,699 and 99,215.
-                //
-                // sqrt(2) restates the child threshold on that edge (a parent hypotenuse is sqrt(2) x a
-                // child's), and the threshold itself is evaluated at the parent's midpoint — corner1,
-                // shared bit-identically — so the view-priority coarsening is diamond-consistent too.
-                //
-                // A parent endpoint at/behind the eye plane cannot be projected. That facet keeps the
-                // per-child answer: the endpoint that failed is the sibling's unshared corner, so the
-                // sibling is on the near-field branch, where the world-space rule decides the pair.
-                vec3 parentFar = CBT_ParentSplitEdgeFar(h, e0, e1, e2);
-                vec2 parentFarPx;
-                if (CBT_ProjectPixels(parentFar, fp, parentFarPx))
-                {
-                    vec2 parentHeldPx = ((uint(h) & 1u) == 0u) ? p0 : p2;
-                    float mergePxParent = fp.screen.w * CBT_NearBiasCoarsen(fp, contention, distance(e1, camRel)) *
-                                          pressureScale * submergedCoarsen;
-                    wantMerge = distance(parentHeldPx, parentFarPx) <
-                                mergePxParent * CBT_LEB_PARENT_EDGE_SCALE;
-                }
-                else
-                {
-                    wantMerge = (distance(p0, p2) < mergePx);
-                }
+                // A merge decides the parent, so both children run the parent's split test: their own
+                // edges are the parent's two legs and can project 10x apart. A sibling that is not a leaf
+                // blocks the merge; a parent end behind the eye plane keeps the per-child answer.
+                vec3 parentFar;
+                bool siblingIsLeaf = depth > pc.baseDepth && CBT_ParentSplitEdgeFar(slot, h, fp, parentFar);
+                bool parentProjects = false;
+                bool parentMerges =
+                    siblingIsLeaf && CBT_PlanarParentMergeWish(fp, demand, h, e0, e2, parentFar, parentProjects);
+                wantMerge = (!siblingIsLeaf || parentProjects) ? parentMerges : (distance(p0, p2) < mergePx);
             }
 #if !defined(CBT_DECODE_INT32)
             if (!wantSplit && !wantMerge && depth > pc.baseDepth && CBT_PlanarFlatTestOn(fp))
@@ -1911,30 +1889,18 @@ void Kernel_Classify()
                 // the AREA merge threshold while the parent's split edge still exceeds the rescue
                 // threshold; merging them would re-issue the same rescue split next frame, so the
                 // diamond would oscillate. Hold the merge while the parent edge is still long. The
-                // parent's far endpoint is read from the sibling's cached corners: reflecting the
-                // midpoint is not valid on a curved or displaced sphere. Topology is frozen and the
-                // corners cached for the whole Classify pass, so both siblings measure the same edge
-                // (deep-sector storage included).
+                // parent's far end comes from the sibling's corners (CBT_ParentSplitEdgeFar), so both
+                // siblings measure the same edge, deep-sector storage included.
                 if (wantMerge && depth > pc.baseDepth && depth <= maxDepth &&
                     fp.demandTuning.z > 0.0 && occupancy < fp.demandTuning.w)
                 {
-                    bool oddChild = (uint(h) & 1u) != 0u;
-                    uvec4 neighbors = CBT_ReadCur(slot);
-                    uint sibling = oddChild ? neighbors.y : neighbors.x;
-#if defined(GE_CBT_HEAP32)
-                    // The narrow heap packs two ids per uvec2 slot; only the loader
-                    // knows the lane. The wide arm keeps the direct read.
-                    if (sibling < CBT_POOL_SIZE && CBT_LoadHeapID(sibling) == CBT_SiblingHeapID(h))
-#else
-                    if (sibling < CBT_POOL_SIZE && gHeap.HeapID[sibling] == CBT_SiblingHeapID(h))
-#endif
+                    vec3 parentFar;
+                    if (CBT_ParentSplitEdgeFar(slot, h, fp, parentFar))
                     {
-                        CBTCornersWS siblingCorners = CBT_FetchCorners(sibling, fp);
-                        vec3 parentFar = oddChild ? siblingCorners.R0 : siblingCorners.R2;
                         vec2 parentFarPx;
                         if (CBT_ProjectPixels(parentFar, fp, parentFarPx))
                         {
-                            vec2 parentHeldPx = oddChild ? p2 : p0;
+                            vec2 parentHeldPx = ((uint(h) & 1u) != 0u) ? p2 : p0;
                             if (distance(parentHeldPx, parentFarPx) > fp.demandTuning.z)
                                 wantMerge = false;
                         }
@@ -2994,8 +2960,10 @@ vec4 CBT_FoldHeightPlane(uvec2 block, uint level, uint belowOffset, uvec2 belowD
 
 // Writes level k = pc.passIndex & 0xFF of the height-range pyramid (CBT_HeightRange*) and of the
 // chain levels' range pyramids, for the first pc.passIndex >> 8 chain levels (0: none; the CPU passes
-// CBTHeightChainRangeLevels when the chain is built for the bound lattice). Threads [0, N_k) write the
-// level-0 entries; each next N_k, chain level 1, 2, ... whose pyramid has level k. The first stored
+// CBTHeightChainRangeLevels when the chain is built for the bound lattice), over the blocks
+// pc.buildRegionMin + [0, pc.buildRegionExtent) of level k (the whole level, or the blocks over an edit:
+// CBTLayout.h CBTHeightRangeBlocksReading). Threads [0, R) write the level-0 entries of the region's R
+// blocks; each next R, chain level 1, 2, ... whose pyramid has level k. The first stored
 // level reads the bound height texture (every lattice sample a block's cells touch), a chain level's
 // base level reads the chain's samples whose lattice positions the block covers; each coarser level
 // folds 2 x 2 blocks of the level below. The CPU dispatches the levels in order with a barrier
@@ -3026,13 +2994,18 @@ void Kernel_HeightRangeBuild()
             gHeightRange.Range[20u + j] = CBT_ChainRangeFirstEntry(cells, first, top, j);
     }
     uvec2 levelDim = uvec2(CBT_HeightRangeDim(cells.x, level), CBT_HeightRangeDim(cells.y, level));
-    uint levelEntries = levelDim.x * levelDim.y;
+    uvec2 regionExtent = uvec2(pc.buildRegionExtent & 0xFFFFu, pc.buildRegionExtent >> 16u);
+    uint regionEntries = regionExtent.x * regionExtent.y;
     uint i = gl_GlobalInvocationID.x;
-    uint chainLevel = i / levelEntries;
+    uint chainLevel = i / regionEntries;
     if (chainLevel > chainLevels || (chainLevel > 0u && CBT_ChainRangeBase(first, top, chainLevel) > level))
         return;
-    uint e = i - chainLevel * levelEntries;
-    uvec2 block = uvec2(e % levelDim.x, e / levelDim.x);
+    uint inRegion = i - chainLevel * regionEntries;
+    uvec2 block = uvec2(pc.buildRegionMin & 0xFFFFu, pc.buildRegionMin >> 16u) +
+                  uvec2(inRegion % regionExtent.x, inRegion / regionExtent.x);
+    if (block.x >= levelDim.x || block.y >= levelDim.y)
+        return;
+    uint e = block.y * levelDim.x + block.x;
     vec2 acc = vec2(3.0e38, -3.0e38);
     uint base = chainLevel == 0u ? first : CBT_ChainRangeBase(first, top, chainLevel);
     if (level == base && chainLevel == 0u)
@@ -3136,7 +3109,7 @@ float CBT_ChainBuildSource(uint level, int x, int z, uint samplesX, uint samples
     return CBT_ChainLoad(CBT_ChainLevelWord(samplesX, samplesZ, level) + cz * sx + cx);
 }
 
-// The [1 2 1] / 4 tent across finer row `z` around coarse sample `x` (HeightPyramidBuilder's
+// The [1 2 1] / 4 tent across finer row `z` around coarse sample `x` (PagePyramidBuilder's
 // TentAcross, same order of operations).
 float CBT_ChainTentAcross(uint finer, int x, int z, uint samplesX, uint samplesZ, uint frameSlot)
 {
@@ -3149,8 +3122,8 @@ float CBT_ChainTentAcross(uint finer, int x, int z, uint samplesX, uint samplesZ
 #endif
 
 // The prefiltered height chain (cbt_height_chain.glsl): writes level pc.passIndex over the region
-// pc.heightChainRegionMin + [0, pc.heightChainRegionExtent), each sample the [1 2 1] / 4 tent of the
-// level below around sample 2j along both axes (HeightPyramidBuilder::MakeCoarserRow's order). Level
+// pc.buildRegionMin + [0, pc.buildRegionExtent), each sample the [1 2 1] / 4 tent of the
+// level below around sample 2j along both axes (PagePyramidBuilder::MakeCoarserRow's order). Level
 // 1 reads the bound height texture, each coarser level the chain; the CPU dispatches the levels in
 // order with a barrier between them. Thread 0 of level 1 writes the header. The narrow-heap arm has
 // no chain.
@@ -3173,12 +3146,12 @@ void Kernel_HeightChainBuild()
         gHeightChain.Words[0] = samplesX | (samplesZ << 16u);
         gHeightChain.Words[1] = top;
     }
-    uint width = pc.heightChainRegionExtent & 0xFFFFu;
-    uint height = pc.heightChainRegionExtent >> 16u;
+    uint width = pc.buildRegionExtent & 0xFFFFu;
+    uint height = pc.buildRegionExtent >> 16u;
     if (i >= width * height)
         return;
-    uint x = (pc.heightChainRegionMin & 0xFFFFu) + i % width;
-    uint z = (pc.heightChainRegionMin >> 16u) + i / width;
+    uint x = (pc.buildRegionMin & 0xFFFFu) + i % width;
+    uint z = (pc.buildRegionMin >> 16u) + i / width;
     uint sx = CBT_ChainSamples(samplesX, level);
     if (x >= sx || z >= CBT_ChainSamples(samplesZ, level))
         return;
@@ -3193,7 +3166,7 @@ void Kernel_HeightChainBuild()
 }
 
 // The far-field normal chain (cbt_height_chain.glsl CBT_ChainNormal): writes mip pc.passIndex over the
-// texel region pc.heightChainRegionMin + [0, pc.heightChainRegionExtent), each texel the normal of chain
+// texel region pc.buildRegionMin + [0, pc.buildRegionExtent), each texel the normal of chain
 // level mip + 1 at the texel's center. Runs after the height chain it reads; mips are independent of
 // each other. The narrow-heap arm has no chain.
 void Kernel_NormalChainBuild()
@@ -3205,13 +3178,13 @@ void Kernel_NormalChainBuild()
     uint mip = pc.passIndex;
     if (samplesX < 3u || samplesZ < 3u || mip >= CBT_NORMAL_CHAIN_MAX_MIPS)
         return;
-    uint width = pc.heightChainRegionExtent & 0xFFFFu;
-    uint height = pc.heightChainRegionExtent >> 16u;
+    uint width = pc.buildRegionExtent & 0xFFFFu;
+    uint height = pc.buildRegionExtent >> 16u;
     uint i = gl_GlobalInvocationID.x;
     if (i >= width * height)
         return;
-    uint x = (pc.heightChainRegionMin & 0xFFFFu) + i % width;
-    uint z = (pc.heightChainRegionMin >> 16u) + i / width;
+    uint x = (pc.buildRegionMin & 0xFFFFu) + i % width;
+    uint z = (pc.buildRegionMin >> 16u) + i / width;
     uint texelsX = max(((samplesX - 1u) / 2u) >> mip, 1u);
     uint texelsZ = max(((samplesZ - 1u) / 2u) >> mip, 1u);
     if (x >= texelsX || z >= texelsZ)

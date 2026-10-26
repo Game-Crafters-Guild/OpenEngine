@@ -55,10 +55,28 @@ public:
     // GPU pipeline like StopRecording(…, true) does.
     void StopForShutdown();
 
-    bool IsRecording() const { return m_MovieOptions.has_value(); }
+    // What a caller that waits for a recording to end reads.
+    struct RecordingStatus
+    {
+        // True until the encoder has closed the container. Once it reads false,
+        // the file on disk is complete and readable, unless Failure is set.
+        bool Recording = false;
+        // The session has ended (a stop or the frame limit) and the encoder is
+        // still writing the container's index.
+        bool Finalizing = false;
+        // Why the last recording failed (the encoder could not open or write the
+        // file). Empty while recording and when the file closed cleanly.
+        std::string Failure;
+    };
+
+    // A session is open: frames are captured or still draining into the encoder.
+    // The encoder can still hold the file after the session closes; a caller
+    // that waits for the file reads GetRecordingStatus.
+    bool IsSessionOpen() const { return m_MovieOptions.has_value(); }
+    RecordingStatus GetRecordingStatus() const;
     // Actively capturing new frames. False from the moment a stop is requested,
-    // while IsRecording stays true until pending readbacks/audio finish
-    // draining into the encoder — key UI state off this, not IsRecording.
+    // while IsSessionOpen stays true until pending readbacks/audio finish
+    // draining into the encoder — key UI state off this, not IsSessionOpen.
     bool IsCapturing() const { return m_MovieOptions.has_value() && !m_MovieFinishRequested; }
     // Capturing an HDR arm, so this frame's encode carries a PQ/HLG override.
     // A view asks before finalizing itself: the encode refuses an already-encoded
@@ -99,6 +117,11 @@ public:
                           Rendering::TextureFormat presentedFormat);
 
 private:
+    friend struct GameViewMovieCaptureTestAccess;
+
+    // Drops the finalized recorder and keeps its failure text for the status.
+    // The caller holds m_MovieRecorderMutex.
+    void ReleaseFinalizedRecorderLocked();
     Video::SubmitResult TrySubmitMovieFrame(Video::OwnedVideoFrame& frame);
     // The recorder's terminal failure text, or the generic encoder-stopped
     // message when none exists. For the rejected-submit paths.
@@ -146,7 +169,9 @@ private:
     bool m_MovieFinishRequested = false;
     bool m_MovieFinishWaitRequested = false;
     std::string m_MovieFinishMessage;
-    std::mutex m_MovieRecorderMutex;
+    mutable std::mutex m_MovieRecorderMutex;
+    // The failure of the last recorder released, guarded by m_MovieRecorderMutex.
+    std::string m_LastRecordingFailure;
     uint32_t m_MovieAudioChannels = 0;
     uint32_t m_MovieAudioSampleRate = 0;
     // Audio the encoder couldn't accept yet (queue full); drained in order on the

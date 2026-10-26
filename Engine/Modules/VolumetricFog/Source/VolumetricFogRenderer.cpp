@@ -355,7 +355,8 @@ void ResolveFogAmbient(RenderServices& services, const VolumetricFogSettings& se
     // This is the one consumer of the sun colour that is NOT proportional to it: the source is
     // normalized by its own luminance and mixed in at 35 %, so an authored sun tint reaches the fog
     // ambient as HUE only, never as magnitude. That is the intent — this is a wash, not a light.
-    const float sunLum = std::max(ColorUtils::LinearRec709Luminance(sky.primarySunColor), 0.001f);
+    const ColorLinear sunColor(sky.primarySunColor[0], sky.primarySunColor[1], sky.primarySunColor[2]);
+    const float sunLum = std::max(ColorUtils::LinearRec709Luminance(sunColor), 0.001f);
     float skyAmbient[3]{};
     for (int i = 0; i < 3; ++i)
     {
@@ -381,13 +382,15 @@ bool SunLightingChangedEnough(
     if (dirDot < 0.9848077f) // 10 degrees.
         return true;
 
-    const float oldLum = ColorUtils::LinearRec709Luminance(historySunColor) * historySunIntensity;
-    const float newLum = ColorUtils::LinearRec709Luminance(sun.color) * sun.intensity;
+    const ColorLinear historyColor(historySunColor[0], historySunColor[1], historySunColor[2]);
+    const ColorLinear sunColor(sun.color[0], sun.color[1], sun.color[2]);
+    const float oldLum = ColorUtils::LinearRec709Luminance(historyColor) * historySunIntensity;
+    const float newLum = ColorUtils::LinearRec709Luminance(sunColor) * sun.intensity;
     if (std::abs(oldLum - newLum) > std::max(0.05f, oldLum * 0.25f))
         return true;
 
-    const float oldColorScale = std::max(ColorUtils::LinearRec709Luminance(historySunColor), 0.001f);
-    const float newColorScale = std::max(ColorUtils::LinearRec709Luminance(sun.color), 0.001f);
+    const float oldColorScale = std::max(ColorUtils::LinearRec709Luminance(historyColor), 0.001f);
+    const float newColorScale = std::max(ColorUtils::LinearRec709Luminance(sunColor), 0.001f);
     for (int i = 0; i < 3; ++i)
     {
         const float oldC = historySunColor[i] / oldColorScale;

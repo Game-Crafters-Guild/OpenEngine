@@ -72,6 +72,11 @@ class Archetype
     // archetype-transition cost when MoveEntity dropped it).
     EntityLocation AddEntityUnsafe(EntityHandle entity);
 
+    // Add entities as one run of consecutive rows (ArchetypeTable::AddEntities)
+    // and stamp the run's chunk once. The run may hold fewer rows than asked;
+    // add the rest with another call. Same locking contract as AddEntityUnsafe.
+    RowRun AddEntitiesUnsafe(std::span<const EntityHandle> entities);
+
     // Remove entity at the given location. Returns the entity that was swapped
     // into the vacated slot (for metadata fixup), or Invalid if none was moved.
     // Same locking contract as AddEntityUnsafe: caller must hold worldMutex.

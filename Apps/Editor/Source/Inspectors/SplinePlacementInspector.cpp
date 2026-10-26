@@ -1,11 +1,12 @@
 #include "Inspectors/SplinePlacementInspector.h"
 
-#include "InspectorRegistry.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "EditorChangeNotifications.h"
+#include "InspectorRegistry.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Inspectors/SplineInspector.h"
 #include "Mathematics/Interpolation.h"
 #include "UndoRedo/UndoRedoService.h"
 
@@ -215,164 +216,175 @@ void AddReflectedEnumRow(const InspectorContext& ctx, const std::string& label,
         });
 }
 
-} // namespace
-
-void RegisterSplinePlacementInspector()
+void BuildSplinePlacementInspector(const InspectorContext& context)
 {
     using namespace Components;
     using namespace InspectorDrag;
 
-    InspectorRegistry::Get().RegisterComponentInspector<SplinePlacement>(
-        [](const InspectorContext& ctx)
+    auto* comp = context.World ? context.World->GetComponent<SplinePlacement>(context.Entity) : nullptr;
+    if (!comp)
+        return;
+    AddSplineRecipeBuildStateNotice(context);
+
+    ECS::World* world = context.World;
+    ECS::EntityHandle entity = context.Entity;
+    Editor::EditorChangeNotifications* notifications = context.ChangeNotifications;
+    Editor::UndoRedoService* undo = context.Undo;
+
+    // Multi-selection: mirror edits to the other selected entities that
+    // also carry the component (membership mirrors the generic fallback).
+    std::vector<ECS::EntityHandle> extras;
+    for (ECS::EntityHandle ex : GetAdditionalEntities(context))
+    {
+        if (world->GetComponent<SplinePlacement>(ex))
+            extras.push_back(ex);
+    }
+
+    BuildPoolRows(context, "Straight", &SplinePlacement::StraightPool,
+                  "Tile meshes placed along the spline; each station picks one "
+                  "deterministically from Seed. Pool members must share footprint "
+                  "width and pivot convention.",
+                  extras);
+    BuildPoolRows(context, "Curve", &SplinePlacement::CurvePool,
+                  "Corner pieces for joints past the seam-shear cap (consumed by the "
+                  "corner slice). Optional; empty means every joint shears.",
+                  extras);
+    BuildPoolRows(context, "Scatter", &SplinePlacement::ScatterPool,
+                  "Accent meshes scattered across the band (consumed by the scatter "
+                  "slice).",
+                  extras);
+
+    InspectorUI::AddAssetFieldRow(
+        context.Parent, "Material Override", comp->OverrideMaterial.ToGuid(),
+        {AssetType::Material}, &EngineCore::GetInstance().GetAssetManager().GetRegistry(),
+        [world, entity, extras, notifications, undo](const GUID& picked)
         {
-            auto* comp = ctx.World ? ctx.World->GetComponent<SplinePlacement>(ctx.Entity) : nullptr;
-            if (!comp)
-                return;
+            CommitToSelection(world, entity, extras, notifications, undo, "Change Material Override",
+                              [picked](SplinePlacement& u)
+                              { u.OverrideMaterial.Set(picked); });
+        },
+        context.Thumbnails,
+        "Material applied to every placed tile. Empty keeps each mesh's own embedded "
+        "model material, which on many kits is an untextured placeholder.");
 
-            ECS::World* w = ctx.World;
-            ECS::EntityHandle e = ctx.Entity;
-            Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
-            Editor::UndoRedoService* undo = ctx.Undo;
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Spacing", comp->Spacing, world, entity, notifications, undo, "Change Spacing",
+        [](SplinePlacement& u, float v)
+        { u.Spacing = std::max(v, 0.05f); }, 2.0f,
+        "Metres between tile centers along the draped centerline", extras, 0.05f);
 
-            // Multi-selection: mirror edits to the other selected entities that
-            // also carry the component (membership mirrors the generic fallback).
-            std::vector<ECS::EntityHandle> extras;
-            for (ECS::EntityHandle ex : GetAdditionalEntities(ctx))
-            {
-                if (w->GetComponent<SplinePlacement>(ex))
-                    extras.push_back(ex);
-            }
+    AddReflectedEnumRow<SplinePlacementFit>(
+        context, "Fit", "Fit", comp->Fit, "Change Fit", &SplinePlacement::Fit,
+        "FitToLength rounds the tile count to close the spline exactly; "
+        "FixedPitch steps exactly Spacing metres and cuts the last partial step",
+        extras);
+    AddReflectedEnumRow<SplinePlacementConform>(
+        context, "Conform", "ConformMode", comp->ConformMode, "Change Conform Mode",
+        &SplinePlacement::ConformMode, "How tiles meet the surface under the spline",
+        extras);
+    AddReflectedEnumRow<SplineConformTarget>(
+        context, "Conform Target", "ConformTarget", comp->ConformTarget,
+        "Change Conform Target", &SplinePlacement::ConformTarget,
+        "What the conform ray may land on. Scene takes the nearest surface of any kind, "
+        "so a tile passing under a cart or a canopy sits on top of it; TerrainOnly makes "
+        "scenery transparent so tiles follow the ground beneath it. Under TerrainOnly the "
+        "drawn drape line can still ride scene props while the placed tiles stand on the "
+        "terrain under them — the line does not read this setting yet",
+        extras);
+    // Tooltip from the @ge-tooltip marker on the field, not a literal here.
+    AddReflectedEnumRow<SplinePlantMode>(
+        context, "Plant Mode", "PlantMode", comp->PlantMode, "Change Plant Mode",
+        &SplinePlacement::PlantMode, nullptr, extras);
 
-            BuildPoolRows(ctx, "Straight", &SplinePlacement::StraightPool,
-                          "Tile meshes placed along the spline; each station picks one "
-                          "deterministically from Seed. Pool members must share footprint "
-                          "width and pivot convention.",
-                          extras);
-            BuildPoolRows(ctx, "Curve", &SplinePlacement::CurvePool,
-                          "Corner pieces for joints past the seam-shear cap (consumed by the "
-                          "corner slice). Optional; empty means every joint shears.",
-                          extras);
-            BuildPoolRows(ctx, "Scatter", &SplinePlacement::ScatterPool,
-                          "Accent meshes scattered across the band (consumed by the scatter "
-                          "slice).",
-                          extras);
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Lateral Offset", comp->LateralOffset, world, entity, notifications, undo,
+        "Change Lateral Offset",
+        [](SplinePlacement& u, float v)
+        { u.LateralOffset = v; }, 0.0f,
+        "Metres to the right of travel; negative = left", extras);
 
-            InspectorUI::AddAssetFieldRow(
-                ctx.Parent, "Material Override", comp->OverrideMaterial.ToGuid(),
-                {AssetType::Material}, &EngineCore::GetInstance().GetAssetManager().GetRegistry(),
-                [w, e, extras, n, undo](const GUID& picked)
-                {
-                    CommitToSelection(w, e, extras, n, undo, "Change Material Override",
-                                      [picked](SplinePlacement& u)
-                                      { u.OverrideMaterial.Set(picked); });
-                },
-                ctx.Thumbnails,
-                "Material applied to every placed tile. Empty keeps each mesh's own embedded "
-                "model material, which on many kits is an untextured placeholder.");
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Slope Blend", comp->SlopeBlend, world, entity, notifications, undo, "Change Slope Blend",
+        [](SplinePlacement& u, float v)
+        { u.SlopeBlend = Math::Clamp01(v); },
+        1.0f, "0 = tiles stay world-up, 1 = tiles align fully to the surface normal",
+        extras, 0.0f, 1.0f);
 
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Spacing", comp->Spacing, w, e, n, undo, "Change Spacing",
-                [](SplinePlacement& u, float v) { u.Spacing = std::max(v, 0.05f); }, 2.0f,
-                "Metres between tile centers along the draped centerline", extras, 0.05f);
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Max Tilt", comp->MaxTiltDegrees, world, entity, notifications, undo, "Change Max Tilt",
+        [](SplinePlacement& u, float v)
+        { u.MaxTiltDegrees = std::clamp(v, 0.0f, 90.0f); },
+        Components::kDefaultSplineMaxTiltDegrees,
+        "Degrees a tile may lean from upright. Ground steeper than this still sets the "
+        "tile's height, but the tile holds this angle instead of standing on edge",
+        extras, 0.0f, 90.0f);
 
-            AddReflectedEnumRow<SplinePlacementFit>(
-                ctx, "Fit", "Fit", comp->Fit, "Change Fit", &SplinePlacement::Fit,
-                "FitToLength rounds the tile count to close the spline exactly; "
-                "FixedPitch steps exactly Spacing metres and cuts the last partial step",
-                extras);
-            AddReflectedEnumRow<SplinePlacementConform>(
-                ctx, "Conform", "ConformMode", comp->ConformMode, "Change Conform Mode",
-                &SplinePlacement::ConformMode, "How tiles meet the surface under the spline",
-                extras);
-            AddReflectedEnumRow<SplineConformTarget>(
-                ctx, "Conform Target", "ConformTarget", comp->ConformTarget,
-                "Change Conform Target", &SplinePlacement::ConformTarget,
-                "What the conform ray may land on. Scene takes the nearest surface of any kind, "
-                "so a tile passing under a cart or a canopy sits on top of it; TerrainOnly makes "
-                "scenery transparent so tiles follow the ground beneath it. Under TerrainOnly the "
-                "drawn drape line can still ride scene props while the placed tiles stand on the "
-                "terrain under them — the line does not read this setting yet",
-                extras);
-            // Tooltip from the @ge-tooltip marker on the field, not a literal here.
-            AddReflectedEnumRow<SplinePlantMode>(
-                ctx, "Plant Mode", "PlantMode", comp->PlantMode, "Change Plant Mode",
-                &SplinePlacement::PlantMode, nullptr, extras);
+    AddComponentIntRowWithDrag<SplinePlacement>(
+        context.Parent, "Seed", static_cast<int>(comp->Seed), world, entity, notifications, undo, "Change Seed",
+        [](SplinePlacement& u, int v)
+        { u.Seed = static_cast<uint32>(std::max(v, 0)); },
+        0,
+        "Salts the per-station pool pick and every jitter draw below; same seed "
+        "reproduces the same layout exactly",
+        extras);
 
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Lateral Offset", comp->LateralOffset, w, e, n, undo,
-                "Change Lateral Offset",
-                [](SplinePlacement& u, float v) { u.LateralOffset = v; }, 0.0f,
-                "Metres to the right of travel; negative = left", extras);
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Seam Shear Max", comp->SeamShearMaxDegrees, world, entity, notifications, undo,
+        "Change Seam Shear Max",
+        [](SplinePlacement& u, float v)
+        { u.SeamShearMaxDegrees = std::max(v, 0.0f); },
+        8.0f, "Cap in degrees on the per-tile skew that softens rigid seams; 0 disables",
+        extras, 0.0f);
 
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Slope Blend", comp->SlopeBlend, w, e, n, undo, "Change Slope Blend",
-                [](SplinePlacement& u, float v) { u.SlopeBlend = Math::Clamp01(v); },
-                1.0f, "0 = tiles stay world-up, 1 = tiles align fully to the surface normal",
-                extras, 0.0f, 1.0f);
+    // Per-station variation. Every one of these is deterministic in Seed
+    // and defaults to a no-op, so an existing recipe lays out unchanged.
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Spacing Jitter", comp->SpacingJitterMetres, world, entity, notifications, undo,
+        "Change Spacing Jitter",
+        [](SplinePlacement& u, float v)
+        { u.SpacingJitterMetres = std::max(v, 0.0f); },
+        0.0f,
+        "Metres a tile may slide along the path, either way. Breaks up the railway-sleeper "
+        "look of an exact pitch. Capped at half the spacing, so tiles never reorder",
+        extras, 0.0f);
 
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Max Tilt", comp->MaxTiltDegrees, w, e, n, undo, "Change Max Tilt",
-                [](SplinePlacement& u, float v)
-                { u.MaxTiltDegrees = std::clamp(v, 0.0f, 90.0f); },
-                Components::kDefaultSplineMaxTiltDegrees,
-                "Degrees a tile may lean from upright. Ground steeper than this still sets the "
-                "tile's height, but the tile holds this angle instead of standing on edge",
-                extras, 0.0f, 90.0f);
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Yaw Jitter", comp->YawJitterDegrees, world, entity, notifications, undo,
+        "Change Yaw Jitter",
+        [](SplinePlacement& u, float v)
+        { u.YawJitterDegrees = std::clamp(v, 0.0f, 180.0f); },
+        0.0f, "Degrees a tile may turn on the spot, either way", extras, 0.0f, 180.0f);
 
-            AddComponentIntRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Seed", static_cast<int>(comp->Seed), w, e, n, undo, "Change Seed",
-                [](SplinePlacement& u, int v) { u.Seed = static_cast<uint32>(std::max(v, 0)); },
-                0,
-                "Salts the per-station pool pick and every jitter draw below; same seed "
-                "reproduces the same layout exactly",
-                extras);
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Lateral Jitter", comp->LateralJitterMetres, world, entity, notifications, undo,
+        "Change Lateral Jitter",
+        [](SplinePlacement& u, float v)
+        { u.LateralJitterMetres = std::max(v, 0.0f); },
+        0.0f, "Metres a tile may slide across the path, either way", extras, 0.0f);
 
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Seam Shear Max", comp->SeamShearMaxDegrees, w, e, n, undo,
-                "Change Seam Shear Max",
-                [](SplinePlacement& u, float v) { u.SeamShearMaxDegrees = std::max(v, 0.0f); },
-                8.0f, "Cap in degrees on the per-tile skew that softens rigid seams; 0 disables",
-                extras, 0.0f);
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "Dropout", comp->DropoutChance, world, entity, notifications, undo, "Change Dropout",
+        [](SplinePlacement& u, float v)
+        { u.DropoutChance = Math::Clamp01(v); },
+        0.0f,
+        "Fraction of stations left empty. 0 places every tile, 1 places none — gaps are "
+        "what stop a run reading as a manufactured strip",
+        extras, 0.0f, 1.0f);
 
-            // Per-station variation. Every one of these is deterministic in Seed
-            // and defaults to a no-op, so an existing recipe lays out unchanged.
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Spacing Jitter", comp->SpacingJitterMetres, w, e, n, undo,
-                "Change Spacing Jitter",
-                [](SplinePlacement& u, float v) { u.SpacingJitterMetres = std::max(v, 0.0f); },
-                0.0f,
-                "Metres a tile may slide along the path, either way. Breaks up the railway-sleeper "
-                "look of an exact pitch. Capped at half the spacing, so tiles never reorder",
-                extras, 0.0f);
+    AddComponentFloatRowWithDrag<SplinePlacement>(
+        context.Parent, "End Taper", comp->EndTaperMetres, world, entity, notifications, undo, "Change End Taper",
+        [](SplinePlacement& u, float v)
+        { u.EndTaperMetres = std::max(v, 0.0f); }, 0.0f,
+        "Metres at each end over which tiles thin out to nothing, so a run peters out "
+        "instead of stopping square. 0 disables",
+        extras, 0.0f);
+}
 
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Yaw Jitter", comp->YawJitterDegrees, w, e, n, undo,
-                "Change Yaw Jitter",
-                [](SplinePlacement& u, float v)
-                { u.YawJitterDegrees = std::clamp(v, 0.0f, 180.0f); },
-                0.0f, "Degrees a tile may turn on the spot, either way", extras, 0.0f, 180.0f);
+} // namespace
 
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Lateral Jitter", comp->LateralJitterMetres, w, e, n, undo,
-                "Change Lateral Jitter",
-                [](SplinePlacement& u, float v) { u.LateralJitterMetres = std::max(v, 0.0f); },
-                0.0f, "Metres a tile may slide across the path, either way", extras, 0.0f);
-
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "Dropout", comp->DropoutChance, w, e, n, undo, "Change Dropout",
-                [](SplinePlacement& u, float v) { u.DropoutChance = Math::Clamp01(v); },
-                0.0f,
-                "Fraction of stations left empty. 0 places every tile, 1 places none — gaps are "
-                "what stop a run reading as a manufactured strip",
-                extras, 0.0f, 1.0f);
-
-            AddComponentFloatRowWithDrag<SplinePlacement>(
-                ctx.Parent, "End Taper", comp->EndTaperMetres, w, e, n, undo, "Change End Taper",
-                [](SplinePlacement& u, float v) { u.EndTaperMetres = std::max(v, 0.0f); }, 0.0f,
-                "Metres at each end over which tiles thin out to nothing, so a run peters out "
-                "instead of stopping square. 0 disables",
-                extras, 0.0f);
-        });
+void RegisterSplinePlacementInspector()
+{
+    InspectorRegistry::Get().RegisterComponentInspector<Components::SplinePlacement>(BuildSplinePlacementInspector);
 }
 
 } // namespace GameEngine

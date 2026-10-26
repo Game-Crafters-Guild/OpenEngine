@@ -44,7 +44,11 @@ extern "C" {
 // engine component, which keeps the engine's bytes of the fields a script may
 // not write and refuses a component the engine owns; GetComponentDefaults — the
 // engine's default bytes of every component, which the C# mirrors' constructors copy.
-static const uint32_t GE_ECS_ABI_VERSION_CURRENT = GE_ECS_ABI_VERSION_ENCODE(2u, 4u);
+// v2.5 (minor, appended): SpawnPrefab — an instance of a resident prefab through
+// Scene::SpawnPrefab (EntityCommands.Spawn); DespawnPrefab — the root of an instance and its tree
+// through Scene::DespawnPrefab (EntityCommands.Despawn); GE_ECS_FieldDesc.assetCategory, the asset
+// category of an AssetGuid field (a C# PrefabRef names a prefab).
+static const uint32_t GE_ECS_ABI_VERSION_CURRENT = GE_ECS_ABI_VERSION_ENCODE(2u, 5u);
 
 // Opaque entity identifier (packed index+version in engine ECS).
 // 0 is reserved to mean "none/invalid" at the ABI boundary.
@@ -164,8 +168,11 @@ typedef struct GE_ECS_FieldDesc
     uint32_t    offset;    // byte offset within the component
     uint32_t    size;      // total byte span (elementSize * count for arrays)
     uint16_t    fieldType; // ECS::FieldTypeId underlying value; 0 (Unknown) is invalid
-    uint16_t    reserved;  // must be 0
+    uint16_t    assetCategory; // (v2.5) the AssetType an AssetGuid field names; 0 for any, and for other types
 } GE_ECS_FieldDesc;
+
+// The AssetType value of a prefab, the category a C# PrefabRef field names.
+#define GE_ECS_ASSET_CATEGORY_PREFAB 42u
 
 // v2.1: Register a blob component together with its reflected field table.
 // Subsumes RegisterBlobComponent for schema-carrying components:
@@ -216,6 +223,18 @@ typedef GE_Result (GE_CDECL *GE_ECSABI_SetComponentBytesFromScript_Fn)(GE_Handle
 // returns GE_Result_BufferFull for a non-null outData. Main thread only: a user-script reload
 // rewrites the defaults.
 typedef GE_Result (GE_CDECL *GE_ECSABI_GetComponentDefaults_Fn)(uint8_t* outData, uint32_t outCap, uint32_t* outLen);
+
+// v2.5: Spawns the prefab `prefabGuid` (16 bytes, the engine's GUID byte order) through Scene::SpawnPrefab: the root
+// at `at` under `parent` (0 for none), written to outRoot. It runs at once, also while changes are deferred.
+// A prefab that is not resident gives GE_Result_NotFound and root 0. Main thread only, outside a job.
+typedef GE_Result (GE_CDECL *GE_ECSABI_SpawnPrefab_Fn)(GE_Handle world, const uint8_t* prefabGuid,
+                                                       const GE_ECS_Transform* at, GE_ECS_Entity parent,
+                                                       GE_ECS_Entity* outRoot);
+
+// v2.5: Destroys `root` and every entity under it through Scene::DespawnPrefab, queued as DestroyEntity queues; it
+// checks no instance marker. A root that is not alive gives GE_Result_NotFound. Main thread only, outside a job: a call
+// from another thread gives GE_Result_Fail and the last error.
+typedef GE_Result (GE_CDECL *GE_ECSABI_DespawnPrefab_Fn)(GE_Handle world, GE_ECS_Entity root);
 
 // v1.7: Change-signaling chunk enumeration (design M11/Q7).
 // outChunkVersion (nullable) receives the requested component column's
@@ -329,6 +348,10 @@ typedef struct GE_ECS_Interface_v2
     // v2.4: a script's component write, and the component defaults
     GE_ECSABI_SetComponentBytesFromScript_Fn SetComponentBytesFromScript;
     GE_ECSABI_GetComponentDefaults_Fn        GetComponentDefaults;
+
+    // v2.5: an instance of a resident prefab (Scene::SpawnPrefab), and its removal (Scene::DespawnPrefab)
+    GE_ECSABI_SpawnPrefab_Fn   SpawnPrefab;
+    GE_ECSABI_DespawnPrefab_Fn DespawnPrefab;
 } GE_ECS_Interface_v2;
 
 // Bootstrap entry: returns a pointer to the requested ECS interface version.
@@ -389,6 +412,9 @@ GE_API GE_Result GE_CDECL GE_ECSABI_SetComponentBytesFromScript(GE_Handle world,
                                                                 GE_ECS_ComponentTypeId componentTypeId,
                                                                 const uint8_t* data, uint32_t dataLen);
 GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentDefaults(uint8_t* outData, uint32_t outCap, uint32_t* outLen);
+GE_API GE_Result GE_CDECL GE_ECSABI_SpawnPrefab(GE_Handle world, const uint8_t* prefabGuid, const GE_ECS_Transform* at,
+                                                GE_ECS_Entity parent, GE_ECS_Entity* outRoot);
+GE_API GE_Result GE_CDECL GE_ECSABI_DespawnPrefab(GE_Handle world, GE_ECS_Entity root);
 GE_API GE_Result GE_CDECL GE_ECSABI_SetComponentBytes(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId, const uint8_t* data, uint32_t dataLen);
 GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentBytes(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId, uint8_t* outData, uint32_t outCap, uint32_t* outLen);
 GE_API GE_Result GE_CDECL GE_ECSABI_RemoveComponent(GE_Handle world, GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId);

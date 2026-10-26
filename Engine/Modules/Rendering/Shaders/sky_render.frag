@@ -27,8 +27,7 @@ layout(set = 0, binding = 0) uniform SkyUBO
     vec2  viewportResolution; float nightSkyBlend; float skyTimeSeconds;
     vec4  starModel;    // x = limiting magnitude, y = highlight compression, z = scintillation, w = twinkle speed
     vec4  skyboxParams; // x = HDRI rotation radians; y = HDRI intensity if >= 0, else the procedural sky
-    vec4  fallingStarParams; // x = enabled, y = amount, z = frequency, w = speed
-    vec4  fallingStarShapeParams; // x = length, y = thickness, z = dot size, w = 2D dot size
+    vec4  fallingStarParams; // the falling stars, drawn by the star billboard (sky_stars_billboard.vert)
     vec4  gradientSkyTop;    // .rgb = scene-linear top color; .w >= 0.5 -> render gradient sky
     vec4  gradientSkyHorizon;
     vec4  gradientSkyBottom;
@@ -142,13 +141,6 @@ vec3 GradientSkyColor(vec3 dirWS)
          + uSky.gradientSkyBottom.rgb * down;
 }
 
-float Hash13(vec3 p)
-{
-    p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
-    p += dot(p, p.yzx + 19.19);
-    return fract(p.x * p.y * p.z);
-}
-
 // Transmittance from the camera to the top of the atmosphere along dirWS; 0 below the horizon.
 vec3 TransmittanceAlongView(vec3 dirWS)
 {
@@ -158,43 +150,6 @@ vec3 TransmittanceAlongView(vec3 dirWS)
     vec3 up = (camPos - planetCenter) / r;
     float mu = clamp(dot(dirWS, up), -1.0, 1.0);
     return GE_SkyTransmittanceToTop(uTransLUT, r, mu, uAtmos.planetRadius, uAtmos.atmosphereRadius);
-}
-
-vec3 FallingStarStartDir(float seed)
-{
-    float az = (Hash13(vec3(seed, 11.0, 7.0)) + 0.23 * Hash13(vec3(seed, 41.0, 29.0))) * 2.0 * PI;
-    float y = mix(0.12, 0.96, pow(Hash13(vec3(seed, 13.0, 3.0)), 0.72));
-    float xz = sqrt(max(0.0, 1.0 - y * y));
-    return normalize(vec3(cos(az) * xz, y, sin(az) * xz));
-}
-
-vec3 FallingStarTangent(vec3 startDir, float seed)
-{
-    vec3 fallDir = normalize(vec3(mix(-0.9, 0.9, Hash13(vec3(seed, 17.0, 2.0))),
-                                  mix(-1.35, -0.45, Hash13(vec3(seed, 23.0, 31.0))),
-                                  mix(-0.9, 0.9, Hash13(vec3(seed, 19.0, 5.0)))));
-    return normalize(fallDir - startDir * dot(fallDir, startDir));
-}
-
-// A falling star's head: a round, soft point (a Gaussian whose radius is headRadius / 3), filtered
-// over the pixel by its screen derivatives so a head a few pixels across stays round.
-// Reach of the head per unit of Falling Star Dot Size: radians on the perspective path (0.015 rad,
-// about 13 px at 900 px over a 60 degree FOV, at the default 0.1), and screen units (the viewport's
-// height is 2) on the 2D backdrop (about 13 px at the default 0.979).
-const float kFallingStarHeadRadiusPerDot = 0.15;
-const float kFallingStarHeadRadiusPerDot2D = 0.03;
-
-// The head's intensity at an offset from it along the screen's right and up, in the units
-// headRadius is given in. Called in uniform control flow: it takes screen derivatives.
-float FallingStarHead(vec2 screenOffset, float headRadius)
-{
-    vec2 q = screenOffset / headRadius;
-    vec2 dqdx = dFdx(q);
-    vec2 dqdy = dFdy(q);
-    // The pixel's footprint widens the Gaussian, so a head under a pixel keeps its energy.
-    float footprint2 = 0.25 * (dot(dqdx, dqdx) + dot(dqdy, dqdy));
-    float width2 = 1.0 / 9.0 + footprint2;
-    return exp(-dot(q, q) / width2) / (9.0 * width2);
 }
 
 // Sample the same HDR backdrop source as the perspective sky for one virtual
@@ -252,7 +207,7 @@ void RenderOrthoBackdrop(vec2 ndc)
 
     // Gradient sky: a stylized vertical gradient with NO celestial bodies. Map the screen-vertical
     // t (top -> Top, horizon -> Horizon, bottom -> Bottom) to the gradient colors and emit before
-    // the sun disc / meteor / moon compositing below (matches the perspective path's early-out).
+    // the sun disk / moon compositing below (matches the perspective path's early-out).
     if (uSky.gradientSkyTop.w >= 0.5)
     {
         vec3 grad = (t < 0.5)
@@ -361,65 +316,6 @@ void RenderOrthoBackdrop(vec2 ndc)
         float rampStrength = clamp(uSky.sunIntensity * 0.018, 0.0, 1.2);
         col += warmRampColor * (rampStrength * horizonFade * dayFade) * ramp * horizonMask;
         col += uSky.sunColor * (uSky.sunIntensity * 0.4 * horizonFade * dayFade) * disc * horizonMask;
-    }
-
-    if (uSky.fallingStarParams.x > 0.5 && nightAmount > 0.01)
-    {
-        float aspect = max(uSky.viewportAspect, 0.001);
-        vec3 basisRight = normalize(uSky.cameraRightWS);
-        vec3 basisUp    = normalize(uSky.cameraUpWS);
-        vec3 basisFwd   = normalize(uSky.cameraForwardWS);
-        float amount = clamp(uSky.fallingStarParams.y, 0.0, 1.0);
-        float frequency = clamp(uSky.fallingStarParams.z, 0.0, 4.0);
-        float speed = clamp(uSky.fallingStarParams.w, 0.2, 50.0);
-        float trailLength = clamp(uSky.fallingStarShapeParams.x, 0.2, 4.0);
-        float trailThickness = clamp(uSky.fallingStarShapeParams.y, 0.1, 4.0);
-        float dotSize = clamp(uSky.fallingStarShapeParams.w, 0.1, 4.0);
-        const int kMaxMeteors = 8;
-        for (int i = 0; i < kMaxMeteors; ++i)
-        {
-            float enabled = step(float(i) + 0.5, amount * float(kMaxMeteors));
-            float seed = float(i) * 31.73 + floor(uSky.skyTimeSeconds * 0.017 + float(i) * 7.13) * 19.19 + 3.11;
-            float periodJitter = mix(0.58, 1.72, Hash13(vec3(seed, 37.0, 9.0)));
-            float period = mix(8.5, 1.0, frequency / 4.0) * periodJitter;
-            float t = fract(uSky.skyTimeSeconds / max(period, 0.1) + Hash13(vec3(seed, 2.0, 5.0)));
-            float speedJitter = mix(0.55, 1.65, Hash13(vec3(seed, 43.0, 17.0)));
-            float activeEnd = mix(0.42, 0.13, clamp((speed * speedJitter) / 4.0, 0.0, 1.0));
-            float meteorActive = smoothstep(0.0, 0.035, t) * (1.0 - smoothstep(activeEnd * 0.58, activeEnd, t));
-            vec3 startDir = FallingStarStartDir(seed);
-            vec2 p = vec2(skyNdc.x * aspect, skyNdc.y);
-            vec2 startScreen = vec2(dot(startDir, basisRight) / aspect,
-                                    dot(startDir, basisUp));
-            if (uSky.skyRotateAroundZenithRadians > 0.5)
-            {
-                const float maxMeteorScreenRadius = 1.18;
-                float startLen = length(startScreen);
-                if (startLen > maxMeteorScreenRadius)
-                    startScreen *= maxMeteorScreenRadius / startLen;
-            }
-            float angle = mix(-2.55, -0.58, Hash13(vec3(seed, 71.0, 5.0)));
-            vec2 v = normalize(vec2(cos(angle) / aspect, sin(angle)));
-            float travel = t * 0.58 * speed * speedJitter;
-            vec2 h = vec2(startScreen.x * aspect, startScreen.y) + v * travel;
-            float lengthJitter = mix(0.55, 1.75, Hash13(vec3(seed, 53.0, 11.0)));
-            float brightnessJitter = mix(0.55, 1.85, Hash13(vec3(seed, 61.0, 13.0)));
-            float alongMax = 0.30 * trailLength * lengthJitter;
-            float visibleAlongMax = max(alongMax * smoothstep(0.0, activeEnd * 0.55, t), 0.0001);
-            float rawAlong = dot(p - h, -v);
-            float along = clamp(rawAlong, 0.0, visibleAlongMax);
-            float dist = length(p - (h - v * along));
-            float frontFade = smoothstep(-0.03, 0.03, dot(startDir, basisFwd));
-            float widthFalloff = 105000.0 / max(trailThickness * trailThickness, 0.01);
-            float lengthFalloff = 20.0 / max(trailLength * lengthJitter, 0.2);
-            float behindTip = smoothstep(0.0, 0.006, rawAlong) *
-                              (1.0 - smoothstep(visibleAlongMax * 0.88, visibleAlongMax, rawAlong));
-            float tail = exp(-dist * dist * widthFalloff) * exp(-along * lengthFalloff) * behindTip;
-            float tip = FallingStarHead(p - h, kFallingStarHeadRadiusPerDot2D * dotSize);
-            vec3 tailColor = vec3(0.62, 0.78, 1.0);
-            vec3 tipColor = vec3(1.0, 0.96, 0.82);
-            col += (tailColor * tail * 0.85 + tipColor * tip * 2.4) *
-                   meteorActive * enabled * frontFade * nightAmount * brightnessJitter;
-        }
     }
 
     vec3 moonDir = normalize(uSky.moonDirectionWS);
@@ -590,53 +486,6 @@ void main()
         skyColor = GE_MoonSkyUnderDisc(skyColor, 0.25 * rimSky, moonCover, transmittance);
     }
 
-    vec3 fallingStarRadiance = vec3(0.0);
-    if (uSky.fallingStarParams.x > 0.5 && nightAmount > 0.01)
-    {
-        float amount = clamp(uSky.fallingStarParams.y, 0.0, 1.0);
-        float frequency = clamp(uSky.fallingStarParams.z, 0.0, 4.0);
-        float speed = clamp(uSky.fallingStarParams.w, 0.2, 50.0);
-        float trailLength = clamp(uSky.fallingStarShapeParams.x, 0.2, 4.0);
-        float trailThickness = clamp(uSky.fallingStarShapeParams.y, 0.1, 4.0);
-        float dotSize = clamp(uSky.fallingStarShapeParams.z, 0.1, 4.0);
-        const int kMaxMeteors = 8;
-        for (int i = 0; i < kMaxMeteors; ++i)
-        {
-            float enabled = step(float(i) + 0.5, amount * float(kMaxMeteors));
-            float seed = float(i) * 31.73 + floor(uSky.skyTimeSeconds * 0.017 + float(i) * 7.13) * 19.19 + 3.11;
-            float periodJitter = mix(0.58, 1.72, Hash13(vec3(seed, 37.0, 9.0)));
-            float period = mix(8.5, 1.0, frequency / 4.0) * periodJitter;
-            float t = fract(uSky.skyTimeSeconds / max(period, 0.1) + Hash13(vec3(seed, 2.0, 5.0)));
-            float speedJitter = mix(0.55, 1.65, Hash13(vec3(seed, 43.0, 17.0)));
-            float activeEnd = mix(0.42, 0.13, clamp((speed * speedJitter) / 4.0, 0.0, 1.0));
-            float meteorActive = smoothstep(0.0, 0.035, t) * (1.0 - smoothstep(activeEnd * 0.58, activeEnd, t));
-            vec3 startDir = FallingStarStartDir(seed);
-            vec3 tangentWS = FallingStarTangent(startDir, seed);
-            vec3 headDir = normalize(startDir + tangentWS * (t * 0.8 * speed * speedJitter));
-            vec3 sideWS = normalize(cross(headDir, tangentWS));
-            vec3 delta = dirWS - headDir;
-            float lengthJitter = mix(0.55, 1.75, Hash13(vec3(seed, 53.0, 11.0)));
-            float brightnessJitter = mix(0.55, 1.85, Hash13(vec3(seed, 61.0, 13.0)));
-            float alongMax = 0.10 * trailLength * lengthJitter;
-            float visibleAlongMax = max(alongMax * smoothstep(0.0, activeEnd * 0.55, t), 0.0001);
-            float rawAlong = dot(delta, -tangentWS);
-            float along = clamp(rawAlong, 0.0, visibleAlongMax);
-            float dist = abs(dot(delta + tangentWS * along, sideWS));
-            float facing = smoothstep(cos(0.7), cos(0.35), dot(dirWS, headDir));
-            float widthFalloff = 340000.0 / max(trailThickness * trailThickness, 0.01);
-            float lengthFalloff = 44.0 / max(trailLength * lengthJitter, 0.2);
-            float behindTip = smoothstep(0.0, 0.002, rawAlong) *
-                              (1.0 - smoothstep(visibleAlongMax * 0.88, visibleAlongMax, rawAlong));
-            float tail = exp(-dist * dist * widthFalloff) * exp(-along * lengthFalloff) * facing * behindTip;
-            float tip = FallingStarHead(vec2(dot(delta, basisRight), dot(delta, basisUp)),
-                                        kFallingStarHeadRadiusPerDot * dotSize) * facing;
-            vec3 tailColor = vec3(0.62, 0.78, 1.0);
-            vec3 tipColor = vec3(1.0, 0.96, 0.82);
-            fallingStarRadiance += (tailColor * tail * 0.85 + tipColor * tip * 2.4) *
-                                   meteorActive * enabled * nightAmount * brightnessJitter;
-        }
-    }
-
     // ---- Ground / below-horizon blend + night-sky gradient ----
     // Extracted into sky_composite.glsl so the IBL capture (sky_capture_cube.frag)
     // composites the sky identically. The bright discs (sun/moon/stars) stay below,
@@ -692,8 +541,7 @@ void main()
         skyColor = mix(skyColor, rimCol, clamp(rimMask, 0.0, 1.0));
     }
 
-    // The falling stars are beyond the moon; the stars' own pass hides behind the disc the same way.
-    vec3 finalColor = skyColor + GE_MoonHidesBehind(fallingStarRadiance, moonCover) + sunRadiance + moonRadiance;
+    vec3 finalColor = skyColor + sunRadiance + moonRadiance;
 
     oColor = SkyOutput(finalColor * exposure);
 }

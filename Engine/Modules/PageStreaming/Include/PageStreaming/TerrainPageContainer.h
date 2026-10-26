@@ -29,7 +29,9 @@ struct TerrainContainerField
 std::string WriteTerrainContainer(const std::filesystem::path& target, std::span<const TerrainContainerField> fields);
 
 /// Opens the `kind` field of the container at `container` into `out`. Returns an empty string,
-/// else the reason (a container without that field names the field).
+/// else the reason (a container without that field names the field; a field whose store is not a
+/// `kind` store is refused as PageStoreReader::Open refuses it); a refused field's store is not
+/// left open in `out`.
 std::string OpenTerrainContainerField(const std::filesystem::path& container, PageFieldKind kind,
                                       PageStoreReader& out);
 

@@ -26,9 +26,9 @@ struct Vector3
         float v[3];
     };
 
-    Vector3() : x(0.0f), y(0.0f), z(0.0f) {}
-    Vector3(float x_, float y_, float z_) : x(x_), y(y_), z(z_) {}
-    explicit Vector3(const glm::vec3& vec) : x(vec.x), y(vec.y), z(vec.z) {}
+    constexpr Vector3() : x(0.0f), y(0.0f), z(0.0f) {}
+    constexpr Vector3(float x_, float y_, float z_) : x(x_), y(y_), z(z_) {}
+    constexpr explicit Vector3(const glm::vec3& vec) : x(vec.x), y(vec.y), z(vec.z) {}
 
     /// Component by index: 0 is `x`, 1 is `y`, 2 is `z`. The caller keeps the index below 3.
     float& operator[](std::size_t index) { return v[index]; }

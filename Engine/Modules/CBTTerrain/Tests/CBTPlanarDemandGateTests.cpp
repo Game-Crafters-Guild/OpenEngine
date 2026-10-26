@@ -197,8 +197,9 @@ float NearBiasCoarsen(const CBTFrameParams& p, float contention, const Vector3& 
     return 1.0f + contention * farT * std::max(p.NearBias[3] - 1.0f, 0.0f);
 }
 
-// CPU mirror of CBT_ParentSplitEdgeFar (cbt_kernels.comp): the parent hypotenuse endpoint this
-// child does NOT hold, recovered by reflecting the one it does through the shared midpoint c1.
+// The parent hypotenuse endpoint this child does not hold, reflected through the shared midpoint c1.
+// The kernel reads it from the sibling's corners (CBT_ParentSplitEdgeFar); on flat ground, where this
+// mirror runs the edge rule, the reflection gives the same point.
 Vector3 ParentSplitEdgeFar(uint64_t heapId, const Vector3& c0,
                                         const Vector3& c1,
                                         const Vector3& c2)
@@ -274,16 +275,16 @@ PlanarDecision ClassifyPlanarFacet(const CBTFrameParams& p, float contention, fl
     d.Ratio = mergePx > 0.0f ? edgePx / mergePx : 0.0f;
     d.WantSplit = depth < maxDepth && edgePx > splitPx;
 
-    // The merge is decided on the PARENT's split edge — the one edge both siblings share — with the
-    // threshold taken at the parent's midpoint (c1, held bit-identically by both children) and
-    // scaled by sqrt(2) to restate the child threshold on a parent-length edge. An unprojectable
-    // parent endpoint falls back to the per-child answer, exactly as the shader does.
+    // The merge runs on the parent's split edge, at the threshold of that edge's midpoint times sqrt(2)
+    // (CBT_PlanarParentMergeWish). An unprojectable parent end keeps the per-child answer, as the shader does.
     const Vector3 parentFar = ParentSplitEdgeFar(heapId, c0, c1, c2);
     const Proj parentFarProj = ProjectPix(viewProj, parentFar);
-    const Proj& parentHeld = (heapId & 1ull) == 0ull ? d.P0 : d.P2;
+    const bool evenChild = (heapId & 1ull) == 0ull;
+    const Proj& parentHeld = evenChild ? d.P0 : d.P2;
     if (parentFarProj.InFront)
     {
-        const float mergePxParent = p.Screen[3] * NearBiasCoarsen(p, contention, c1);
+        const Vector3 parentMid = ((evenChild ? c0 : c2) + parentFar) * 0.5f;
+        const float mergePxParent = p.Screen[3] * NearBiasCoarsen(p, contention, parentMid);
         const float parentPx =
             std::hypot(parentHeld.Px - parentFarProj.Px, parentHeld.Py - parentFarProj.Py);
         d.ParentRated = true;
@@ -997,21 +998,10 @@ TEST_F(CBTPlanarDemandGate, ConvergedPlanarTreeServesItsSplitDemand)
 // planar criterion (CBT_PlanarClassify) asks whether the parent's UV box or its twin's would split;
 // both children rebuild those boxes bit for bit from their dyadic UVs. This census locks the
 // structural facts the two rules rest on, and its printed population statistics compare the rules:
-//   1. the corner convention — siblings share c1, and evenC2 == oddC0, so the parent's hypotenuse
-//      runs between the two UNSHARED corners with c1 as its midpoint;
-//   2. ON FLAT GROUND ONLY, sibling split edges are exactly congruent in world space, so the
-//      pixel spread there is purely projection. This is NOT a general LEB fact and a world-space
-//      merge criterion is NOT diamond-consistent for free: the relief arm measures the same ratio
-//      at 0.249-3.917, which is why CBT_NearFieldWantMerge's world-space bound carries the very
-//      asymmetry the domain metric no longer does;
-//   3. on the flat arms (the edge rule), the parent's hypotenuse rebuilt from either child reaches
-//      the same merge decision. This is exact only at heightScale 0, where no corner height is
-//      extrapolated;
-//   4. on the relief arm (the criterion), the GPU's own state for the two siblings never differs:
-//      a pair where neither child asks to split carries CBT_STATE_SIMPLIFY on both or on neither.
-//      The arm reads CBTBisectorData::BisectorState after convergence and expects 0 such pairs.
-//      The pool must stay below the keep ceiling, because the off-frustum gate decides each child
-//      on its own box.
+//   1. the corner convention: siblings share c1 and evenC2 == oddC0, so c1 is the parent hypotenuse's midpoint;
+//   2. sibling split edges are congruent in world space on flat ground only (the relief arm: 0.249-3.917);
+//   3. on the flat arms (the edge rule), the parent's hypotenuse from either child gives one merge decision;
+//   4. on the relief arm (the criterion), no converged pair carries CBT_STATE_SIMPLIFY on one sibling only.
 // The blocked-population counts are PRINTED, not asserted: they characterize how the rules differ.
 TEST_F(CBTPlanarDemandGate, SiblingMergeMetricCensus)
 {
@@ -1469,39 +1459,13 @@ float TiltedPlainHeight(float wx, float wz)
 TextureHandle MakePresetHeightTexture(IDevice& device, uint32_t dim, float originX, float originZ, float sizeM,
                                       float (*heightAt)(float, float))
 {
-    TextureDesc td{};
-    td.width = dim;
-    td.height = dim;
-    td.format = static_cast<uint32_t>(TextureFormat::R32_FLOAT);
-    td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) |
-               static_cast<uint32_t>(TextureUsage::TransferDst);
-    td.persistent = true;
-    td.debugName = "CBT.Test.TiledPresetRelief";
-    TextureHandle tex = device.CreateTexture(td);
-    if (!tex.IsValid())
-        return tex;
     std::vector<float> data(static_cast<size_t>(dim) * dim);
     const float spacing = sizeM / static_cast<float>(dim - 1u);
     for (uint32_t y = 0; y < dim; ++y)
         for (uint32_t x = 0; x < dim; ++x)
             data[static_cast<size_t>(y) * dim + x] = heightAt(originX + static_cast<float>(x) * spacing,
                                                               originZ + static_cast<float>(y) * spacing);
-    const size_t bytes = data.size() * sizeof(float);
-    const size_t rowPitch = static_cast<size_t>(dim) * sizeof(float);
-    BufferHandle staging = device.CreateUploadBuffer(bytes, "CBT.Test.TiledPresetReliefStaging");
-    device.UpdateBuffer(staging, 0, bytes, data.data());
-    auto cl = device.CreateCommandList(IDevice::QueueType::Graphics);
-    cl->Begin();
-    cl->CopyBufferToTextureSubresource(staging, tex, 0, 0, dim, dim, 0, rowPitch, 1, 0, 0, 0,
-                                       ResourceState::Undefined);
-    cl->Barrier(ResourceBarrier::CreateTextureBarrier(tex, ResourceState::CopyDest,
-                                                      ResourceState::ShaderResource));
-    cl->End();
-    std::vector<CommandList*> lists{cl.get()};
-    device.ExecuteCommandLists(lists);
-    device.WaitForIdle();
-    device.DestroyBuffer(staging);
-    return tex;
+    return MakeR32Texture(device, dim, dim, data, "CBT.Test.TiledPresetRelief");
 }
 
 // The frame the editor builds for the preset (CBTRenderFeature.cpp): `eye` in world meters, the view

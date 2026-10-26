@@ -55,9 +55,7 @@ void ApplyStarDials(Components::SkyEnvironment& sky, const StarLookPreset& prese
 void ApplyNightTint(Components::PostProcessVolume& volume, const StarLookPreset& preset)
 {
     volume.NightTintStrength = preset.NightTintStrength;
-    volume.NightTintColor[0] = preset.NightTintColor.r;
-    volume.NightTintColor[1] = preset.NightTintColor.g;
-    volume.NightTintColor[2] = preset.NightTintColor.b;
+    volume.NightTintColor = preset.NightTintColor;
 }
 
 bool Near(float a, float b)
@@ -68,9 +66,9 @@ bool Near(float a, float b)
 bool MatchesNightTint(const Components::PostProcessVolume& volume, const StarLookPreset& preset)
 {
     return Near(volume.NightTintStrength, preset.NightTintStrength) &&
-           Near(volume.NightTintColor[0], preset.NightTintColor.r) &&
-           Near(volume.NightTintColor[1], preset.NightTintColor.g) &&
-           Near(volume.NightTintColor[2], preset.NightTintColor.b);
+           Near(volume.NightTintColor.r, preset.NightTintColor.r) &&
+           Near(volume.NightTintColor.g, preset.NightTintColor.g) &&
+           Near(volume.NightTintColor.b, preset.NightTintColor.b);
 }
 
 std::vector<ECS::EntityHandle> GlobalVolumes(ECS::World& world)

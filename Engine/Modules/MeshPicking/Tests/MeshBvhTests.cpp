@@ -1,10 +1,10 @@
-#include <gtest/gtest.h>
+#include "Mathematics/Vector3.h"
+#include "MeshPicking/MeshBvh.h"
 
 #include <random>
 #include <vector>
 
-#include "Mathematics/Vector3.h"
-#include "MeshPicking/MeshBvh.h"
+#include <gtest/gtest.h>
 
 namespace
 {
@@ -322,6 +322,38 @@ TEST(MeshBvh, DeserializeRejectsStaleVersion)
     MeshBvh restored;
     EXPECT_FALSE(restored.Deserialize(bytes, view));
     EXPECT_TRUE(restored.IsEmpty());
+}
+
+// A declared count larger than the bytes behind it is refused before anything is allocated, so a
+// corrupt count never throws out of Deserialize. TriangleCount, TriIndexCount and NodeCount sit
+// at bytes 8, 12 and 16 of the payload header.
+TEST(MeshBvh, DeserializeRejectsACountLargerThanThePayload)
+{
+    std::vector<Vector3> verts(600);
+    std::vector<uint32> idx;
+    for (uint32 i = 0; i < 200u; ++i) {
+        verts[i*3 + 0] = Vector3(static_cast<float>(i), 0, 1);
+        verts[i*3 + 1] = Vector3(static_cast<float>(i) + 1, 0, 1);
+        verts[i*3 + 2] = Vector3(static_cast<float>(i), 1, 1);
+        idx.push_back(i*3 + 0);
+        idx.push_back(i*3 + 1);
+        idx.push_back(i*3 + 2);
+    }
+    auto view = MakeView(verts, idx);
+
+    std::vector<GameEngine::uint8> good;
+    MeshBvh::Build(view).Serialize(good);
+    for (size_t field : {size_t{8}, size_t{12}, size_t{16}})
+    {
+        std::vector<GameEngine::uint8> bytes = good;
+        const GameEngine::uint32 huge = 0xFFFFFFF0u;
+        std::memcpy(bytes.data() + field, &huge, sizeof(huge));
+        MeshBvh restored;
+        bool loaded = true;
+        EXPECT_NO_THROW(loaded = restored.Deserialize(bytes, view)) << "the count at byte " << field;
+        EXPECT_FALSE(loaded) << "the count at byte " << field;
+        EXPECT_TRUE(restored.IsEmpty());
+    }
 }
 
 TEST(MeshBvh, BuildHandlesSingleTriangle)

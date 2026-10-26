@@ -467,9 +467,12 @@ TEST(RenderServicesRGPassTests, EffectiveColorFollowsResolveCollapseAndMismatch)
         FramePools pools(f.Device.get());
         RenderGraph::RGFrame frame(f.Device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
 
-        // (a) MSAA color + same-format 1-sample resolve => resolve attach.
+        // (a) MSAA color + same-format 1-sample resolve => the world pass draws
+        // the MSAA color and a resolve pass after it samples it into the resolve.
         frame.BeginFrame(0);
-        RenderGraph::RGTexture msaa = frame.ImportPersistentTexture("RGT4.Msaa", ColorTargetDesc(4));
+        TextureDesc sampledMsaa = ColorTargetDesc(4);
+        sampledMsaa.usage |= static_cast<uint32_t>(TextureUsage::ShaderResource);
+        RenderGraph::RGTexture msaa = frame.ImportPersistentTexture("RGT4.Msaa", sampledMsaa);
         RenderGraph::RGTexture resolve = frame.ImportPersistentTexture("RGT4.Resolve", ColorTargetDesc());
         f.Rs.BeginWorldDrawFrame();
         f.Rs.BuildWorldBatchKeys();
@@ -488,7 +491,14 @@ TEST(RenderServicesRGPassTests, EffectiveColorFollowsResolveCollapseAndMismatch)
                 if (r.Tex == msaa.Id)
                     rec = &r;
             ASSERT_NE(rec, nullptr);
-            EXPECT_EQ(rec->Resolve, resolve.Id) << "MSAA resolve attachment recorded";
+            EXPECT_EQ(rec->Pass, world.Pass.Id);
+            EXPECT_EQ(rec->Resolve, RenderGraph::kInvalidId) << "no attachment resolve on the world pass";
+            const RenderGraph::RGPassId resolvePass =
+                PassIdByName(frame.Graph(), std::string(frame.Graph().PassName(world.Pass.Id)) + ".ColorResolve");
+            ASSERT_NE(resolvePass, RenderGraph::kInvalidId) << "the resolve pass is declared";
+            EXPECT_TRUE(frame.Graph().HasReadAccess(resolvePass, msaa.Id));
+            EXPECT_TRUE(frame.Graph().HasWriteAccess(resolvePass, resolve.Id));
+            EXPECT_GT(ScheduledIndexOf(frame.Graph(), resolvePass), ScheduledIndexOf(frame.Graph(), world.Pass.Id));
         }
 
         // (b) MSAA off + pipeline resolve => collapse: render straight into
@@ -518,6 +528,9 @@ TEST(RenderServicesRGPassTests, EffectiveColorFollowsResolveCollapseAndMismatch)
             }
             EXPECT_TRUE(attachedToPipeRes);
             EXPECT_FALSE(attachedToColor1) << "collapsed: the 1-sample color is not attached";
+            EXPECT_EQ(PassIdByName(frame.Graph(), std::string(frame.Graph().PassName(world.Pass.Id)) + ".ColorResolve"),
+                      RenderGraph::kInvalidId)
+                << "a 1-sample color declares no resolve pass";
         }
 
         // (c) MSAA on + format-mismatched resolve => no resolve, effective =
@@ -537,6 +550,9 @@ TEST(RenderServicesRGPassTests, EffectiveColorFollowsResolveCollapseAndMismatch)
         frame.MarkOutput(world.EffectiveColor);
         frame.Execute();
         f.Device->WaitForIdle();
+        EXPECT_EQ(PassIdByName(frame.Graph(), std::string(frame.Graph().PassName(world.Pass.Id)) + ".ColorResolve"),
+                  RenderGraph::kInvalidId)
+            << "a resolve target of another format declares no resolve pass";
     }
     f.Down();
 }

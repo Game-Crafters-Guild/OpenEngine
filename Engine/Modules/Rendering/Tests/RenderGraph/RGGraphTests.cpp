@@ -189,6 +189,107 @@ TEST(RGCull, CullReasonDistinguishesProducerCulledFromNoConsumer)
         << "its output HAS a reader — which was culled";
 }
 
+// A write that a later pass replaces in full before any pass reads it is dead, even into an external
+// resource: the graph culls it with its own reason. The last write always runs.
+TEST(RGCull, WriteOverwrittenInFullBeforeAnyReadIsCulled)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId target = Tex(g, "Target");
+    g.MarkExternal(target);
+    RGPassId first = g.AddPass({"First"});
+    g.WriteEveryPixel(first, target);
+    RGPassId second = g.AddPass({"Second"});
+    g.WriteEveryPixel(second, target);
+    g.Compile();
+
+    EXPECT_TRUE(g.IsCulled(first));
+    EXPECT_EQ(g.CullReason(first), RGCullReason::Overwritten);
+    EXPECT_FALSE(g.IsCulled(second));
+    EXPECT_EQ(g.LivePassCount(), 1u);
+}
+
+// A read between the two writes sees the first one, so both run.
+TEST(RGCull, ReadBetweenTwoFullWritesKeepsTheFirst)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId target = Tex(g, "Target");
+    RGResourceId copy = Tex(g, "Copy");
+    g.MarkExternal(target);
+    g.MarkExternal(copy);
+    RGPassId first = g.AddPass({"First"});
+    g.WriteEveryPixel(first, target);
+    RGPassId reader = g.AddPass({"Reader"});
+    g.Read(reader, target, RGAccess::Sampled);
+    g.Write(reader, copy, RGAccess::ColorAttachment);
+    RGPassId second = g.AddPass({"Second"});
+    g.WriteEveryPixel(second, target);
+    g.Compile();
+
+    EXPECT_FALSE(g.IsCulled(first)) << "the reader sees the first write";
+    EXPECT_FALSE(g.IsCulled(reader));
+    EXPECT_FALSE(g.IsCulled(second));
+}
+
+// A later write that may leave pixels unwritten does not make the earlier write dead.
+TEST(RGCull, PartialOverwriteKeepsTheEarlierWrite)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId target = Tex(g, "Target");
+    g.MarkExternal(target);
+    RGPassId first = g.AddPass({"First"});
+    g.WriteEveryPixel(first, target);
+    RGPassId second = g.AddPass({"Second"});
+    g.Write(second, target, RGAccess::ColorAttachment);
+    g.Compile();
+
+    EXPECT_FALSE(g.IsCulled(first));
+    EXPECT_FALSE(g.IsCulled(second));
+}
+
+// A later write that loads the prior contents reads the earlier write, so both run.
+TEST(RGCull, LoadingOverwriterKeepsTheFirst)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId target = Tex(g, "Target");
+    g.MarkExternal(target);
+    RGPassId first = g.AddPass({"First"});
+    g.WriteEveryPixel(first, target);
+    RGPassId second = g.AddPass({"Second"});
+    g.Read(second, target, RGAccess::ColorLoad);
+    g.WriteEveryPixel(second, target);
+    g.Compile();
+
+    EXPECT_FALSE(g.IsCulled(first)) << "the load reads the first write";
+    EXPECT_FALSE(g.IsCulled(second));
+}
+
+// Accesses declared out of pass order give the same result as in order: the last write runs.
+TEST(RGCull, OutOfOrderDeclarationKeepsTheLastWrite)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId target = Tex(g, "Target");
+    RGResourceId copy = Tex(g, "Copy");
+    g.MarkExternal(target);
+    g.MarkExternal(copy);
+    RGPassId first = g.AddPass({"First"});
+    RGPassId reader = g.AddPass({"Reader"});
+    RGPassId second = g.AddPass({"Second"});
+    g.WriteEveryPixel(second, target);
+    g.WriteEveryPixel(first, target);
+    g.Read(reader, target, RGAccess::Sampled);
+    g.Write(reader, copy, RGAccess::ColorAttachment);
+    g.Compile();
+
+    EXPECT_FALSE(g.IsCulled(first)) << "the reader sees the first write";
+    EXPECT_FALSE(g.IsCulled(reader));
+    EXPECT_FALSE(g.IsCulled(second)) << "the last write always runs";
+}
+
 // Review minor: a dependency cycle must never silently truncate the schedule
 // (Release included) — cyclic passes are culled with an explicit reason and the
 // acyclic remainder still schedules.

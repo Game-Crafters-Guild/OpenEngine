@@ -1,0 +1,9 @@
+﻿[scene name="Traps" version=1]
+[resource id="mat" path="Materials/RtsBlueprint.material"]
+[resource id="bp" path="Blueprints/bp.blueprint" guid="954fd91d-6a21-4357-90e8-d95717bb1e72"]
+
+[entity id="site"]
+Name.value = "Fort blueprint"
+Notes.text = "see Blueprints/bp.blueprint"
+MeshRenderer.meshAsset = [path="Models/x.fbx" guid=""]
+PrefabRef.source = [path="Blueprints/bp.blueprint" guid="954fd91d-6a21-4357-90e8-d95717bb1e72"]

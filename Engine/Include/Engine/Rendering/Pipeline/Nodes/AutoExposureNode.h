@@ -30,7 +30,7 @@ namespace GameEngine::Engine::Renderer::Pipeline::Nodes
 //     taken on the CPU at declare time; no histogram pass.
 // Both meters share the resolve's clamp, bias and smoothing.
 // The resolved exposure lives in the per-view "ExposureHistory" buffer — a PERSISTENT blueprint
-// resource (rendergraph "resources" entry: 16-byte perView Storage buffer, zeroOnCreate), never a
+// resource (rendergraph "resources" entry: 16-byte perView Storage buffer, perFrameCopies), never a
 // transient (those alias across frames). Consumers (BloomThreshold, Tonemap) bind it by name and
 // the blackboard materializes it on first resolve, so declaration order does not matter. For
 // rendergraphs that predate the resource entry, DeclareForView imports + publishes the buffer

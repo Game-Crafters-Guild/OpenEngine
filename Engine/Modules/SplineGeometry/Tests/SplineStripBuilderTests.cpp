@@ -97,7 +97,7 @@ SplineProfile WallProfile(float32 thickness, float32 height)
 }
 
 // The engine's front-face rule, read off a primitive that renders correctly
-// today (PrimitiveGenerator::GeneratePlane, an up-facing quad): for a triangle
+// (PrimitiveGenerator::GeneratePlane, whose every triangle faces +Y): for a triangle
 // (a, b, c), cross(b - a, c - a) is the outward normal. It is also the CCW
 // winding a Jolt mesh shape expects, so collision inherits whatever this pins.
 V3 TriangleNormal(const SplineStripMesh& mesh, size_t triangle)

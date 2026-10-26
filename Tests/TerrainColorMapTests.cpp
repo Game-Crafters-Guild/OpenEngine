@@ -424,8 +424,8 @@ TEST_F(TerrainColorMapBake, AColorEffectOnTheGrassVolumeWritesItsArea)
     World.AddComponentImmediate<Components::TerrainGrassEffect>(region, Components::TerrainGrassEffect{});
     Components::TerrainColorEffect color{};
     color.StackOrder = 1;
-    color.Color[0] = 1.0f;
-    color.Color[1] = color.Color[2] = 0.0f;
+    color.Color.r = 1.0f;
+    color.Color.g = color.Color.b = 0.0f;
     color.Strength = 1.0f;
     World.AddComponentImmediate<Components::TerrainColorEffect>(region, color);
     World.AddComponentImmediate<Components::WorldTransform>(region, {});
@@ -451,7 +451,7 @@ TEST_F(TerrainColorMapBake, AColorAreaAloneWritesItsColorAtItsStrength)
     volume.Falloff = 0;
     World.AddComponentImmediate<Components::TerrainModifierVolume>(region, volume);
     Components::TerrainColorEffect color{};
-    color.Color[0] = color.Color[1] = color.Color[2] = 1.0f;
+    color.Color.r = color.Color.g = color.Color.b = 1.0f;
     color.Strength = 0.5f;
     World.AddComponentImmediate<Components::TerrainColorEffect>(region, color);
     World.AddComponentImmediate<Components::WorldTransform>(region, {});
@@ -476,8 +476,9 @@ void AddColorRegion(ECS::World& world, float32 priority, uint32 channel)
     volume.Priority = priority;
     world.AddComponentImmediate<Components::TerrainModifierVolume>(region, volume);
     Components::TerrainColorEffect color{};
-    color.Color[0] = color.Color[1] = color.Color[2] = 0.0f;
-    color.Color[channel] = 1.0f;
+    color.Color.r = channel == 0 ? 1.0f : 0.0f;
+    color.Color.g = channel == 1 ? 1.0f : 0.0f;
+    color.Color.b = channel == 2 ? 1.0f : 0.0f;
     color.Strength = 1.0f;
     world.AddComponentImmediate<Components::TerrainColorEffect>(region, color);
     world.AddComponentImmediate<Components::WorldTransform>(region, {});

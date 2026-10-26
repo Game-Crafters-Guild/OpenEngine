@@ -43,6 +43,8 @@ enum class NavigationBakeWait : uint8
     Model = 2,
     // The surface's baked data (BakedData) is still loading.
     BakedData = 3,
+    // A spline recipe of the scene has not built yet (SplineRecipes::IsSceneSettledAtLastUpdate is false).
+    SplineRecipes = 4,
 };
 
 // Why a bake failed, when BakePhase is Failed.

@@ -3,9 +3,10 @@
 #include "DebugServer/DebugServerReply.h"
 #include "DebugServer/EditorDebugServer.h"
 #include "Components/Name.h"
+#include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "ECS/World.h"
-#include "Placement/PlacementGroundGap.h"
+#include "SplineRecipes/PlacementGroundGap.h"
 #include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainGpuBake.h"
 
@@ -68,17 +69,17 @@ json DescribeSurface(const TerrainECS::SurfaceHeightQuery& query)
 // A piece with no gap numbers says which cause left it that way, because the
 // fixes differ: wait out a streaming tile, move a piece off the terrain edge,
 // and stop asking a wall how far above the ground its underside floats.
-const char* DescribeGapStatus(Editor::GroundGapStatus status)
+const char* DescribeGapStatus(SplineRecipes::GroundGapStatus status)
 {
     switch (status)
     {
-    case Editor::GroundGapStatus::Measured:
+    case SplineRecipes::GroundGapStatus::Measured:
         return "measured";
-    case Editor::GroundGapStatus::NoGroundSampled:
+    case SplineRecipes::GroundGapStatus::NoGroundSampled:
         return "noGroundSampled";
-    case Editor::GroundGapStatus::UndersideNearVertical:
+    case SplineRecipes::GroundGapStatus::UndersideNearVertical:
         return "undersideNearVertical";
-    case Editor::GroundGapStatus::DegenerateFootprint:
+    case SplineRecipes::GroundGapStatus::DegenerateFootprint:
         return "degenerateFootprint";
     }
     return "unknown";
@@ -136,8 +137,11 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
         if (!world)
             return Editor::RefuseRequest("No world available");
 
-        const TerrainECS::SurfaceHeightQuery query =
-            TerrainECS::ResolveSurfaceHeightQuery(*world);
+        // The terrain under the first point answers every point.
+        const Mathematics::Vector3 first =
+            points.empty() ? Mathematics::Vector3{}
+                           : Mathematics::Vector3(points[0][0].get<float32>(), 0.0f, points[0][1].get<float32>());
+        const TerrainECS::SurfaceHeightQuery query = TerrainECS::ResolveSurfaceHeightQuery(*world, first);
         if (!query.IsValid())
             return UnresolvedSurface();
 
@@ -197,13 +201,14 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
         if (!world->IsValid(route))
             return Editor::RefuseRequest("Invalid entity");
 
-        const TerrainECS::SurfaceHeightQuery query =
-            TerrainECS::ResolveSurfaceHeightQuery(*world);
+        const auto* routeTransform = world->GetComponent<Components::WorldTransform>(route);
+        const TerrainECS::SurfaceHeightQuery query = TerrainECS::ResolveSurfaceHeightQuery(
+            *world, routeTransform ? routeTransform->GetPosition() : Mathematics::Vector3{});
         if (!query.IsValid())
             return UnresolvedSurface();
 
-        std::vector<Editor::PieceGroundGap> gaps;
-        Editor::MeasureRouteGroundGaps(*world, route, query, gaps);
+        std::vector<SplineRecipes::PieceGroundGap> gaps;
+        SplineRecipes::MeasureRouteGroundGaps(*world, route, query, gaps);
 
         json pieces = json::array();
         float32 worstFloating = std::numeric_limits<float32>::lowest();
@@ -211,7 +216,7 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
         uint32_t worstFloatingPiece = 0u;
         uint32_t worstBuriedPiece = 0u;
         uint32 measured = 0u;
-        for (const Editor::PieceGroundGap& gap : gaps)
+        for (const SplineRecipes::PieceGroundGap& gap : gaps)
         {
             json piece{
                 {"entityId", gap.Piece.id},
@@ -232,7 +237,7 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
             if (gap.ProbesRequested > 0u)
             {
                 json probes = json::array();
-                for (const Editor::GroundGapProbe& probe : gap.Probes)
+                for (const SplineRecipes::GroundGapProbe& probe : gap.Probes)
                 {
                     json entry{{"x", probe.X},
                                {"z", probe.Z},
@@ -248,7 +253,7 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
                 piece["probes"] = std::move(probes);
             }
 
-            if (gap.Status == Editor::GroundGapStatus::Measured)
+            if (gap.Status == SplineRecipes::GroundGapStatus::Measured)
             {
                 piece["minGap"] = gap.MinGap;
                 piece["maxGap"] = gap.MaxGap;

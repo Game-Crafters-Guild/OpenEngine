@@ -94,6 +94,18 @@ std::string AddedTo(const std::string& container)
 
 } // namespace
 
+// The Falling stars section takes its look from the Stars section (the glow, the core, the spikes, the
+// limit and Seen by), so it reads after it: the sections show in the order they are built.
+TEST(SkyInspectorSections, TheFallingStarsSectionFollowsTheStarsSection)
+{
+    const std::string flat = Flattened(SkyInspector());
+    const size_t stars = flat.find("AddSkySection(ctx.Parent, \"Stars\"");
+    const size_t fallingStars = flat.find("AddSkySection(ctx.Parent, \"Falling stars\"");
+    ASSERT_NE(stars, std::string::npos);
+    ASSERT_NE(fallingStars, std::string::npos);
+    EXPECT_LT(stars, fallingStars) << "the Falling stars section is built before the Stars section it depends on";
+}
+
 // The three groups are sections, built by the SAME helper the two original sections use. Going
 // through AddSkySection is the whole guarantee: it is what routes them to
 // InspectorUI::AddComponentSection, and that is what makes them collapsible and remembered.
@@ -162,10 +174,9 @@ TEST(SkyInspectorSections, EachSectionContainsTheRowsItTook)
         std::initializer_list<const char*> rows;
     };
     const Group groups[] = {
-        {"fallingStars", "addSkyDiskToggle(fallingStars, \"Falling stars\"",
+        {"fallingStars", "addSkyDiskToggle(fallingStars, \"Show falling stars\"",
          "AddSkyStarLookRow(stars",
-         {"\"Falling amount\"", "\"Falling frequency\"", "\"Falling speed\"", "\"Falling length\"",
-          "\"Falling thickness\"", "\"Falling dot size\""}},
+         {"\"Interval (seconds)\""}},
         // The star rows end where the Sun Dir override rows begin. Those go to `physical`, so a
         // span that runs past them reads three of its rows as stars that landed elsewhere.
         {"stars", "AddSkyStarLookRow(stars", "if (!sky->AutoSunMoon)",
@@ -174,7 +185,7 @@ TEST(SkyInspectorSections, EachSectionContainsTheRowsItTook)
         // Sun size 2D leads the group: it belongs with the other 2D-only knobs rather than beside
         // the sun's real size, because it is a screen fraction and not an angle.
         {"backdrop2D", "(backdrop2D, \"Sun size 2D\"", "",
-         {"\"Sun size 2D\"", "\"Sky pan 2D\"", "\"Moon size 2D\"", "\"Falling dot size 2D\""}},
+         {"\"Sun size 2D\"", "\"Sky pan 2D\"", "\"Moon size 2D\""}},
     };
 
     for (const Group& g : groups)

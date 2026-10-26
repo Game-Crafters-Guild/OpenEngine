@@ -943,7 +943,8 @@ void RegisterTerrainModifierInspectors()
         InspectorUI::AddComponentColorRow<TerrainColorEffect>(
             ctx.Parent, "Color",
             "The color the ground inside the volume moves toward. The base of the grass that grows "
-            "there takes the same color. Applies at the next bake.",
+            "there takes the same color. Applies at the next bake. Double-click the label to reset to the "
+            "default.",
             std::move(color));
 
         // The colour map recomposes the whole terrain when the value changes, so a drag holds the

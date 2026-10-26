@@ -604,7 +604,7 @@ void MeshRendererSchema::Serialize(const ECS::World& world, ECS::EntityHandle en
                 outLines.push_back(std::string("MeshRenderer.meshAsset = ") +
                                    FormatAssetReferenceForSave(ctx, meshGuid, ""));
                 // Submesh index within the model (0 for single-mesh models).
-                if (mr->meshId != 0)
+                if (mr->meshId != 0 || ctx.WriteEveryField)
                     outLines.push_back(std::string("MeshRenderer.meshId = ") + std::to_string(mr->meshId));
                 meshSerialized = true;
             }
@@ -613,6 +613,11 @@ void MeshRendererSchema::Serialize(const ECS::World& world, ECS::EntityHandle en
 
     if (!meshSerialized)
     {
+        // No model: its clear form when the save writes every field, so an instance that clears
+        // its prefab's mesh says so.
+        if (ctx.WriteEveryField)
+            outLines.push_back(std::string("MeshRenderer.meshAsset = ") +
+                               FormatAssetReferenceForSave(ctx, GUID::Null(), ""));
         // Legacy fallback: serialize numeric meshId
         outLines.push_back(std::string("MeshRenderer.meshId = ") + std::to_string(mr->meshId));
     }
@@ -642,12 +647,16 @@ void MeshRendererSchema::Serialize(const ECS::World& world, ECS::EntityHandle en
             outLines.push_back(std::string("MeshRenderer.meshNameHash = ") + std::to_string(mr->MeshNameId));
         }
     }
+    else if (ctx.WriteEveryField)
+    {
+        outLines.push_back("MeshRenderer.meshNameHash = 0");
+    }
 
     // Material: serialize the AssetRef path+guid pair via FormatAssetReferenceForSave,
     // which queries the active save context's resolver to heal stale data.
     {
         const GUID g = mr->materialAssetGuid.ToGuid();
-        if (!g.IsNull())
+        if (!g.IsNull() || ctx.WriteEveryField)
         {
             outLines.push_back(std::string("MeshRenderer.material = ") +
                                FormatAssetReferenceForSave(ctx, g, ""));
@@ -931,24 +940,32 @@ bool MeshRendererSchema::ApplyProperty(ECS::World& world,
         // Accepts:
         //   `MeshRenderer.meshAsset = [path="..." guid="..."]`  (canonical)
         //   `MeshRenderer.meshAsset = "<guid>"`                  (legacy bare GUID)
+        //   `MeshRenderer.meshAsset = 0`                         (clears)
         SceneValue sv{};
         if (!ParseValue(value, sv, outError))
             return false;
-        AssetReference ref{};
-        std::string err;
-        if (!TryResolveAssetReference(ctx, sv, AssetType::Model, ref, &err))
+        if (sv.Kind == SceneValueKind::Int && sv.IntValue == 0)
         {
-            if (outError)
-                *outError = err.empty() ? "Invalid mesh asset reference" : err;
-            return false;
+            mr.modelAssetGuid.Clear();
         }
-        if (ref.guid.IsNull())
+        else
         {
-            if (outError)
-                *outError = "MeshRenderer.meshAsset resolved to a null GUID";
-            return false;
+            AssetReference ref{};
+            std::string err;
+            if (!TryResolveAssetReference(ctx, sv, AssetType::Model, ref, &err))
+            {
+                if (outError)
+                    *outError = err.empty() ? "Invalid mesh asset reference" : err;
+                return false;
+            }
+            if (ref.guid.IsNull())
+            {
+                if (outError)
+                    *outError = "MeshRenderer.meshAsset resolved to a null GUID";
+                return false;
+            }
+            mr.modelAssetGuid.Set(ref.guid);
         }
-        mr.modelAssetGuid.Set(ref.guid);
         // The GPU handle is resolved after the scene load: RuntimeHost::OpenScene
         // hands the world to SceneResolveService, which binds it over frames.
     }
@@ -2483,18 +2500,20 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("SkyEnvironment.SkyExposureTrim = ") + FormatFloat(c->SkyExposureTrim));
         outLines.push_back(std::string("SkyEnvironment.IblIntensity = ") + FormatFloat(c->IblIntensity));
         outLines.push_back(std::string("SkyEnvironment.IblLowerHemisphereDarkness = ") + FormatFloat(c->IblLowerHemisphereDarkness));
-        outLines.push_back(std::string("SkyEnvironment.AmbientTintSky = ") + FormatFloat3(c->AmbientTintSky[0], c->AmbientTintSky[1], c->AmbientTintSky[2]));
-        outLines.push_back(std::string("SkyEnvironment.AmbientTintEquator = ") + FormatFloat3(c->AmbientTintEquator[0], c->AmbientTintEquator[1], c->AmbientTintEquator[2]));
-        outLines.push_back(std::string("SkyEnvironment.AmbientTintGround = ") + FormatFloat3(c->AmbientTintGround[0], c->AmbientTintGround[1], c->AmbientTintGround[2]));
+        outLines.push_back(std::string("SkyEnvironment.AmbientTintSky = ") + FormatFloat3(c->AmbientTintSky.r, c->AmbientTintSky.g, c->AmbientTintSky.b));
+        outLines.push_back(std::string("SkyEnvironment.AmbientTintEquator = ") + FormatFloat3(c->AmbientTintEquator.r, c->AmbientTintEquator.g, c->AmbientTintEquator.b));
+        outLines.push_back(std::string("SkyEnvironment.AmbientTintGround = ") + FormatFloat3(c->AmbientTintGround.r, c->AmbientTintGround.g, c->AmbientTintGround.b));
         outLines.push_back(std::string("SkyEnvironment.Mode = ") + std::to_string(static_cast<uint32_t>(c->Mode)));
-        outLines.push_back(std::string("SkyEnvironment.GradientSkyTopColor = ") + FormatFloat3(c->GradientSkyTopColor[0], c->GradientSkyTopColor[1], c->GradientSkyTopColor[2]));
-        outLines.push_back(std::string("SkyEnvironment.GradientSkyHorizonColor = ") + FormatFloat3(c->GradientSkyHorizonColor[0], c->GradientSkyHorizonColor[1], c->GradientSkyHorizonColor[2]));
-        outLines.push_back(std::string("SkyEnvironment.GradientSkyBottomColor = ") + FormatFloat3(c->GradientSkyBottomColor[0], c->GradientSkyBottomColor[1], c->GradientSkyBottomColor[2]));
+        outLines.push_back(std::string("SkyEnvironment.GradientSkyTopColor = ") + FormatFloat3(c->GradientSkyTopColor.r, c->GradientSkyTopColor.g, c->GradientSkyTopColor.b));
+        outLines.push_back(std::string("SkyEnvironment.GradientSkyHorizonColor = ") + FormatFloat3(c->GradientSkyHorizonColor.r, c->GradientSkyHorizonColor.g, c->GradientSkyHorizonColor.b));
+        outLines.push_back(std::string("SkyEnvironment.GradientSkyBottomColor = ") + FormatFloat3(c->GradientSkyBottomColor.r, c->GradientSkyBottomColor.g, c->GradientSkyBottomColor.b));
         outLines.push_back(std::string("SkyEnvironment.GradientSkyIntensity = ") + FormatFloat(c->GradientSkyIntensity));
         outLines.push_back(std::string("SkyEnvironment.BelowHorizonMode = ") + std::to_string(static_cast<uint32_t>(c->BelowHorizonMode)));
         outLines.push_back(std::string("SkyEnvironment.GroundHazeStrength = ") + FormatFloat(c->GroundHazeStrength));
         if (std::string sunLightRef = FormatEntityReferenceForSave(ctx, c->SunLight); !sunLightRef.empty())
             outLines.push_back(std::string("SkyEnvironment.SunLight = ") + sunLightRef);
+        else if (!c->SunLight.IsValid() && ctx.WriteEveryField)
+            outLines.push_back("SkyEnvironment.SunLight = \"\"");
         outLines.push_back(std::string("SkyEnvironment.TimeOfDayDrivesSunLight = ") + (c->TimeOfDayDrivesSunLight ? "true" : "false"));
         outLines.push_back(std::string("SkyEnvironment.DriveSunColor = ") + (c->DriveSunColor ? "true" : "false"));
         outLines.push_back(std::string("SkyEnvironment.SunIlluminanceSource = ") +
@@ -2514,13 +2533,7 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("SkyEnvironment.MoonSize2D = ") + FormatFloat(c->MoonSize2D));
         outLines.push_back(std::string("SkyEnvironment.MoonExposureEV = ") + FormatFloat(c->MoonExposureEV));
         outLines.push_back(std::string("SkyEnvironment.FallingStarsEnabled = ") + (c->FallingStarsEnabled ? "true" : "false"));
-        outLines.push_back(std::string("SkyEnvironment.FallingStarAmount = ") + FormatFloat(c->FallingStarAmount));
-        outLines.push_back(std::string("SkyEnvironment.FallingStarFrequency = ") + FormatFloat(c->FallingStarFrequency));
-        outLines.push_back(std::string("SkyEnvironment.FallingStarSpeed = ") + FormatFloat(c->FallingStarSpeed));
-        outLines.push_back(std::string("SkyEnvironment.FallingStarLength = ") + FormatFloat(c->FallingStarLength));
-        outLines.push_back(std::string("SkyEnvironment.FallingStarThickness = ") + FormatFloat(c->FallingStarThickness));
-        outLines.push_back(std::string("SkyEnvironment.FallingStarDotSize = ") + FormatFloat(c->FallingStarDotSize));
-        outLines.push_back(std::string("SkyEnvironment.FallingStarDotSize2D = ") + FormatFloat(c->FallingStarDotSize2D));
+        outLines.push_back(std::string("SkyEnvironment.FallingStarIntervalSeconds = ") + FormatFloat(c->FallingStarIntervalSeconds));
         outLines.push_back(std::string("SkyEnvironment.SunDirOverride = ") + FormatFloat3(c->SunDirOverride[0], c->SunDirOverride[1], c->SunDirOverride[2]));
         outLines.push_back(std::string("SkyEnvironment.SunTintMidnight = ") + FormatFloat3(
                                                                                  c->SunTintKeys.Midnight[0], c->SunTintKeys.Midnight[1], c->SunTintKeys.Midnight[2]));
@@ -2726,42 +2739,42 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         }
         else if (property == "ambienttintsky")
         {
-            Float3 v{c.AmbientTintSky[0], c.AmbientTintSky[1], c.AmbientTintSky[2]};
+            Float3 v{c.AmbientTintSky.r, c.AmbientTintSky.g, c.AmbientTintSky.b};
             if (!ParseFloat3(value, v))
             {
                 if (outError)
                     *outError = "SkyEnvironment.AmbientTintSky must be (x, y, z)";
                 return false;
             }
-            c.AmbientTintSky[0] = v.X;
-            c.AmbientTintSky[1] = v.Y;
-            c.AmbientTintSky[2] = v.Z;
+            c.AmbientTintSky.r = v.X;
+            c.AmbientTintSky.g = v.Y;
+            c.AmbientTintSky.b = v.Z;
         }
         else if (property == "ambienttintequator")
         {
-            Float3 v{c.AmbientTintEquator[0], c.AmbientTintEquator[1], c.AmbientTintEquator[2]};
+            Float3 v{c.AmbientTintEquator.r, c.AmbientTintEquator.g, c.AmbientTintEquator.b};
             if (!ParseFloat3(value, v))
             {
                 if (outError)
                     *outError = "SkyEnvironment.AmbientTintEquator must be (x, y, z)";
                 return false;
             }
-            c.AmbientTintEquator[0] = v.X;
-            c.AmbientTintEquator[1] = v.Y;
-            c.AmbientTintEquator[2] = v.Z;
+            c.AmbientTintEquator.r = v.X;
+            c.AmbientTintEquator.g = v.Y;
+            c.AmbientTintEquator.b = v.Z;
         }
         else if (property == "ambienttintground")
         {
-            Float3 v{c.AmbientTintGround[0], c.AmbientTintGround[1], c.AmbientTintGround[2]};
+            Float3 v{c.AmbientTintGround.r, c.AmbientTintGround.g, c.AmbientTintGround.b};
             if (!ParseFloat3(value, v))
             {
                 if (outError)
                     *outError = "SkyEnvironment.AmbientTintGround must be (x, y, z)";
                 return false;
             }
-            c.AmbientTintGround[0] = v.X;
-            c.AmbientTintGround[1] = v.Y;
-            c.AmbientTintGround[2] = v.Z;
+            c.AmbientTintGround.r = v.X;
+            c.AmbientTintGround.g = v.Y;
+            c.AmbientTintGround.b = v.Z;
         }
         else if (property == "mode")
         {
@@ -2778,42 +2791,42 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         }
         else if (property == "gradientskytopcolor")
         {
-            Float3 v{c.GradientSkyTopColor[0], c.GradientSkyTopColor[1], c.GradientSkyTopColor[2]};
+            Float3 v{c.GradientSkyTopColor.r, c.GradientSkyTopColor.g, c.GradientSkyTopColor.b};
             if (!ParseFloat3(value, v))
             {
                 if (outError)
                     *outError = "SkyEnvironment.GradientSkyTopColor must be (x, y, z)";
                 return false;
             }
-            c.GradientSkyTopColor[0] = v.X;
-            c.GradientSkyTopColor[1] = v.Y;
-            c.GradientSkyTopColor[2] = v.Z;
+            c.GradientSkyTopColor.r = v.X;
+            c.GradientSkyTopColor.g = v.Y;
+            c.GradientSkyTopColor.b = v.Z;
         }
         else if (property == "gradientskyhorizoncolor")
         {
-            Float3 v{c.GradientSkyHorizonColor[0], c.GradientSkyHorizonColor[1], c.GradientSkyHorizonColor[2]};
+            Float3 v{c.GradientSkyHorizonColor.r, c.GradientSkyHorizonColor.g, c.GradientSkyHorizonColor.b};
             if (!ParseFloat3(value, v))
             {
                 if (outError)
                     *outError = "SkyEnvironment.GradientSkyHorizonColor must be (x, y, z)";
                 return false;
             }
-            c.GradientSkyHorizonColor[0] = v.X;
-            c.GradientSkyHorizonColor[1] = v.Y;
-            c.GradientSkyHorizonColor[2] = v.Z;
+            c.GradientSkyHorizonColor.r = v.X;
+            c.GradientSkyHorizonColor.g = v.Y;
+            c.GradientSkyHorizonColor.b = v.Z;
         }
         else if (property == "gradientskybottomcolor")
         {
-            Float3 v{c.GradientSkyBottomColor[0], c.GradientSkyBottomColor[1], c.GradientSkyBottomColor[2]};
+            Float3 v{c.GradientSkyBottomColor.r, c.GradientSkyBottomColor.g, c.GradientSkyBottomColor.b};
             if (!ParseFloat3(value, v))
             {
                 if (outError)
                     *outError = "SkyEnvironment.GradientSkyBottomColor must be (x, y, z)";
                 return false;
             }
-            c.GradientSkyBottomColor[0] = v.X;
-            c.GradientSkyBottomColor[1] = v.Y;
-            c.GradientSkyBottomColor[2] = v.Z;
+            c.GradientSkyBottomColor.r = v.X;
+            c.GradientSkyBottomColor.g = v.Y;
+            c.GradientSkyBottomColor.b = v.Z;
         }
         else if (property == "gradientskyintensity")
         {
@@ -2973,47 +2986,13 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
             if (!ParseBool(value, c.FallingStarsEnabled, outError))
                 return false;
         }
-        else if (property == "fallingstaramount")
+        else if (property == "fallingstarintervalseconds")
         {
-            if (!ParseF32(value, c.FallingStarAmount, outError))
+            if (!ParseF32(value, c.FallingStarIntervalSeconds, outError))
                 return false;
-            c.FallingStarAmount = Math::Clamp01(c.FallingStarAmount);
-        }
-        else if (property == "fallingstarfrequency")
-        {
-            if (!ParseF32(value, c.FallingStarFrequency, outError))
-                return false;
-            c.FallingStarFrequency = std::clamp(c.FallingStarFrequency, 0.0f, 4.0f);
-        }
-        else if (property == "fallingstarspeed")
-        {
-            if (!ParseF32(value, c.FallingStarSpeed, outError))
-                return false;
-            c.FallingStarSpeed = std::clamp(c.FallingStarSpeed, 0.2f, 50.0f);
-        }
-        else if (property == "fallingstarlength")
-        {
-            if (!ParseF32(value, c.FallingStarLength, outError))
-                return false;
-            c.FallingStarLength = std::clamp(c.FallingStarLength, 0.2f, 4.0f);
-        }
-        else if (property == "fallingstarthickness")
-        {
-            if (!ParseF32(value, c.FallingStarThickness, outError))
-                return false;
-            c.FallingStarThickness = std::clamp(c.FallingStarThickness, 0.1f, 4.0f);
-        }
-        else if (property == "fallingstardotsize")
-        {
-            if (!ParseF32(value, c.FallingStarDotSize, outError))
-                return false;
-            c.FallingStarDotSize = std::clamp(c.FallingStarDotSize, 0.1f, 4.0f);
-        }
-        else if (property == "fallingstardotsize2d")
-        {
-            if (!ParseF32(value, c.FallingStarDotSize2D, outError))
-                return false;
-            c.FallingStarDotSize2D = std::clamp(c.FallingStarDotSize2D, 0.1f, 4.0f);
+            c.FallingStarIntervalSeconds = std::clamp(c.FallingStarIntervalSeconds,
+                                                      Components::kFallingStarIntervalMinSeconds,
+                                                      Components::kFallingStarIntervalMaxSeconds);
         }
         else if (property == "sundiroverride")
         {
@@ -3838,9 +3817,9 @@ class SkyboxSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("Skybox.IblIntensity = ") + FormatFloat(c->IblIntensity));
         outLines.push_back(std::string("Skybox.IblLowerHemisphereDarkness = ") + FormatFloat(c->IblLowerHemisphereDarkness));
         outLines.push_back(std::string("Skybox.RotationDegrees = ") + FormatFloat(c->RotationDegrees));
-        if (c->Resolution[0] != '\0')
+        if (c->Resolution[0] != '\0' || ctx.WriteEveryField)
             outLines.push_back(std::string("Skybox.Resolution = ") + FormatQuoted(c->GetResolution()));
-        if (c->SourceSlug[0] != '\0')
+        if (c->SourceSlug[0] != '\0' || ctx.WriteEveryField)
             outLines.push_back(std::string("Skybox.SourceSlug = ") + FormatQuoted(c->GetSourceSlug()));
         // Single canonical AssetRef line. The save context's resolver heals
         // stale/missing components — see FormatAssetReferenceForSave docs.
@@ -3848,7 +3827,7 @@ class SkyboxSchema final : public ISceneComponentSchema
         // load, but new saves emit only the consolidated property.
         const bool hasGuid = c->HDRIAssetGuid[0] != '\0';
         const bool hasPath = c->HDRIPath[0] != '\0';
-        if (hasGuid || hasPath)
+        if (hasGuid || hasPath || ctx.WriteEveryField)
         {
             GUID g = GUID::Null();
             if (hasGuid)
@@ -5030,26 +5009,26 @@ class AnimatorSchema final : public ISceneComponentSchema
                 outLines.push_back("Animator.clipSourceModelGuid = " + FormatAssetReferenceForSave(ctx, c->clipSourceModelGuid.ToGuid(), ""));
             outLines.push_back("Animator.clipSourceAnimationIndex = " + std::to_string(c->clipSourceAnimationIndex));
         }
-        else if (!c->clipGuid.IsNull())
+        else if (!c->clipGuid.IsNull() || ctx.WriteEveryField)
             outLines.push_back(std::string("Animator.clipGuid = ") +
                                FormatAssetReferenceForSave(ctx, c->clipGuid.ToGuid(), ""));
-        if (!c->libraryGuid.IsNull())
+        if (!c->libraryGuid.IsNull() || ctx.WriteEveryField)
             outLines.push_back(std::string("Animator.libraryGuid = ") +
                                FormatAssetReferenceForSave(ctx, c->libraryGuid.ToGuid(), ""));
-        if (!c->timelineGuid.IsNull())
+        if (!c->timelineGuid.IsNull() || ctx.WriteEveryField)
             outLines.push_back(std::string("Animator.timelineGuid = ") +
                                FormatAssetReferenceForSave(ctx, c->timelineGuid.ToGuid(), ""));
-        if (!c->controllerGuid.IsNull())
+        if (!c->controllerGuid.IsNull() || ctx.WriteEveryField)
             outLines.push_back(std::string("Animator.controllerGuid = ") +
                                FormatAssetReferenceForSave(ctx, c->controllerGuid.ToGuid(), ""));
-        if (!c->graphGuid.IsNull())
+        if (!c->graphGuid.IsNull() || ctx.WriteEveryField)
             outLines.push_back(std::string("Animator.graphGuid = ") +
                                FormatAssetReferenceForSave(ctx, c->graphGuid.ToGuid(), ""));
-        if (!c->AssignedAnimation().empty())
+        if (!c->AssignedAnimation().empty() || ctx.WriteEveryField)
             outLines.push_back(std::string("Animator.assignedAnimation = ") + FormatQuoted(std::string(c->AssignedAnimation())));
-        if (!c->RootNode().empty())
+        if (!c->RootNode().empty() || ctx.WriteEveryField)
             outLines.push_back(std::string("Animator.rootNode = ") + FormatQuoted(std::string(c->RootNode())));
-        if (!c->RootMotionTrack().empty())
+        if (!c->RootMotionTrack().empty() || ctx.WriteEveryField)
             outLines.push_back(std::string("Animator.rootMotionTrack = ") + FormatQuoted(std::string(c->RootMotionTrack())));
         outLines.push_back(std::string("Animator.speedScale = ") + FormatFloat(c->speedScale));
         outLines.push_back(std::string("Animator.blendSeconds = ") + FormatFloat(c->blendSeconds));
@@ -5199,7 +5178,7 @@ class GameLogicGraphRefSchema final : public ISceneComponentSchema
         if (!c)
             return;
 
-        if (!c->graphGuid.IsNull())
+        if (!c->graphGuid.IsNull() || ctx.WriteEveryField)
         {
             outLines.push_back(std::string("GameLogicGraph.graph = ") +
                                FormatAssetReferenceForSave(ctx, c->graphGuid.ToGuid(), ""));
@@ -5768,7 +5747,7 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("PostProcessVolume.look = ") + std::string(Components::LookName(c->Look)));
         outLines.push_back(std::string("PostProcessVolume.nightTintStrength = ") + FormatFloat(c->NightTintStrength));
         outLines.push_back(std::string("PostProcessVolume.nightTintColor = ") +
-                           FormatFloat3(c->NightTintColor[0], c->NightTintColor[1], c->NightTintColor[2]));
+                           FormatFloat3(c->NightTintColor.r, c->NightTintColor.g, c->NightTintColor.b));
         outLines.push_back(std::string("PostProcessVolume.isGlobal = ") + (c->IsGlobal ? "true" : "false"));
         outLines.push_back(std::string("PostProcessVolume.shape = ") + std::to_string(static_cast<int32_t>(c->Shape)));
         outLines.push_back(std::string("PostProcessVolume.blendDistance = ") + FormatFloat(c->BlendDistance));
@@ -5891,9 +5870,9 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
                                 "hue is used. Fix: divide every channel by the largest one.";
                 return false;
             }
-            c.NightTintColor[0] = v.X;
-            c.NightTintColor[1] = v.Y;
-            c.NightTintColor[2] = v.Z;
+            c.NightTintColor.r = v.X;
+            c.NightTintColor.g = v.Y;
+            c.NightTintColor.b = v.Z;
         }
         else if (property == "isglobal")
         {
@@ -6336,7 +6315,7 @@ class BloomEffectSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("BloomEffect.lensDirtVignetteColorB = ") + FormatFloat(c->LensDirtVignetteColor[2]));
         outLines.push_back(std::string("BloomEffect.lensDirtIntensity = ") + FormatFloat(c->LensDirtIntensity));
         outLines.push_back(std::string("BloomEffect.lensDirtScatter = ") + FormatFloat(c->LensDirtScatter));
-        if (!c->LensDirtTexture.IsNull())
+        if (!c->LensDirtTexture.IsNull() || ctx.WriteEveryField)
             outLines.push_back(std::string("BloomEffect.lensDirtTexture = ") +
                                FormatAssetReferenceForSave(ctx, c->LensDirtTexture.ToGuid(), ""));
     }
@@ -6604,7 +6583,7 @@ class CubeLutEffectSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("CubeLutEffect.stage = ") + std::string(Components::CubeLutStageName(c->Stage)));
         // AssetRef stores only a GUID; a cleared slot has nothing to reference, so skip the
         // line rather than emit an empty [] that would round-trip back to a parse error.
-        if (!c->LutAssetGuid.IsNull())
+        if (!c->LutAssetGuid.IsNull() || ctx.WriteEveryField)
             outLines.push_back(std::string("CubeLutEffect.lutAsset = ") +
                                FormatAssetReferenceForSave(ctx, c->LutAssetGuid.ToGuid(), ""));
     }

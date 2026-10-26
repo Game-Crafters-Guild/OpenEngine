@@ -8,7 +8,9 @@
 #include "Engine/Rendering/RenderOrigin.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Matrix4x4.h"
+#include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/ReverseZ.h"
 
 #include <algorithm>
 #include <cassert>
@@ -19,6 +21,12 @@ namespace GameEngine
 namespace Engine::Renderer
 {
 using namespace ::GameEngine::Rendering;
+
+// The view clear defaults in CameraTypes.h are the reverse-Z far plane.
+static_assert(ViewTargets{}.clearDepthValue == ReverseZ::kClearFar,
+              "ViewTargets must default its depth clear to the far plane (ReverseZ::kClearFar)");
+static_assert(ViewClearConfig{}.clearDepthValue == ReverseZ::kClearFar,
+              "ViewClearConfig must default its depth clear to the far plane (ReverseZ::kClearFar)");
 
 CameraId ViewRegistry::AllocateCamera(const char* debugName)
 {

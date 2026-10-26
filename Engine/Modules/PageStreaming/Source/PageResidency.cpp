@@ -16,7 +16,6 @@ namespace GameEngine::PageStreaming
 namespace
 {
 
-constexpr uint64 kPageSampleBytes = static_cast<uint64>(kPageSampleCount) * sizeof(float32);
 // The changes a stream's CPU page directory records (48 KB of addresses): many frames of landings
 // for a reader that reads the record every frame.
 constexpr std::size_t kCpuChangeRecordLength = 4096;
@@ -85,10 +84,14 @@ void PageResidencyManager::Configure(uint32 stream, uint32 field, PageSource sou
     state.Source = std::move(source);
     state.Field = field;
     state.TopLevel = TopLevelOf(state.Source);
+    state.PageBytes = state.Source.PayloadBytes();
     state.Epoch = m_NextEpoch++;
     const std::span<const PageStoreLevel> levels = LevelsOf(state.Source);
     const uint32 faces = state.Source.Store ? state.Source.Store->Layout().Header.FaceCount : 1u;
-    state.EntriesPerFace = levels.empty() ? 0u : levels.back().FirstEntry + levels.back().PagesX * levels.back().PagesZ;
+    assert((levels.empty() || (levels.front().SamplesX <= kCpuDirectoryMaxSamplesPerAxis &&
+                               levels.front().SamplesZ <= kCpuDirectoryMaxSamplesPerAxis)) &&
+           "a store past the CPU directory's limit is refused before it streams");
+    state.EntriesPerFace = static_cast<uint32>(DensePageCount(levels));
     state.CpuDirectory.assign(static_cast<std::size_t>(faces) * state.EntriesPerFace, CpuPageEntry{});
     state.CpuChanges.assign(kCpuChangeRecordLength, PageAddress{});
     state.KeptCpuWindow.clear(); // the old source's window
@@ -101,7 +104,7 @@ void PageResidencyManager::Forget(uint32 stream)
         return;
     // Its outstanding loads resolve as cancelled and are counted out of the budget as they drain.
     it->second.Cancel->store(true);
-    m_CpuBytes -= static_cast<uint64>(it->second.Loaded.size()) * kPageSampleBytes;
+    m_CpuBytes -= static_cast<uint64>(it->second.Loaded.size()) * it->second.PageBytes;
     if (const auto field = m_Fields.find(it->second.Field); field != m_Fields.end())
         field->second.ReleaseStream(stream);
     m_Streams.erase(it);
@@ -178,7 +181,8 @@ CpuPageDirectory PageResidencyManager::DirectoryOf(const Stream& stream)
 {
     const bool empty = stream.CpuDirectory.empty();
     return CpuPageDirectory{LevelsOf(stream.Source), stream.CpuDirectory, stream.EntriesPerFace,
-                            empty ? 0u : stream.Epoch, stream.CpuChanges, empty ? nullptr : &stream.CpuChangeCount};
+                            empty ? 0u : stream.Epoch, stream.CpuChanges, empty ? nullptr : &stream.CpuChangeCount,
+                            stream.PageBytes};
 }
 
 void PageResidencyManager::SetCpuEntry(Stream& stream, const PageAddress& address, const CpuPageEntry& entry)
@@ -198,13 +202,13 @@ const PageCache& PageResidencyManager::FieldCache(uint32 field) const
     return m_Fields.at(field);
 }
 
-const std::vector<float32>* PageResidencyManager::Samples(uint32 stream, const PageAddress& address) const
+const std::vector<uint8>* PageResidencyManager::Bytes(uint32 stream, const PageAddress& address) const
 {
     const auto it = m_Streams.find(stream);
     if (it == m_Streams.end())
         return nullptr;
     const auto page = it->second.Loaded.find(address);
-    return page == it->second.Loaded.end() ? nullptr : page->second.Samples.get();
+    return page == it->second.Loaded.end() ? nullptr : page->second.Bytes.get();
 }
 
 void PageResidencyManager::DrainCompletions(uint64 frameIndex)
@@ -229,15 +233,15 @@ void PageResidencyManager::DrainCompletions(uint64 frameIndex)
 
 void PageResidencyManager::Land(Stream& stream, uint64 frameIndex, PageFetchOutcome& outcome)
 {
-    if (outcome.Samples)
+    if (outcome.Bytes)
     {
         const auto [page, inserted] = stream.Loaded.try_emplace(outcome.Address);
-        page->second = LoadedPage{std::move(outcome.Samples), std::max(page->second.LastWantedFrame, frameIndex)};
-        assert(page->second.Samples->size() == kPageSampleCount && "a decoded page holds kPageSampleCount samples");
-        SetCpuEntry(stream, outcome.Address, CpuPageEntry{page->second.Samples->data(), CpuPageState::Resident});
+        page->second = LoadedPage{std::move(outcome.Bytes), std::max(page->second.LastWantedFrame, frameIndex)};
+        assert(page->second.Bytes->size() == stream.PageBytes && "a loaded page holds its source's page bytes");
+        SetCpuEntry(stream, outcome.Address, CpuPageEntry{page->second.Bytes->data(), CpuPageState::Resident});
         stream.Failures.erase(outcome.Address);
         if (inserted)
-            m_CpuBytes += kPageSampleBytes;
+            m_CpuBytes += stream.PageBytes;
         return;
     }
     if (outcome.Absent)
@@ -405,15 +409,21 @@ void PageResidencyManager::Refresh(uint32 streamId, const PageSampleRect& level0
         return;
     Stream& stream = it->second;
     for (const CachedPage& page : m_Fields.at(stream.Field).Resident())
-        if (page.Stream == streamId && PageReadsLevel0Rect(page.Address, level0Rect))
-            stream.Stale.insert(page.Address);
+    {
+        if (page.Stream != streamId || !PageReadsLevel0Rect(page.Address, level0Rect))
+            continue;
+        if (PageSampleRect* stale = stream.Stale.Find(page.Address))
+            *stale = Union(*stale, level0Rect);
+        else
+            stream.Stale.InsertOrAssign(page.Address, level0Rect);
+    }
 }
 
 void PageResidencyManager::StartLoads(uint64 frameIndex)
 {
     // A refreshed page is shown with its old content until it is rewritten: reload those first.
     for (auto& [id, stream] : m_Streams)
-        for (const PageAddress& address : stream.Stale)
+        for (const auto& [address, level0Rect] : stream.Stale)
         {
             if (m_InFlightCount >= m_Budget.LoadsInFlight)
                 return;
@@ -475,24 +485,23 @@ void PageResidencyManager::AssignLoaded(uint64 frameIndex, float32 deltaSeconds,
 
 void PageResidencyManager::RewriteRefreshed(uint32 field, PageCache& cache)
 {
-    for (auto& [id, stream] : m_Streams)
+    for (auto& entry : m_Streams)
     {
+        const uint32 id = entry.first;
+        Stream& stream = entry.second;
         if (stream.Field != field)
             continue;
-        for (auto page = stream.Stale.begin(); page != stream.Stale.end();)
-        {
-            const CachedPage cached{id, *page};
-            if (cache.SlotOf(cached) == kNoResidentSlot)
-                page = stream.Stale.erase(page); // released meanwhile: a later assign loads it afresh
-            else if (stream.Loaded.count(*page) && cache.Rewrite(cached))
-                page = stream.Stale.erase(page);
-            else
-                ++page;
-        }
+        // A page released meanwhile is dropped (a later assign loads it afresh); a loaded one is
+        // rewritten; the rest wait for their load.
+        stream.Stale.EraseIf([id, &stream, &cache](const PageAddress& address, const PageSampleRect& level0Rect) {
+            const CachedPage cached{id, address};
+            return cache.SlotOf(cached) == kNoResidentSlot ||
+                   (stream.Loaded.count(address) != 0 && cache.Rewrite(cached, level0Rect));
+        });
     }
 }
 
-void PageResidencyManager::TrimCpuSamples(uint64 frameIndex)
+void PageResidencyManager::TrimCpuPages(uint64 frameIndex)
 {
     // Kept past the budget: the placeable pages (to upload, or uploaded and wanted again), this
     // frame's CPU window pages (wanted at this frame) and the CPU pinned levels.
@@ -514,7 +523,7 @@ void PageResidencyManager::TrimCpuSamples(uint64 frameIndex)
         Stream& stream = m_Streams.at(candidate.Stream);
         stream.Loaded.erase(candidate.Address);
         SetCpuEntry(stream, candidate.Address, CpuPageEntry{});
-        m_CpuBytes -= kPageSampleBytes;
+        m_CpuBytes -= stream.PageBytes;
     }
 }
 
@@ -530,7 +539,7 @@ void PageResidencyManager::Update(uint64 frameIndex, float32 deltaSeconds, bool 
     StartLoads(frameIndex);
     StartCpuLoads(frameIndex, true);
     AssignLoaded(frameIndex, deltaSeconds, teleport);
-    TrimCpuSamples(frameIndex);
+    TrimCpuPages(frameIndex);
     for (auto& [id, stream] : m_Streams)
     {
         // Each frame states its windows; the ones this Update kept stay readable until the next.

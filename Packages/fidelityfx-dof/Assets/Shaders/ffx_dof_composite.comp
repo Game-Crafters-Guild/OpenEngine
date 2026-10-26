@@ -18,6 +18,7 @@ layout(set = 0, binding = 5, std140) uniform ViewParamsBlock
     vec4 ge_nearFar;
     vec4 ge_cameraPosWS;
 } ViewParams;
+#include "Includes/reverse_z.glsl"
 // The view's exposure state. The focus visualizer's colour is display-referred (divided by the
 // exposure) and lands in scene colour at the frame's pre-exposure P.
 #define GE_EXPOSURE_HISTORY_BINDING 6
@@ -41,13 +42,6 @@ layout(push_constant) uniform DofPC
     int useAutoExposure;
 } pc;
 
-float LinearizeReverseZ(float depth)
-{
-    float n = max(ViewParams.ge_nearFar.x, 1e-5);
-    float f = max(ViewParams.ge_nearFar.y, n + 1.0);
-    return (n * f) / max(depth * (f - n) + n, 1e-6);
-}
-
 float PhysicalCocMeters(float rawDepth)
 {
     float focal = max(pc.dofFocalLengthMm, 1.0) * 0.001;
@@ -55,9 +49,9 @@ float PhysicalCocMeters(float rawDepth)
     float apertureDiameter = focal / max(pc.dofAperture, 0.95);
     // A reverse-Z clear value is the sky at infinity. Evaluate the physical
     // thin-lens limit rather than assigning a focus-independent maximum blur.
-    if (rawDepth <= 0.0)
+    if (IsBackgroundDepth(rawDepth))
         return -apertureDiameter * focal / max(focus - focal, 1e-6);
-    float d = LinearizeReverseZ(rawDepth);
+    float d = LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
     return apertureDiameter * focal * (focus - d) /
            max(d * (focus - focal), 1e-6);
 }

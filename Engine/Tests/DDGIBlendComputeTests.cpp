@@ -25,6 +25,8 @@ class DDGIBlendComputeTest : public ::testing::Test
 {
   protected:
     using V4 = std::array<float, 4>;
+    // The world-space xyz of a vec4 UBO field, the form DDGIAtlasUploadState compares.
+    static GameEngine::Mathematics::Vector3 ToVector3(const V4& value) { return {value[0], value[1], value[2]}; }
     static constexpr uint32_t kRays = 64;
     static constexpr uint32_t kTexels = 64;
     struct Params
@@ -204,7 +206,7 @@ class DDGIBlendComputeTest : public ::testing::Test
             if (tick == 9) up.filter[1] = 0.75f;
             if (tick == 12) up.min[0] = 2;  // scroll: stale cells must upload black
             if (tick == 15) up.size[1] = 3;
-            const bool full = uploadState.NeedsFullUpload(up.min.data(), up.size.data(),
+            const bool full = uploadState.NeedsFullUpload(ToVector3(up.min), ToVector3(up.size),
                                                           up.filter[0], up.filter[1]);
             EXPECT_EQ(full, tick == 0 || tick == 6 || tick == 9 || tick == 12 || tick == 15) << "tick " << tick;
             const auto irradiance = MakeBuffer(state.data(), state.size() * sizeof(V4));
@@ -266,7 +268,7 @@ class DDGIBlendComputeTest : public ::testing::Test
             }
             EXPECT_EQ(captured[0], captured[2]) << "irradiance at tick " << tick;
             EXPECT_EQ(captured[1], captured[3]) << "depth at tick " << tick;
-            uploadState.Commit(up.min.data(), up.size.data(), up.filter[0], up.filter[1]);
+            uploadState.Commit(ToVector3(up.min), ToVector3(up.size), up.filter[0], up.filter[1]);
         }
     }
 

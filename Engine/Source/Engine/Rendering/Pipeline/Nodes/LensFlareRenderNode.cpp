@@ -8,6 +8,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SunScreenProjection.h"
 #include "Mathematics/Interpolation.h"
+#include "Mathematics/Vector3.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -106,15 +108,15 @@ void BuildViewInstances(const std::vector<ResolvedFlare>& flares,
         }
         std::vector<FlareInstanceGPU>& out = batch->Instances;
 
-        float ndcX = 0.0f, ndcY = 0.0f, ndcDepth = 0.0f;
-        const bool projected = rf.SunMode
-                                   ? ProjectSunDirectionToNdc(
-                                         cam, rf.Forward, ndcX, ndcY, ndcDepth)
-                                   : ProjectToNdc(
-                                         cam.viewProj, rf.WorldPos[0], rf.WorldPos[1],
-                                         rf.WorldPos[2], ndcX, ndcY, ndcDepth);
-        if (!projected)
+        const std::optional<Mathematics::Vector3> ndc =
+            rf.SunMode
+                ? ProjectSunDirectionToNdc(cam, Mathematics::Vector3(rf.Forward[0], rf.Forward[1], rf.Forward[2]))
+                : ProjectToNdc(cam, Mathematics::Vector3(rf.WorldPos[0], rf.WorldPos[1], rf.WorldPos[2]));
+        if (!ndc)
             continue;
+        const float ndcX = ndc->x;
+        const float ndcY = ndc->y;
+        const float ndcDepth = ndc->z;
 
         // Optical axis: source -> screen-center (NDC origin).
         const float axisX = -ndcX;

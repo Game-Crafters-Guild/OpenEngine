@@ -1383,7 +1383,7 @@ namespace GameEngine.SourceGenerators
             if (model.HasEntityCommands)
             {
                 sb.Append(indent3);
-                sb.AppendLine("var __commands = new GameEngine.Scripting.EntityCommands { WorldHandle = worldHandle };");
+                sb.AppendLine("var __commands = new GameEngine.Scripting.EntityCommands(worldHandle);");
             }
 
             sb.Append(indent3);

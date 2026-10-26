@@ -18,8 +18,8 @@ struct ColorLinear
 	float b = 0.0f;
 	float a = 1.0f;
 
-	ColorLinear() = default;
-	ColorLinear(float rValue, float gValue, float bValue, float aValue = 1.0f)
+	constexpr ColorLinear() = default;
+	constexpr ColorLinear(float rValue, float gValue, float bValue, float aValue = 1.0f)
 		: r(rValue), g(gValue), b(bValue), a(aValue) {}
 
 	// Exact per-channel comparison; != is the rewritten negation.
@@ -43,8 +43,8 @@ struct ColorSRGB
 	float b = 0.0f;
 	float a = 1.0f;
 
-	ColorSRGB() = default;
-	ColorSRGB(float rValue, float gValue, float bValue, float aValue = 1.0f)
+	constexpr ColorSRGB() = default;
+	constexpr ColorSRGB(float rValue, float gValue, float bValue, float aValue = 1.0f)
 		: r(rValue), g(gValue), b(bValue), a(aValue) {}
 
 	// Exact per-channel comparison; != is the rewritten negation.

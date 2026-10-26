@@ -11,15 +11,14 @@
 #define GE_HEIGHT_FOG_PIXEL_GLSL
 
 #include "height_fog_term.glsl"
+#include "reverse_z.glsl"
 
 /// The height fog in front of the pixel at uv in [0, 1] whose view depth is rawDepth (reverse-Z, 0 is
 /// the cleared far plane). scattering is absolute scene-linear; the fogged radiance is
 /// radiance * transmittance + scattering.
 void GE_HeightFogAtPixel(vec2 uv, float rawDepth, out vec3 scattering, out float transmittance)
 {
-    // Reverse-Z clears to exactly 0, and a D32F buffer keeps the farthest geometry above it, so
-    // only 0 is sky.
-    bool sky = rawDepth <= 0.0;
+    bool sky = IsBackgroundDepth(rawDepth);
     vec2 ndc = vec2(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0);
     vec4 pV = ViewParams.ge_invProj * vec4(ndc, rawDepth, 1.0);
     pV.xyz /= max(pV.w, 1e-6);

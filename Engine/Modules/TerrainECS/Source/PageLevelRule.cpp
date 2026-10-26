@@ -67,14 +67,24 @@ uint32 FirstPinnedPageLevel(const PageRequestTerrain& terrain, std::span<const P
 {
     if (levels.empty())
         return 0;
+    const uint64 cap = terrain.CacheSlots / kPinWholePyramidCacheFraction;
     const uint64 pages = static_cast<uint64>(levels.back().FirstEntry) + levels.back().PagesX * levels.back().PagesZ;
-    if (pages <= terrain.CacheSlots / kPinWholePyramidCacheFraction)
+    if (pages <= cap)
         return 0;
+    // Coarsest first while the pinned pages stay within the cap and the level's texel is at least
+    // kPinnedPageTexelMeters; the top level always, so every fallback walk ends on a page.
     const float32 texel = std::max(terrain.Level0TexelX, terrain.Level0TexelZ);
-    for (uint32 level = 0; level < levels.size(); ++level)
-        if (texel * static_cast<float32>(1u << level) >= kPinnedPageTexelMeters)
-            return level;
-    return static_cast<uint32>(levels.size()) - 1u;
+    uint32 first = static_cast<uint32>(levels.size()) - 1u;
+    uint64 pinned = static_cast<uint64>(levels.back().PagesX) * levels.back().PagesZ;
+    while (first > 0 && texel * static_cast<float32>(1u << (first - 1u)) >= kPinnedPageTexelMeters)
+    {
+        const uint64 finer = static_cast<uint64>(levels[first - 1u].PagesX) * levels[first - 1u].PagesZ;
+        if (pinned + finer > cap)
+            break;
+        pinned += finer;
+        --first;
+    }
+    return first;
 }
 
 void HeightPageRequester::Configure(const PageRequestTerrain& terrain)
@@ -127,7 +137,12 @@ void HeightPageRequester::Build(std::span<const Mathematics::Vector3> cameras, c
                                                        2u * page.Z + dz};
                 if (child.X >= finer.PagesX || child.Z >= finer.PagesZ)
                     continue;
-                out.push_back(PageStreaming::PageWant{child, NearestDistance(m_Terrain, child, cameras), false});
+                // Wanted only where its own nearest point needs its level: elsewhere every point of
+                // its footprint resolves its parent's level or a coarser one.
+                const float32 childDistance = NearestDistance(m_Terrain, child, cameras);
+                if (GeometryPageLevel(childDistance, texel, view) >= static_cast<float32>(page.Level))
+                    continue;
+                out.push_back(PageStreaming::PageWant{child, childDistance, false});
                 m_Frontier.push_back(child);
             }
         }
