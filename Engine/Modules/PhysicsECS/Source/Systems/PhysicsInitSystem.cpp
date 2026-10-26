@@ -13,8 +13,6 @@
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
 #include "PhysicsECS/Components/KinematicBody.h"
 #include "PhysicsECS/HeightFieldDataProvider.h"
-#include "PhysicsECS/MeshColliderData.h"
-#include "PhysicsECS/Components/MeshColliderShape.h"
 
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
@@ -26,7 +24,6 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
-#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -36,23 +33,6 @@ namespace GameEngine::PhysicsECS
 {
 namespace
 {
-std::shared_ptr<const Physics::MeshShapeDef> ReadMeshForRebuild(Physics::PhysicsWorld& physics,
-    ECS::EntityHandle entity, const Components::MeshColliderShape& shape, const Components::PhysicsBody& body)
-{
-    const bool changed = shape.DataIndex != shape.BuiltDataIndex || shape.DataGeneration != shape.BuiltDataGeneration;
-    if (!changed && body.initialized && physics.IsBodyValid(body.body) && physics.IsShapeValid(body.shape))
-        return {};
-    const auto mesh = MeshColliderData::Read({shape.DataIndex, shape.DataGeneration});
-    if (!mesh)
-        return {};
-    if (body.motionType != Physics::MotionType::Static)
-    {
-        Logger::Log::Warning("Mesh collider entity {} requires a Static physics body", entity.id);
-        return {};
-    }
-    return mesh;
-}
-
 static GameEngine::Components::Transform TransformFromWorld(const GameEngine::Components::WorldTransform& wt)
 {
     GameEngine::Components::Transform t;
@@ -281,24 +261,6 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
         bc.shapeDef = std::move(shapeDef);
         byBody[bodyEntity].push_back(std::move(bc));
     };
-
-    // Procedural triangle meshes participate in the same body creation and teardown as other shapes.
-    world.Query<ECS::Read<Components::Transform>, ECS::Read<Components::PhysicsCollider>,
-                ECS::Write<Components::MeshColliderShape>, ECS::Read<Components::PhysicsBody>>()
-        .Each([pw, &addCollider, &rebuildBodies](ECS::EntityHandle entity, const Components::Transform& local,
-                  const Components::PhysicsCollider& collider, Components::MeshColliderShape& shape,
-                  const Components::PhysicsBody& body)
-        {
-            const auto mesh = ReadMeshForRebuild(*pw, entity, shape, body);
-            if (!mesh)
-                return;
-            const bool changed = shape.DataIndex != shape.BuiltDataIndex || shape.DataGeneration != shape.BuiltDataGeneration;
-            addCollider(entity, nullptr, local, collider, *mesh);
-            if (changed)
-                rebuildBodies.insert(entity);
-            shape.BuiltDataIndex = shape.DataIndex;
-            shape.BuiltDataGeneration = shape.DataGeneration;
-        });
 
     // Gather sphere colliders
     {

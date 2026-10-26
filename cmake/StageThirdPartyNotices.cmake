@@ -51,13 +51,6 @@ _ge_notice_copy(
     "${GE_SOURCE_DIR}/Packages/eztree/Assets/Textures/EZTree/NOTICE.md"
     "${GE_NOTICES_DEST}/EZTree/NOTICE.md")
 
-_ge_notice_copy(
-    "${GE_SOURCE_DIR}/Packages/smartshape2d/LICENSE"
-    "${GE_NOTICES_DEST}/SmartShape2D/LICENSE")
-_ge_notice_copy(
-    "${GE_SOURCE_DIR}/Packages/smartshape2d/THIRD_PARTY_NOTICES.md"
-    "${GE_NOTICES_DEST}/SmartShape2D/THIRD_PARTY_NOTICES.md")
-
 # The desktop WebGPU backend and SDK shader cook share the pinned web toolchain.
 # Keep its full permission texts with the shipped notices, including Rust dependencies.
 _ge_notice_copy(

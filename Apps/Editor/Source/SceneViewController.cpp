@@ -58,7 +58,6 @@
 #include "Logger/Logger.h"
 #include "Picking/ScenePick.h"
 #include "Picking/PickRootResolver.h"
-#include "Editor/Entities/EditorComponentTraits.h"
 #include "UI/Controls/Widgets/CameraBookmarksWidget.h"
 #include "Editor/Settings/SceneViewSettings.h"
 #include "SceneView/SceneViewFraming.h"
@@ -1142,13 +1141,6 @@ std::string_view SceneViewController::GetActiveRegisteredToolId() const
 void SceneViewController::ActivateRegisteredToolForSelection(ECS::EntityHandle primary)
 {
     ECS::World* world = &GetWorld();
-    if (!world->IsValid(primary))
-        return;
-    for (const auto& [type, traits] : Editor::EditorComponentTraitsRegistry::Get().Snapshot())
-    {
-        if (traits.PreserveSceneToolOnSelection && world->HasComponent(primary, type))
-            return;
-    }
     for (const Editor::SceneViewToolStripEntry& entry : Editor::SceneViewToolStripRegistry::Get().Entries())
     {
         if (entry.ActivatesForSelection && entry.ActivatesForSelection(*world, primary, m_SelectedEntities))
@@ -3664,7 +3656,6 @@ void SceneViewController::FrameAll()
 void SceneViewController::PopulatePointerCameraState(Editor::SceneTools::ScenePointerEvent& ev) const
 {
     ev.cameraPos = GetCameraWorldPos();
-    ev.IsEditor2D = m_Is2DMode;
 
     const float yawR = m_CamYawDeg * 3.1415926535f / 180.0f;
     const float pitR = m_CamPitchDeg * 3.1415926535f / 180.0f;

@@ -1,8 +1,6 @@
 #include "Inspectors/PhysicsColliderInspector.h"
 
 #include "InspectorRegistry.h"
-#include "Editor/Entities/EditorComponentTraits.h"
-#include "PhysicsECS/Components/MeshColliderShape.h"
 
 #include <functional>
 #include <memory>
@@ -827,9 +825,6 @@ static void RegisterPlaneShapeInspector()
 
 void RegisterPhysicsColliderInspectors()
 {
-    Editor::EditorComponentTraits generatedMeshTraits;
-    generatedMeshTraits.HideInInspector = true;
-    Editor::EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<Components::MeshColliderShape>(), std::move(generatedMeshTraits));
     InspectorFn colliderFn = [](const InspectorContext& ctx)
     {
         if (!ctx.Parent || !ctx.World || !ctx.Entity.IsValid())

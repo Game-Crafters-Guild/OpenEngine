@@ -18,7 +18,6 @@
 #include "SceneView/SplineOwnerQuery.h"
 #include "SceneView/SplineSceneGizmo.h"
 #include "SceneView/SplineTool.h"
-#include "SceneView/TransformTool.h"
 #include "SceneView/SplineToolStripEntry.h"
 #include "Scripting/ScriptsConfig.h"
 #include "Spline/SplineData.h"
@@ -26,7 +25,6 @@
 #include "TerrainECS/TerrainService.h"
 #include "Types/ColorUtils.h"
 #include "UndoRedo/UndoRedoService.h"
-#include "UndoRedo/SplineUndoHelpers.h"
 
 using GameEngine::ApplicationConfig;
 using GameEngine::EngineCore;
@@ -939,153 +937,4 @@ TEST(SplineInteractionStateTests, IndexDoesNotOwnTheStateAfterItsConsumersClose)
     }
     EXPECT_TRUE(weak.expired());
     EXPECT_EQ(AcquireSplineInteractionState(world)->Selection().PointIndex, -1);
-}
-
-TEST_F(SplineToolTests, TwoDimensionalBrushDrawsInXYWithoutGroundHit)
-{
-    ScopedSplineStickToMeshSetting stickToMesh(false);
-    SplineTool tool(*GetWorld());
-    for (const auto phase : {PointerPhase::Down, PointerPhase::Move, PointerPhase::Up})
-    {
-        const float x = phase == PointerPhase::Down ? -2.0f : phase == PointerPhase::Move ? 0.0f : 2.0f;
-        auto event = MakePointer(phase, 100.0f + x * 20.0f, 100.0f, {x, 3.0f, -10.0f}, {0, 0, 1});
-        event.IsEditor2D = true;
-        event.orthoHeight = 10.0f;
-        event.tanHalfFovY = 0.0f;
-        tool.OnPointerEvent(event);
-    }
-    auto* service = GameEngine::SplineECS::SplineService::TryGet();
-    ASSERT_NE(service, nullptr);
-    size_t count = 0;
-    GetWorld()->Query<GameEngine::ECS::Read<SplineComponent>, GameEngine::ECS::Read<Transform>>()
-        .Each([&](const SplineComponent& reference, const Transform& transform)
-        {
-            ++count;
-            const auto* spline = service->GetSplineData({reference.SplineDataIndex, reference.SplineDataGeneration});
-            ASSERT_NE(spline, nullptr);
-            ASSERT_GE(spline->Points.size(), 2u);
-            for (const auto& point : spline->Points)
-            {
-                EXPECT_NEAR(point.Position.y + transform.GetPosition().y, 3.0f, 0.001f);
-                EXPECT_NEAR(point.Position.z + transform.GetPosition().z, 0.0f, 0.001f);
-            }
-        });
-    EXPECT_EQ(count, 1u);
-}
-
-TEST_F(SplineToolTests, PerSplineWidthEnvelopeCanBeHiddenWithoutHidingControlPoints)
-{
-    auto* world = GetWorld();
-    auto& settings = GameEngine::Editor::SplineEditorSettings::Get();
-    const bool previousEnvelope = settings.GetShowWidthEnvelope();
-    const bool previousDrape = settings.GetDrapeToSurface();
-    settings.SetShowWidthEnvelope(true);
-    settings.SetDrapeToSurface(false);
-    const auto spline = MakeSplineEntity(world, 2);
-    world->AddComponentImmediate(spline.SplineEntity, WorldTransform{});
-    GameEngine::Editor::SceneTools::SplineSceneGizmo gizmo(*world);
-    gizmo.SetSelectionQuery([entity = spline.SplineEntity] { return entity; });
-    constexpr GameEngine::Rendering::ViewId kView = 9082;
-    const auto draw = [&](bool visible)
-    {
-        world->GetComponentForWrite<SplineComponent>(spline.SplineEntity)->ShowWidthEnvelope = visible;
-        GameEngine::Editor::SceneTools::ResetGizmoLineGroups(kView);
-        GameEngine::Editor::SceneTools::ResetGizmoTriangleGroups(kView);
-        const Vector3 camera(0.0f, 20.0f, -20.0f);
-        GizmoRenderContext context(kView, kView, &camera, nullptr, world);
-        gizmo.Render(context);
-        size_t count = 0;
-        if (const auto* groups = GameEngine::Editor::SceneTools::GetGizmoTriangleGroups(kView))
-            for (const auto& group : *groups)
-                count += group.vertices.size();
-        return count;
-    };
-    const auto hidden = draw(false);
-    EXPECT_GT(hidden, 0u);
-    EXPECT_GT(draw(true), hidden);
-    GameEngine::Editor::SceneTools::ResetGizmoLineGroups(kView);
-    GameEngine::Editor::SceneTools::ResetGizmoTriangleGroups(kView);
-    settings.SetShowWidthEnvelope(previousEnvelope);
-    settings.SetDrapeToSurface(previousDrape);
-}
-
-TEST_F(SplineToolTests, TransformingControlsOnTwoSplinesIsOneUndoStep)
-{
-    auto* world = GetWorld();
-    const auto first = MakeSplineEntity(world, 3);
-    const auto second = MakeSplineEntity(world, 3);
-    auto* service = GameEngine::SplineECS::SplineService::TryGet();
-    const auto firstReference = *world->GetComponent<SplineComponent>(first.SplineEntity);
-    const auto secondReference = *world->GetComponent<SplineComponent>(second.SplineEntity);
-    const GameEngine::SplineECS::SplineHandle firstHandle{firstReference.SplineDataIndex, firstReference.SplineDataGeneration};
-    const GameEngine::SplineECS::SplineHandle secondHandle{secondReference.SplineDataIndex, secondReference.SplineDataGeneration};
-    const auto before = service->GetSplineData(firstHandle)->Points[0].Position;
-    auto& selection = State->Selection();
-    selection.Entity = first.SplineEntity;
-    selection.PointIndex = 0;
-    selection.Kind = 1;
-    selection.Controls = {{first.SplineEntity, 0, 1}, {second.SplineEntity, 0, 1}};
-    GameEngine::Editor::UndoRedoService undo;
-    GameEngine::Editor::SceneTools::TransformTool transform(*world);
-    SplineTool spline(*world);
-    spline.SetUndoRedoService(&undo);
-    spline.SetTransformTool(&transform);
-    GameEngine::Editor::SceneTools::GizmoCollector collector;
-    spline.GatherGizmos(collector);
-    GameEngine::Editor::SceneTools::TransformTranslateGizmo* gizmo = nullptr;
-    for (auto* candidate : collector.GetGizmos())
-        if (auto* translation = dynamic_cast<GameEngine::Editor::SceneTools::TransformTranslateGizmo*>(candidate))
-            gizmo = translation;
-    ASSERT_NE(gizmo, nullptr);
-    GameEngine::Editor::SceneTools::GizmoHit hit{};
-    hit.kind = GameEngine::Editor::SceneTools::GizmoHitKind::Axis;
-    hit.handleId = 0;
-    auto down = MakePointer(PointerPhase::Down, 400, 300, before + Vector3{0, 0, 5}, {0, 0, -1});
-    ASSERT_TRUE(gizmo->HandlePointerEvent(down, hit));
-    auto move = down;
-    move.phase = PointerPhase::Move;
-    move.ray.origin.x += 2;
-    ASSERT_TRUE(gizmo->HandlePointerEvent(move, hit));
-    auto up = move;
-    up.phase = PointerPhase::Up;
-    ASSERT_TRUE(gizmo->HandlePointerEvent(up, hit));
-    EXPECT_EQ(undo.GetUndoCount(), 1u);
-    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x + 2);
-    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x + 2);
-    undo.Undo();
-    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x);
-    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x);
-    undo.Redo();
-    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x + 2);
-    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x + 2);
-}
-
-TEST_F(SplineToolTests, SnapshotFollowsTheOwnersRecreatedSplineWithoutRestoringRuntimeHandles)
-{
-    auto* world = GetWorld();
-    const auto created = MakeSplineEntity(world, 3);
-    auto* service = GameEngine::SplineECS::SplineService::TryGet();
-    auto* component = world->GetComponentForWrite<SplineComponent>(created.SplineEntity);
-    const GameEngine::SplineECS::SplineHandle original{component->SplineDataIndex, component->SplineDataGeneration};
-    component->DefaultRadius = 3;
-    component->ShowWidthEnvelope = false;
-    service->GetSplineData(original)->SetPointPosition(0, {4, 5, 0});
-    auto target = GameEngine::Editor::SplineUndo::MakeSplineEditableSnapshotTarget(
-        service, original, world, created.SplineEntity, nullptr, "Edit spline");
-    GameEngine::Editor::UndoRedoService::SnapshotTarget::Snapshot snapshot;
-    ASSERT_TRUE(target.Capture(snapshot));
-    service->DestroySpline(original);
-    const auto replacement = service->CreateSpline();
-    component->SplineDataIndex = replacement.Index();
-    component->SplineDataGeneration = replacement.Generation();
-    component->DefaultRadius = 1;
-    component->ShowWidthEnvelope = true;
-    ASSERT_TRUE(target.Apply(snapshot));
-    EXPECT_EQ(component->SplineDataGeneration, replacement.Generation());
-    EXPECT_FLOAT_EQ(component->DefaultRadius, 3);
-    EXPECT_FALSE(component->ShowWidthEnvelope);
-    EXPECT_FLOAT_EQ(service->GetSplineData(replacement)->Points[0].Position.x, 4);
-    world->DestroyEntityImmediate(created.SplineEntity);
-    EXPECT_FALSE(target.Apply(snapshot));
-    service->DestroySpline(replacement);
 }

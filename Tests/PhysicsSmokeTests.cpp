@@ -11,8 +11,6 @@
 #include "PhysicsECS/PhysicsEntityEventCallbacks.h"
 #include "PhysicsECS/PhysicsScriptApi.h"
 #include "PhysicsECS/PhysicsWorldService.h"
-#include "PhysicsECS/MeshColliderData.h"
-#include "PhysicsECS/Components/MeshColliderShape.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
 #include "PhysicsECS/Components/KinematicBody.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
@@ -4799,61 +4797,4 @@ TEST(PhysicsWorldHooks, HooksNeverResolveASiblingComponent)
                "must be self-sufficient from its own component.";
         EXPECT_EQ(src.find("world.Get"), std::string::npos) << path.filename().string();
     }
-}
-
-TEST(Physics, ProceduralMeshReaderSurvivesReleaseAndRejectsStaleHandle)
-{
-    GameEngine::Physics::MeshShapeDef mesh;
-    mesh.vertices = {{-1, 0, -1}, {1, 0, -1}, {0, 0, 1}};
-    mesh.indices = {0, 2, 1};
-    const auto handle = GameEngine::PhysicsECS::MeshColliderData::Register(mesh);
-    const auto reader = GameEngine::PhysicsECS::MeshColliderData::Read(handle);
-    ASSERT_NE(reader, nullptr);
-    GameEngine::PhysicsECS::MeshColliderData::Release(handle);
-    EXPECT_EQ(reader->indices.size(), 3u);
-    EXPECT_EQ(GameEngine::PhysicsECS::MeshColliderData::Read(handle), nullptr);
-    const auto replacement = GameEngine::PhysicsECS::MeshColliderData::Register(mesh);
-    EXPECT_NE(replacement, handle);
-    EXPECT_EQ(GameEngine::PhysicsECS::MeshColliderData::Read(handle), nullptr);
-    GameEngine::PhysicsECS::MeshColliderData::Release(replacement);
-    mesh.indices = {0, 2, 99};
-    EXPECT_FALSE(GameEngine::PhysicsECS::MeshColliderData::Register(mesh).IsValid());
-}
-
-TEST(Physics, ProceduralMeshColliderBuildsAndRebuildsWithoutARenderer)
-{
-    ScopedPhysicsWorldService service(SmallDeterministicSettings());
-    GameEngine::ECS::World world;
-    GameEngine::PhysicsECS::RegisterPhysicsWorldHooks(world);
-    const auto entity = world.CreateEntity();
-    world.AddComponentImmediate(entity, GameEngine::Components::Transform{});
-    world.AddComponentImmediate(entity, GameEngine::Components::WorldTransform{});
-    GameEngine::Components::PhysicsBody body;
-    body.motionType = GameEngine::Physics::MotionType::Static;
-    world.AddComponentImmediate(entity, body);
-    GameEngine::Physics::MeshShapeDef mesh;
-    mesh.vertices = {{-1, 0, -1}, {1, 0, -1}, {0, 0, 1}};
-    mesh.indices = {0, 2, 1};
-    const auto first = GameEngine::PhysicsECS::MeshColliderData::Register(mesh);
-    GameEngine::Components::MeshColliderShape collider;
-    collider.DataIndex = first.Index();
-    collider.DataGeneration = first.Generation();
-    world.AddComponentImmediate(entity, collider);
-    GameEngine::PhysicsECS::PhysicsInitSystem init;
-    RunPhysicsInitFrame(world, init);
-    ASSERT_TRUE(world.GetComponent<GameEngine::Components::PhysicsBody>(entity)->initialized);
-    EXPECT_EQ(world.GetComponent<GameEngine::Components::MeshColliderShape>(entity)->BuiltDataGeneration,
-              first.Generation());
-    mesh.vertices[0].y = 1;
-    const auto replacement = GameEngine::PhysicsECS::MeshColliderData::Register(mesh);
-    collider.DataIndex = replacement.Index();
-    collider.DataGeneration = replacement.Generation();
-    world.AddComponentImmediate(entity, collider);
-    RunPhysicsInitFrame(world, init);
-    EXPECT_TRUE(world.GetComponent<GameEngine::Components::PhysicsBody>(entity)->initialized);
-    EXPECT_EQ(world.GetComponent<GameEngine::Components::MeshColliderShape>(entity)->BuiltDataIndex,
-              replacement.Index());
-    world.DestroyEntityImmediate(entity);
-    GameEngine::PhysicsECS::MeshColliderData::Release(first);
-    GameEngine::PhysicsECS::MeshColliderData::Release(replacement);
 }

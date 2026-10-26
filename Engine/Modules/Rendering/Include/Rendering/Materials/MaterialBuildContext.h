@@ -41,10 +41,6 @@ struct MaterialBuildContext
     {
         std::string Alias;
         std::filesystem::path Root;
-        // Registry-key spelling on case-insensitive hosts. Root retains the physical
-        // spelling for source reads; this alternate is only used to identify paths
-        // returned by the asset registry. Empty for callers without a registry.
-        std::filesystem::path RegistryRoot{};
     };
 
     // Every mounted asset source: the project, the editor mount and each

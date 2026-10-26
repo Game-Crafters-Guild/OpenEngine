@@ -28,14 +28,13 @@ namespace GameEngine::Editor::Picking
 // are never crossed, so deep scene hierarchies (City > Buildings > Room)
 // don't swallow the pick. Entities without an asset-backed MeshRenderer
 // (lights, probes, primitives, plugin pick-root components) resolve to
-// themselves, except generated geometry whose registered authoring root owns the pick.
+// themselves.
 ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity);
 
 // Ordered click-through candidates from a distance-sorted, pickability-
 // filtered hit list. Root mode prepends the nearest hit's instance root:
 // [root, nearest exact hit, deeper exact hits...]; exact mode is just the
-// exact hit entities nearest-to-farthest. Generated pieces collapse to their owner
-// in root mode, including repeat clicks. Deduplicated, order preserved.
+// exact hit entities nearest-to-farthest. Deduplicated, order preserved.
 void BuildPickCandidates(ECS::World& world,
                          const std::vector<Scene::PickHit>& sortedHits,
                          bool exactPick,

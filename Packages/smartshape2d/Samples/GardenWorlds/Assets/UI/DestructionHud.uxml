@@ -1,4 +1,0 @@
-<uielement class="destruction-hud">
-    <label class="destruction-title" text="DESTRUCTION GARDEN" />
-    <label class="destruction-instructions" text="Click to explode. R: restore terrain. Restart Play to reset seeds." />
-</uielement>

@@ -49,11 +49,6 @@ using Mathematics::Vector3;
 
 namespace
 {
-UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
-    SplineECS::SplineService* splineService,
-    const std::vector<std::pair<ECS::EntityHandle, SplineECS::SplineHandle>>& splines,
-    ECS::World* world, Editor::EditorChangeNotifications* notifications, const std::string& label);
-
 // Same basis as SceneViewTransformTool translate gizmo (constant screen size).
 constexpr float kSplineScreenScaleRefAxisLength = 1.5f;
 constexpr float kSplineScreenScaleBase            = 0.1875f;
@@ -523,23 +518,6 @@ bool SplineTool::RaycastEntityMesh(const GizmoRay& ray, uint32 entityId, Vector3
     return true;
 }
 
-bool SplineTool::RaycastEditingPlane(const GizmoRay& ray, Vector3& outHit)
-{
-    Vector3 origin{0.0f, 0.0f, 0.0f};
-    Vector3 normal{0.0f, 0.0f, 1.0f};
-    const auto selected = m_SelectionQuery ? m_SelectionQuery() : ECS::EntityHandle{};
-    if (const auto* transform = m_State->World().GetComponent<Components::WorldTransform>(selected))
-    {
-        const auto matrix = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
-        origin = matrix.TransformPoint(origin);
-        const auto x = matrix.TransformPoint({1.0f, 0.0f, 0.0f}) - origin;
-        const auto y = matrix.TransformPoint({0.0f, 1.0f, 0.0f}) - origin;
-        normal = Vector3::Cross(x, y).NormalizeOrZero();
-    }
-    float distance = 0.0f;
-    return Mathematics::IntersectRayPlane(ray, origin, normal, distance, outHit) && distance >= 0.0f;
-}
-
 void SplineTool::OnPointerEvent(const ScenePointerEvent& event)
 {
     if (event.phase == PointerPhase::Move && m_TransformTool)
@@ -561,11 +539,7 @@ void SplineTool::OnPointerEvent(const ScenePointerEvent& event)
     // whatever's behind it (terrain / floor), which is the problem this option
     // fixes. A miss produces no sample and the stroke visibly pauses until the
     // cursor returns to the target mesh.
-    if (event.IsEditor2D)
-    {
-        hit = RaycastEditingPlane(event.ray, hitPos);
-    }
-    else if (stickyEnabled && m_IsDrawingBrush && m_StickyEntityId != 0)
+    if (stickyEnabled && m_IsDrawingBrush && m_StickyEntityId != 0)
     {
         hit = RaycastEntityMesh(event.ray, m_StickyEntityId, hitPos);
         if (hit)
@@ -931,17 +905,14 @@ void SplineTool::BeginSelectedControlTransformEdit(const char* editName)
     }
 
     m_SplineDragUndo = {};
-    if (m_UndoRedo)
+    if (m_UndoRedo && undoSplines.size() == 1u)
     {
         const char* label = (editName && *editName) ? editName : "Transform Spline Control";
         m_SplineDragUndo = m_UndoRedo->BeginInteractiveEdit(
             label,
-            undoSplines.size() == 1u
-                ? Editor::SplineUndo::MakeSplineEditableSnapshotTarget(
-                    splineService, undoSplines.front().second, world, undoSplines.front().first,
-                    m_ChangeNotifications, label)
-                : MakeMultiSplineEditableSnapshotTarget(splineService, undoSplines, world,
-                    m_ChangeNotifications, label));
+            Editor::SplineUndo::MakeSplineEditableSnapshotTarget(
+                splineService, undoSplines.front().second, world, undoSplines.front().first,
+                m_ChangeNotifications, label));
     }
 }
 
@@ -1448,7 +1419,7 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
     UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
 
-    target.Capture = [splineService, splines, world](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+    target.Capture = [splineService, splines](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
     {
         out.clear();
         const uint32_t count = static_cast<uint32_t>(splines.size());
@@ -1457,8 +1428,7 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
         for (const auto& entry : splines)
         {
             UndoRedoService::SnapshotTarget::Snapshot one;
-            const auto currentHandle = Editor::SplineUndo::ResolveSplineUndoHandle(world, entry.first, entry.second);
-            const auto* data = splineService ? splineService->GetSplineData(currentHandle) : nullptr;
+            const auto* data = splineService ? splineService->GetSplineData(entry.second) : nullptr;
             if (!Editor::SplineUndo::EncodeSplineConfig(data, one))
                 return false;
             const uint32_t bytes = static_cast<uint32_t>(one.size());
@@ -1470,7 +1440,7 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
         return true;
     };
 
-    target.Apply = [splineService, splines, world](const UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
+    target.Apply = [splineService, splines](const UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
     {
         if (snap.size() < 4u)
             return false;
@@ -1498,13 +1468,12 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
             Spline::SplineData restored{};
             if (!Editor::SplineUndo::DecodeSplineConfig(one, restored))
                 return false;
-            const auto currentHandle = Editor::SplineUndo::ResolveSplineUndoHandle(world, splines[i].first, splines[i].second);
-            auto* data = splineService ? splineService->GetSplineData(currentHandle) : nullptr;
+            auto* data = splineService ? splineService->GetSplineData(splines[i].second) : nullptr;
             if (!data)
                 return false;
             *data = std::move(restored);
             data->MarkDirty();
-            splineService->RebuildCache(currentHandle);
+            splineService->RebuildCache(splines[i].second);
         }
         return offset == snap.size();
     };
