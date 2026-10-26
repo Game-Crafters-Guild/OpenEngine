@@ -10,7 +10,7 @@
 
 #include "UI/ResolvedStyle.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 
 #include <filesystem>
 #include <fstream>
@@ -18,7 +18,7 @@
 #include <sstream>
 #include <string>
 
-using GameEngine::PathUtils;
+using GameEngine::ApplicationPaths;
 using GameEngine::UITesting::IsolatedUIFixture;
 
 namespace
@@ -28,7 +28,7 @@ namespace
 // reads them from under its own exe.
 std::string ReadShippedCss(const std::string& relative)
 {
-    std::ifstream in(PathUtils::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
+    std::ifstream in(ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
     if (!in)
         return {};
     std::ostringstream ss;
@@ -61,7 +61,7 @@ constexpr ShippedRuleCase kMediumRules[] = {
     {"theme/node-graph.css",
      R"(<uielement class="node-graph-palette"><label id="subject" class="node-graph-palette-section-title">Color</label></uielement>)"},
     {"theme/todos.css", R"(<label id="subject" class="todo-section-header">To Do</label>)"},
-    {"theme/widgets.css", R"(<label id="subject" class="log-detail-title">Stack Trace</label>)"},
+    {"panels/LogPanel/LogPanel.css", R"(<label id="subject" class="log-detail-section-title">Stack trace</label>)"},
     {"panels/SettingsPanel.css", R"(<label id="subject" class="settings-subsection-header">Game name</label>)"},
     {"panels/SettingsPanel.css",
      R"(<uielement class="settings-tree-pane"><uielement class="project-settings-row"><label id="subject" class="tree-title">Project Settings</label></uielement></uielement>)"},

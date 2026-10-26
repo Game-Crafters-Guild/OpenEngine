@@ -1,5 +1,6 @@
 #include "Rendering/Passes/HdrColorFxPass.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/NamedDescriptorWriter.h"
 #include "Rendering/Core/NamedPushConstantWriter.h"
@@ -228,7 +229,7 @@ RenderGraph::RGPass AddHdrColorFxPassRG(RenderGraph::RGFrame& frame, RenderGraph
 	if (pcw.IsValid())
 	{
 		pcw.Add("exposure", params.exposure);
-		pcw.Add("lutIntensity", std::clamp(params.lutIntensity, 0.0f, 1.0f));
+		pcw.Add("lutIntensity", Math::Clamp01(params.lutIntensity));
 		pcw.Add("lutStage", kLutStageGrade);
 		pcw.Add("lutInputEncoding", params.lut.InputEncoding);
 		pcw.Add("lutSize3d", params.lut.Size3D);

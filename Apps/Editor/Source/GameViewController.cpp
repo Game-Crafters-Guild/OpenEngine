@@ -22,6 +22,7 @@
 #include "Rendering/Common/Math.h"
 #include "Rendering/Core/HzbCullingStrategy.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Passes/PixelPerfectUpscalePass.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
 
@@ -247,7 +248,7 @@ std::optional<Engine::Renderer::Camera> GameViewController::PrepareView(
     clear.clearColorValue[2] = bg;
     clear.clearColorValue[3] = 1.0f;
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     rs->Views().SetViewClearConfig(m_ViewId, clear);
     return activeCam;
 }
@@ -373,7 +374,7 @@ bool GameViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& frame
     clear.clearColorValue[2] = bg;
     clear.clearColorValue[3] = 1.0f;
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     rs->Views().SetViewClearConfig(m_ViewId, clear);
     rs->WriteViewLightBuffer(m_ViewId);
 

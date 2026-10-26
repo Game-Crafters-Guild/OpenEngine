@@ -10,7 +10,7 @@
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "Editor/Entities/EditorComponentTraits.h"
-#include "Picking/MeshPickingService.h"
+#include "Scene/SceneRaycast.h"
 
 namespace GameEngine::Editor::Picking
 {
@@ -24,15 +24,15 @@ using ChildrenByParent =
 // Snapshot every (parent -> children) edge in one pass. O(parented-entities),
 // so the resolve walk builds it lazily, at most once, and only when it
 // actually reaches a container node. When a model-instance-root marker
-// component exists (planned with the prefab/blueprint system), this scan and
+// component exists (planned with the prefab system), this scan and
 // the subtree check below disappear in favor of an O(depth) climb.
 void BuildChildrenMap(ECS::World& world, ChildrenByParent& out)
 {
     world.Query<ECS::Read<Components::Parent>>().IncludeDisabled().Each(
         [&out](ECS::EntityHandle e, const Components::Parent& p)
         {
-            if (p.parent.IsValid())
-                out[p.parent].push_back(e);
+            if (p.Entity.IsValid())
+                out[p.Entity].push_back(e);
         });
 }
 
@@ -119,10 +119,10 @@ ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity)
     for (;;)
     {
         const auto* parentComp = world.GetComponent<Components::Parent>(entity);
-        if (!parentComp || !parentComp->parent.IsValid() || !world.IsValid(parentComp->parent))
+        if (!parentComp || !parentComp->Entity.IsValid() || !world.IsValid(parentComp->Entity))
             break;
 
-        const ECS::EntityHandle parent = parentComp->parent;
+        const ECS::EntityHandle parent = parentComp->Entity;
         const auto* parentMr = world.GetComponent<Components::MeshRenderer>(parent);
         bool sameInstance = false;
         if (parentMr)
@@ -147,7 +147,7 @@ ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity)
 }
 
 void BuildPickCandidates(ECS::World& world,
-                         const std::vector<PickHit>& sortedHits,
+                         const std::vector<Scene::PickHit>& sortedHits,
                          bool exactPick,
                          std::vector<ECS::EntityHandle>& outCandidates)
 {
@@ -162,7 +162,7 @@ void BuildPickCandidates(ECS::World& world,
         if (root.IsValid())
             outCandidates.push_back(root);
     }
-    for (const PickHit& hit : sortedHits)
+    for (const Scene::PickHit& hit : sortedHits)
     {
         const auto entity = exactPick ? hit.Entity : ResolveGeneratedPickOwner(world, hit.Entity);
         if (std::find(outCandidates.begin(), outCandidates.end(), entity) == outCandidates.end())

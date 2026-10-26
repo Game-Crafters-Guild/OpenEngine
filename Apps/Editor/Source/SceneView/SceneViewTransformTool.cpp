@@ -36,7 +36,7 @@
 #include "Mathematics/Vector3.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
 #include "PhysicsECS/PhysicsWorldService.h"
-#include "Picking/MeshPickingService.h"
+#include "Picking/ScenePick.h"
 #include "Types/Color.h"
 #include "Types/ColorUtils.h"
 #include "UndoRedo/MultiEntityComponentSnapshot.h"
@@ -254,7 +254,7 @@ inline TRS ComputeWorldTRSForEntity(World* world, EntityHandle handle)
 
     if (auto* parentComp = e.Get<Parent>())
     {
-        TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->parent);
+        TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->Entity);
         return CombineTRS(parentWorld, local);
     }
 
@@ -290,7 +290,7 @@ inline void GetParentWorldTRS(World* world,
         return; // identity parent
     }
 
-    TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->parent);
+    TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->Entity);
     outPos = parentWorld.position;
     outRot = parentWorld.rotation;
     outScale = parentWorld.scale;
@@ -326,13 +326,13 @@ inline bool HasAncestorInSet(World* world,
     while (e.IsValid())
     {
         const auto* parent = e.Get<Parent>();
-        if (!parent || !parent->parent.IsValid())
+        if (!parent || !parent->Entity.IsValid())
             return false;
 
-        if (std::find(candidates.begin(), candidates.end(), parent->parent) != candidates.end())
+        if (std::find(candidates.begin(), candidates.end(), parent->Entity) != candidates.end())
             return true;
 
-        e = Entity(world, parent->parent);
+        e = Entity(world, parent->Entity);
     }
 
     return false;
@@ -362,7 +362,7 @@ inline bool TryBuildWorldMatrixForEntity(World* world, EntityHandle entity, Math
     // Compose the sector so the gizmo, world-position queries, and measure
     // endpoints land on the SAME absolute world position the mesh renders and
     // picks at. ComposeEffectiveWorldTransform is the single source of truth
-    // (also used by SceneTlas + MeshPickingService); a null/zero sector returns
+    // (also used by SceneTlas + SceneRaycast); a null/zero sector returns
     // the matrix unchanged (dark-ship for untagged entities).
     const auto* sector = world->GetComponent<Components::WorldSectorCoord>(entity);
     const WorldTransform composed =

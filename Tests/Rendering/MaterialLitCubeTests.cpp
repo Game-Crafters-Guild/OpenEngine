@@ -16,7 +16,10 @@
 #include "Assets/MaterialAsset.h"
 #include "Engine/Rendering/MaterialSsboLayout.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Mathematics/Angle.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/CameraTypes.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Core/ViewParamsLayout.h"
 #include "Rendering/Common/Math.h"
 #include "Rendering/Common/Utils.h"
@@ -254,7 +257,8 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     const Matrix4x4 V = Mathematics::MakeLookAtLH(eye, Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f)).ToVulkan();
     constexpr float kNear = 0.1f;
     constexpr float kFar = 10.0f;
-    const Matrix4x4 P = Mathematics::MakePerspectiveLH_ZO_ReverseZ(Math::ToRadians(60.0f), aspect, kNear, kFar).ToVulkan();
+    constexpr float kVerticalFieldOfViewDeg = 60.0f;
+    const Matrix4x4 P = Mathematics::MakePerspectiveLH_ZO_ReverseZ(Mathematics::ToRadians(kVerticalFieldOfViewDeg), aspect, kNear, kFar).ToVulkan();
     const Matrix4x4 VP = P * V;
 
     CameraData cam{};
@@ -344,7 +348,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     pd.topology = PrimitiveTopology::TriangleList;
     pd.AddDynamicState(DynamicState::Viewport);
     pd.AddDynamicState(DynamicState::Scissor);
-    pd.EnableDepthTest(true, CompareOp::Greater); // reverse-Z: nearer is greater
+    pd.EnableDepthTest(true, ReverseZ::kNearerOrEqual);
     pd.SetCullingMode(CullModeFlagBits::None, FrontFace::CounterClockwise);
     pd.colorAttachmentFormats = {static_cast<uint32_t>(TextureFormat::RGBA8_UNORM)};
     pd.depthAttachmentFormat = static_cast<uint32_t>(TextureFormat::D32_FLOAT);
@@ -417,7 +421,9 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
                 bytes = named->Bytes;
                 ++namedBound;
                 if (isUniform && b.Block)
+                {
                     EXPECT_EQ(b.Block->Size, bytes) << b.Name << " block size drifted from its C++ mirror";
+                }
                 if (b.Name == "MaterialParams")
                 {
                     // The runtime array's reflected std430 stride is the row stride the
@@ -469,7 +475,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     rp.clearColorValue[0][3] = 1.0f;
     rp.colorStoreOp[0] = RenderPassDesc::StoreOp::Store;
     rp.clearDepth = true;
-    rp.clearDepthValue = 0.0f; // reverse-Z far
+    rp.clearDepthValue = ReverseZ::kClearFar;
     rp.depthStoreOp = RenderPassDesc::StoreOp::Store;
 
     cl->BeginRenderPass(rp);
@@ -506,7 +512,7 @@ TEST(MaterialShaders, MaterialV2_RendersLitCube)
     const uint8_t* px = static_cast<const uint8_t*>(dev->MapBuffer(rb));
     ASSERT_NE(px, nullptr);
 
-    auto toByte = [](float v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    auto toByte = [](float v) { return static_cast<uint8_t>(std::lround(Math::Clamp01(v) * 255.0f)); };
     const uint8_t clearR = toByte(rp.clearColorValue[0][0]);
     const uint8_t clearG = toByte(rp.clearColorValue[0][1]);
     const uint8_t clearB = toByte(rp.clearColorValue[0][2]);

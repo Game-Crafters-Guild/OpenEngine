@@ -32,11 +32,18 @@
 //                               mirror rules refuse fails the scan
 // Options: --in <dir> (repeatable; include paths are computed relative to each root's
 // "Include" dir, and structs already seen from an earlier root are de-duplicated by
-// fully-qualified name), --out <file>, --emit-dts <file>, --emit-json <file>, --dry-run.
+// fully-qualified name), --out <file>, --emit-dts <file>, --emit-json <file>, --dry-run,
+// --enum-include-root <dir> (repeatable; an include root searched for the headers a component
+// header includes, below), --depfile <file> (the headers read that way, as a make-style
+// dependency file of --out).
+//
+// An enum a reflected field names that no scanned header declares is read from the headers the
+// component header includes, followed transitively: beside the including header, then under the
+// scan's include roots and each --enum-include-root. Only that enum is taken from those headers.
 //
 // A struct is skipped, and named in the report, when its fields look non-POD (pointers,
-// references, templates, std:: containers, virtual members) or hide behind an unexpanded
-// field-injection macro. The report ends with a stable summary line
+// references, templates other than AssetRef<...>, std:: containers, virtual members) or hide
+// behind an unexpanded field-injection macro. The report ends with a stable summary line
 // ("ComponentScanner.summary reflected=N skipped=N sourcewarnings=N") the native-script
 // build pipeline parses.
 namespace GameEngine::ComponentScanner

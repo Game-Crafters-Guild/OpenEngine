@@ -88,7 +88,7 @@ const Refusal kRefusals[] = {
      "names. Fix: rename the field or the other member"},
     {"EnumNotFound", "Components/Bad.h", 13,
      "the field `Mode` of `FixtureBad` names the enum `Other::FixtureMode`, which the mirror's enum table does not hold under "
-     "that name. Fix: declare the enum in a component header or in the Include tree of a module the header includes, and write "
+     "that name. Fix: declare the enum in a component header or in a module header the component header includes, and write "
      "its name as C++ finds it from the component"},
     {"EnumFoundTwice", "Components/Bad.h", 13,
      "the field `Mode` of `FixtureBad` names the enum `FixtureMode`, which the mirror's enum table holds twice: "
@@ -143,7 +143,7 @@ TEST(ComponentMirrors, MirrorsPinsAndClassesOfTheFixtureAreTheGoldens)
     EXPECT_EQ(ReadFile(kFixture / "Expected" / "Components.layout.gen.cpp"),
               ReadFile(scratch.Path() / "native" / "Components.layout.gen.cpp"));
     EXPECT_EQ(CSharpFiles(kFixture / "Expected" / "CSharp"), CSharpFiles(csharp / "Components"));
-    EXPECT_NE(std::string::npos, out.str().find("ComponentScanner.components reflected=6 mirrored=2 readonly=1 element=1 internal=1 "
+    EXPECT_NE(std::string::npos, out.str().find("ComponentScanner.components reflected=7 mirrored=3 readonly=1 element=1 internal=1 "
                                                 "editor=1 enums=3"))
         << out.str();
 }

@@ -19,6 +19,7 @@
 #include "Engine/Rendering/MaterialCompiler.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Engine/Rendering/MeshReprovisionSource.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialBuildService.h"
 #include "Rendering/Materials/MaterialParamsLayout.h"
@@ -711,7 +712,7 @@ static void ClearDepthArrayToFar(Rendering::IDevice* dev, Rendering::TextureHand
         rp.colorStoreOp[0] = Rendering::RenderPassDesc::StoreOp::DontCare;
         rp.depthTarget = tex;
         rp.clearDepth = true;
-        rp.clearDepthValue = 0.0f; // reverse-Z far == lit
+        rp.clearDepthValue = Rendering::ReverseZ::kClearFar; // reverse-Z far == lit
         rp.depthLoadOp = Rendering::RenderPassDesc::LoadOp::Clear;
         rp.depthStoreOp = Rendering::RenderPassDesc::StoreOp::Store;
         // Dynamic rendering records one layer per pass, so each layer gets its

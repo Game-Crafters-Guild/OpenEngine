@@ -1731,6 +1731,8 @@ void ShadowMapRenderFeature::WriteTerrainShadowMap(ViewId viewId, RenderServices
     out.terrainShadowSource[1] = map.HeightBindlessIndex;
     out.terrainShadowSource[2] = 1u;
     out.terrainShadowSource[3] = map.MapSide;
+    out.terrainShadowField[0] = map.FieldLitBindlessIndex;
+    out.terrainShadowField[1] = map.FieldLitLevels;
 }
 
 Rendering::TextureHandle ShadowMapRenderFeature::GetShadowMapTexture(

@@ -13,7 +13,7 @@
 #include "Assets/Packages/PackagesIndex.h"
 #include "Assets/Packages/PackageVersion.h"
 #include "Assets/Packages/ProjectPackagesManifest.h"
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 #include "Core/EngineLoggerBridge.h"
 #include "Engine/Build/AssetCollector.h"
 #include "Engine/Build/PackageBuildStaging.h"
@@ -793,7 +793,7 @@ class CapturingLogSink final : public Logger::LogSink
 
     void Flush() override {}
     bool ShouldLog(Logger::LogLevel) const override { return true; }
-    Logger::String GetName() const override { return "CapturingLogSink"; }
+    std::string GetName() const override { return "CapturingLogSink"; }
 
   private:
     std::vector<std::string>* m_Out;
@@ -2393,11 +2393,11 @@ TEST(PackageRuntimeAssetStaging, ProjectOutsideAPackagedGameDoesNotReportMisses)
     EXPECT_EQ(reports, 0);
 }
 
-// A component used only inside a blueprint the scene instances, with no override of
+// A component used only inside a prefab the scene instances, with no override of
 // its fields in the scene, still ships the package's runtimeAssets for it.
-TEST(PackageRuntimeAssetStaging, ComponentUsedOnlyInABlueprintShipsItsRuntimeAssets)
+TEST(PackageRuntimeAssetStaging, ComponentUsedOnlyInAPrefabShipsItsRuntimeAssets)
 {
-    E2EProject project("ge_pkg_runtime_assets_blueprint");
+    E2EProject project("ge_pkg_runtime_assets_prefab");
 
     WriteTextFile(project.Root / "Packages" / "tree-pack" / "package.json", R"({
         "name": "tree-pack", "version": "1.0.0",
@@ -2407,12 +2407,12 @@ TEST(PackageRuntimeAssetStaging, ComponentUsedOnlyInABlueprintShipsItsRuntimeAss
     WriteTextFile(project.Root / "Packages" / "manifest.json", R"({
         "dependencies": { "tree-pack": "embedded" }
     })");
-    WriteTextFile(project.Root / "Assets" / "Blueprints" / "Oak.blueprint",
-                  "[blueprint name=\"Oak\" version=1]\n[entity id=\"root\"]\nTree.seed = 7\n");
+    WriteTextFile(project.Root / "Assets" / "Prefabs" / "Oak.prefab",
+                  "[prefab name=\"Oak\" version=1]\n[entity id=\"root\"]\nTree.seed = 7\n");
     WriteTextFile(project.Root / "Assets" / "Scenes" / "grove.scene",
                   "[scene name=\"grove\" version=1]\n"
-                  "[resource id=\"oak\" path=\"Blueprints/Oak.blueprint\"]\n\n"
-                  "[blueprint id=\"oak_0\" source=\"oak\"]\n"
+                  "[resource id=\"oak\" path=\"Prefabs/Oak.prefab\"]\n\n"
+                  "[prefab id=\"oak_0\" source=\"oak\"]\n"
                   "Transform.position = (0, 0, 0)\n");
 
     ASSERT_TRUE(project.Initialize());
@@ -2428,7 +2428,7 @@ TEST(PackageRuntimeAssetStaging, ComponentUsedOnlyInABlueprintShipsItsRuntimeAss
     collector.CollectPackageRuntimeAssets(res.MountOrder[0], AssetCollector::CollectComponentNames(manifest), manifest);
     EXPECT_NE(manifest.FindByGuid(AssetRegistry::DeriveGuidForSourcePath("tree-pack", "Textures/Bark/oak.png")),
               nullptr)
-        << "the instanced blueprint uses Tree, so the listed folder ships";
+        << "the instanced prefab uses Tree, so the listed folder ships";
 }
 
 // ---------------------------------------------------------------------------
@@ -2445,7 +2445,7 @@ TEST(PackageRuntimeAssetStaging, ComponentUsedOnlyInABlueprintShipsItsRuntimeAss
 TEST(PackageMountE2E, EZTreeEnginePackageStagesForPackagedGameWithShaders)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "eztree"))
         << enginePackagesRoot << " missing — Packages not staged";
 
@@ -2549,7 +2549,7 @@ TEST(PackageMountE2E, EZTreeEnginePackageStagesForPackagedGameWithShaders)
 TEST(PackageMountE2E, EZTreePanelUiAssetsResolveFromPackageMountAndStayEditorOnly)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "eztree"))
         << enginePackagesRoot << " missing — Packages not staged";
 
@@ -2610,7 +2610,7 @@ TEST(PackageMountE2E, EZTreePanelUiAssetsResolveFromPackageMountAndStayEditorOnl
 TEST(PackageMountE2E, SvnVcsModuleStaysEditorOnlyAndChromeCssResolves)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "svn-vcs"))
         << enginePackagesRoot << " missing svn-vcs — Packages not staged";
 
@@ -2630,7 +2630,7 @@ TEST(PackageMountE2E, SvnVcsModuleStaysEditorOnlyAndChromeCssResolves)
 
     // The chrome stylesheet + settings icon ship with the PACKAGE mount.
     const GUID chromeGuid = am.ResolveAssetGuid(fs::path("Editor/UI/SvnVcsChrome.css"), "svn-vcs");
-    const GUID iconGuid = am.ResolveAssetGuid(fs::path("Icons/SettingsSVN.png"), "svn-vcs");
+    const GUID iconGuid = am.ResolveAssetGuid(fs::path("Icons/SettingsSVN.svg"), "svn-vcs");
     EXPECT_FALSE(chromeGuid.IsNull());
     EXPECT_FALSE(iconGuid.IsNull());
     EXPECT_TRUE(am.ResolveAssetGuid(fs::path("Editor/UI/SvnVcsChrome.css"), "project").IsNull());
@@ -2664,7 +2664,7 @@ TEST(PackageMountE2E, SvnVcsModuleStaysEditorOnlyAndChromeCssResolves)
 TEST(PackageMountE2E, DiversionVcsModuleStaysEditorOnlyAndChromeCssResolves)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "diversion-vcs"))
         << enginePackagesRoot << " missing diversion-vcs — Packages not staged";
 
@@ -2686,7 +2686,7 @@ TEST(PackageMountE2E, DiversionVcsModuleStaysEditorOnlyAndChromeCssResolves)
     const GUID chromeGuid =
         am.ResolveAssetGuid(fs::path("Editor/UI/DiversionVcsChrome.css"), "diversion-vcs");
     const GUID iconGuid =
-        am.ResolveAssetGuid(fs::path("Icons/SettingsDiversion.png"), "diversion-vcs");
+        am.ResolveAssetGuid(fs::path("Icons/SettingsDiversion.svg"), "diversion-vcs");
     EXPECT_FALSE(chromeGuid.IsNull());
     EXPECT_FALSE(iconGuid.IsNull());
     EXPECT_TRUE(am.ResolveAssetGuid(fs::path("Editor/UI/DiversionVcsChrome.css"), "project").IsNull());
@@ -2721,7 +2721,7 @@ TEST(PackageMountE2E, DiversionVcsModuleStaysEditorOnlyAndChromeCssResolves)
 TEST(PackageMountE2E, LoreVcsModuleStaysEditorOnlyAndChromeCssResolves)
 {
     const fs::path enginePackagesRoot =
-        PathUtils::GetExecutableDirectory() / "TestData" / "Packages";
+        ApplicationPaths::GetExecutableDirectory() / "TestData" / "Packages";
     ASSERT_TRUE(fs::is_directory(enginePackagesRoot / "lore-vcs"))
         << enginePackagesRoot << " missing lore-vcs — Packages not staged";
 
@@ -2741,7 +2741,7 @@ TEST(PackageMountE2E, LoreVcsModuleStaysEditorOnlyAndChromeCssResolves)
 
     // The chrome stylesheet + settings icon ship with the PACKAGE mount.
     const GUID chromeGuid = am.ResolveAssetGuid(fs::path("Editor/UI/LoreVcsChrome.css"), "lore-vcs");
-    const GUID iconGuid = am.ResolveAssetGuid(fs::path("Icons/SettingsLore.png"), "lore-vcs");
+    const GUID iconGuid = am.ResolveAssetGuid(fs::path("Icons/SettingsLore.svg"), "lore-vcs");
     EXPECT_FALSE(chromeGuid.IsNull());
     EXPECT_FALSE(iconGuid.IsNull());
     EXPECT_TRUE(am.ResolveAssetGuid(fs::path("Editor/UI/LoreVcsChrome.css"), "project").IsNull());

@@ -6,7 +6,7 @@
 // here; it is exercised end-to-end once the build/load pipeline lands (C10+),
 // where the behavior is observable without racing the watcher thread.
 
-#include "Core/Application.h" // PathUtils::InstallContentRootFor
+#include "Core/ApplicationPaths.h"
 #include "Engine/Build/BuildPipeline.h"
 #include "Engine/Build/MacBundleAssembler.h"
 #include "Engine/Build/NativeScriptStaging.h"
@@ -680,7 +680,7 @@ int PackagedModuleMapBeginsFromThePlayerContentRoot(const fs::path& contents)
     observer.ImageMapEnd = [](std::uint64_t, std::uint64_t) {};
     mgr.SetModuleImageObserver(std::move(observer));
     // The fixture dylibs export no user-module entry points, so the load itself fails.
-    EXPECT_FALSE(mgr.LoadPrebuiltUserModule(GameEngine::PathUtils::InstallContentRootFor(contents / "MacOS")));
+    EXPECT_FALSE(mgr.LoadPrebuiltUserModule(GameEngine::ApplicationPaths::InstallContentRootFor(contents / "MacOS")));
     mgr.Shutdown();
     return mapBegins;
 }
@@ -731,7 +731,7 @@ TEST(NativeScriptManager, MacExportNativeModuleIsWhereThePlayerLoadsIt)
                                           ns::BuildCacheRecord{"digest", editorDylib.string(), "abi"}));
 
     const fs::path bundle = root / "Game.app";
-    const fs::path contentRoot = GameEngine::PathUtils::InstallContentRootFor(bundle / "Contents" / "MacOS");
+    const fs::path contentRoot = GameEngine::ApplicationPaths::InstallContentRootFor(bundle / "Contents" / "MacOS");
     std::vector<std::string> errors;
     ASSERT_EQ(GameEngine::StageNativeUserScriptsForPackage(projectRoot, contentRoot, {"abi", {}, {}}, errors, false),
               GameEngine::NativeScriptStageOutcome::Staged);

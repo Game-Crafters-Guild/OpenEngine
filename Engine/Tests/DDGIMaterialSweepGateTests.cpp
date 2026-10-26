@@ -13,11 +13,11 @@
 #include "Engine/Rendering/MaterialSystem.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/TextureService.h"
+#include "Mathematics/Vector3.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "TestDeviceHelper.h"
 
-#include <array>
 #include <memory>
 
 using namespace GameEngine;
@@ -69,8 +69,8 @@ class DDGIMaterialSweepGate : public testing::Test
         Material* mat = Register(guid);
         if (!mat)
             return nullptr;
-        const std::array<float, 3> orange{1.0f, 0.5f, 0.0f};
-        mat->SetVector(kEmissiveColor, orange.data(), 3);
+        const Mathematics::Vector3 orange(1.0f, 0.5f, 0.0f);  // scene-linear rgb lanes
+        mat->SetVector(kEmissiveColor, orange.v, 3);
         mat->SetFloat(kEmissionLuminance, 1000.0f);
         return mat;
     }
@@ -133,7 +133,9 @@ TEST_F(DDGIMaterialSweepGate, TheEmitterTableDoesNotSweepAStillRegistry)
     const uint32_t slot = mat->GetGpuSceneMaterialIndex();
     const DDGIEmitterMaterials::Emitter* emitter = emitters.Find(slot);
     ASSERT_NE(emitter, nullptr);
-    EXPECT_GT(emitter->Emissive.Color[0], emitter->Emissive.Color[1]);
+    // Orange keeps its lane order: r > g > b.
+    EXPECT_GT(emitter->Emissive.Color.r, emitter->Emissive.Color.g);
+    EXPECT_GT(emitter->Emissive.Color.g, emitter->Emissive.Color.b);
 
     const uint32_t movedSlot = slot + 7u;
     Material::TestFactory::SetGpuSceneMaterialIndex(*mat, movedSlot);

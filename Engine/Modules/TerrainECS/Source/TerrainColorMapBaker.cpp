@@ -6,6 +6,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
+#include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainTypes.h"
 #include "TerrainECS/TerrainAtlas.h"
 #include "TerrainECS/TerrainService.h"
@@ -102,7 +103,7 @@ TerrainColorGroundWrite TerrainColorMapBaker::ResolveGroundWrite(const ECS::Worl
     // The placement's own predicate (Terrain::TerrainGrassRowPlaces): a row that places no blade
     // has no field to write the ground of.
     const float32 nearDensity = grass->TextureGrass ? grass->TextureCardsPerSquareMeter : grass->BladesPerSquareMeter;
-    const float32 amount = std::isfinite(grass->GroundDarkening) ? std::clamp(grass->GroundDarkening, 0.0f, 1.0f) : 0.0f;
+    const float32 amount = std::isfinite(grass->GroundDarkening) ? Math::Clamp01(grass->GroundDarkening) : 0.0f;
     if (!(nearDensity > 0.0f) || !(grass->BladeHeight > 0.0f) || !(grass->BladeWidth > 0.0f) || amount <= 0.0f)
         return write;
     const ColorLinear soil = ColorSRGB::FromSRGB255(static_cast<uint8>((grass->SoilColor >> 16) & 0xFFu),
@@ -115,7 +116,7 @@ TerrainColorGroundWrite TerrainColorMapBaker::ResolveGroundWrite(const ECS::Worl
     write.SoilLinear[1] = soil.g;
     write.SoilLinear[2] = soil.b;
     write.GrassLayer = std::min(grass->LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u);
-    write.MaskThreshold = std::clamp(grass->MaskThreshold, 0.0f, 1.0f);
+    write.MaskThreshold = Math::Clamp01(grass->MaskThreshold);
     return write;
 }
 

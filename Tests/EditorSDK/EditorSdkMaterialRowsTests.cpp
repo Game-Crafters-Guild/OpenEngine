@@ -7,6 +7,7 @@
 
 #include "Rendering/Materials/MaterialAlphaMode.h"
 #include "Rendering/Materials/MaterialDocument.h"
+#include "Rendering/Materials/MaterialPropertyBinding.h"
 
 #include <gtest/gtest.h>
 
@@ -293,13 +294,21 @@ TEST(MaterialRowsRange, ReliefDepthStopsWhereTheSelfShadowStopsResolving)
     EXPECT_GT(Rows::kReliefDepthSliderMax, GameEngine::kDefaultReliefDepth);
 }
 
-TEST(MaterialRowsLabels, PropertyLabelSplitsCamelCase)
+TEST(MaterialRowsLabels, PropertyKeyLabelReadsTheKeyAsWords)
 {
-    EXPECT_EQ(Rows::PropertyLabel("baseColor"), "Base Color");
-    EXPECT_EQ(Rows::PropertyLabel("emissionLuminance"), "Emission Luminance");
-    EXPECT_EQ(Rows::PropertyLabel("alphaCutoff"), "Alpha Cutoff");
+    EXPECT_EQ(Rendering::MaterialPropertyBinding::PropertyKeyLabel("baseColor"), "Base Color");
+    EXPECT_EQ(Rendering::MaterialPropertyBinding::PropertyKeyLabel("emissionLuminance"), "Emission Luminance");
+    EXPECT_EQ(Rendering::MaterialPropertyBinding::PropertyKeyLabel("alphaCutoff"), "Alpha Cutoff");
     // "ao" would otherwise render as "Ao".
-    EXPECT_EQ(Rows::PropertyLabel("ao"), "AO");
+    EXPECT_EQ(Rendering::MaterialPropertyBinding::PropertyKeyLabel("ao"), "AO");
+    EXPECT_EQ(Rendering::MaterialPropertyBinding::PropertyKeyLabel("detailUVScale"), "Detail UV Scale");
+}
+
+TEST(MaterialRowsLabels, PropertyKeyLabelReadsAnIorKeyAsIOR)
+{
+    EXPECT_EQ(Rendering::MaterialPropertyBinding::PropertyKeyLabel("specularIor"), "Specular IOR");
+    EXPECT_EQ(Rendering::MaterialPropertyBinding::PropertyKeyLabel("clearCoatIor"), "Clear Coat IOR");
+    EXPECT_EQ(Rendering::MaterialPropertyBinding::PropertyKeyLabel("thinFilmIor"), "Thin Film IOR");
 }
 
 TEST(MaterialRowsLabels, TextureSlotLabelDropsTheMapSuffix)
@@ -307,6 +316,8 @@ TEST(MaterialRowsLabels, TextureSlotLabelDropsTheMapSuffix)
     EXPECT_EQ(Rows::TextureSlotLabel("albedoMap"), "Albedo");
     EXPECT_EQ(Rows::TextureSlotLabel("metallicRoughnessMap"), "Metallic Roughness");
     EXPECT_EQ(Rows::TextureSlotLabel("coatNormalMap"), "Coat Normal");
+    EXPECT_EQ(Rows::TextureSlotLabel("aoMap"), "AO");
+    EXPECT_EQ(Rows::TextureSlotLabel("detailUVMap"), "Detail UV");
 }
 
 // ---------------------------------------------------------------------------

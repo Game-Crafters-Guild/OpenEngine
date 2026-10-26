@@ -29,7 +29,7 @@ bool IsDrivableSunLight(const ECS::World& world, ECS::EntityHandle light)
     if (!DirectionalLight(world, light) || !world.GetComponent<Transform>(light))
         return false;
     const Parent* parent = world.GetComponent<Parent>(light);
-    return !(parent && world.IsValid(parent->parent));
+    return !(parent && world.IsValid(parent->Entity));
 }
 
 ECS::EntityHandle LightSkyWouldDrive(const ECS::World& world, const SkyEnvironment& sky)
@@ -155,7 +155,7 @@ float DeliveredLux(const Light& light)
     float colour[3] = {1.0f, 1.0f, 1.0f};
     float unitless = 0.0f;
     ResolveLightColorIntensity(light, colour, unitless);
-    const float luminance = ColorUtils::LinearRec709Luminance(colour);
+    const float luminance = ColorUtils::LinearRec709Luminance({colour[0], colour[1], colour[2]});
     return UnitlessToLightIntensity(unitless, LightUnit::Lux) * luminance;
 }
 

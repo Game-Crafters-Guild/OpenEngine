@@ -244,7 +244,7 @@ class ScopedLogCapture
     ScopedLogCapture()
     {
         Logger::Log::Initialize({Logger::LogLevel::Info, false});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         m_Sink = sink.get();
         Logger::Log::AddSink(std::move(sink));
         m_CallbackId = m_Sink->RegisterCallback([this](const Logger::LogMessage& message) {

@@ -94,7 +94,7 @@ TEST(ScriptingAbiLoggerBridge, RespectsPreconfiguredSinksAndIgnoresGeLogFile)
     fileCfg.append = false;
     fileCfg.minLevel = Logger::LogLevel::Debug;
     fileCfg.includeTimestamp = false;
-    Log::AddSink(Logger::MakeUnique<Logger::FileSink>(fileCfg));
+    Log::AddSink(std::make_unique<Logger::FileSink>(fileCfg));
 
     EXPECT_GT(Log::GetSinkCount(), static_cast<size_t>(0));
 

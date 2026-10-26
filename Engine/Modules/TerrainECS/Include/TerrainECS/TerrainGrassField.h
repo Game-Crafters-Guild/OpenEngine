@@ -5,6 +5,8 @@
 #include <vector>
 #include <span>
 
+namespace JobSystem { class WorkStealingThreadPool; }
+
 namespace GameEngine::TerrainECS
 {
 
@@ -29,15 +31,23 @@ struct TerrainGrassField : TerrainFieldData
     uint64 AppliedHash = 0;
     uint64 NonNeutralTexels = 0;
     uint64 NonNeutralDarkeningTexels = 0;
+
+    // True when grass placement on its terrain must wait for this field on the GPU: an active
+    // field, or one whose first compose has not landed, which would otherwise read as neutral.
+    bool GatesPlacement() const { return !Initialized || IsActive(); }
 };
 
 struct ResolvedModifier;
 
 // Re-evaluate an inclusive sample rectangle from neutral through the ordered
 // targets. Negative maxima mean the full field. No height/splat data is read.
+// With `jobs`, a rectangle as large as the parallel ground bake's threshold is
+// composed in row bands across the pool, the ground bake's banding (legal from a
+// pool worker); the bytes are those of the serial walk.
 void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 height,
                               float32 sizeX, float32 sizeZ, float32 originX, float32 originZ,
                               std::span<const ResolvedModifier> modifiers,
-                              int32 minX = 0, int32 minZ = 0, int32 maxX = -1, int32 maxZ = -1);
+                              int32 minX = 0, int32 minZ = 0, int32 maxX = -1, int32 maxZ = -1,
+                              JobSystem::WorkStealingThreadPool* jobs = nullptr);
 
 } // namespace GameEngine::TerrainECS

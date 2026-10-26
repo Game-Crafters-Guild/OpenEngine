@@ -454,8 +454,9 @@ button.search-dialog-result-view-toggle,
 /* ---- Global command palette presentation ---- */
 .universal-command-palette .search-dialog-query-field TextInput {
 	font-size: var(--ui_font_size_list);
+	/* The search field's one-pixel lift (theme/widgets.css), which its placeholder shares. */
 	padding-top: 0;
-	padding-bottom: 0;
+	padding-bottom: 2px;
 }
 
 .universal-command-palette .search-field-with-filter-placeholder {

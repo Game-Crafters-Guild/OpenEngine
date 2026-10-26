@@ -5,7 +5,7 @@
 
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Input/InputSystem.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "UI/Controls/Button.h"
@@ -35,7 +35,7 @@ namespace
 
 std::string ReadStagedSheet(const char* relative)
 {
-    std::ifstream in(PathUtils::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
+    std::ifstream in(ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
     if (!in)
         return {};
     std::ostringstream ss;
@@ -62,7 +62,7 @@ public:
         UIRegistration::RegisterBuiltInControls();
 
         namespace fs = std::filesystem;
-        const fs::path assetRoot = PathUtils::GetExecutableDirectory() / "Assets";
+        const fs::path assetRoot = ApplicationPaths::GetExecutableDirectory() / "Assets";
         const fs::path scratch = fs::temp_directory_path() / "ui_floating_panel_tests";
         std::error_code ec;
         fs::remove_all(scratch, ec);

@@ -21,6 +21,7 @@
 #include "Markups/MarkupRegionPort.h"
 #include "Spline/SplineData.h"
 #include "SplineECS/SplineService.h"
+#include "Types/FormatNumber.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/InspectorNotice.h"
@@ -32,7 +33,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -54,12 +54,9 @@ constexpr float32 kHectare = 10000.0f;
 
 std::string FormatArea(float32 squareMeters)
 {
-    char text[32];
     if (squareMeters >= kHectare)
-        std::snprintf(text, sizeof(text), "%.2f ha", squareMeters / kHectare);
-    else
-        std::snprintf(text, sizeof(text), "%.0f m\xC2\xB2", squareMeters);
-    return text;
+        return FormatFixed(squareMeters / kHectare, 2) + " ha";
+    return FormatFixed(squareMeters, 0) + " m\xC2\xB2";
 }
 
 using Edit = UndoRedoService::InteractiveEdit;
@@ -127,7 +124,7 @@ void AddOutlineRows(const InspectorContext& ctx)
             ? splines->GetSplineData(SplineECS::SplineHandle(spline->SplineDataIndex, spline->SplineDataGeneration))
             : nullptr;
     AddValueRow(ctx.Parent, "Points", std::to_string(data ? data->Points.size() : 0u),
-                "The outline's knots; Edit outline moves, adds and deletes them");
+                "The outline's knots; Edit Outline moves, adds and deletes them");
     const std::optional<MarkupECS::MarkupFootprint> footprint = MarkupECS::ReadMarkupFootprint(*ctx.World, ctx.Entity);
     if (!footprint || footprint->IsCircle())
         return;
@@ -376,7 +373,7 @@ void AddMarkupRegionBlock(const InspectorContext& ctx, MarkupEditorBridge& bridg
             RegionOutlineProblemFix(problem), EditorUI::InspectorNotice::Kind::Warning));
     const HeightRow height = AddHeightRow(ctx, bridge, *region);
     AddOutlineRows(ctx);
-    AddEditKnotsRow(ctx, bridge, "Edit outline", "markup-region-edit-outline",
+    AddEditKnotsRow(ctx, bridge, "Edit Outline", "markup-region-edit-outline",
                     "Drag, add and delete the outline's points in the Scene View");
     AddMemberList(ctx, bridge, *region);
     FollowMarkupShapeChanges(ctx, FollowHeight(ctx, height));
@@ -405,7 +402,7 @@ void AddConvertToRegionRow(const InspectorContext& ctx, MarkupEditorBridge& brid
         return;
     UIElement* cell = InspectorUI::AddActionRow(ctx.Parent, "markup-region-actions");
     auto button = std::make_unique<Button>();
-    button->SetText("Convert to region");
+    button->SetText("Convert to Region");
     button->AddClass("small");
     button->AddClass("markup-convert-to-region");
     button->SetTooltip("Make this box a region with the box's outline and height; its notes and thread stay");

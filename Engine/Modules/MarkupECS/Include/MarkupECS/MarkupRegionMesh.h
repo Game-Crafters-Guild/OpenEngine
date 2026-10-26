@@ -2,52 +2,43 @@
 
 #include "Mathematics/Vector2.h"
 #include "Mathematics/Vector3.h"
+#include "SplineGeometry/AreaGround.h"
 #include "Types/Types.h"
 
 #include <array>
 #include <cstddef>
-#include <functional>
 #include <span>
 #include <vector>
 
 namespace GameEngine::MarkupECS
 {
 
-struct MarkupAreaPiece;
-
 // A region's ground, as its display stands on it: the rings of its area sampled along the ground
 // and the lid's points over the area, each at its ground height (the higher of the ground and the
 // sea level). Built when the outline, the placement, the members, the sea level or the ground
 // under it changes; the extrusion height is applied on top (BuildMarkupRegionMesh), so a height
 // drag rebuilds no ground.
-struct MarkupRegionGround
+//
+// The rings and the lid are the area's SplineGeometry::AreaGround. A region's outer rings run
+// counter-clockwise and the holes its Exclude members cut run clockwise. A region without members
+// that change its area has one ring, its base outline. An open outline (a path, or fewer than
+// three knots) is one ring kept in order, with no area and no lid, and contains no point.
+struct MarkupRegionGround : SplineGeometry::AreaGround
 {
-    // The rings' ground samples in world meters, ring after ring (RingEnds), each ring's closing
-    // point not repeated. A region's outer rings run counter-clockwise seen from above (+Y) and
-    // the holes its Exclude members cut run clockwise, so a wall wound out of its ring faces out of
-    // the area on both. A region without members that change its area has one ring, its base
-    // outline. An open outline (a path, or fewer than three knots) is one ring kept in order, with
-    // no area.
-    std::vector<Mathematics::Vector3> Outline;
-    // Outline on the ground plane (x, z), in the same order.
-    std::vector<Mathematics::Vector2> OutlineXZ;
-    // One past each ring's last sample in Outline, in order.
-    std::vector<uint32> RingEnds;
     // The highest of the outline's samples.
     float32 Top = 0.0f;
     // Whether Outline is a closed ring the walls stand on; false for an outline that is not
     // closed yet (OutlineOnly draws).
     bool Closed = false;
+
+    // Whether the ground-plane point (x, z) lies in the region's area; never for an open outline,
+    // whose one ring AreaGround::Contains would close. It hides that function: a call through an
+    // AreaGround reference has no such guard.
+    bool Contains(const Mathematics::Vector2& xz) const { return Closed && AreaGround::Contains(xz); }
     // Whether the base outline crosses itself (a knot drag passing through such a state): the
     // walls stand on the base outline alone (the members do not apply), the lid is dropped until
     // the ring is simple again.
     bool Crosses = false;
-    // The lid's points at their ground height, the outline's first; triangles index them,
-    // counter-clockwise from above. Empty with no lid.
-    std::vector<Mathematics::Vector3> LidPoints;
-    std::vector<uint32> LidTriangles;
-    // Each lid point's distance to the nearest ring on the ground plane, meters (0 on it).
-    std::vector<float32> LidEdgeDistance;
     // The ring's pole of inaccessibility (MarkupECS::RegionLabelPoint) at its ground height: where
     // the label stands, ExtrudeHeight above. Inside even a C-shaped outline. An open outline's (a
     // path's) is the point halfway along it.
@@ -59,25 +50,14 @@ struct MarkupRegionGround
     // kPathEdgeOffsets[k] meters to its left (k = 0 to 3), then to its right (PathAcross), so the
     // band's edges stand on the ground beside the line at any width. Empty for a closed outline.
     std::vector<float32> EdgeGround;
-
-    std::size_t GetRingCount() const { return RingEnds.size(); }
-    std::span<const Mathematics::Vector3> GetRing(std::size_t ring) const;
-    std::span<const Mathematics::Vector2> GetRingXZ(std::size_t ring) const;
-    // Whether the ground-plane point (x, z) lies in the area: inside an odd number of its rings.
-    // False for an open outline.
-    bool Contains(const Mathematics::Vector2& xz) const;
 };
 
 // The distances either side of a path's samples at which its ground is read (EdgeGround): the
 // band's narrowest half width, then wider, to the half width at about two kilometers.
 inline constexpr std::array<float32, 4> kPathEdgeOffsets{1.5f, 4.0f, 10.0f, 25.0f};
 
-// The ground height at a world (x, z): the caller's ground (terrain only, so a region stands on
-// the terrain under a house rather than on its roof) raised to the sea level.
-using MarkupGroundSampler = std::function<float32(const Mathematics::Vector2& xz)>;
-
-// The lid's triangles are split until no edge is longer than this or the region's larger extent
-// over kLidEdgeExtentDivisions, whichever is longer, so the lid follows the ground's shape.
+// A region's lid is split until no edge is longer than this or the region's larger extent over
+// kLidEdgeExtentDivisions, whichever is longer, so the lid follows the ground's shape.
 inline constexpr float32 kLidMinEdgeMeters = 4.0f;
 inline constexpr float32 kLidEdgeExtentDivisions = 32.0f;
 // The most lid triangles a region gets; the split stops there (a 30 km region still reads).
@@ -100,22 +80,23 @@ float32 PolylineLength(std::span<const Mathematics::Vector3> line);
 float32 PathEdgeHeight(const MarkupRegionGround& ground, std::size_t i, float32 side, float32 halfWidth);
 
 // The ground of a region whose outline `outline` (world, y = the ground under each sample: the
-// drape) is closed when `closed`: its one ring. Interior lid points take `groundAt`, and so does an
-// open outline's ground across its band (EdgeGround). Consecutive samples closer than a millimeter
-// are merged.
+// drape) is closed when `closed`: its one ring. Interior lid points take `groundAt` (the caller's
+// ground, terrain only, so a region stands on the terrain under a house rather than on its roof,
+// raised to the sea level), and so does an open outline's ground across its band (EdgeGround).
+// Consecutive samples closer than a millimeter are merged.
 MarkupRegionGround BuildMarkupRegionGround(std::span<const Mathematics::Vector3> outline, bool closed,
-                                           const MarkupGroundSampler& groundAt);
+                                           const SplineGeometry::GroundSampler& groundAt);
 
 // The ground of a region whose members cut or extend its area: the rings of `area` (its pieces,
 // CombineRegionArea) sampled along the ground at most `spacing` meters apart (and at most
 // kMaxRegionKnots samples a ring, as the drape caps a spline), each sample at `groundAt`, with a
-// wall on every ring and the lid over the pieces with their holes. The label point and the
+// wall on every ring and the lid over the pieces with their holes (SplineGeometry::BuildAreaGround). The label point and the
 // crossing test are the base outline's (`outline`, closed, as BuildMarkupRegionGround takes it);
 // a base outline that crosses itself gives BuildMarkupRegionGround's ground, the members not
 // applied. An empty `area` (the excludes cover the base) has no rings.
 MarkupRegionGround BuildMarkupRegionAreaGround(std::span<const Mathematics::Vector3> outline,
-                                               std::span<const MarkupAreaPiece> area, float32 spacing,
-                                               const MarkupGroundSampler& groundAt);
+                                               std::span<const SplineGeometry::AreaPiece> area, float32 spacing,
+                                               const SplineGeometry::GroundSampler& groundAt);
 
 // One vertex of a region's display: a world position and the distance to the nearest rim edge
 // (the wall's top edge, or the lid's outline) over the rim's width, so the glow's rim lights a

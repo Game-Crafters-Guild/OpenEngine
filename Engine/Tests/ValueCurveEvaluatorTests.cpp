@@ -24,7 +24,7 @@ Math::CurveKey MakeKey(float t, float v, Math::CurveInterp interp = Math::CurveI
 TEST(ValueCurveEvaluator, LinearShapeIsPolyline)
 {
     ValueCurve curve;
-    curve.Shape = {};
+    curve.Shape = Math::Curve{};
     curve.Shape.TryInsert(MakeKey(0.0f, 0.0f));
     curve.Shape.TryInsert(MakeKey(0.5f, 0.5f));
     curve.Shape.TryInsert(MakeKey(1.0f, 1.0f));
@@ -35,7 +35,7 @@ TEST(ValueCurveEvaluator, LinearShapeIsPolyline)
 TEST(ValueCurveEvaluator, StepShapeHolds)
 {
     ValueCurve curve;
-    curve.Shape = {};
+    curve.Shape = Math::Curve{};
     curve.Shape.TryInsert(MakeKey(0.0f, 0.0f, Math::CurveInterp::Step));
     curve.Shape.TryInsert(MakeKey(1.0f, 1.0f, Math::CurveInterp::Step));
     EXPECT_NEAR(EvaluateValueCurve01(curve, 0.5f), 0.0f, 1.0e-5f);
@@ -45,7 +45,7 @@ TEST(ValueCurveEvaluator, StepShapeHolds)
 TEST(ValueCurveEvaluator, SmoothFlatEndpointsTraceSmoothstep)
 {
     ValueCurve curve;
-    curve.Shape = {};
+    curve.Shape = Math::Curve{};
     curve.Shape.TryInsert(MakeKey(0.0f, 0.0f, Math::CurveInterp::Smooth, Math::CurveTangentMode::Flat));
     curve.Shape.TryInsert(MakeKey(1.0f, 1.0f, Math::CurveInterp::Smooth, Math::CurveTangentMode::Flat));
     // Flat tangents at both ends produce an S: midpoint stays 0.5, quarter dips below, three-quarter rises above.
@@ -65,7 +65,7 @@ TEST(ValueCurveEvaluator, DefaultShapeIsLinearRamp)
 TEST(ValueCurveEvaluator, BuiltinEasingSourceUsesAnalyticEasing)
 {
     ValueCurve curve;
-    curve.Shape = {};
+    curve.Shape = Math::Curve{};
     curve.Shape.TryInsert(MakeKey(0.0f, 0.0f));
     curve.Shape.TryInsert(MakeKey(1.0f, 1.0f));
     curve.UseBuiltinEasing = true;
@@ -78,7 +78,7 @@ TEST(ValueCurveEvaluator, BuiltinEasingSourceUsesAnalyticEasing)
 TEST(ValueCurveEvaluator, CubicBezierModeUsesDedicatedHandles)
 {
     ValueCurve curve;
-    curve.Shape = {};
+    curve.Shape = Math::Curve{};
     curve.Shape.TryInsert(MakeKey(0.0f, 1.0f));
     curve.Shape.TryInsert(MakeKey(1.0f, 1.0f));
     curve.ShapeMode = ValueCurveShapeMode::CubicBezier;

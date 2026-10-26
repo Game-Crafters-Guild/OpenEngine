@@ -8,6 +8,7 @@
 #include "AssetCore/AssetTypes.h"
 #include "AssetCore/GUID.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Memory/TrackedBytes.h"
 #include "Rendering/Core/Device.h"
 
@@ -129,7 +130,7 @@ Mathematics::Quaternion SampleRotation(const Animation::AnimChannel& ch, float t
     const auto& hi = *it;
     const auto& lo = *(it - 1);
     const float dt = std::max(1e-6f, hi.time - lo.time);
-    const float a = std::clamp((time - lo.time) / dt, 0.0f, 1.0f);
+    const float a = Math::Clamp01((time - lo.time) / dt);
     const Mathematics::Quaternion qLo(glm::quat(lo.rotation[3], lo.rotation[0], lo.rotation[1], lo.rotation[2]));
     const Mathematics::Quaternion qHi(glm::quat(hi.rotation[3], hi.rotation[0], hi.rotation[1], hi.rotation[2]));
     return ShortLerp(qLo, qHi, a);
@@ -153,7 +154,7 @@ Mathematics::Vector3 SampleTranslation(const Animation::AnimChannel& ch, float t
     const auto& hi = *it;
     const auto& lo = *(it - 1);
     const float dt = std::max(1e-6f, hi.time - lo.time);
-    const float a = std::clamp((time - lo.time) / dt, 0.0f, 1.0f);
+    const float a = Math::Clamp01((time - lo.time) / dt);
     return LerpVec3(
         Mathematics::Vector3(lo.translation[0], lo.translation[1], lo.translation[2]),
         Mathematics::Vector3(hi.translation[0], hi.translation[1], hi.translation[2]),

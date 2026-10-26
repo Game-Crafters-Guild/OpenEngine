@@ -87,6 +87,9 @@ GE_Result RefuseZeroId(const char* function, const char* parameter);
 /// Refuses an entity argument that names no entity (an event's scope).
 GE_Result RefuseNoEntity(const char* function, const char* parameter);
 
+/// Refuses a `parent` argument that names no live entity.
+GE_Result RefuseDeadParent(const char* function);
+
 /// Refuses a call off the function's thread; logs once per process for each function.
 GE_Result RefuseThread(const char* function, ThreadRule rule);
 
@@ -108,6 +111,10 @@ inline GE_Result ContextMissing()
 
 /// Answers a call whose facade function threw: GE_Result_Fail.
 GE_Result CallFailed(const char* function, const char* what);
+
+/// Refuses a script's write of a component the engine owns with GE_Result_InvalidArg; `text` names the component,
+/// the system that writes it and the fix.
+GE_Result RefuseScriptWrite(std::string text);
 
 /**
  * @brief Serves a module table to a caller built from the same description: `expectedHash` is the table's,

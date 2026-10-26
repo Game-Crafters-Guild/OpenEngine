@@ -18,6 +18,7 @@
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "Rendering/ShaderCache/ShaderProgramIndex.h"
 #include "ShaderIncludeClosure.h"
+#include "ShaderSourceCache.h"
 
 #include <atomic>
 
@@ -75,11 +76,13 @@ std::optional<TextureSlotResolution> ResolveDeclaredSurfaceSlots(const GameEngin
                                                                  const std::filesystem::path& materialDir,
                                                                  const MaterialBuildContext& context)
 {
-    std::string source;
-    if (!ReadShaderFileText(ShaderComposer::ResolveSurfaceShaderPath(doc.surfaceShader, materialDir, context), source,
-                            nullptr))
+    const std::filesystem::path surfacePath =
+        ShaderComposer::ResolveSurfaceShaderPath(doc.surfaceShader, materialDir, context);
+    const ShaderSourceCache::EntryPtr source =
+        ShaderSourceCache::Get().Read(surfacePath, ShaderSourceCache::NormalizedKey(surfacePath));
+    if (!source)
         return std::nullopt;
-    TextureSlotResolution slots = ShaderComposer::ResolveTextureSlots(source);
+    TextureSlotResolution slots = ShaderComposer::ResolveTextureSlots(source->Bytes);
     if (slots.Rejected)
         return std::nullopt;
     return slots;

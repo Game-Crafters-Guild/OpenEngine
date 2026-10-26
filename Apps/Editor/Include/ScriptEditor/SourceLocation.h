@@ -24,4 +24,8 @@ struct SourceLocation
 /// Returns nothing when the line names no .cs file.
 std::optional<SourceLocation> FindSourceLocationInLogLine(std::string_view text);
 
+/// True for a C# source file (".cs" in any case): the script editor opens it at a line. Any other
+/// file opens in the external editor, which receives no line.
+bool IsCSharpSource(const std::filesystem::path& path);
+
 } // namespace GameEngine::Editor

@@ -1,10 +1,15 @@
 #include "Spline/SplineData.h"
 #include "Spline/SplineEvaluator.h"
 #include "Spline/SplineTypes.h"
+#include "Mathematics/Interpolation.h"
 
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <utility>
+#include <vector>
 
 using namespace GameEngine;
 using namespace GameEngine::Spline;
@@ -47,6 +52,9 @@ SplineData MakeCatmullRom4Point()
 }
 
 constexpr float32 kEps = 0.01f;
+
+// The XZ signed-distance queries measure everywhere with no cutoff.
+constexpr float32 kNoCutoff = std::numeric_limits<float32>::infinity();
 
 void ExpectNear(Vector3 a, Vector3 b, float32 tol = kEps)
 {
@@ -201,8 +209,8 @@ TEST(SplineEvaluator, SignedDistanceXZIsInsideTheFootprintOfAnElevatedPath)
     // footprint — however high the path is authored.
     auto s = MakeLinearSpline({0, 20, 0}, {10, 20, 0});
 
-    EXPECT_LT(SignedDistanceToSplineXZ(s, 5.0f, 2.0f), 0.0f);
-    EXPECT_GT(SignedDistanceToSplineXZ(s, 5.0f, 9.0f), 0.0f); // 9 > radius 5
+    EXPECT_LT(SignedDistanceToSplineXZ(s, 5.0f, 2.0f, kNoCutoff), 0.0f);
+    EXPECT_GT(SignedDistanceToSplineXZ(s, 5.0f, 9.0f, kNoCutoff), 0.0f); // 9 > radius 5
     EXPECT_GT(SignedDistanceToSpline(s, {5, 0, 2}), 0.0f);    // 3-D: 20 up, outside
 }
 
@@ -239,12 +247,91 @@ TEST(SplineEvaluator, SignedDistanceXZIsNegativeInsideAnElevatedClosedLoop)
     s.AddPoint({-20, 50, 20});
     RebuildSplineCache(s);
 
-    EXPECT_LT(SignedDistanceToSplineXZ(s, 0.0f, 0.0f), 0.0f) << "loop interior read as outside";
+    EXPECT_LT(SignedDistanceToSplineXZ(s, 0.0f, 0.0f, kNoCutoff), 0.0f) << "loop interior read as outside";
     // Just past the edge + radius 5: outside, but by a measurable XZ margin
     // rather than the 50 units of altitude.
-    const float32 outside = SignedDistanceToSplineXZ(s, 30.0f, 0.0f);
+    const float32 outside = SignedDistanceToSplineXZ(s, 30.0f, 0.0f, kNoCutoff);
     EXPECT_GT(outside, 0.0f);
     EXPECT_NEAR(outside, 5.0f, 0.5f); // 10 from the edge, less the 5 radius
+}
+
+// A winding route of many segments, radius tapering along it, as a long road is authored.
+SplineData MakeWindingRoute()
+{
+    SplineData s;
+    s.Type = SplineType::CatmullRom;
+    for (uint32 i = 0; i < 24; ++i)
+    {
+        const float32 t = static_cast<float32>(i) / 23.0f;
+        s.AddPoint({-110.0f + 220.0f * t, 3.0f * t, 70.0f * std::sin(t * 9.0f)}, 2.45f + 0.4f * std::cos(t * 13.0f));
+    }
+    RebuildSplineCache(s);
+    return s;
+}
+
+TEST(SplineEvaluator, ClosestPointXZOnAWindingRouteMatchesADenseScan)
+{
+    // The broad phase refines the segment with the nearest bounds first and culls by it. The
+    // reference projects onto a 4000-chord polyline of the whole curve (chords about 9 cm on this
+    // route). The tolerance is the refinement's own accuracy, 2 cm: an in-order scan of every
+    // segment misses the reference by up to 1.7 cm on this grid as well. A wrongly culled segment
+    // misses it by metres.
+    const SplineData s = MakeWindingRoute();
+    constexpr uint32 kChords = 4000;
+    std::vector<Vector3> dense(kChords + 1);
+    for (uint32 i = 0; i <= kChords; ++i)
+        dense[i] = EvaluatePosition(s, static_cast<float32>(i) / kChords);
+
+    for (float32 z = -90.0f; z <= 90.0f; z += 6.0f)
+        for (float32 x = -130.0f; x <= 130.0f; x += 6.5f)
+        {
+            float32 reference = std::numeric_limits<float32>::max();
+            for (uint32 i = 0; i < kChords; ++i)
+            {
+                const float32 dx = dense[i + 1].x - dense[i].x, dz = dense[i + 1].z - dense[i].z;
+                const float32 lengthSq = dx * dx + dz * dz;
+                const float32 t = lengthSq > 0.0f
+                    ? Math::Clamp01(((x - dense[i].x) * dx + (z - dense[i].z) * dz) / lengthSq) : 0.0f;
+                reference = std::min(reference, std::hypot(x - (dense[i].x + t * dx), z - (dense[i].z + t * dz)));
+            }
+            EXPECT_NEAR(FindClosestPointXZ(s, x, z).Distance, reference, 0.02f) << "at (" << x << ", " << z << ")";
+        }
+}
+
+TEST(SplineEvaluator, SignedDistanceXZCutoffIsExactBelowItAndABoundBeyondIt)
+{
+    // The cutoff only skips work. Wherever either answer is below the cutoff the two are the same
+    // float; elsewhere the cut answer is at or past the cutoff. A closed loop's filled interior is
+    // never cut, however far its centre lies from the curve.
+    const SplineData route = MakeWindingRoute();
+    SplineData loop;
+    loop.Type = SplineType::CatmullRom;
+    loop.Closed = true;
+    for (const Vector3& p : {Vector3{-60, 0, -60}, Vector3{20, 0, -80}, Vector3{70, 0, -10}, Vector3{30, 0, 60},
+                             Vector3{-50, 0, 40}})
+        loop.AddPoint(p, 3.0f);
+    RebuildSplineCache(loop);
+
+    uint32 cut = 0;
+    for (const float32 cutoff : {0.0f, 0.9f, 2.2f, 8.0f})
+        for (float32 z = -90.0f; z <= 90.0f; z += 2.3f)
+            for (float32 x = -130.0f; x <= 130.0f; x += 2.7f)
+            {
+                const std::array<std::pair<float32, float32>, 3> answers{{
+                    {SignedDistanceToSplineBandXZ(route, x, z, kNoCutoff), SignedDistanceToSplineBandXZ(route, x, z, cutoff)},
+                    {SignedDistanceToSplineBandXZ(loop, x, z, kNoCutoff), SignedDistanceToSplineBandXZ(loop, x, z, cutoff)},
+                    {SignedDistanceToSplineXZ(loop, x, z, kNoCutoff), SignedDistanceToSplineXZ(loop, x, z, cutoff)}}};
+                for (const auto& [exact, bounded] : answers)
+                {
+                    if (exact < cutoff || bounded < cutoff)
+                        EXPECT_EQ(bounded, exact) << "cutoff " << cutoff << " at (" << x << ", " << z << ")";
+                    else
+                        EXPECT_GE(bounded, cutoff) << "cutoff " << cutoff << " at (" << x << ", " << z << ")";
+                    cut += bounded != exact ? 1u : 0u;
+                }
+            }
+    EXPECT_GT(cut, 0u) << "no sample was cut off, so the cutoff path went unexercised";
+    EXPECT_LT(SignedDistanceToSplineXZ(loop, 5.0f, -5.0f, 0.0f), -20.0f) << "the loop's centre was cut off";
 }
 
 // ---- Edge cases ----

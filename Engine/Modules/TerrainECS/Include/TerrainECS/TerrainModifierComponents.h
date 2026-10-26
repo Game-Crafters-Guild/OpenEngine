@@ -163,7 +163,7 @@ struct TerrainEffectChrome<Components::TerrainStampEffect>
 {
     static constexpr std::string_view Title = "Stamp";
     static constexpr std::string_view Description =
-        "Projects a height texture over the region - craters, cliff details, sculpt data.";
+        "Projects a height texture over the volume - craters, cliff details, sculpt data.";
 };
 
 template <>
@@ -187,7 +187,7 @@ struct TerrainEffectChrome<Components::TerrainGroundClaimEffect>
 {
     static constexpr std::string_view Title = "Ground Claim";
     static constexpr std::string_view Description =
-        "Marks ground this region owns, so pooled flattens grade up to it and stop. Writes no height.";
+        "Marks ground this volume owns, so pooled flattens grade up to it and stop. Writes no height.";
 };
 
 template <>
@@ -195,7 +195,7 @@ struct TerrainEffectChrome<Components::TerrainGrassEffect>
 {
     static constexpr std::string_view Title = "Grass";
     static constexpr std::string_view Description =
-        "Shortens or thins planar grass relative to its global profile, with the region's falloff.";
+        "Makes the terrain's grass shorter or sparser inside the volume, fading out over its falloff.";
 };
 
 template <>

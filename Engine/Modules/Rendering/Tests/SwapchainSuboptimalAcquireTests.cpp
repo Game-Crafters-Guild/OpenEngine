@@ -62,9 +62,9 @@ struct CountsSnapshot
 
 void CountSwapchainLogLine(SwapchainLogCounts& counts, const Logger::LogMessage& msg)
 {
-    if (msg.Message.find("VulkanDevice: Created window swapchain") != Logger::String::npos)
+    if (msg.Message.find("VulkanDevice: Created window swapchain") != std::string::npos)
         counts.Created.fetch_add(1);
-    else if (msg.Message.find("[fault-injection] forcing VK_SUBOPTIMAL_KHR on acquire") != Logger::String::npos)
+    else if (msg.Message.find("[fault-injection] forcing VK_SUBOPTIMAL_KHR on acquire") != std::string::npos)
         counts.ForcedAcquires.fetch_add(1);
 }
 
@@ -107,7 +107,7 @@ void RunForcedSuboptimalFrames(const char* forcing)
 
     Logger::Log::Initialize({Logger::LogLevel::Info});
     auto counts = std::make_shared<SwapchainLogCounts>();
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     Logger::CallbackSink* sinkPtr = sink.get();
     const auto callbackId =
         sinkPtr->RegisterCallback([counts](const Logger::LogMessage& msg) { CountSwapchainLogLine(*counts, msg); });

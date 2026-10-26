@@ -1,0 +1,10 @@
+<!-- One tile of a PictureChoiceField: the choice's picture, then its name over the line that says
+     what it does. PictureChoiceField adds the picture class and the texts; PictureChoiceField.css
+     styles every part. -->
+<UIElement class="picture-choice-tile">
+  <UIElement class="picture-choice-picture" />
+  <UIElement class="picture-choice-text">
+    <Label class="picture-choice-name" />
+    <Label class="picture-choice-description" />
+  </UIElement>
+</UIElement>

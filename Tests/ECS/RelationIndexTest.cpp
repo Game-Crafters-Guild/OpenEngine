@@ -17,7 +17,7 @@ using GameEngine::ECS::test::Position;
 namespace {
 
 struct ParentOf {}; // relation tag
-using ParentIndex = RelationIndex<ParentOf, Parent, &Parent::parent>;
+using ParentIndex = RelationIndex<ParentOf, Parent, &Parent::Entity>;
 
 static EntityHandle MakeNode(World& w, EntityHandle parent = {}) {
     auto e = w.Create();
@@ -156,11 +156,11 @@ static CapturedHook g_Hook; // per-test scratch; tests below are sequential
 
 static void OnParentSet(EntityHandle e, Parent& p) {
     g_Hook.SeenEntities.push_back(e);
-    g_Hook.SeenTargets.push_back(p.parent);
+    g_Hook.SeenTargets.push_back(p.Entity);
 }
 static void OnParentRemoved(EntityHandle e, Parent& p) {
     g_Hook.SeenEntities.push_back(e);
-    g_Hook.SeenTargets.push_back(p.parent);
+    g_Hook.SeenTargets.push_back(p.Entity);
 }
 } // namespace
 
@@ -223,7 +223,7 @@ TEST(RelationIndex, MatchesScanAcrossRandomMutations) {
         for (auto r : roots) {
             std::vector<EntityHandle> expected;
             w.Query<Read<Parent>>().Each([&](EntityHandle e, const Parent& p) {
-                if (p.parent == r) expected.push_back(e);
+                if (p.Entity == r) expected.push_back(e);
             });
             const auto* got = idx.GetSources(w, r);
             const size_t gotSize = got ? got->size() : 0;

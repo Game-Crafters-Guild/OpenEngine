@@ -18,7 +18,7 @@ struct EditorGlobalPaths
     std::filesystem::path userLogsRoot;  // <userDataRoot>/Logs
 
     // Editor assets: install-provided vs user-writable (seeded).
-    std::filesystem::path installAssetsRoot; // PathUtils::GetInstallAssetsRoot(): Editor.app Resources/Assets or <exe>/Assets
+    std::filesystem::path installAssetsRoot; // ApplicationPaths::GetInstallAssetsRoot(): Editor.app Resources/Assets or <exe>/Assets
     std::filesystem::path userAssetsRoot;    // <userDataRoot>/EditorAssets
 
     // Project templates staged with the build. Sibling of installAssetsRoot so

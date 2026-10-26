@@ -6,6 +6,7 @@
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/PipelineManager.h"
 #include "Rendering/Core/RendererProfile.h"
+#include "Rendering/Core/ReverseZ.h"
 #if defined(RENDERING_HAS_VULKAN)
 #include "../Vulkan/VulkanDevice.h"
 #endif
@@ -73,7 +74,7 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         d.minFilter = 1; d.magFilter = 1; d.mipFilter = 0;          // linear (hardware 2x2 PCF), no mip
         d.addressModeU = 3; d.addressModeV = 3; d.addressModeW = 3; // CLAMP_TO_BORDER
         d.borderColor = 0;                                         // reverse-Z far depth -> OOB considered lit
-        d.compareEnable = true; d.compareOp = CompareOp::GreaterOrEqual;  // reverse-Z
+        d.compareEnable = true; d.compareOp = ReverseZ::kNearerOrEqual;
         return d;
     }
 

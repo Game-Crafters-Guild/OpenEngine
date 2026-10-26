@@ -306,7 +306,9 @@ TEST(ParticleShaderCompose, NoDerivativeReadFollowsADiscardInAFoggedVariant)
         EXPECT_EQ(order.DerivativeReadsAfterFirstDiscard, 0)
             << "a derivative, or a sample or level query that reads one, follows a discard";
         if (alphaMode == MaterialAlphaMode::Mask)
+        {
             EXPECT_TRUE(order.Discards) << "positive control: the alpha-tested variant discards";
+        }
         discarding += order.Discards ? 1u : 0u;
     }
     EXPECT_GT(discarding, 1u) << "positive control: the fogged variants read include discarding ones";

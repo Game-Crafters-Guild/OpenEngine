@@ -50,13 +50,20 @@ RGPass AddFullscreenPass(RGFrame& frame, const RGFullscreenDesc& desc)
     for (uint32_t i = 0; i < bufferCount; ++i)
         buffers[i] = desc.Buffers[i];
 
+    const RGResourceDesc& target = frame.Graph().ResourceDesc(desc.Target.Id);
     uint32_t width = desc.Width;
     uint32_t height = desc.Height;
     if (width == 0 || height == 0)
     {
-        const RGResourceDesc& td = frame.Graph().ResourceDesc(desc.Target.Id);
-        width = td.Width;
-        height = td.Height;
+        width = target.Width;
+        height = target.Height;
+    }
+    // A viewport smaller than the target leaves pixels unwritten.
+    RGAttachmentOps ops = desc.Ops;
+    if (ops.WritesEveryPixel && (width != target.Width || height != target.Height))
+    {
+        assert(false && "AddFullscreenPass: WritesEveryPixel needs a viewport that covers the target");
+        ops.WritesEveryPixel = false;
     }
 
     return frame.AddPass(
@@ -74,7 +81,7 @@ RGPass AddFullscreenPass(RGFrame& frame, const RGFullscreenDesc& desc)
                     p.Read(buffers[i].Declare,
                            buffers[i].IsStorage ? RGBufferRead::Storage : RGBufferRead::Uniform);
             }
-            p.AttachColor(0, desc.Target, desc.Ops);
+            p.AttachColor(0, desc.Target, ops);
         },
         [textures, textureCount, buffers, bufferCount, pipeline = desc.Pipeline,
          layout = desc.Layout, width, height](RGContext& ctx)

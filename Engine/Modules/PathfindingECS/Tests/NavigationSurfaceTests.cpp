@@ -3,9 +3,9 @@
 // cells; how it reports its bake and its sources; how it is listed and saved.
 #include "NavigationTestSurfaces.h"
 
-#include "PathfindingECS/Components/NavigationAgent.h"
-#include "PathfindingECS/Components/NavigationSource.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationAgent.h"
+#include "Components/Navigation/NavigationSource.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationScriptApi.h"
 #include "PathfindingECS/NavigationService.h"
@@ -37,7 +37,10 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -77,15 +80,6 @@ std::optional<NavigationSourcePolicy> PolicyListedFor(const std::vector<Navigati
         if (source.Entity == entity.GetHandle() && source.Kind == kind)
             return source.Policy;
     return std::nullopt;
-}
-
-// Streams in one tile of a tiled terrain at full detail, as the terrain's streaming would.
-void MakeTileResident(TE::TiledTerrainHandle terrain, TE::TileCoord coord)
-{
-    auto* tile = TE::TerrainService::Get().LoadTile(terrain, coord);
-    ASSERT_NE(tile, nullptr);
-    tile->LodState = TE::TileLodState::Full;
-    tile->MarkFullDirty();
 }
 
 class NavigationSurfaceTest : public ::testing::Test
@@ -336,50 +330,6 @@ TEST_F(NavigationSurfaceTest, TerrainWithoutItsHeightfieldWaits)
     EXPECT_EQ(Navigation::FormatBakeStatus(SurfaceOf(surface)), "Waiting for: the terrain's heightfield to be built");
 }
 
-// A terrain tile inside the bounds that has not streamed in holds the bake and is named; the bake
-// completes once the tile is resident.
-TEST_F(NavigationSurfaceTest, TiledTerrainWaitsForTheTileThatIsNotResident)
-{
-    TE::TiledTerrainConfig config{};
-    config.WorldSizeX = 128.0f;
-    config.WorldSizeZ = 64.0f; // square tiles of the shorter side: (0, 0) and (1, 0)
-    config.HeightScale = 16.0f;
-    auto& service = TE::TerrainService::Get();
-    const auto handle = service.CreateTiledTerrain(config);
-    const auto* data = service.GetTiledTerrainData(handle);
-    ASSERT_NE(data, nullptr);
-    ASSERT_EQ(data->Config.TilesPerAxisX, 2u);
-    ASSERT_EQ(data->Config.TilesPerAxisZ, 1u);
-    MakeTileResident(handle, TE::TileCoord{0, 0});
-
-    auto terrain = world->Create();
-    Components::Terrain component{};
-    component.SizeX = config.WorldSizeX;
-    component.SizeZ = config.WorldSizeZ;
-    component.HeightScale = config.HeightScale;
-    component.TiledTerrainHandle = handle.Index;
-    component.TiledTerrainGeneration = handle.Generation;
-    terrain.Set(component);
-    terrain.Set(Components::Transform{});
-    terrain.Set(Placed(0.0f, 0.0f, 0.0f));
-    auto surface = world->Create();
-    NavigationSurface grid{}; // fitted to the terrain
-    grid.Mode = NavigationSurfaceMode::Grid;
-    grid.CellSize = 2.0f;
-    surface.Set(grid);
-    world->ProcessCommands();
-
-    BakeAll(2);
-
-    ASSERT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Waiting) << Navigation::FormatBakeStatus(SurfaceOf(surface));
-    EXPECT_EQ(Navigation::FormatBakeStatus(SurfaceOf(surface)), "Waiting for: terrain tile (1, 0) is not resident");
-
-    MakeTileResident(handle, TE::TileCoord{1, 0});
-    BakeAll();
-
-    EXPECT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(surface));
-}
-
 // A trigger volume is not ground: a static trigger collider is left out of the bake.
 TEST_F(NavigationSurfaceTest, TriggerCollidersAreNotBaked)
 {
@@ -428,7 +378,7 @@ TEST_F(NavigationSurfaceTest, BakeUnitCountIsWhatTheBakeMakes)
     entity.Set(authored);
     world->ProcessCommands();
 
-    for (const auto [mode, cellSize] : {std::pair{NavigationSurfaceMode::Mesh, 0.5f}, std::pair{NavigationSurfaceMode::Grid, 1.0f}})
+    for (const auto& [mode, cellSize] : {std::pair{NavigationSurfaceMode::Mesh, 0.5f}, std::pair{NavigationSurfaceMode::Grid, 1.0f}})
     {
         auto* surface = world->GetComponentForWrite<NavigationSurface>(entity.GetHandle());
         surface->Mode = mode;
@@ -953,9 +903,8 @@ TEST_F(NavigationSurfaceTest, BakeStatusReadsAsTheInspectorShowsIt)
     EXPECT_EQ(Navigation::FormatBakeStatus(surface), "Not baked");
 
     surface.BakePhase = NavigationBakePhase::Waiting;
-    surface.BlockingTileX = 3;
-    surface.BlockingTileZ = 7;
-    EXPECT_EQ(Navigation::FormatBakeStatus(surface), "Waiting for: terrain tile (3, 7) is not resident");
+    surface.BlockingPoint = {1500.6f, 12.0f, 300.6f};
+    EXPECT_EQ(Navigation::FormatBakeStatus(surface), "Waiting for: terrain height near X 1501, Z 301 to load");
 
     surface.BakePhase = NavigationBakePhase::Baking;
     surface.BakeDone = 212;
@@ -1055,6 +1004,11 @@ TEST_F(NavigationSurfaceTest, SceneRoundTripKeepsTheAuthoredFields)
         }
     } cleanup{path};
     ASSERT_TRUE(Scene::SaveSceneToFile(*world, path));
+    // The grid type is written by its name, though Pathfinding::GridType is declared outside the
+    // component headers.
+    std::ostringstream saved;
+    saved << std::ifstream(path).rdbuf();
+    EXPECT_NE(saved.str().find("Hex"), std::string::npos) << saved.str();
     world->Clear();
     ASSERT_TRUE(Scene::LoadSceneFromFile(*world, path));
 

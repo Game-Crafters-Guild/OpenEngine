@@ -130,7 +130,7 @@ float LuminanceOfGround(const float source[3], float upDot)
 {
     float ground[3];
     Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), source, upDot, ground);
-    return ColorUtils::LinearRec709Luminance(ground);
+    return ColorUtils::LinearRec709Luminance({ground[0], ground[1], ground[2]});
 }
 
 // The default sky's physical curve for a 100 000 lx sun (PhysicalSeedCurve at the component's
@@ -330,8 +330,9 @@ float MoonlightLux(const SkyEnvironment& sky, float moonUpDot)
     if (!sky.ShowMoon)
         return 0.0f;
     const Rendering::SkySystemConfig config{};
+    const float moonColor[3] = {config.moonColor.r, config.moonColor.g, config.moonColor.b};
     float moonGround[3];
-    Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), config.moonColor, moonUpDot, moonGround);
+    Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), moonColor, moonUpDot, moonGround);
     return MoonlightLuxFromGround(sky, Rendering::MoonPhaseIlluminanceFraction(sky.MoonArcPosition), moonGround);
 }
 
@@ -341,7 +342,8 @@ float MoonlightLuxFromGround(const SkyEnvironment& sky, float moonPhaseFraction,
         return 0.0f;
     const Rendering::SkySystemConfig config{};
     return SanitisedMoonlightLux(sky.MoonlightIlluminance) * moonPhaseFraction *
-           ColorUtils::LinearRec709Luminance(moonGround) / ColorUtils::LinearRec709Luminance(config.moonColor);
+           ColorUtils::LinearRec709Luminance({moonGround[0], moonGround[1], moonGround[2]}) /
+           ColorUtils::LinearRec709Luminance(config.moonColor);
 }
 
 float MoonlightRatio(const SkyEnvironment& sky)

@@ -167,6 +167,8 @@ inline float step(float edge, float v) { return v < edge ? 0.0f : 1.0f; }
 inline float max(float a, float b) { return a < b ? b : a; }
 // GLSL max(vec3, float) takes each component against the scalar.
 inline vec3 max(const vec3& v, float s) { return {max(v.x, s), max(v.y, s), max(v.z, s)}; }
+// GLSL max(vec4, vec4) takes each component pair.
+inline vec4 max(const vec4& a, const vec4& b) { return {max(a.x, b.x), max(a.y, b.y), max(a.z, b.z), max(a.w, b.w)}; }
 // GLSL min(a, b) is `b < a ? b : a`, the mirror of max, and likewise returns a on a NaN operand.
 inline float min(float a, float b) { return b < a ? b : a; }
 inline uint min(uint a, uint b) { return b < a ? b : a; }

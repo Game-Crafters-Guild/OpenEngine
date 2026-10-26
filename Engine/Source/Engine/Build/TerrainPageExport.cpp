@@ -5,9 +5,38 @@
 #include "PageStreaming/HeightStoreCache.h"
 #include "PageStreaming/TerrainPageContainer.h"
 #include "TerrainECS/RawHeightmap.h"
+#include "TerrainECS/TerrainSurfaceStore.h"
 
 namespace GameEngine
 {
+
+namespace
+{
+
+// Packs the surface stores of each terrain of `scene` into one container a terrain,
+// <contentRoot>/Assets/Cooked/Terrain/<scene guid>-<terrain>.geterrain. A Normal store's samples
+// cache is a bake cache and stays behind.
+void ExportSceneSurfaceStores(const std::filesystem::path& cacheDirectory, const std::filesystem::path& contentRoot,
+                              const GUID& scene, TerrainPageExportResult& result)
+{
+    const std::vector<TerrainECS::SceneSurfaceStore> stores = TerrainECS::SceneSurfaceStores(cacheDirectory, scene);
+    for (std::size_t first = 0; first < stores.size();)
+    {
+        std::vector<PageStreaming::TerrainContainerField> fields;
+        std::size_t next = first;
+        for (; next < stores.size() && stores[next].Terrain == stores[first].Terrain; ++next)
+            fields.push_back({stores[next].Plane, stores[next].File});
+        const std::string name = scene.ToString() + "-" + stores[first].Terrain + ".geterrain";
+        const std::filesystem::path container = contentRoot / "Assets" / "Cooked" / "Terrain" / name;
+        if (std::string reason = PageStreaming::WriteTerrainContainer(container, fields); !reason.empty())
+            result.Warnings.push_back("Terrain surface pages: " + name + ": " + reason);
+        else
+            result.Containers.push_back(container);
+        first = next;
+    }
+}
+
+} // namespace
 
 TerrainPageExportResult ExportTerrainPages(const std::filesystem::path& projectRoot,
                                            const std::filesystem::path& contentRoot, const AssetManifest& manifest,
@@ -15,7 +44,8 @@ TerrainPageExportResult ExportTerrainPages(const std::filesystem::path& projectR
                                            const std::atomic<bool>* cancel)
 {
     TerrainPageExportResult result;
-    const PageStreaming::HeightStoreCache cache(projectRoot / ".Cache" / "TerrainPages");
+    const std::filesystem::path cacheDirectory = projectRoot / ".Cache" / "TerrainPages";
+    const PageStreaming::HeightStoreCache cache(cacheDirectory);
     for (const AssetManifestEntry& entry : manifest.entries)
     {
         if (entry.type != AssetType::TerrainHeightmap)
@@ -56,6 +86,9 @@ TerrainPageExportResult ExportTerrainPages(const std::filesystem::path& projectR
         }
         result.Containers.push_back(container);
     }
+    for (const AssetManifestEntry& entry : manifest.entries)
+        if (entry.type == AssetType::Scene)
+            ExportSceneSurfaceStores(cacheDirectory, contentRoot, entry.guid, result);
     return result;
 }
 

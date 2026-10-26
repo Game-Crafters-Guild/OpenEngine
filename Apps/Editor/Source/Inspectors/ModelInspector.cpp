@@ -21,6 +21,7 @@
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/ModelSettingsReload.h"
 #include "Inspectors/SubmeshLodProvenance.h"
+#include "Mathematics/Interpolation.h"
 #include "Thumbnails/IThumbnailProvider.h"
 #include "Thumbnails/ModelThumbnailHandler.h"
 #include "UI/Controls/Button.h"
@@ -623,7 +624,7 @@ void BuildLodSection(UIElement* root, ModelAsset* model, std::function<void()> r
         {
             InspectorDrag::AddFloatRowWithDrag(root, "LOD" + std::to_string(lod) + " target %",
                 settings.TargetRatios[lod], [](float) {},
-                [persist, lod](float v) { persist([v, lod](LodAssetSettings& s) { s.TargetRatios[lod] = std::clamp(v, 0.0f, 1.0f); }); },
+                [persist, lod](float v) { persist([v, lod](LodAssetSettings& s) { s.TargetRatios[lod] = Math::Clamp01(v); }); },
                 settings.TargetRatios[lod], "Target fraction of LOD0 triangles", 0.0f, 1.0f);
             InspectorDrag::AddFloatRowWithDrag(root, "LOD" + std::to_string(lod) + " max error",
                 settings.TargetError[lod], [](float) {},
@@ -640,8 +641,9 @@ void BuildLodSection(UIElement* root, ModelAsset* model, std::function<void()> r
             Dropdown* borderDropdown = InspectorUI::AddDropdownRow(
                 root, "Border rule", kBorderOptions,
                 static_cast<int>(settings.BorderRule),
-                "Open-border handling during simplification: Seam planes locks only "
-                "kit tiling seams (borders on the bounding-box faces), Lock all pins "
+                "Open-border handling during simplification: Seam planes locks kit "
+                "tiling seams (borders on the bounding-box faces) and the rims of parts "
+                "that close an opening in another part (a lid in its rim), Lock all pins "
                 "every open border, Free lets all borders drift within the error budget");
             borderDropdown->SetOnValueChanged([persist](const std::string& value) {
                 const uint32 rule = value == "1" ? 1u : (value == "2" ? 2u : 0u);

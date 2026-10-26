@@ -18,6 +18,7 @@
 #include "Markups/MarkupPathInspector.h"
 #include "Markups/MarkupPresentation.h"
 #include "Markups/MarkupRegionInspector.h"
+#include "Types/StringUtils.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/Label.h"
@@ -32,8 +33,8 @@
 #include <functional>
 #include <initializer_list>
 #include <memory>
-#include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -80,14 +81,11 @@ std::string JoinTags(const MarkupECS::MarkupNotes* notes)
 std::vector<std::string> SplitTags(const std::string& text)
 {
     std::vector<std::string> names;
-    std::stringstream stream(text);
-    std::string name;
-    while (std::getline(stream, name, ','))
+    for (const std::string_view field : Split(text, ','))
     {
-        const size_t first = name.find_first_not_of(" \t");
-        const size_t last = name.find_last_not_of(" \t");
-        if (first != std::string::npos)
-            names.push_back(name.substr(first, last - first + 1));
+        const std::string_view name = TrimWhitespaceView(field);
+        if (!name.empty())
+            names.emplace_back(name);
     }
     return names;
 }
@@ -260,7 +258,7 @@ TextArea* AddDescriptionRow(const InspectorContext& ctx, MarkupEditorBridge& bri
 }
 
 // One thread entry: a comment as a header (author, time) over its text; an action as one
-// muted line ("Agent set it to In progress · 5 min ago"). The kind classes are the ones the
+// muted line ("Agent set it to In Progress · 5 min ago"). The kind classes are the ones the
 // Activity tab's rows carry (MarkupEntryKindClass), styled alike in MarkupsPanel.css.
 std::unique_ptr<UIElement> BuildThreadEntry(const MarkupECS::MarkupEntry& entry, int64 now, MarkupEditorBridge& bridge,
                                             ECS::World& world)
@@ -308,7 +306,7 @@ std::unique_ptr<UIElement> BuildThreadEntry(const MarkupECS::MarkupEntry& entry,
     return item;
 }
 
-// The thread, boxed under its title, then the comment field and its Add comment button;
+// The thread, boxed under its title, then the comment field and its Add Comment button;
 // returns the two.
 std::pair<TextArea*, Button*> AddThread(const InspectorContext& ctx, MarkupEditorBridge& bridge, const MarkupECS::MarkupNotes* notes)
 {
@@ -369,7 +367,7 @@ std::pair<TextArea*, Button*> AddThread(const InspectorContext& ctx, MarkupEdito
     auto row = std::make_unique<UIElement>();
     row->AddClass("markup-inspector-comment-actions");
     auto add = std::make_unique<Button>();
-    add->SetText("Add comment");
+    add->SetText("Add Comment");
     add->AddClass("small");
     add->AddClass("secondary");
     add->RegisterEventHandler(kEventButtonClick, [addComment](UIEvent&) { addComment(); });

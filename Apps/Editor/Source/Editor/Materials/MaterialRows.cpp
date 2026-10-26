@@ -2,10 +2,10 @@
 
 #include "Rendering/Materials/MaterialAlphaMode.h"
 #include "Rendering/Materials/MaterialDocument.h"
+#include "Rendering/Materials/MaterialPropertyBinding.h"
 #include "Types/StringUtils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <variant>
 
 namespace GameEngine::Editor::MaterialRows
@@ -18,26 +18,6 @@ bool UsesVolumetricSixAxisSurface(const MaterialDocument& doc)
 {
     const std::string s = ToLowerAscii(doc.surfaceShader);
     return s.find("volumetric_six_axis") != std::string::npos;
-}
-
-// camelCase -> spaced PascalCase, the shared half of both label mappings.
-std::string SplitCamelCase(const std::string& s)
-{
-    std::string out;
-    for (size_t i = 0; i < s.size(); ++i)
-    {
-        const unsigned char c = static_cast<unsigned char>(s[i]);
-        if (i == 0)
-            out.push_back(static_cast<char>(std::toupper(c)));
-        else if (std::isupper(c))
-        {
-            out.push_back(' ');
-            out.push_back(static_cast<char>(c));
-        }
-        else
-            out.push_back(static_cast<char>(c));
-    }
-    return out;
 }
 
 } // namespace
@@ -368,19 +348,12 @@ bool IsSlider01Property(const std::string& name)
            name == "transmissionWeight" || name == "thinFilmWeight";
 }
 
-std::string PropertyLabel(const std::string& key)
-{
-    if (key == "ao")
-        return "AO";
-    return SplitCamelCase(key);
-}
-
 std::string TextureSlotLabel(const std::string& slot)
 {
     std::string s = slot;
     if (s.size() > 3 && s.compare(s.size() - 3, 3, "Map") == 0)
         s.erase(s.size() - 3);
-    return SplitCamelCase(s);
+    return Rendering::MaterialPropertyBinding::PropertyKeyLabel(s);
 }
 
 } // namespace GameEngine::Editor::MaterialRows

@@ -58,8 +58,8 @@ void AddGrassRegionDarkenGroundRow(const InspectorContext& ctx, const Components
         ctx.Parent, effect.GroundDarkeningScale, ctx.World, ctx.Entity, ctx.ChangeNotifications,
         [](TerrainGrassEffect& u, float v) { u.GroundDarkeningScale = Components::ClampTerrainGrassEffectScale(v); },
         [base](float v) { return GrassMultiplierLabel("Darken Ground", v, base.GroundDarkening * 100.0f, "%"); },
-        "How much of the terrain's Darken Ground this region keeps: the soil the grass writes into "
-        "the color map under its blades. 100% leaves it alone, 0% keeps the soil out of the region, "
+        "How much of the terrain's Darken Ground this volume keeps: the soil the grass writes into "
+        "the color map under its blades. 100% leaves it alone, 0% keeps the soil out of the volume, "
         "for a path through a field. Applies at the next bake.",
         {}, [arm](bool previewing) { previewing ? arm->Arm() : arm->Release(); });
     if (base.Known && base.GroundDarkening <= 0.0f)

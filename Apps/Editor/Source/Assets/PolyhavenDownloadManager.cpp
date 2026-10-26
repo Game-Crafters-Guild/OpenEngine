@@ -9,6 +9,7 @@
 #include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "ECS/World.h"
+#include "Mathematics/Interpolation.h"
 #include "JobSystem/JobChannel.h"
 #include "Editor/Settings/FbxImportSettings.h"
 #include "Editor/Entities/SpriteEntityFactory.h"
@@ -406,7 +407,7 @@ void PolyhavenDownloadManager::ReplacePlaceholder(const CompletedDownload& dl)
             posZ = xf->matrix[14];
         }
         if (auto* p = world->GetComponent<Components::Parent>(placeholder))
-            parentEntity = p->parent;
+            parentEntity = p->Entity;
         if (auto* o = world->GetComponent<Components::HierarchyOrder>(placeholder))
         {
             hasOrder = true;
@@ -519,7 +520,7 @@ void PolyhavenDownloadManager::ReplacePlaceholder(const CompletedDownload& dl)
         if (parentEntity.IsValid() && world->IsValid(parentEntity))
         {
             Components::Parent p{};
-            p.parent = parentEntity;
+            p.Entity = parentEntity;
             world->AddComponentImmediate(spriteResult, p);
         }
         if (hasOrder)
@@ -602,7 +603,7 @@ void PolyhavenDownloadManager::ReplacePlaceholder(const CompletedDownload& dl)
         if (parentEntity.IsValid() && world->IsValid(parentEntity))
         {
             Components::Parent p{};
-            p.parent = parentEntity;
+            p.Entity = parentEntity;
             world->AddComponentImmediate(result.rootEntity, p);
         }
         if (hasOrder)
@@ -684,7 +685,7 @@ bool PolyhavenDownloadManager::GetDownloadProgress(const std::string& slug, floa
     if (it == m_Shared->Progress.end() || it->second.second == 0)
         return false;
     const float f = static_cast<float>(it->second.first) / static_cast<float>(it->second.second);
-    outFraction = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+    outFraction = Math::Clamp01(f);
     return true;
 }
 

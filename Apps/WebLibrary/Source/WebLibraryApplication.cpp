@@ -1,6 +1,7 @@
 #include "WebLibraryApplication.h"
 
 #include "Assets/AssetManager.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Engine/Build/PackagedGameLayout.h"
 #include "Engine/Hosting/RuntimeHost.h"
@@ -65,7 +66,7 @@ bool WebLibraryApplication::Start(std::string& outError)
     auto& engine = EngineCore::GetInstance();
     auto& assets = engine.GetAssetManager();
     if (const auto editorSource =
-            BuildPlayerEditorSourceDesc(engine.GetResolvedAssetRoot(), PathUtils::GetInstallAssetsRoot()))
+            BuildPlayerEditorSourceDesc(engine.GetResolvedAssetRoot(), ApplicationPaths::GetInstallAssetsRoot()))
         assets.RegisterSource(*editorSource);
 
     if (!m_Host->InitRendering())

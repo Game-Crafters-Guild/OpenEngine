@@ -25,7 +25,7 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Assets/TextureAsset.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
 #include "Engine/Rendering/RenderOrigin.h"
@@ -1008,7 +1008,7 @@ void RenderServices::EnsureAnimComputePass()
     if (spirv.empty())
     {
         spirv = Rendering::Utils::ReadFile(
-            (PathUtils::GetInstallAssetsRoot() / "Shaders" / "animation_skinning.comp.spv").string());
+            (ApplicationPaths::GetInstallAssetsRoot() / "Shaders" / "animation_skinning.comp.spv").string());
     }
     if (spirv.empty() && resolverAnswered)
     {

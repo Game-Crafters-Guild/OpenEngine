@@ -188,6 +188,7 @@ struct TerrainParamsEntry
     float GrassRootFadeEnd;
     uint GrassControlBindless;
     uint ColorMapBindless;
+    float GrassGroundTintHeight;
 };
 
 layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer
@@ -429,6 +430,20 @@ float grassCanopyRise(float t)
 vec3 GrassBladeCanopyRoot(vec3 rootColor, vec3 groundColor, bool rootFromGround, float groundingStrength)
 {
     return rootFromGround ? mix(rootColor, groundColor, groundingStrength) : rootColor;
+}
+
+// THE CANOPY GRADIENT AT HEIGHT t, from its root end (GrassBladeCanopyRoot) to the tip. Under
+// `rootFromGround` the whole root end, the ground's share and the tip in shade alike, gives way to the
+// tip by groundTintHeight: the gradient is one ramp from the root end to the tip, so it never goes
+// below the darker of the two, on any ground and at any Grounding Strength. At groundTintHeight 1 the
+// rise is the canopy rise itself, so the gradient is the plain mix, bit for bit. groundTintHeight
+// stays in [kMinTerrainGrassGroundTintHeight, 1] (TerrainGrass.h): above 1 the root end would still
+// show at the tip.
+vec3 GrassBladeCanopy(vec3 rootColor, vec3 groundColor, vec3 tip, bool rootFromGround, float groundingStrength,
+                      float groundTintHeight, float t)
+{
+    float rise = rootFromGround ? smoothstep(0.0f, groundTintHeight, t) : grassCanopyRise(t);
+    return mix(GrassBladeCanopyRoot(rootColor, groundColor, rootFromGround, groundingStrength), tip, rise);
 }
 
 const float kGrassNormalSettleRange = 0.55f;
@@ -676,8 +691,8 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 
     // Bit 1 is Splat Root Color, bit 5 an automatic Root Color (kTerrainGrassBit* in TerrainTypes.h).
     bool rootFromGround = (tp.GrassEnabled & 34u) == 34u;
-    vec3 col = mix(GrassBladeCanopyRoot(rootColor, groundedEnd, rootFromGround, groundingStrength), tip,
-                   grassCanopyRise(t));
+    vec3 col = GrassBladeCanopy(rootColor, groundedEnd, tip, rootFromGround, groundingStrength,
+                                tp.GrassGroundTintHeight, t);
     uint atlasTile = grassAtlasTile(tp, tint);
     vec2 textureUv = grassAtlasUV(tp, atlasTile, side, t, tint);
     // Hoisted here, the last uniform-flow point before the blade-texture branches below: WGSL
@@ -790,7 +805,7 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // near RootColor there, so the step from the ground is small; a whole-blade span instead
     // carries the ground colour halfway up the blade.
     //
-    // The canopy shade on the contact is the ground's too: o.baseColor at the end of this function
+    // The canopy shade on the contact is the ground's too: the canopy shade at the end of this function
     // carries why.
     //
     // GroundingStrength still turns the whole grounding read off: at 0 the weight is 1 everywhere and
@@ -850,14 +865,15 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // No brightness is handed back for the blade normal's departure from the terrain normal: the
     // fold and the arched upper blade face the sky, and a noon field measured at 1.00x its ground
     // with nothing handed back (P1, sun overhead, grass over the same frame at density 0).
-    // The canopy shade: the light the field keeps off its own lower blades, sun and sky alike, so
-    // it scales the reflectance and not only the indirect term. TWO-SIDED by construction: the ground
-    // under the field takes the same depth (cbt_surface.glsl, through the same include), so at the
-    // root the blade and its ground are shaded alike and the base stays the ground's colour. A
-    // blade-side shade alone dims the base while nothing dims the ground beside it, which lands as a
-    // step at the contact line rather than as shadow. The light through the blade takes it too: its
-    // albedo is the shaded one.
-    o.baseColor = col * canopyOcclusion;
+    // The canopy shade: the light the field keeps off its own lower blades, sun and sky alike. It is
+    // the share of the light that reaches the blade (lightVisibility), so it dims the diffuse, the
+    // specular and the light through the blade alike. TWO-SIDED by construction: the ground under the
+    // field takes the same depth (cbt_surface.glsl, through the same include), so at the root the
+    // blade and its ground are shaded alike and the base stays the ground's colour. A blade-side
+    // shade alone dims the base while nothing dims the ground beside it, which lands as a step at the
+    // contact line rather than as shadow.
+    o.baseColor = col;
+    o.lightVisibility = canopyOcclusion;
 #if defined(GE_DIFFUSE_TRANSMISSION_ENABLED)
     GrassLeafLight leaf = GrassBladeLeafLight(o.baseColor, backlightColor, tp.GrassTranslucency, t);
     o.baseColor = leaf.Albedo;

@@ -18,7 +18,7 @@ class CommandList;
 namespace GameEngine::Ocean
 {
 
-// Displacement-combine cascade (optional, OceanRenderer.CombineDisplacementCascade).
+// Displacement-combine cascade (optional, OceanRenderer.CombineCascade).
 // Each frame it sums the tileable FFT displacement cascades into a single
 // camera-snapped, viewer-centered Texture2DArray (one slice per LOD), per LOD only
 // summing the cascades resolvable at that layer's texel (an anti-aliased LOD

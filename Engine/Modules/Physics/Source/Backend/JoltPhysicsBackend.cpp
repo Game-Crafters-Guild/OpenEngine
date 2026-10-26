@@ -1,6 +1,7 @@
 #include "Physics/Backend/JoltPhysicsBackend.h"
 
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/Capabilities.h"
 
 #include <algorithm>
@@ -163,6 +164,9 @@ private:
 // Builds a Jolt heightfield from samples, with the encode range padded so in-place edits
 // (UpdateHeightFieldRegion) can raise or lower past the initial min/max without a full rebuild.
 // Touches no world state, so any thread may call it.
+static_assert(kHeightFieldNoCollision == JPH::HeightFieldShapeConstants::cNoCollisionValue,
+              "a hole sample of a HeightFieldShapeDef is Jolt's no-collision value");
+
 JPH::ShapeRefC BuildHeightFieldShape(const HeightFieldShapeDef& d)
 {
     if (d.Samples.empty() || d.SampleCount == 0)
@@ -1123,7 +1127,7 @@ BodyHandle JoltPhysicsBackend::CreateBody(const BodySettings& settings)
     bcs.mAngularDamping = static_cast<float>(settings.angularDamping);
     bcs.mGravityFactor = static_cast<float>(settings.gravityScale);
     bcs.mFriction = static_cast<float>(std::max(0.0f, settings.friction));
-    bcs.mRestitution = static_cast<float>(std::clamp(settings.restitution, 0.0f, 1.0f));
+    bcs.mRestitution = static_cast<float>(Math::Clamp01(settings.restitution));
     bcs.mUserData = static_cast<uint64_t>(settings.userData);
     bcs.mLinearVelocity = JPH::Vec3(settings.linearVelocity.x, settings.linearVelocity.y, settings.linearVelocity.z);
     bcs.mAngularVelocity = JPH::Vec3(settings.angularVelocity.x, settings.angularVelocity.y, settings.angularVelocity.z);

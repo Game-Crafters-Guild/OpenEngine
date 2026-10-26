@@ -536,10 +536,12 @@ TEST(DropdownTests, UnannotatedOptionsCarryNoIconSlot)
     dropdown.SetOptionsFromString("One,Two");
 
     EXPECT_EQ(ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-icon"), nullptr);
+    EXPECT_EQ(ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-picture"), nullptr);
     dropdown.OpenMenuUi();
     for (const auto& row : dropdown.GetItemsContainer()->GetChildren())
     {
         EXPECT_EQ(ChildWithClass(*row, "dropdown-item-icon"), nullptr);
+        EXPECT_FALSE(row->HasClass("dropdown-item-picture"));
         // Without an icon the row keeps its own text, so it stays the Yoga
         // text-measure leaf it has always been.
         EXPECT_FALSE(dynamic_cast<Label*>(row.get())->GetText().empty());
@@ -638,6 +640,77 @@ TEST(DropdownTests, EnumEntryIconClassReachesTheDropdown)
     EXPECT_EQ(selected, Mode::Two);
     EXPECT_EQ(dropdown->GetHeaderLabel()->GetText(), "Two");
     EXPECT_TRUE(headerIcon->HasClass("test-icon-second"));
+}
+
+TEST(DropdownTests, PictureOptionsShowTheSelectedPictureInTheHeader)
+{
+    Dropdown dropdown;
+    dropdown.SetOptions({{"a", "Vivid", {}, {}, "test-picture-vivid", "Bright stars glow."},
+                         {"b", "Plain", {}, {}, "test-picture-plain", {}}});
+
+    // The closed header shows the selected picture in a slot of its own kind,
+    // never the icon slot, and names a class and nothing else. The popup rows
+    // come from the row layout asset (ShippedDropdownPictureRowTests).
+    UIElement* headerPicture = ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-picture");
+    ASSERT_NE(headerPicture, nullptr);
+    EXPECT_EQ(ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-icon"), nullptr);
+    EXPECT_TRUE(headerPicture->HasClass("test-picture-vivid"));
+    EXPECT_FALSE(headerPicture->Overrides().Get(Style::BackgroundImage).has_value());
+    EXPECT_TRUE(dropdown.GetItemsContainer()->HasClass("fit-content"));
+
+    dropdown.SetSelectedIndex(1);
+    EXPECT_FALSE(headerPicture->HasClass("test-picture-vivid"));
+    EXPECT_TRUE(headerPicture->HasClass("test-picture-plain"));
+    EXPECT_EQ(dropdown.GetHeaderLabel()->GetText(), "Plain");
+}
+
+TEST(DropdownTests, ChangingFromIconsToPicturesReplacesTheHeaderSlot)
+{
+    Dropdown dropdown;
+    dropdown.SetOptions({{"a", "First", {}, "test-icon-first"}});
+    ASSERT_NE(ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-icon"), nullptr);
+
+    // Pictures take the leading slot when both are declared: one slot per row.
+    dropdown.SetOptions({{"a", "First", {}, "test-icon-first", "test-picture-first"}});
+    EXPECT_EQ(ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-icon"), nullptr);
+    UIElement* headerPicture = ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-picture");
+    ASSERT_NE(headerPicture, nullptr);
+    EXPECT_TRUE(headerPicture->HasClass("test-picture-first"));
+    EXPECT_FALSE(headerPicture->HasClass("test-icon-first"));
+
+    dropdown.SetOptions({{"a", "First"}});
+    EXPECT_EQ(ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-picture"), nullptr);
+    EXPECT_EQ(dropdown.GetHeaderContainer()->GetChildren().size(), 2u) << "a text list keeps its label and chevron only";
+}
+
+TEST(DropdownTests, NoSelectionTextNamesTheStateWithoutAnEntry)
+{
+    // A preset list whose values match no preset reads "Custom" in its field, and
+    // the list still offers only the presets: the state is not an entry.
+    Dropdown dropdown;
+    dropdown.SetOptions({{"vivid", "Vivid", {}, {}, "test-picture-vivid"},
+                         {"physical", "Physical", {}, {}, "test-picture-physical"}});
+    dropdown.SetNoSelectionText("Custom");
+    int changes = 0;
+    dropdown.SetOnValueChanged([&changes](const std::string&) { ++changes; });
+
+    dropdown.SetSelectedIndexWithoutNotify(-1);
+    EXPECT_EQ(dropdown.GetHeaderLabel()->GetText(), "Custom");
+    EXPECT_EQ(ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-picture"), nullptr)
+        << "no option is selected, so there is no picture to show";
+    dropdown.OpenMenuUi();
+    const auto& rows = dropdown.GetItemsContainer()->GetChildren();
+    ASSERT_EQ(rows.size(), 2u);
+    for (const auto& row : rows)
+        EXPECT_FALSE(row->HasClass("selected"));
+
+    // Picking a preset from the Custom state is a change, and shows its picture.
+    dropdown.SetSelectedIndex(0);
+    EXPECT_EQ(changes, 1);
+    EXPECT_EQ(dropdown.GetHeaderLabel()->GetText(), "Vivid");
+    UIElement* headerPicture = ChildWithClass(*dropdown.GetHeaderContainer(), "dropdown-header-picture");
+    ASSERT_NE(headerPicture, nullptr);
+    EXPECT_TRUE(headerPicture->HasClass("test-picture-vivid"));
 }
 
 // An inspector row that re-labels its options when the asset it shows changes

@@ -94,6 +94,7 @@ struct TerrainParamsEntry
     float GrassRootFadeEnd;
     uint GrassControlBindless;
     uint ColorMapBindless;
+    float GrassGroundTintHeight;
 };
 
 struct GrassBladeInstance

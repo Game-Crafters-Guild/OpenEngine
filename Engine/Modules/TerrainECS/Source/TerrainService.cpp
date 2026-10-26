@@ -1,15 +1,17 @@
 #include "TerrainECS/TerrainService.h"
-#include "TerrainCollisionReadiness.h"
 
 #include "CBTTerrain/CBTPlanetShading.h" // SampleSphereSculptByDir (brush cursor sculpt sample)
 #include "CBTTerrain/SphereSculptSerialization.h" // .tsculpt blob codec (persistence)
+#include "Mathematics/Interpolation.h"
 #include "PhysicsECS/HeightFieldDataProvider.h"
+#include "Physics/PhysicsShapes.h"
 #include "Terrain/CDLODSelection.h"
 #include "TerrainECS/RawHeightmap.h"
 #include "TerrainECS/TerrainSizingPlan.h"
 #include "TerrainECS/TerrainHeightPages.h"
 #include "TerrainECS/HeightPageStoreLoader.h"
 #include "Components/Terrain/Terrain.h"
+#include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "Assets/AssetManager.h"
 #include "Assets/BinaryAsset.h"
@@ -197,6 +199,48 @@ UpsampleTap ComputeUpsampleTap(uint32 dstIndex, uint32 srcDim, uint32 dstDim)
     const uint32 hi = std::min(lo + 1u, srcDim - 1u);
     return {lo, hi, pos - static_cast<float32>(lo)};
 }
+// Reads finest page (pageX, pageZ)'s body samples (SurfaceHeightQuery::FillFinestPage) into `out`,
+// kFinestPageGridSamples squared, the samples past the field's last sample holes: no ground past the
+// edge. False, `out` unspecified, when the page is not on the CPU at level 0.
+bool ReadPageColliderSamples(const SurfaceHeightQuery& query, uint32 pageX, uint32 pageZ, std::span<float32> out)
+{
+    if (!query.FillFinestPage(pageX, pageZ, out))
+        return false;
+    const uint64 firstX = static_cast<uint64>(pageX) * PageStreaming::kPageOwnedSamples;
+    const uint64 firstZ = static_cast<uint64>(pageZ) * PageStreaming::kPageOwnedSamples;
+    const uint64 insideX = std::min<uint64>(kFinestPageGridSamples, query.LatticeSamplesX() - firstX);
+    const uint64 insideZ = std::min<uint64>(kFinestPageGridSamples, query.LatticeSamplesZ() - firstZ);
+    for (uint64 z = 0; z < kFinestPageGridSamples; ++z)
+        for (uint64 x = z < insideZ ? insideX : 0u; x < kFinestPageGridSamples; ++x)
+            out[z * kFinestPageGridSamples + x] = Physics::kHeightFieldNoCollision;
+    return true;
+}
+
+// True when an overlay edit over level-0 samples `rect` (inclusive) touches a sample of finest page
+// (pageX, pageZ)'s body: lattice samples 128 pageX to 128 pageX + 128 on X, the same on Z.
+bool OverlayRectReachesPage(const PageStreaming::PageSampleRect& rect, uint32 pageX, uint32 pageZ)
+{
+    const uint64 firstX = static_cast<uint64>(pageX) * PageStreaming::kPageOwnedSamples;
+    const uint64 firstZ = static_cast<uint64>(pageZ) * PageStreaming::kPageOwnedSamples;
+    return rect.MaxX >= firstX && rect.MinX <= firstX + PageStreaming::kPageOwnedSamples && rect.MaxZ >= firstZ &&
+           rect.MinZ <= firstZ + PageStreaming::kPageOwnedSamples;
+}
+
+// The bounds of the samples where two page body grids (kFinestPageGridSamples squared) differ; empty
+// when they are equal.
+DirtyRegionLog::Region DifferingSamples(std::span<const float32> before, std::span<const float32> after)
+{
+    constexpr int32 kGrid = static_cast<int32>(kFinestPageGridSamples);
+    DirtyRegionLog::Region region;
+    for (int32 z = 0; z < kGrid; ++z)
+        for (int32 x = 0; x < kGrid; ++x)
+        {
+            const std::size_t index = static_cast<std::size_t>(z) * kGrid + x;
+            if (before[index] != after[index])
+                region.Union(DirtyRegionLog::Region{x, z, x + 1, z + 1});
+        }
+    return region;
+}
 } // namespace
 
 void UpsampleHeightfieldBilinear(const float32* src, uint32 srcDim,
@@ -327,6 +371,74 @@ JobSystem::JobChannel& TerrainService::BakeStoreChannel(JobSystem::WorkStealingT
     return *m_BakeStoreChannel;
 }
 
+SurfaceHeightQuery TerrainService::SurfaceQuery(const Components::Terrain& terrain,
+                                                const Components::WorldTransform& transform)
+{
+    const float32 originY = transform.matrix[13];
+    if (const TiledTerrainData* tiled =
+            GetTiledTerrainData(TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration}))
+    {
+        if (m_HeightPages)
+        {
+            SurfaceHeightQuery paged = m_HeightPages->SurfaceQuery(
+                TerrainHandle{tiled->GlobalGpuHandleIndex, tiled->GlobalGpuHandleGeneration});
+            if (paged.IsValid())
+                return paged;
+        }
+        // No page source yet (a height store still cooking, or before its first request): the
+        // footprint on the tile lattice, every sample unsampled.
+        const TiledRenderExtent extent = ComputeTiledRenderExtent(tiled->Config);
+        if (extent.UnifiedWidth < 2u || extent.UnifiedHeight < 2u)
+            return {};
+        PageRequestTerrain shape;
+        shape.OriginX = tiled->WorldOriginX;
+        shape.OriginZ = tiled->WorldOriginZ;
+        shape.Level0TexelX = extent.WorldSizeX / static_cast<float32>(extent.UnifiedWidth - 1u);
+        shape.Level0TexelZ = extent.WorldSizeZ / static_cast<float32>(extent.UnifiedHeight - 1u);
+        shape.SamplesX = extent.UnifiedWidth;
+        shape.SamplesZ = extent.UnifiedHeight;
+        shape.MinHeight = std::min(originY, originY + terrain.HeightScale);
+        shape.MaxHeight = std::max(originY, originY + terrain.HeightScale);
+        return SurfaceHeightQuery(shape, originY, terrain.HeightScale);
+    }
+    const TerrainHandle handle{terrain.TerrainDataHandle, terrain.TerrainDataGeneration};
+    const TerrainData* data = GetTerrainData(handle);
+    // An allocated-but-empty heightfield is not a surface: sampling it would report the origin
+    // altitude everywhere.
+    if (!data || data->Heightfield.GetWidth() < 2u || data->Heightfield.GetHeight() < 2u)
+        return {};
+    // The terrain's transform is a translation for this purpose: the footprint is centered on it.
+    PageRequestTerrain shape;
+    shape.OriginX = transform.matrix[12] - terrain.SizeX * 0.5f;
+    shape.OriginZ = transform.matrix[14] - terrain.SizeZ * 0.5f;
+    shape.Level0TexelX = terrain.SizeX / static_cast<float32>(data->Heightfield.GetWidth() - 1u);
+    shape.Level0TexelZ = terrain.SizeZ / static_cast<float32>(data->Heightfield.GetHeight() - 1u);
+    shape.SamplesX = data->Heightfield.GetWidth();
+    shape.SamplesZ = data->Heightfield.GetHeight();
+    shape.MinHeight = std::min(originY, originY + terrain.HeightScale);
+    shape.MaxHeight = std::max(originY, originY + terrain.HeightScale);
+    return SurfaceHeightQuery(*data, handle, shape, originY, terrain.HeightScale);
+}
+
+bool TerrainService::FetchFinestHeightPage(const Components::Terrain& terrain, const Mathematics::Vector3& worldPoint)
+{
+    const TiledTerrainData* tiled =
+        GetTiledTerrainData(TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
+    if (!tiled || !m_HeightPages)
+        return false;
+    return m_HeightPages->FetchFinestPage(TerrainHandle{tiled->GlobalGpuHandleIndex, tiled->GlobalGpuHandleGeneration},
+                                          worldPoint);
+}
+
+std::span<const PageStreaming::PageAddress> TerrainService::FinestWindowPages(const Components::Terrain& terrain)
+{
+    const TiledTerrainData* tiled =
+        GetTiledTerrainData(TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
+    if (!tiled || !m_HeightPages)
+        return {};
+    return m_HeightPages->CpuWindowPages(TerrainHandle{tiled->GlobalGpuHandleIndex, tiled->GlobalGpuHandleGeneration});
+}
+
 TerrainHeightPages& TerrainService::GetHeightPages()
 {
     if (!m_HeightPages)
@@ -370,15 +482,10 @@ void TerrainService::Initialize()
     // (test) construction leaves the lane inactive.
     s_Instance->InstallAssetReloadInvalidators();
 
-    // Report terrain whose collider is still to be provisioned, so a consumer
-    // asking whether heightfield collision is current waits for it.
-    PhysicsECS::AddPendingHeightFieldSource(&FindPendingTerrainCollision);
-
-    // Register as the heightfield data provider for PhysicsInitSystem. The
-    // handle is either a single-terrain slot index or a per-tile physics handle
-    // (kTilePhysicsHandleBit set); both resolve to a heightfield + version +
-    // dirty-region log, so the region-scoped in-place collider path is
-    // identical for single terrains and tiles.
+    // Register as the heightfield data provider for PhysicsInitSystem. The handle is a
+    // single-terrain slot index, a page body handle (kPagePhysicsHandleBit) or a planet-face
+    // handle (kPlanetFacePhysicsHandleBit); each resolves to samples + version + dirty-region log,
+    // so the region-scoped in-place collider path is the same for all three.
     PhysicsECS::SetHeightFieldDataProvider([](uint32 handle, uint32 generation, uint64 sinceVersion) -> PhysicsECS::HeightFieldData
     {
         auto* svc = TerrainService::TryGet();
@@ -386,21 +493,20 @@ void TerrainService::Initialize()
             return {};
 
         // Resolve the raw sample grid + version + dirty log for whichever addressing
-        // scheme the handle carries: a per-tile heightfield, a per-face planet collider
-        // buffer, or a single-terrain heightfield. All three feed the same region tail.
+        // scheme the handle carries: a per-page collider buffer, a per-face planet collider
+        // buffer, or a single-terrain heightfield. All feed the same region tail.
         const float32* samples = nullptr;
         uint32 sampleCount = 0;
         uint64 version = 0;
         const DirtyRegionLog* dirtyLog = nullptr;
-        if (handle & TerrainService::kTilePhysicsHandleBit)
+        if (handle & TerrainService::kPagePhysicsHandleBit)
         {
-            if (TerrainTileData* tile = svc->ResolveTilePhysicsTile(handle, generation);
-                tile && !tile->Heightfield.IsEmpty())
+            if (const auto* page = svc->ResolvePageCollider(handle, generation))
             {
-                samples = tile->Heightfield.GetRawSamples();
-                sampleCount = std::min(tile->Heightfield.GetWidth(), tile->Heightfield.GetHeight());
-                version = tile->HeightfieldVersion;
-                dirtyLog = &tile->HeightfieldDirtyLog;
+                samples = page->Samples.data();
+                sampleCount = kFinestPageGridSamples;
+                version = page->Version;
+                dirtyLog = &page->DirtyLog;
             }
         }
         else if (handle & TerrainService::kPlanetFacePhysicsHandleBit)
@@ -456,7 +562,6 @@ void TerrainService::Initialize()
 
 void TerrainService::Shutdown()
 {
-    PhysicsECS::RemovePendingHeightFieldSource(&FindPendingTerrainCollision);
     PhysicsECS::SetHeightFieldDataProvider(nullptr);
     s_Instance.reset();
     ++s_Generation;
@@ -835,38 +940,6 @@ TiledRenderExtent ComputeTiledRenderExtent(const TiledTerrainConfig& config)
     return e;
 }
 
-bool SampleTiledHeightNormalized(const TiledTerrainData& tiled,
-                                 float32 worldX, float32 worldZ, float32& outHeight)
-{
-    const float32 tileWorld = tiled.Config.TileWorldSize;
-    if (tileWorld <= 0.0f)
-        return false;
-
-    // World XZ -> tile grid index (floor). Reject points outside the tile grid.
-    const float32 relX = worldX - tiled.WorldOriginX;
-    const float32 relZ = worldZ - tiled.WorldOriginZ;
-    if (relX < 0.0f || relZ < 0.0f)
-        return false;
-    const int32 tileX = static_cast<int32>(std::floor(relX / tileWorld));
-    const int32 tileZ = static_cast<int32>(std::floor(relZ / tileWorld));
-    if (tileX >= static_cast<int32>(tiled.Config.TilesPerAxisX) ||
-        tileZ >= static_cast<int32>(tiled.Config.TilesPerAxisZ))
-        return false;
-
-    auto it = tiled.Tiles.find(TileCoord{tileX, tileZ});
-    if (it == tiled.Tiles.end() || !it->second || it->second->LodState == TileLodState::Empty)
-        return false;
-    const TerrainTileData& tile = *it->second;
-    if (tile.Heightfield.IsEmpty())
-        return false;
-
-    // Tile-local UV in [0,1]; the tile's heightfield spans exactly its world area.
-    const float32 u = std::clamp((worldX - tile.WorldOriginX) / tileWorld, 0.0f, 1.0f);
-    const float32 v = std::clamp((worldZ - tile.WorldOriginZ) / tileWorld, 0.0f, 1.0f);
-    outHeight = tile.Heightfield.SampleBilinear(u, v);
-    return true;
-}
-
 void FillHeightfieldBaseRegion(Terrain::HeightfieldData& heightfield,
                                Components::TerrainBaseSource source,
                                const Terrain::HeightfieldData* heightmap,
@@ -961,12 +1034,12 @@ void FillTiledBaseRegion(Terrain::HeightfieldData& field, const TiledTerrainConf
             for (int32 z = minZ; z <= maxZ; ++z)
             {
                 const float32 worldZ = fieldOriginZ + static_cast<float32>(z) * spacingZ;
-                const float32 v = std::clamp((worldZ - terrainOriginZ) / config.WorldSizeZ, 0.0f, 1.0f);
+                const float32 v = Math::Clamp01((worldZ - terrainOriginZ) / config.WorldSizeZ);
                 for (int32 x = minX; x <= maxX; ++x)
                 {
                     const float32 worldX = fieldOriginX + static_cast<float32>(x) * spacingX;
                     const float32 u =
-                        std::clamp((worldX - terrainOriginX) / config.WorldSizeX, 0.0f, 1.0f);
+                        Math::Clamp01((worldX - terrainOriginX) / config.WorldSizeX);
                     field.SetSample(static_cast<uint32>(x), static_cast<uint32>(z),
                                     heightmap.SampleBilinear(u, v));
                 }
@@ -1264,8 +1337,7 @@ void TerrainService::DestroyTiledTerrain(TiledTerrainHandle handle)
     if (!slot.Active || slot.Generation != handle.Generation)
         return;
 
-    // Destroy the global GPU TerrainData slot (holds the global quadtree) before
-    // freeing the tiled data. Tiles no longer own per-tile GPU slots — the whole
+    // Destroy the global GPU TerrainData slot before freeing the tiled data. Tiles no longer own per-tile GPU slots — the whole
     // terrain renders through one unified texture set on the render feature.
     if (slot.Data && (slot.Data->GlobalGpuHandleIndex != 0 || slot.Data->GlobalGpuHandleGeneration != 0))
     {
@@ -1279,20 +1351,6 @@ void TerrainService::DestroyTiledTerrain(TiledTerrainHandle handle)
                 gpuSlot.Data.reset();
                 m_FreeList.push_back(gpuH.Index);
             }
-        }
-    }
-
-    // Release any tile-physics slots addressing this terrain. The collider
-    // entities are destroyed elsewhere (TerrainPhysicsSystem sweep or snapshot
-    // restore); without this, their slots would leak once the terrain is gone.
-    for (uint32 i = 0; i < m_TilePhysicsSlots.size(); ++i)
-    {
-        auto& phys = m_TilePhysicsSlots[i];
-        if (phys.Active && phys.Tiled == handle)
-        {
-            phys.Active = false;
-            ++phys.Generation; // stale handles resolving here now fail
-            m_TilePhysicsFreeList.push_back(i);
         }
     }
 
@@ -1314,99 +1372,99 @@ TiledTerrainData* TerrainService::GetTiledTerrainData(TiledTerrainHandle handle)
     return slot.Data.get();
 }
 
-TerrainService::TilePhysicsHandle
-TerrainService::AcquireTilePhysicsHandle(TiledTerrainHandle tiled, TileCoord coord)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
+// ---- Per-page collider registry (design page-streaming D3) ----
 
-    uint32 index;
-    if (!m_TilePhysicsFreeList.empty())
+TerrainService::PagePhysicsHandle TerrainService::AcquirePagePhysicsHandle(const SurfaceHeightQuery& query,
+                                                                           uint32 pageX, uint32 pageZ)
+{
+    // Grid sample i of page p is lattice sample p x kPageOwnedSamples + i. A page whose first
+    // sample is the field's last owns no cell.
+    const uint64 firstX = static_cast<uint64>(pageX) * PageStreaming::kPageOwnedSamples;
+    const uint64 firstZ = static_cast<uint64>(pageZ) * PageStreaming::kPageOwnedSamples;
+    if (firstX + 1u >= query.LatticeSamplesX() || firstZ + 1u >= query.LatticeSamplesZ())
+        return {};
+    PageColliderData data;
+    data.Samples.resize(static_cast<std::size_t>(kFinestPageGridSamples) * kFinestPageGridSamples);
+    if (!ReadPageColliderSamples(query, pageX, pageZ, data.Samples))
+        return {};
+    data.Version = 1;
+    constexpr int32 kGrid = static_cast<int32>(kFinestPageGridSamples);
+    data.DirtyLog.Append(data.Version, DirtyRegionLog::Region{0, 0, kGrid, kGrid});
+    data.ReadAt = query.PageStamp();
+    data.OverlayVersion = query.Edits().OverlayVersion;
+
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    const GenerationalVector::Handle slot = m_PagePhysicsSlots.Create(std::move(data));
+    assert(slot.Index() < kPagePhysicsHandleBit && "page physics slots overflow the handle's index bits");
+    return PagePhysicsHandle{slot.Index() | kPagePhysicsHandleBit, slot.Generation()};
+}
+
+void TerrainService::RefreshPagePhysicsHandle(const SurfaceHeightQuery& query, uint32 pageX, uint32 pageZ,
+                                              PagePhysicsHandle handle)
+{
+    if ((handle.Index & kPagePhysicsHandleBit) == 0)
+        return;
+    PageColliderData* data = nullptr;
     {
-        index = m_TilePhysicsFreeList.back();
-        m_TilePhysicsFreeList.pop_back();
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        data = m_PagePhysicsSlots.Get(GenerationalVector::Handle(handle.Index & ~kPagePhysicsHandleBit, handle.Generation));
     }
-    else
+    if (!data)
+        return;
+    const SurfaceHeightPageStamp stamp = query.PageStamp();
+    const SurfaceHeightEdits& edits = query.Edits();
+    const bool pagesMoved = stamp.Epoch != data->ReadAt.Epoch || stamp.Change != data->ReadAt.Change;
+    const bool overlayMoved = edits.OverlayVersion != data->OverlayVersion;
+    if (!pagesMoved && !overlayMoved)
+        return;
+
+    bool reread = pagesMoved && query.FinestPageChangedSince(data->ReadAt, pageX, pageZ);
+    if (overlayMoved && !reread)
+        reread = edits.OverlayChangedSince != data->OverlayVersion ||
+                 OverlayRectReachesPage(edits.OverlayChanged, pageX, pageZ);
+    DirtyRegionLog::Region changed;
+    if (reread)
     {
-        index = static_cast<uint32>(m_TilePhysicsSlots.size());
-        m_TilePhysicsSlots.emplace_back();
+        m_PageColliderScratch.resize(data->Samples.size());
+        if (!ReadPageColliderSamples(query, pageX, pageZ, m_PageColliderScratch))
+            return;
+        changed = DifferingSamples(data->Samples, m_PageColliderScratch);
     }
 
-    auto& slot = m_TilePhysicsSlots[index];
-    slot.Tiled = tiled;
-    slot.Coord = coord;
-    slot.Active = true;
-    ++slot.Generation; // distinct from any prior handle into this slot
-
-    return TilePhysicsHandle{index | kTilePhysicsHandleBit, slot.Generation};
-}
-
-void TerrainService::ReleaseTilePhysicsHandle(uint32 handleIndex, uint32 generation)
-{
-    if ((handleIndex & kTilePhysicsHandleBit) == 0)
-        return;
-    const uint32 index = handleIndex & ~kTilePhysicsHandleBit;
-
     std::lock_guard<std::mutex> lock(m_Mutex);
-    if (index >= m_TilePhysicsSlots.size())
-        return;
-    auto& slot = m_TilePhysicsSlots[index];
-    if (!slot.Active)
-        return;
-    if (slot.Generation != generation)
+    if (!changed.IsEmpty())
     {
-        // A stale handle: the slot was already released and re-acquired by a
-        // different tile. Releasing on the index alone would silently free the
-        // current owner (the same silent-unbind class the material binder
-        // closed). Refuse and make it loud.
-        Logger::Log::Warning(
-            "TerrainService::ReleaseTilePhysicsHandle stale handle ignored "
-            "(index={}, expected gen={}, got gen={})",
-            index, slot.Generation, generation);
-        return;
+        std::copy(m_PageColliderScratch.begin(), m_PageColliderScratch.end(), data->Samples.begin());
+        ++data->Version;
+        data->DirtyLog.Append(data->Version, changed);
     }
-    slot.Active = false;
-    ++slot.Generation; // stale handles resolving against this slot now fail
-    m_TilePhysicsFreeList.push_back(index);
+    data->ReadAt = stamp;
+    data->OverlayVersion = edits.OverlayVersion;
 }
 
-void TerrainService::ReleaseAllTilePhysicsHandles()
+void TerrainService::ReleasePagePhysicsHandle(uint32 handleIndex, uint32 generation)
 {
+    if ((handleIndex & kPagePhysicsHandleBit) == 0)
+        return;
+    const GenerationalVector::Handle slot(handleIndex & ~kPagePhysicsHandleBit, generation);
     std::lock_guard<std::mutex> lock(m_Mutex);
-    m_TilePhysicsSlots.clear();
-    m_TilePhysicsFreeList.clear();
+    if (m_PagePhysicsSlots.IsValid(slot))
+        m_PagePhysicsSlots.Destroy(slot);
 }
 
-uint32 TerrainService::GetTilePhysicsSlotCountForTests() const
+void TerrainService::ReleaseAllPagePhysicsHandles()
 {
     std::lock_guard<std::mutex> lock(m_Mutex);
-    return static_cast<uint32>(m_TilePhysicsSlots.size());
+    m_PagePhysicsSlots.Clear();
 }
 
-TerrainTileData* TerrainService::ResolveTilePhysicsTile(uint32 handleIndex, uint32 generation)
+const TerrainService::PageColliderData* TerrainService::ResolvePageCollider(uint32 handleIndex,
+                                                                            uint32 generation) const
 {
-    if ((handleIndex & kTilePhysicsHandleBit) == 0)
+    if ((handleIndex & kPagePhysicsHandleBit) == 0)
         return nullptr;
-    const uint32 index = handleIndex & ~kTilePhysicsHandleBit;
-
     std::lock_guard<std::mutex> lock(m_Mutex);
-    if (index >= m_TilePhysicsSlots.size())
-        return nullptr;
-    const auto& slot = m_TilePhysicsSlots[index];
-    if (!slot.Active || slot.Generation != generation)
-        return nullptr;
-
-    // Resolve the live tiled terrain + tile directly (already under the lock).
-    if (slot.Tiled.Index >= m_TiledSlots.size())
-        return nullptr;
-    auto& tiledSlot = m_TiledSlots[slot.Tiled.Index];
-    if (!tiledSlot.Active || tiledSlot.Generation != slot.Tiled.Generation || !tiledSlot.Data)
-        return nullptr;
-
-    auto& tiles = tiledSlot.Data->Tiles;
-    auto it = tiles.find(slot.Coord);
-    if (it == tiles.end() || !it->second)
-        return nullptr;
-    return it->second.get();
+    return m_PagePhysicsSlots.Get(GenerationalVector::Handle(handleIndex & ~kPagePhysicsHandleBit, generation));
 }
 
 // ---- Per-face planet collider registry (planet-collider slice) ----
@@ -2123,8 +2181,8 @@ TerrainTileData* TerrainService::LoadTile(TiledTerrainHandle handle, TileCoord c
     auto tile = std::make_unique<TerrainTileData>();
     tile->Coord = coord;
     tile->Config = tiled.Config.TileConfig;
-    tile->WorldOriginX = tiled.WorldOriginX + coord.X * tiled.Config.TileWorldSize;
-    tile->WorldOriginZ = tiled.WorldOriginZ + coord.Z * tiled.Config.TileWorldSize;
+    tile->WorldOriginX = TileWorldOrigin(tiled.WorldOriginX, coord.X, tiled.Config.TileWorldSize);
+    tile->WorldOriginZ = TileWorldOrigin(tiled.WorldOriginZ, coord.Z, tiled.Config.TileWorldSize);
 
     const float32 tileWorld = tiled.Config.TileWorldSize;
     tile->Heightfield.Resize(tile->Config.HeightmapWidth, tile->Config.HeightmapHeight, 0.0f);
@@ -2148,9 +2206,7 @@ TerrainTileData* TerrainService::LoadTile(TiledTerrainHandle handle, TileCoord c
     auto* ptr = tile.get();
     tiled.Tiles[coord] = std::move(tile);
 
-    // Mark the global quadtree for rebuild.
     ++tiled.Revision;
-    tiled.QuadtreeDirty = true;
 
     return ptr;
 }
@@ -2166,12 +2222,7 @@ void TerrainService::UnloadTile(TiledTerrainHandle handle, TileCoord coord)
         return;
 
     if (slot.Data->Tiles.erase(coord) > 0)
-    {
         ++slot.Data->Revision;
-        // Only the departed tile's nodes change: the next sync clears them instead
-        // of rescanning every resident tile (FinalizeGlobalQuadtreeUpdates).
-        slot.Data->DirtyQuadtreeTiles.push_back(coord);
-    }
 }
 
 bool TerrainService::IsTileLoaded(TiledTerrainHandle handle, TileCoord coord) const
@@ -2185,69 +2236,6 @@ bool TerrainService::IsTileLoaded(TiledTerrainHandle handle, TileCoord coord) co
         return false;
 
     return slot.Data->Tiles.count(coord) > 0;
-}
-
-void TerrainService::RebuildGlobalQuadtree(TiledTerrainHandle handle)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-
-    if (handle.Index >= m_TiledSlots.size())
-        return;
-    auto& slot = m_TiledSlots[handle.Index];
-    if (!slot.Active || slot.Generation != handle.Generation)
-        return;
-
-    auto& tiled = *slot.Data;
-    const auto& cfg = tiled.Config;
-
-    // Each tile's finest level has tileFinestNodes nodes per axis.
-    const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
-    const uint32 maxTilesPerAxis = std::max(cfg.TilesPerAxisX, cfg.TilesPerAxisZ);
-
-    // Find globalLODLevels such that 2^(G-1) >= tileFinestNodes * maxTilesPerAxis.
-    const uint32 totalFinestNeeded = tileFinestNodes * maxTilesPerAxis;
-    uint32 globalLODLevels = 1;
-    while ((1u << (globalLODLevels - 1)) < totalFinestNeeded && globalLODLevels < Terrain::kMaxLODLevels)
-        ++globalLODLevels;
-
-    tiled.GlobalQuadtree.AllocateLevels(globalLODLevels);
-
-    // Populate finest-level nodes from each loaded tile's heightfield.
-    // Each finest-level node covers samplesPerNode heightfield samples.
-    const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
-    const uint32 samplesPerNodeZ = std::max(1u, (cfg.TileConfig.HeightmapHeight - 1) / tileFinestNodes);
-
-    for (auto& [coord, tilePtr] : tiled.Tiles)
-    {
-        const auto& hf = tilePtr->Heightfield;
-
-        for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-        {
-            for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-            {
-                const int32 startX = static_cast<int32>(nx * samplesPerNodeX);
-                const int32 startZ = static_cast<int32>(nz * samplesPerNodeZ);
-
-                float32 minH, maxH;
-                hf.GetMinMax(startX, startZ,
-                             static_cast<int32>(samplesPerNodeX + 1),
-                             static_cast<int32>(samplesPerNodeZ + 1),
-                             minH, maxH);
-
-                const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-                const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-                if (globalNodeX < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0) &&
-                    globalNodeZ < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0))
-                {
-                    tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ, minH, maxH);
-                }
-            }
-        }
-    }
-
-    tiled.GlobalQuadtree.BuildCoarseLevelsFromChildren();
-    tiled.QuadtreeDirty = false;
 }
 
 // ---- Async tile API (used by TileStreamingManager) ----
@@ -2278,8 +2266,8 @@ TerrainTileData* TerrainService::CreateEmptyTile(TiledTerrainHandle handle, Tile
     auto tile = std::make_unique<TerrainTileData>();
     tile->Coord = coord;
     tile->Config = tiled.Config.TileConfig;
-    tile->WorldOriginX = tiled.WorldOriginX + coord.X * tiled.Config.TileWorldSize;
-    tile->WorldOriginZ = tiled.WorldOriginZ + coord.Z * tiled.Config.TileWorldSize;
+    tile->WorldOriginX = TileWorldOrigin(tiled.WorldOriginX, coord.X, tiled.Config.TileWorldSize);
+    tile->WorldOriginZ = TileWorldOrigin(tiled.WorldOriginZ, coord.Z, tiled.Config.TileWorldSize);
     tile->LodState = TileLodState::Empty;
     tile->HeightfieldDirty = false; // No data yet
 
@@ -2371,221 +2359,6 @@ void TerrainService::SetTileMaps(TiledTerrainHandle handle, TileCoord coord,
     // HeightfieldVersion past this — a freshly-streamed tile skips the re-gen entirely.
     tile.NormalmapVersion = tile.HeightfieldVersion;
     ++slot.Data->Revision;
-}
-
-void TerrainService::PatchTileInGlobalQuadtree(TiledTerrainHandle handle, TileCoord coord)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-
-    if (handle.Index >= m_TiledSlots.size())
-        return;
-    auto& slot = m_TiledSlots[handle.Index];
-    if (!slot.Active || slot.Generation != handle.Generation)
-        return;
-
-    auto& tiled = *slot.Data;
-    const auto& cfg = tiled.Config;
-
-    auto tileIt = tiled.Tiles.find(coord);
-    if (tileIt == tiled.Tiles.end() || !tileIt->second)
-        return;
-
-    if (!tiled.GlobalQuadtree.IsBuilt())
-    {
-        // Quadtree not yet allocated — do a full rebuild instead.
-        // (This will be followed by FinalizeGlobalQuadtreeUpdates anyway.)
-        tiled.QuadtreeDirty = true;
-        return;
-    }
-
-    const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
-    const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
-    const uint32 samplesPerNodeZ = std::max(1u, (cfg.TileConfig.HeightmapHeight - 1) / tileFinestNodes);
-
-    const auto& hf = tileIt->second->Heightfield;
-
-    for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-    {
-        for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-        {
-            const int32 startX = static_cast<int32>(nx * samplesPerNodeX);
-            const int32 startZ = static_cast<int32>(nz * samplesPerNodeZ);
-
-            float32 nodeMinH, nodeMaxH;
-            hf.GetMinMax(startX, startZ,
-                         static_cast<int32>(samplesPerNodeX + 1),
-                         static_cast<int32>(samplesPerNodeZ + 1),
-                         nodeMinH, nodeMaxH);
-
-            const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-            const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-            if (globalNodeX < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0) &&
-                globalNodeZ < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0))
-            {
-                tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ, nodeMinH, nodeMaxH);
-            }
-        }
-    }
-}
-
-void TerrainService::PatchTileInGlobalQuadtreePrecomputed(
-    TiledTerrainHandle handle, TileCoord coord,
-    const NodeMinMax* nodes, uint32 nodesPerAxis)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-
-    if (handle.Index >= m_TiledSlots.size())
-        return;
-    auto& slot = m_TiledSlots[handle.Index];
-    if (!slot.Active || slot.Generation != handle.Generation)
-        return;
-
-    auto& tiled = *slot.Data;
-
-    if (!tiled.GlobalQuadtree.IsBuilt())
-    {
-        tiled.QuadtreeDirty = true;
-        return;
-    }
-
-    const uint32 tileFinestNodes = 1u << (tiled.Config.TileConfig.LODLevels - 1);
-    const uint32 actualNodes = std::min(nodesPerAxis, tileFinestNodes);
-
-    for (uint32 nz = 0; nz < actualNodes; ++nz)
-    {
-        for (uint32 nx = 0; nx < actualNodes; ++nx)
-        {
-            const auto& node = nodes[nz * nodesPerAxis + nx];
-            const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-            const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-            if (globalNodeX < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0) &&
-                globalNodeZ < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0))
-            {
-                tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ,
-                                                    node.MinH, node.MaxH);
-            }
-        }
-    }
-}
-
-void TerrainService::FinalizeGlobalQuadtreeUpdates(TiledTerrainHandle handle)
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-
-    if (handle.Index >= m_TiledSlots.size())
-        return;
-    auto& slot = m_TiledSlots[handle.Index];
-    if (!slot.Active || slot.Generation != handle.Generation)
-        return;
-
-    auto& tiled = *slot.Data;
-
-    if (tiled.QuadtreeDirty)
-    {
-        // Full rebuild needed (first allocation or structural change).
-        // Release lock and call the full rebuild which will re-acquire it.
-        // Actually, since RebuildGlobalQuadtree also takes the lock, we need
-        // to do the work inline here to avoid deadlock.
-        const auto& cfg = tiled.Config;
-        const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
-        const uint32 maxTilesPerAxis = std::max(cfg.TilesPerAxisX, cfg.TilesPerAxisZ);
-        const uint32 totalFinestNeeded = tileFinestNodes * maxTilesPerAxis;
-        uint32 globalLODLevels = 1;
-        while ((1u << (globalLODLevels - 1)) < totalFinestNeeded && globalLODLevels < Terrain::kMaxLODLevels)
-            ++globalLODLevels;
-
-        tiled.GlobalQuadtree.AllocateLevels(globalLODLevels);
-
-        const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
-        const uint32 samplesPerNodeZ = std::max(1u, (cfg.TileConfig.HeightmapHeight - 1) / tileFinestNodes);
-
-        for (auto& [coord, tilePtr] : tiled.Tiles)
-        {
-            if (!tilePtr || tilePtr->LodState == TileLodState::Empty)
-                continue;
-
-            const auto& hf = tilePtr->Heightfield;
-            for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-            {
-                for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-                {
-                    float32 nodeMinH, nodeMaxH;
-                    hf.GetMinMax(static_cast<int32>(nx * samplesPerNodeX),
-                                 static_cast<int32>(nz * samplesPerNodeZ),
-                                 static_cast<int32>(samplesPerNodeX + 1),
-                                 static_cast<int32>(samplesPerNodeZ + 1),
-                                 nodeMinH, nodeMaxH);
-
-                    const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-                    const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-                    if (globalNodeX < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0) &&
-                        globalNodeZ < tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0))
-                    {
-                        tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ, nodeMinH, nodeMaxH);
-                    }
-                }
-            }
-        }
-
-        tiled.QuadtreeDirty = false;
-        tiled.DirtyQuadtreeTiles.clear(); // full rebuild subsumes any pending patches
-    }
-    else if (!tiled.DirtyQuadtreeTiles.empty() && !tiled.GlobalQuadtree.IsBuilt())
-    {
-        // Edited tiles pending but no base quadtree to patch yet (edit before the
-        // initial build): fall back to a full rebuild on the next sync.
-        tiled.QuadtreeDirty = true;
-    }
-    else if (!tiled.DirtyQuadtreeTiles.empty())
-    {
-        // Incremental patch: only the listed tiles' finest-level nodes are written,
-        // each to the value the full-rebuild loop above writes: the heightfield scan
-        // for a resident, non-Empty tile, {0,0} (the AllocateLevels value) for a
-        // tile that left or holds no data. Untouched tiles' nodes stay as they are,
-        // so neither an edit dab nor a tile departure rescans every resident tile.
-        const auto& cfg = tiled.Config;
-        const uint32 tileFinestNodes = 1u << (cfg.TileConfig.LODLevels - 1);
-        const uint32 samplesPerNodeX = std::max(1u, (cfg.TileConfig.HeightmapWidth - 1) / tileFinestNodes);
-        const uint32 samplesPerNodeZ = std::max(1u, (cfg.TileConfig.HeightmapHeight - 1) / tileFinestNodes);
-        const uint32 nodesPerAxis = tiled.GlobalQuadtree.GetNodesPerAxisAtLevel(0);
-
-        for (const TileCoord& coord : tiled.DirtyQuadtreeTiles)
-        {
-            auto tileIt = tiled.Tiles.find(coord);
-            const Terrain::HeightfieldData* hf =
-                (tileIt != tiled.Tiles.end() && tileIt->second &&
-                 tileIt->second->LodState != TileLodState::Empty)
-                    ? &tileIt->second->Heightfield
-                    : nullptr;
-
-            for (uint32 nz = 0; nz < tileFinestNodes; ++nz)
-            {
-                for (uint32 nx = 0; nx < tileFinestNodes; ++nx)
-                {
-                    float32 nodeMinH = 0.0f;
-                    float32 nodeMaxH = 0.0f;
-                    if (hf)
-                        hf->GetMinMax(static_cast<int32>(nx * samplesPerNodeX),
-                                      static_cast<int32>(nz * samplesPerNodeZ),
-                                      static_cast<int32>(samplesPerNodeX + 1),
-                                      static_cast<int32>(samplesPerNodeZ + 1),
-                                      nodeMinH, nodeMaxH);
-
-                    const uint32 globalNodeX = coord.X * tileFinestNodes + nx;
-                    const uint32 globalNodeZ = coord.Z * tileFinestNodes + nz;
-
-                    if (globalNodeX < nodesPerAxis && globalNodeZ < nodesPerAxis)
-                        tiled.GlobalQuadtree.SetNodeMinMax(0, globalNodeX, globalNodeZ, nodeMinH, nodeMaxH);
-                }
-            }
-        }
-        tiled.DirtyQuadtreeTiles.clear();
-    }
-
-    tiled.GlobalQuadtree.BuildCoarseLevelsFromChildren();
 }
 
 } // namespace GameEngine::TerrainECS

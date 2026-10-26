@@ -11,7 +11,7 @@
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/PageStoreReader.h"
 #include "Rendering/Core/Device.h"
-#include "Rendering/Core/HashUtils.h"
+#include "Types/Fnv1a.h"
 
 #include <bit>
 #include <cmath>
@@ -19,13 +19,9 @@
 namespace GameEngine::TerrainECS
 {
 
-namespace
-{
+using Hashing::HashCombine;
 
-using Rendering::HashUtils::HashCombine;
-
-// The generated lattice of a noise or flat tiled terrain: its tile grid and the tile fill's noise.
-PageStreaming::GeneratedHeightLattice MakeGeneratedLattice(const TiledTerrainData& tiled)
+PageStreaming::GeneratedHeightLattice MakeGeneratedHeightLattice(const TiledTerrainData& tiled)
 {
     PageStreaming::GeneratedHeightLattice lattice;
     lattice.Source = tiled.Config.Base.Source == Components::TerrainBaseSource::ProceduralNoise
@@ -41,7 +37,7 @@ PageStreaming::GeneratedHeightLattice MakeGeneratedLattice(const TiledTerrainDat
     return lattice;
 }
 
-uint64 GeneratedIdentity(const PageStreaming::GeneratedHeightLattice& lattice)
+uint64 GeneratedHeightIdentity(const PageStreaming::GeneratedHeightLattice& lattice)
 {
     uint64 hash = HashCombine(0x9E3779B97F4A7C15ull, static_cast<uint64>(lattice.Source));
     hash = HashCombine(hash, std::bit_cast<uint32>(lattice.TerrainOriginX));
@@ -52,8 +48,6 @@ uint64 GeneratedIdentity(const PageStreaming::GeneratedHeightLattice& lattice)
     return HashCombine(hash, lattice.TilesZ);
 }
 
-} // namespace
-
 void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::IDevice& device,
                                     TiledTerrainData& tiled, const TiledRenderExtent& extent,
                                     const TerrainHandle& renderTerrain, std::string_view name, float32 originY,
@@ -61,8 +55,6 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
                                     float32 targetPixelError, std::span<const Mathematics::Vector3> cameras,
                                     float32 focalScale)
 {
-    if (focalScale <= 0.0f)
-        return;
     const bool gpuReadsPages = !CBTTerrain::CBTDeviceRunsNarrowArm(
         device.PreferredShaderSource() == Rendering::ShaderSourceKind::Wgsl,
         device.GetCapabilities().supportsShaderInt64);
@@ -80,8 +72,8 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
     PageStreaming::GeneratedHeightLattice lattice;
     if (generated)
     {
-        lattice = MakeGeneratedLattice(tiled);
-        request.SourceIdentity = GeneratedIdentity(lattice);
+        lattice = MakeGeneratedHeightLattice(tiled);
+        request.SourceIdentity = GeneratedHeightIdentity(lattice);
         samplesX = lattice.TilesX * (lattice.TileSamples - 1u) + 1u;
         samplesZ = lattice.TilesZ * (lattice.TileSamples - 1u) + 1u;
     }
@@ -93,6 +85,16 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
             request.SourceIdentity = HashCombine(reinterpret_cast<uintptr_t>(store.get()), base.HeightmapContentVersion);
             samplesX = store->Layout().Header.SamplesX;
             samplesZ = store->Layout().Header.SamplesZ;
+        }
+        const std::string directoryRefusal =
+            DenseDirectoryRefusal(name.empty() ? std::string_view("A terrain") : name, samplesX, samplesZ);
+        if (!directoryRefusal.empty())
+        {
+            // It draws from its height texture, as a terrain without a store does.
+            pages.ReportRefusal(request.Terrain, directoryRefusal);
+            store = nullptr;
+            samplesX = 0;
+            samplesZ = 0;
         }
     }
 
@@ -107,13 +109,13 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
     const bool onLattice = samplesX == extent.UnifiedWidth && samplesZ == extent.UnifiedHeight;
     const std::string_view label = name.empty() ? std::string_view("A terrain") : name;
     const bool fitsLattice = samplesX > 1u && samplesZ > 1u && (!generated || onLattice);
-    std::string refusal = fitsLattice ? PageTableRefusal(label, samplesX, samplesZ, pages.Profile()) : std::string();
-    inputs.PageTableFits = fitsLattice && refusal.empty();
-    // The modifier system builds the overlay only for a terrain that would page but for its modifiers.
-    TerrainHeightSourceInputs unmodified = inputs;
-    unmodified.ModifiersPending = false;
+    std::string refusal;
+    inputs.PagesOnLattice = fitsLattice;
+    // The modifier system builds the overlay for every terrain with CPU pages: the CPU readers take
+    // it on every GPU arm, and the GPU pages take it where they are drawn.
+    const bool cpuPages = TerrainHeightHasCpuPages(inputs);
     const HeightPageOverlayAllowance allowance = PageOverlayAllowance(
-        TerrainHeightIsPaged(unmodified), samplesX, samplesZ, extent.UnifiedWidth, extent.UnifiedHeight, pages.Profile());
+        cpuPages, samplesX, samplesZ, extent.UnifiedWidth, extent.UnifiedHeight, pages.Profile());
     tiled.PageOverlayByteCap = allowance.ByteCap;
     tiled.PageOverlayOffGrid = allowance.OffGrid;
     if (!allowance.OffGrid)
@@ -122,12 +124,12 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
         refusal = OverlayRefusal(label, tiled.PageOverlayRefusedBytes, pages.Profile());
     else if (allowance.ByteCap != 0 && tiled.PageOverlayRefusedOffGrid)
         refusal = OverlayGridRefusal(label, samplesX, samplesZ, extent.UnifiedWidth, extent.UnifiedHeight);
-    if (!TerrainHeightIsPaged(inputs))
-    {
-        if (!refusal.empty() && gpuReadsPages)
-            pages.ReportRefusal(request.Terrain, refusal);
+    // The GPU draws the pages only with a view to choose their levels for.
+    request.GpuPages = TerrainHeightIsPaged(inputs) && focalScale > 0.0f;
+    if (!refusal.empty() && (gpuReadsPages || cpuPages))
+        pages.ReportRefusal(request.Terrain, refusal);
+    if (!cpuPages)
         return; // not requested this frame: its pages are forgotten at the next update
-    }
 
     if (pages.NeedsSource(request.Terrain, request.SourceIdentity))
     {
@@ -150,8 +152,12 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
     const float32 high = tiled.CachedGlobalMaxH * heightScale + originY;
     request.Shape.MinHeight = std::min(low, high);
     request.Shape.MaxHeight = std::max(low, high);
-    const PageLevelView view =
-        MakePageLevelView(kPageLevelReferenceRows, 2.0f * std::atan(1.0f / focalScale), targetPixelError);
+    request.OriginY = originY;
+    request.HeightScale = heightScale;
+    const PageLevelView view = request.GpuPages ? MakePageLevelView(kPageLevelReferenceRows,
+                                                                    2.0f * std::atan(1.0f / focalScale),
+                                                                    targetPixelError)
+                                                : PageLevelView{};
     pages.Request(request, cameras, view);
 }
 

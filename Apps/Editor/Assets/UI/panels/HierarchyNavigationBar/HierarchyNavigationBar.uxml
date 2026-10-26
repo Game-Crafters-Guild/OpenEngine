@@ -1,0 +1,3 @@
+<!-- HierarchyNavigationBar (Apps/Editor/Include/Editor/Hierarchy/HierarchyNavigationBar.h): the rows
+     glyph that leads the bar. The bar adds its item size slider after it. -->
+<UIElement class="hierarchy-navigation-bar-size-icon" />

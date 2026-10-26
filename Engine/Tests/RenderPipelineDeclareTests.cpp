@@ -120,6 +120,7 @@
 // EngineCore-backed hot-reload fixture (A1.4 S3 L7).
 #include "Core/Engine.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Scripting/ScriptsConfig.h"
 #include "Assets/AssetManager.h"
 #include "AssetCore/AssetEvents.h"
@@ -128,6 +129,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <optional>
 #include <chrono>
 #include <cmath>
@@ -188,6 +190,26 @@ TextureDesc DepthTargetDesc(uint32_t samples = 1)
     d.format = static_cast<uint32_t>(TextureFormat::D32_FLOAT);
     d.usage = static_cast<uint32_t>(TextureUsage::DepthStencil | TextureUsage::ShaderResource);
     return d;
+}
+
+// A multisampled view color the scene color resolve can sample.
+TextureDesc SampledMsaaColorDesc()
+{
+    TextureDesc d = ColorTargetDesc(4);
+    d.usage |= static_cast<uint32_t>(TextureUsage::ShaderResource);
+    return d;
+}
+
+// The pass that resolves what `writer` drew into `msaa` into `resolved` (MsaaColorResolvePass names it
+// after the writer), kInvalidId when there is none.
+RenderGraph::RGPassId ColorResolvePassOf(const RenderGraph::RGGraph& g, RenderGraph::RGPassId writer,
+                                         RenderGraph::RGResourceId msaa, RenderGraph::RGResourceId resolved)
+{
+    const std::string name = std::string(g.PassName(writer)) + ".ColorResolve";
+    for (RenderGraph::RGPassId p = 0; p < g.PassCount(); ++p)
+        if (name == g.PassName(p) && g.HasReadAccess(p, msaa) && g.HasWriteAccess(p, resolved))
+            return p;
+    return RenderGraph::kInvalidId;
 }
 
 // Records every DeclareForView invocation; optionally publishes/resolves
@@ -5752,7 +5774,7 @@ TEST(RenderPipelineDeclareTests, MsaaOnKeepsViewColorMultisampledAndWorldDeclare
         RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
         frame.BeginFrame(0);
 
-        RenderGraph::RGTexture color = frame.ImportPersistentTexture("MSAA.Color", ColorTargetDesc(4));
+        RenderGraph::RGTexture color = frame.ImportPersistentTexture("MSAA.Color", SampledMsaaColorDesc());
         RenderGraph::RGTexture depth = frame.ImportPersistentTexture("MSAA.Depth", DepthTargetDesc(4));
 
         rs.BeginWorldDrawFrame();
@@ -5779,8 +5801,10 @@ TEST(RenderPipelineDeclareTests, MsaaOnKeepsViewColorMultisampledAndWorldDeclare
             if (rec.Tex == color.Id && !rec.IsDepth)
                 worldColor = &rec;
         ASSERT_NE(worldColor, nullptr) << "world attaches the multisampled caller color";
-        EXPECT_EQ(worldColor->Resolve, sceneColor.Id)
-            << "the world declares AttachColorResolve into SceneColor";
+        EXPECT_EQ(worldColor->Resolve, RenderGraph::kInvalidId) << "no attachment resolve";
+        EXPECT_NE(ColorResolvePassOf(frame.Graph(), worldColor->Pass, color.Id, sceneColor.Id),
+                  RenderGraph::kInvalidId)
+            << "a resolve pass after the world resolves the color into SceneColor";
 
         const auto effIt = fr->Textures.find({viewId, "View.EffectiveColor"});
         ASSERT_NE(effIt, fr->Textures.end());
@@ -6393,13 +6417,13 @@ struct DeformationMotionLogLines
     DeformationMotionLogLines()
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         Sink = sink.get();
         auto lines = Lines;
         CallbackId = Sink->RegisterCallback(
             [lines](const Logger::LogMessage& msg)
             {
-                if (msg.Message.find("Deformation motion:") != Logger::String::npos)
+                if (msg.Message.find("Deformation motion:") != std::string::npos)
                     lines->emplace_back(msg.Message.c_str());
             });
         Logger::Log::AddSink(std::move(sink));
@@ -7077,6 +7101,117 @@ TEST(RenderPipelineDeclareTests, ExposureHistoryResourceMaterializesAndZeroInits
         EXPECT_EQ(f2.BufferSize, 16u);
         EXPECT_EQ(f2.ZeroInitPasses, 0u)
             << "reused pool buffer must NOT re-fill — it is cross-frame adaptation state";
+    }
+    f.Down();
+}
+
+// A "perFrameCopies" history is one buffer per frame in flight: each frame binds the next copy, and
+// that copy starts as the previous frame's contents through a carry on the compute queue, where the
+// pre-exposure snapshot writes the history. The pre-exposure snapshot of a frame then never writes the
+// buffer the previous frame's tonemap reads, so the render graph orders no wait between them. The
+// first frame has no previous contents and starts from zero.
+TEST(RenderPipelineDeclareTests, ExposureHistoryPerFrameCopiesRotateAndCarryThePreviousFrame)
+{
+    FxChainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        RenderPipelineBlueprint bp;
+        bp.pipelineName = "ExpCopies";
+        bp.passes.push_back(FxChainFixture::WorldPass());
+        bp.passes.push_back(FxChainFixture::FxPass(
+            "Bloomish",
+            R"({"id":"Bloomish","type":"FullscreenShader","inputs":{"uTex":"SceneColor"},"buffers":{"uExposure":"ExposureHistory"},"output":"PostA","shaderPkg":"Shaders/copy.shaderpkg"})"));
+        bp.worldColorResolveTargetRef = "SceneColor";
+        FxChainFixture::AddTexResource(bp, "SceneColor");
+        FxChainFixture::AddTexResource(bp, "PostA");
+        bp.resources.push_back(
+            {"ExposureHistory",
+             R"({"kind":"buffer","scope":"perView","size":{"bytes":16},"usage":["storage"],"perFrameCopies":true})"});
+
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        FramePools pools(f.Device);
+
+        struct CopiesFrameResult
+        {
+            uint32_t FxPasses = 0;
+            uint32_t ZeroInitPasses = 0;
+            uint32_t CarryPasses = 0;
+            bool CarryOnCompute = true;
+            Rendering::BufferHandle CarrySource{};
+            Rendering::BufferHandle CarryDestination{};
+            Rendering::BufferHandle Buffer{};
+        };
+        auto declareFrame = [&](uint64_t frameIndex) -> CopiesFrameResult
+        {
+            RenderGraph::RGFrame frame(f.Device, &pools.Persistent, &pools.Transient, &pools.Ring);
+            frame.BeginFrame(frameIndex);
+            RenderGraph::RGTexture color = frame.ImportPersistentTexture("EC.Color", ColorTargetDesc());
+            RenderGraph::RGTexture depth = frame.ImportPersistentTexture("EC.Depth", DepthTargetDesc());
+            f.Rs->BeginWorldDrawFrame();
+            f.Rs->BuildWorldBatchKeys();
+            const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{f.View, color, depth, {}}};
+            const std::vector<Rendering::ViewDesc> views(f.Rs->Views().GetViews().begin(),
+                                                         f.Rs->Views().GetViews().end());
+            instance.Declare(frame, targets, views);
+
+            CopiesFrameResult r;
+            for (size_t p = 0; p < frame.Graph().PassCount(); ++p)
+            {
+                const auto pass = static_cast<RenderGraph::RGPassId>(p);
+                const std::string name(frame.Graph().PassName(pass));
+                if (RGQuery::Matches(name, RGQuery::Family{"Bloomish"}))
+                    ++r.FxPasses;
+                if (RGQuery::Matches(name, RGQuery::Subtree{"ZeroInit.ExposureHistory"}))
+                    ++r.ZeroInitPasses;
+                if (RGQuery::Matches(name, RGQuery::Subtree{"Carry.ExposureHistory"}))
+                {
+                    ++r.CarryPasses;
+                    r.CarryOnCompute = r.CarryOnCompute && frame.Graph().PassQueue(pass) == RenderGraph::RGQueue::Compute;
+                    for (const RenderGraph::RGAccessRecord& a : frame.Graph().Accesses())
+                    {
+                        if (a.Pass != pass)
+                            continue;
+                        const Rendering::BufferHandle buffer = frame.PhysicalBuffer(RenderGraph::RGBuffer{a.Resource});
+                        if (a.Access == RenderGraph::RGAccess::CopySrc)
+                            r.CarrySource = buffer;
+                        else if (a.Access == RenderGraph::RGAccess::CopyDst)
+                            r.CarryDestination = buffer;
+                    }
+                }
+            }
+            if (const auto* fr = instance.FrameResourcesFor(&frame))
+            {
+                if (auto it = fr->Buffers.find({f.View, "ExposureHistory"}); it != fr->Buffers.end())
+                    r.Buffer = it->second.Buffer;
+            }
+            frame.MarkOutput(color);
+            frame.Execute();
+            f.Device->WaitForIdle();
+            return r;
+        };
+
+        const CopiesFrameResult f0 = declareFrame(0);
+        if (f0.FxPasses == 0)
+            GTEST_SKIP() << "copy.shaderpkg unavailable in this environment";
+        EXPECT_TRUE(f0.Buffer.IsValid());
+        EXPECT_EQ(f0.ZeroInitPasses, 1u) << "the first frame starts from zero";
+        EXPECT_EQ(f0.CarryPasses, 0u) << "the first frame has no previous contents to carry";
+
+        std::vector<Rendering::BufferHandle> buffers = {f0.Buffer};
+        for (uint64_t frameIndex = 1; frameIndex <= Rendering::IDevice::kMaxSupportedFramesInFlight; ++frameIndex)
+        {
+            const CopiesFrameResult r = declareFrame(frameIndex);
+            EXPECT_EQ(r.CarryPasses, 1u) << "frame " << frameIndex << " starts from the previous frame";
+            EXPECT_TRUE(r.CarryOnCompute) << "frame " << frameIndex;
+            EXPECT_EQ(r.CarrySource, buffers.back()) << "frame " << frameIndex << " carries the previous frame's copy";
+            EXPECT_EQ(r.CarryDestination, r.Buffer) << "frame " << frameIndex << " carries into the copy it binds";
+            EXPECT_NE(r.Buffer, buffers.back()) << "frame " << frameIndex << " binds the copy the previous frame bound";
+            buffers.push_back(r.Buffer);
+        }
+        EXPECT_EQ(buffers.back(), buffers.front())
+            << "the copies rotate: one per frame the device can keep in flight";
     }
     f.Down();
 }
@@ -8356,7 +8491,7 @@ TEST(RenderPipelineDeclareTests, MsaaPairAndBlendLoadForViewColorTargets)
         FramePools pools(f.Device);
         RenderGraph::RGFrame frame(f.Device, &pools.Persistent, &pools.Transient, &pools.Ring);
         frame.BeginFrame(0);
-        RenderGraph::RGTexture color = frame.ImportPersistentTexture("PT.Color", ColorTargetDesc(4));
+        RenderGraph::RGTexture color = frame.ImportPersistentTexture("PT.Color", SampledMsaaColorDesc());
         RenderGraph::RGTexture depth = frame.ImportPersistentTexture("PT.Depth", DepthTargetDesc(4));
 
         f.Rs->BeginWorldDrawFrame();
@@ -8373,15 +8508,18 @@ TEST(RenderPipelineDeclareTests, MsaaPairAndBlendLoadForViewColorTargets)
         ASSERT_NE(fr, nullptr);
         const RenderGraph::RGTexture sceneColor = fr->Textures.at({f.View, "View.Resolve"});
 
-        // The overlay's attachment: the MSAA caller color with Load (blend)
-        // and a resolve into SceneColor. The world's rec on the same texture
-        // clears — distinguish by Load op.
+        // The overlay's attachment: the MSAA caller color with Load (blend),
+        // resolved into SceneColor by the pass after it. The world's rec on
+        // the same texture clears — distinguish by Load op.
         const RenderGraph::RGAttachmentRec* overlayRec = nullptr;
         for (const auto& rec : frame.Attachments())
             if (rec.Tex == color.Id && !rec.IsDepth && rec.Ops.Load == RenderGraph::RGLoadOp::Load)
                 overlayRec = &rec;
         ASSERT_NE(overlayRec, nullptr) << "blend => Load on the overlay attachment";
-        EXPECT_EQ(overlayRec->Resolve, sceneColor.Id) << "MSAA pair into the pipeline resolve";
+        EXPECT_EQ(overlayRec->Resolve, RenderGraph::kInvalidId) << "no attachment resolve";
+        EXPECT_NE(ColorResolvePassOf(frame.Graph(), overlayRec->Pass, color.Id, sceneColor.Id),
+                  RenderGraph::kInvalidId)
+            << "MSAA pair into the pipeline resolve, after the overlay";
         EXPECT_TRUE(frame.Graph().HasReadAccess(overlayRec->Pass, color.Id))
             << "Load derives the read that chains from the world's write";
 
@@ -9403,14 +9541,14 @@ struct MissingUploadPassReports
     MissingUploadPassReports()
     {
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         Sink = sink.get();
         auto count = Count;
         CallbackId = Sink->RegisterCallback(
             [count](const Logger::LogMessage& msg)
             {
                 if (msg.Level == Logger::LogLevel::Error &&
-                    msg.Message.find("declares no \"TerrainUpload\" pass") != Logger::String::npos)
+                    msg.Message.find("declares no \"TerrainUpload\" pass") != std::string::npos)
                     count->fetch_add(1);
             });
         Logger::Log::AddSink(std::move(sink));
@@ -10868,11 +11006,13 @@ std::vector<std::string> VertexReadBindingsMissingFrom(const Rendering::ShaderMe
 
 // The rule both prepass heads are held to (#3367). Under the compatibility profile the head declares no
 // binding that only the fragment stage reads, and every binding the desktop head's vertex stage reads is
-// still declared. The desktop head keeps the variant's whole reflected layout, shadow and IBL slots
-// included.
+// still declared, except `desktopOnlyVertexReads`: work the full profile does in its vertex stage that
+// the compat profile does elsewhere. The desktop head keeps the variant's whole reflected layout, shadow
+// and IBL slots included.
 void ExpectCompatHeadDeclaresOnlyVertexReads(TerrainFixture& f, const MaterialDocument& doc,
                                              Rendering::MaterialKeyword keywords,
-                                             Rendering::VertexAttributeFlags vertexFlags)
+                                             Rendering::VertexAttributeFlags vertexFlags,
+                                             std::span<const std::string_view> desktopOnlyVertexReads = {})
 {
     PrepassHeadDeclaration compat;
     {
@@ -10888,7 +11028,11 @@ void ExpectCompatHeadDeclaresOnlyVertexReads(TerrainFixture& f, const MaterialDo
         << doc.materialName << ": the desktop head keeps the variant's whole reflected layout";
     if (!compat.Meta || !desktop.Meta)
         return;
-    const std::vector<std::string> missing = VertexReadBindingsMissingFrom(*compat.Meta, *desktop.Meta);
+    std::vector<std::string> missing = VertexReadBindingsMissingFrom(*compat.Meta, *desktop.Meta);
+    std::erase_if(missing, [&](const std::string& name) {
+        return std::find(desktopOnlyVertexReads.begin(), desktopOnlyVertexReads.end(), name) !=
+               desktopOnlyVertexReads.end();
+    });
     EXPECT_TRUE(missing.empty()) << doc.materialName << ": the compat head drops " << missing.size()
                                  << " binding(s) the vertex stage reads, first '"
                                  << (missing.empty() ? std::string{} : missing.front()) << "'";
@@ -10926,9 +11070,13 @@ TEST(RenderPipelineDeclareTests, CompatCbtPrepassHeadDeclaresOnlyWhatItsVertexSt
         f.Down();
         GTEST_SKIP() << "staged shader sources not found";
     }
+    // The full profile moves far vertices to the prefiltered height chain in its vertex stage
+    // (cbt_vertex_modifier.glsl): the chain and the frame's level rule. The compat profile draws the
+    // cached corners, so its head rightly declares neither.
+    static constexpr std::string_view kDesktopHeightChainReads[] = {"gCbtChain", "gCbtDrawLevel"};
     ExpectCompatHeadDeclaresOnlyVertexReads(f, CBTTerrainECS::BuildCBTTerrainMaterialDocument(),
                                             CBTTerrainECS::CBTTerrainMaterialKeywords(),
-                                            Rendering::VertexAttributeFlags::None);
+                                            Rendering::VertexAttributeFlags::None, kDesktopHeightChainReads);
     f.Down();
 }
 
@@ -13946,6 +14094,8 @@ constexpr GrassFloatTwin kGrassFloatTwins[] = {
     {"GroundingStrength", "GrassGroundingStrength",
      &Components::TerrainGrass::GroundingStrength,
      &Terrain::TerrainGPUParams::GrassGroundingStrength},
+    {"GroundTintHeight", "GrassGroundTintHeight",
+     &Components::TerrainGrass::GroundTintHeight, &Terrain::TerrainGPUParams::GrassGroundTintHeight},
     {"Translucency", "GrassTranslucency",
      &Components::TerrainGrass::Translucency, &Terrain::TerrainGPUParams::GrassTranslucency},
     {"TextureCardsPerSquareMeter", "GrassTextureCardsPerSquareMeter",
@@ -14273,6 +14423,82 @@ TEST(RenderPipelineDeclareTests, ReadbackStripsDeviceRowPaddingForFullRegionAndS
                 EXPECT_EQ(result.pixels[i + 3], 255);
             }
         }
+    }
+}
+
+// With async compute on, a texture written on the compute queue and read back on graphics has
+// its transition into the copy source recorded at the compute submission's tail, on another
+// command list. The subresource readback must still copy from the transfer-source layout the
+// graph left it in: no "no recorded layout" report, and the written texels come back.
+TEST(RenderPipelineDeclareTests, SubresourceReadbackOfAComputeWrittenTextureCopiesFromTheGraphState)
+{
+    auto* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    if (device->GetComputeQueueFamilyIndex() == device->GetGraphicsQueueFamilyIndex())
+        GTEST_SKIP() << "No separate compute queue family: the graph records every transition on one list";
+    FramePools pools(device);
+    RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.SetPhysicalQueueMap(RenderGraph::RGFrame::kIdentityQueueMap);
+    frame.BeginFrame(1);
+    TextureDesc td{};
+    td.width = 6;
+    td.height = 4;
+    td.depth = 1;
+    td.mipLevels = 1;
+    td.arrayLayers = 1;
+    td.sampleCount = 1;
+    td.format = static_cast<uint32_t>(TextureFormat::RGBA8_UNORM);
+    td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) |
+               static_cast<uint32_t>(TextureUsage::TransferSrc) |
+               static_cast<uint32_t>(TextureUsage::TransferDst);
+    const auto src = frame.CreateTexture("CrossQueueReadback.Src", td);
+    ASSERT_TRUE(src.IsValid());
+    frame.AddComputePass(
+        "CrossQueueReadback.Fill", static_cast<int32_t>(PassPhase::kWorldRender),
+        [&](RenderGraph::RGPassBuilder& p) { p.Write(src, RenderGraph::RGTextureWrite::CopyDst); },
+        [src](RenderGraph::RGContext& ctx)
+        {
+            const float color[4] = {0.25f, 0.5f, 0.75f, 1.0f};
+            ctx.Cmd->ClearColorImageSubresource(ctx.GetTexture(src), 0, 0, color);
+        });
+    const auto ticket =
+        Rendering::RequestTextureSubresourceReadbackRG(device, frame, src, 0, 0, 0, 0, 0, 0, "CrossQueue");
+    ASSERT_NE(ticket, nullptr);
+
+    std::vector<std::string> log;
+    {
+        GameEngine::TestLog::ScopedEngineLogCapture capture(&log, Logger::LogLevel::Warning);
+        frame.Execute();
+        Rendering::OnFrameSubmittedReadbacksRG(frame, frame.SubmissionToken());
+        device->WaitForIdle();
+        Logger::Log::Flush();
+    }
+
+    const auto& barriers = frame.Graph().Barriers();
+    const auto& placement = frame.Graph().BarrierSubmissions();
+    ASSERT_EQ(placement.size(), barriers.size());
+    bool relocated = false;
+    for (size_t i = 0; i < barriers.size(); ++i)
+    {
+        const RenderGraph::RGBarrier& b = barriers[i];
+        relocated |= b.Resource == src.Id && b.NewLayout == RenderGraph::RGImageLayout::TransferSrc &&
+                     placement[i] != RenderGraph::kInvalidId;
+    }
+    ASSERT_TRUE(relocated)
+        << "the transition into the copy source must record on the compute tail; the check is void";
+
+    EXPECT_EQ(GameEngine::TestLog::CountLinesContaining(log, "no recorded layout"), 0u)
+        << GameEngine::TestLog::FirstLineContaining(log, "no recorded layout");
+    Rendering::ViewReadbackResult result{};
+    ASSERT_TRUE(ticket->TryGet(result));
+    ASSERT_EQ(result.pixels.size(), static_cast<size_t>(td.width) * td.height * 4u);
+    for (size_t i = 0; i < result.pixels.size(); i += 4)
+    {
+        EXPECT_NEAR(result.pixels[i], 64, 2);
+        EXPECT_NEAR(result.pixels[i + 1], 128, 2);
+        EXPECT_NEAR(result.pixels[i + 2], 191, 2);
+        EXPECT_EQ(result.pixels[i + 3], 255);
     }
 }
 
@@ -15126,7 +15352,7 @@ struct HeightBakeHarness
     {
         Device = device;
         namespace fs = std::filesystem;
-        const fs::path shaderDir = GameEngine::PathUtils::GetExecutableDirectory()
+        const fs::path shaderDir = GameEngine::ApplicationPaths::GetExecutableDirectory()
                                    / "Assets" / "Shaders" / "CBT";
         if (!fs::exists(shaderDir / "terrain_height_bake.comp"))
         {
@@ -15183,7 +15409,7 @@ struct HeightBakeHarness
     bool InitNormal(std::string& skipReason)
     {
         namespace fs = std::filesystem;
-        const fs::path shaderDir = GameEngine::PathUtils::GetExecutableDirectory()
+        const fs::path shaderDir = GameEngine::ApplicationPaths::GetExecutableDirectory()
                                    / "Assets" / "Shaders" / "CBT";
         ShaderProgramCompileRequest req{};
         req.debugName = "terrain_normal_bake_oracle";
@@ -15233,7 +15459,7 @@ struct HeightBakeHarness
     bool InitSplat(std::string& skipReason)
     {
         namespace fs = std::filesystem;
-        const fs::path shaderDir = GameEngine::PathUtils::GetExecutableDirectory()
+        const fs::path shaderDir = GameEngine::ApplicationPaths::GetExecutableDirectory()
                                    / "Assets" / "Shaders" / "CBT";
         ShaderProgramCompileRequest req{};
         req.debugName = "terrain_splat_bake_oracle";
@@ -20137,6 +20363,8 @@ TEST(RenderPipelineDeclareTests, DefaultSizeTiledTerrainExtractionUploadsTheReso
 
 // The five blade-shape dials reach the terrain's GPU row through the extraction, clamped to their
 // ranges, and the row's canopy depth is the one its own density, width, height and Canopy Shade give.
+// The terrain's grass field is composed first, as the modifier system does on the update after the
+// extraction provisions the terrain, so the row's grass places.
 TEST(RenderPipelineDeclareTests, ExtractionUploadsTheBladeShapeDialsClampedToTheirRanges)
 {
     TerrainFixture f;
@@ -20163,7 +20391,12 @@ TEST(RenderPipelineDeclareTests, ExtractionUploadsTheBladeShapeDialsClampedToThe
         entity.Set(grass);
         world.ProcessCommands();
         TerrainECS::TerrainExtractionSystem extraction(f.Rs.get());
+        extraction.Update(world, 1.0f / 60.0f); // provisions the terrain
+        TerrainECS::TerrainModifierSystem modifiers;
+        modifiers.Update(world, 1.0f / 60.0f); // composes its grass field: no regions, so in place
         const Terrain::TerrainGPUParams row = ExtractFirstTerrainParams(f, terrain, extraction, world);
+        ASSERT_NE(row.GrassEnabled & Terrain::kTerrainGrassBitEnabled, 0u)
+            << "the row's grass still waits for its field";
         EXPECT_FLOAT_EQ(row.GrassBladeTilt, 0.4f);
         EXPECT_FLOAT_EQ(row.GrassBladeBend, Components::kMaxTerrainGrassBladeBend);
         EXPECT_FLOAT_EQ(row.GrassBladeTwist, 0.75f);
@@ -20181,6 +20414,56 @@ TEST(RenderPipelineDeclareTests, ExtractionUploadsTheBladeShapeDialsClampedToThe
             << "Canopy Shade 0 still shades the ground under the grass";
     }
     f.Down();
+}
+
+namespace
+{
+// Extracts `authored` with a default TerrainGrass and no modifier system, so its grass field is never
+// composed, as on the frames before a terrain's first field lands: the row's grass waits for the field
+// and does not place, and a row whose grass does not draw shades no ground (the terrain surface shades
+// the ground under any row with a canopy depth).
+void ExpectAGrassRowWaitingForItsFieldCastsNoCanopyShade(const Components::Terrain& authored)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        EXPECT_TRUE(terrain.Initialize(f.Device));
+        ECS::World world(nullptr);
+        auto entity = world.Create();
+        entity.Set(Components::WorldTransform{});
+        entity.Set(authored);
+        entity.Set(Components::TerrainGrass{});
+        world.ProcessCommands();
+        TerrainECS::TerrainExtractionSystem extraction(f.Rs.get());
+        const Terrain::TerrainGPUParams row = ExtractFirstTerrainParams(f, terrain, extraction, world);
+        ASSERT_EQ(row.GrassEnabled & Terrain::kTerrainGrassBitEnabled, 0u)
+            << "grass placed before its terrain's first field landed";
+        EXPECT_EQ(row.GrassCanopyOcclusion, 0.0f) << "a row whose grass does not draw shades the ground under it";
+    }
+    f.Down();
+}
+} // namespace
+
+// One case per path: a small terrain extracts untiled, and the component's default size tiles.
+TEST(RenderPipelineDeclareTests, UntiledTerrainGrassWaitingForItsFieldCastsNoCanopyShade)
+{
+    Components::Terrain authored{};
+    authored.SizeX = 64.0f;
+    authored.SizeZ = 64.0f;
+    authored.HeightScale = 8.0f;
+    authored.SamplesPerMeter = 1.0f;
+    ASSERT_FALSE(Terrain::TerrainNeedsTiling(authored.SizeX, authored.SizeZ, authored.SamplesPerMeter));
+    ExpectAGrassRowWaitingForItsFieldCastsNoCanopyShade(authored);
+}
+
+TEST(RenderPipelineDeclareTests, DefaultSizeTiledTerrainGrassWaitingForItsFieldCastsNoCanopyShade)
+{
+    const Components::Terrain authored{};
+    ASSERT_TRUE(Terrain::TerrainNeedsTiling(authored.SizeX, authored.SizeZ, authored.SamplesPerMeter))
+        << "the default terrain no longer tiles: this case no longer drives the tiled path";
+    ExpectAGrassRowWaitingForItsFieldCastsNoCanopyShade(authored);
 }
 
 // The CBT renderer binds the terrain's height textures (the unified heightmap, or the resident atlas
@@ -20527,8 +20810,23 @@ struct TerrainShadowFrame
     std::vector<float> Map;
     std::vector<float> Distances;
     uint32 MapSide = 0;
+    // The lit field's level 0 as the GPU built it (FieldSide x FieldSide lit shares and occluder octaves),
+    // when the frame read the map back; the map's texel (meters between samples).
+    std::vector<float> Field;
+    std::vector<float> FieldOctaves;
+    uint32 FieldSide = 0;
+    float MapTexel = 0.0f;
+    // The draw's level scale the map was published with (TerrainShadowMap::DrawLevelScale).
+    float DrawLevelScale = 0.0f;
+    uint32 FieldLevels = 0;
+    // The map's samples per line and lines in use (the rest of the map holds whatever the pool left).
+    uint32 SamplesU = 0;
+    uint32 SamplesV = 0;
     // ShadowData's terrain presence word for the view (terrainShadowSource.z), -1 when the frame had none.
     float ShadowDataTerrainPresence = -1.0f;
+    // ShadowData's lit field index and levels (terrainShadowField.xy).
+    uint32 ShadowDataFieldIndex = 0;
+    uint32 ShadowDataFieldLevels = 0;
 };
 
 // The terrain shadow frames' sun disc (degrees, full): the bake follows its lower edge too. Wide, so that
@@ -20570,13 +20868,25 @@ TerrainShadowFrame DeclareTerrainShadowFrame(TerrainFixture& f, FramePools& pool
     const TerrainShadowMap* published = shadows.FindTerrainShadowMap(v, frame.FrameIndex());
     out.Published = published != nullptr;
     std::shared_ptr<Rendering::RGReadbackTicket> mapTicket;
+    std::shared_ptr<Rendering::RGReadbackTicket> fieldTicket;
     if (readMap && published)
     {
         mapTicket = Rendering::RequestTextureReadbackRG(f.Device, frame, published->Map, "TerrainShadowTest.Map");
         out.MapSide = published->MapSide;
+        out.SamplesU = static_cast<uint32>(published->SamplesU);
+        out.SamplesV = static_cast<uint32>(published->SamplesV);
+        out.MapTexel = published->Texel;
+        out.DrawLevelScale = published->DrawLevelScale;
+        if (published->FieldLit.IsValid())
+        {
+            fieldTicket =
+                Rendering::RequestTextureReadbackRG(f.Device, frame, published->FieldLit, "TerrainShadowTest.FieldLit");
+            out.FieldSide = published->MapSide / 2u;
+            out.FieldLevels = published->FieldLitLevels;
+        }
     }
     frame.Execute();
-    if (mapTicket)
+    if (mapTicket || fieldTicket)
         Rendering::OnFrameSubmittedReadbacksRG(frame, frame.SubmissionToken());
     f.Device->WaitForIdle();
     Rendering::ViewReadbackResult mapResult{};
@@ -20592,6 +20902,20 @@ TerrainShadowFrame DeclareTerrainShadowFrame(TerrainFixture& f, FramePools& pool
             out.Distances[i] = GameEngine::Mathematics::HalfToFloat(bits[1]);
         }
     }
+    Rendering::ViewReadbackResult fieldResult{};
+    if (fieldTicket && fieldTicket->TryGet(fieldResult) &&
+        fieldResult.pixels.size() >= size_t(out.FieldSide) * out.FieldSide * 4u)
+    {
+        out.Field.resize(size_t(out.FieldSide) * out.FieldSide);
+        out.FieldOctaves.resize(out.Field.size());
+        for (size_t i = 0; i < out.Field.size(); ++i)
+        {
+            uint16_t bits[2] = {};
+            std::memcpy(bits, fieldResult.pixels.data() + i * 4u, sizeof(bits));
+            out.Field[i] = GameEngine::Mathematics::HalfToFloat(bits[0]);
+            out.FieldOctaves[i] = GameEngine::Mathematics::HalfToFloat(bits[1]);
+        }
+    }
     if (const auto* resources = instance.FrameResourcesFor(&frame))
     {
         const auto binding = resources->Buffers.find({v, "ShadowData"});
@@ -20603,6 +20927,8 @@ TerrainShadowFrame DeclareTerrainShadowFrame(TerrainFixture& f, FramePools& pool
                 ShadowDataGPU data{};
                 std::memcpy(&data, mapped + binding->second.Offset, sizeof(data));
                 out.ShadowDataTerrainPresence = static_cast<float>(data.terrainShadowSource[2]);
+                out.ShadowDataFieldIndex = data.terrainShadowField[0];
+                out.ShadowDataFieldLevels = data.terrainShadowField[1];
                 f.Device->UnmapBuffer(binding->second.Buffer);
             }
         }
@@ -20893,6 +21219,165 @@ TEST(RenderPipelineDeclareTests, TerrainShadowBakesOnlyWhenTheSunOrTheHeightsCha
         f.Device->DestroyTexture(heights);
     }
     f.Down();
+}
+
+// The terrain shadow's lit field (TerrainShadowFieldLit): a far terrain pixel reads the share of the map's
+// samples it covers that see the sun and how far their occluders lie, so its level 0 must be exactly that
+// share over each 2 x 2 samples of the baked map (a sample is lit when its clearance is at most 0 or it lies
+// outside the samples in use; the four shares are exact in half precision) and the mean of their occluder
+// octaves (0 for a lit sample, log2 of the occluder's distance over one map texel, at least 0, for a
+// shadowed one; to half precision), the chain must run to one texel, ShadowData must carry it to the
+// shading passes, and the map is published with the draw's level scale, which the ray-traced mask reads.
+TEST(RenderPipelineDeclareTests, TerrainShadowLitFieldAveragesTheMapsSamples)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        const ViewId v = f.AddView("TerrainShadowView", 1u);
+        if (!ActivateCbtTerrain(f, terrain))
+        {
+            f.Down();
+            GTEST_SKIP() << "staged shader sources or CBT kernels unavailable";
+        }
+        TextureHandle heights{};
+        const uint32 heightIndex = UploadRidgeHeightTexture(f, heights);
+        if (heightIndex == 0u)
+        {
+            f.Down();
+            GTEST_SKIP() << "the device has no bindless textures";
+        }
+        SetShadowTestTerrain(terrain, heights, heightIndex, true);
+        EXPECT_TRUE(f.Registry.Register("ShadowMap", [] { return std::make_unique<Nodes::ShadowMapNode>(); }, true));
+        const RenderPipelineBlueprint bp = CompileTestBlueprint(f, R"json({
+          "schemaVersion": 2, "pipelineName": "TerrainShadowLitFieldTest",
+          "passes": [
+            { "id": "Upload", "type": "TerrainUpload" },
+            { "id": "CSM", "type": "ShadowMap", "buffer": "ShadowData" },
+            { "id": "Terrain", "type": "CBTRender" },
+            { "id": "Prepass", "type": "DepthPrepass", "clearDepthValue": 0.0 },
+            { "id": "World", "type": "WorldRender" }
+          ]
+        })json", "terrain_shadow_lit_field.rendergraph");
+        EXPECT_FALSE(bp.HasErrors());
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        FramePools pools(f.Device);
+        const TerrainShadowFrame frame = DeclareTerrainShadowFrame(f, pools, instance, v, terrain, 0u, 15.0f, true);
+        EXPECT_TRUE(frame.Baked);
+        EXPECT_NE(frame.ShadowDataFieldIndex, 0u) << "ShadowData does not carry the lit field";
+        EXPECT_EQ(frame.FieldLevels, static_cast<uint32>(std::bit_width(frame.MapSide / 2u)));
+        EXPECT_EQ(frame.ShadowDataFieldLevels, frame.FieldLevels);
+        EXPECT_GT(frame.DrawLevelScale, 0.0f) << "the ray-traced mask cannot tell the draw level without the scale";
+        ASSERT_FALSE(frame.Map.empty());
+        ASSERT_EQ(frame.Field.size(), size_t(frame.FieldSide) * frame.FieldSide) << "the lit field was not read back";
+        ASSERT_GT(frame.MapTexel, 0.0f);
+        size_t mismatched = 0, partial = 0, dark = 0, octavesMismatched = 0;
+        float octavesMax = 0.0f;
+        for (uint32 y = 0; y < frame.FieldSide; ++y)
+            for (uint32 x = 0; x < frame.FieldSide; ++x)
+            {
+                float lit = 0.0f;
+                float octaves = 0.0f;
+                for (uint32 dy = 0; dy < 2u; ++dy)
+                    for (uint32 dx = 0; dx < 2u; ++dx)
+                    {
+                        const uint32 u = 2u * x + dx, line = 2u * y + dy;
+                        // A sample outside the lines and samples in use has no caster: lit.
+                        const bool inUse = u < frame.SamplesU && line < frame.SamplesV;
+                        const size_t at = size_t(line) * frame.MapSide + u;
+                        if (inUse && frame.Map[at] > 0.0f)
+                            octaves += 0.25f * std::log2(std::max(frame.Distances[at], frame.MapTexel) / frame.MapTexel);
+                        else
+                            lit += 0.25f;
+                    }
+                const float field = frame.Field[size_t(y) * frame.FieldSide + x];
+                mismatched += std::abs(field - lit) > 1.0e-3f ? 1u : 0u;
+                const float fieldOctaves = frame.FieldOctaves[size_t(y) * frame.FieldSide + x];
+                octavesMismatched += std::abs(fieldOctaves - octaves) > 1.0e-2f * std::max(1.0f, octaves) ? 1u : 0u;
+                octavesMax = std::max(octavesMax, fieldOctaves);
+                partial += (field > 0.0f && field < 1.0f) ? 1u : 0u;
+                dark += field == 0.0f ? 1u : 0u;
+            }
+        std::printf("[terrain-shadow lit field] side %u levels %u: %zu partial, %zu dark, %zu mismatched; occluder "
+                    "octaves up to %.2f, %zu mismatched\n",
+                    frame.FieldSide, frame.FieldLevels, partial, dark, mismatched, octavesMax, octavesMismatched);
+        EXPECT_GT(dark, 0u) << "the ridge's shadow is not in the field: the test cannot tell the share";
+        EXPECT_GT(partial, 0u) << "no texel straddles the shadow's edge";
+        EXPECT_EQ(mismatched, 0u) << "the lit field is not the share of the map's lit samples";
+        EXPECT_GT(octavesMax, 1.0f) << "the ridge's shadow casters are not in the field: the test cannot tell the octaves";
+        EXPECT_EQ(octavesMismatched, 0u) << "the lit field's occluder octaves are not the mean over the map's samples";
+        f.Device->DestroyTexture(heights);
+    }
+    f.Down();
+}
+
+namespace
+{
+// The texture views alive on `device` that no one has released: a view queued for destruction counts as live
+// until its frame retires.
+size_t HeldTextureViews(const Rendering::IDevice& device)
+{
+    const Rendering::IDevice::ResourcePoolStats s = device.GetResourcePoolStats();
+    return s.liveTextureViews - std::min(s.liveTextureViews, s.deferredTextureViews);
+}
+} // namespace
+
+// The lit field's per-level storage views live as long as the terrain feature that owns the bake: once the
+// render services shut down (the features are destroyed while the device lives on), none of them is still
+// alive, so a device that outlives a terrain does not hold its field's views until its own teardown.
+TEST(RenderPipelineDeclareTests, TerrainShadowLitFieldViewsAreReleasedWithTheTerrain)
+{
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    const size_t viewsBefore = HeldTextureViews(*f.Device);
+    uint32 fieldLevels = 0;
+    size_t viewsWithField = 0;
+    {
+        auto& terrain = f.Rs->EnsureFeature<TerrainECS::TerrainRenderFeature>();
+        const ViewId v = f.AddView("TerrainShadowView", 1u);
+        if (!ActivateCbtTerrain(f, terrain))
+        {
+            f.Down();
+            GTEST_SKIP() << "staged shader sources or CBT kernels unavailable";
+        }
+        TextureHandle heights{};
+        const uint32 heightIndex = UploadRidgeHeightTexture(f, heights);
+        if (heightIndex == 0u)
+        {
+            f.Down();
+            GTEST_SKIP() << "the device has no bindless textures";
+        }
+        SetShadowTestTerrain(terrain, heights, heightIndex, true);
+        const RenderPipelineBlueprint bp = CompileTestBlueprint(f, R"json({
+          "schemaVersion": 2, "pipelineName": "TerrainShadowLitFieldTeardownTest",
+          "passes": [
+            { "id": "Upload", "type": "TerrainUpload" },
+            { "id": "Terrain", "type": "CBTRender" },
+            { "id": "Prepass", "type": "DepthPrepass", "clearDepthValue": 0.0 },
+            { "id": "World", "type": "WorldRender" }
+          ]
+        })json", "terrain_shadow_lit_field_teardown.rendergraph");
+        EXPECT_FALSE(bp.HasErrors());
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        FramePools pools(f.Device);
+        const TerrainShadowFrame frame = DeclareTerrainShadowFrame(f, pools, instance, v, terrain, 0u, 15.0f, true);
+        EXPECT_TRUE(frame.Baked);
+        fieldLevels = frame.FieldLevels;
+        viewsWithField = HeldTextureViews(*f.Device);
+        f.Device->DestroyTexture(heights);
+    }
+    f.Down();
+    const size_t viewsAfter = HeldTextureViews(*f.Device);
+    std::printf("[terrain-shadow lit field teardown] levels %u, views held before %zu, with the field %zu, after %zu\n",
+                fieldLevels, viewsBefore, viewsWithField, viewsAfter);
+    EXPECT_GT(fieldLevels, 0u) << "the frame published no lit field: the test cannot see its views";
+    EXPECT_GE(viewsWithField, viewsBefore + fieldLevels) << "the field's level views were not created";
+    EXPECT_LE(viewsAfter, viewsBefore) << viewsAfter - std::min(viewsAfter, viewsBefore)
+                                       << " texture view(s) outlived the render services that created them";
 }
 
 // A pipeline may declare ShadowMap before the terrain: the map published later in the frame's declaration

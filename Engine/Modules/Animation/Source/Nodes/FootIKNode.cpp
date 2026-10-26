@@ -3,6 +3,7 @@
 #include "Animation/EvaluationContext.h"
 #include "Animation/PoseUtilities.h"
 #include "Animation/Nodes/TwoBoneIKNode.h"
+#include "Mathematics/Interpolation.h"
 
 #include <Mathematics/Vector3.h>
 
@@ -48,7 +49,7 @@ void FootIKNode::SetParentIndices(const std::vector<int32_t>& parentIndices)
 
 void FootIKNode::SetWeight(float weight)
 {
-    m_Weight = std::clamp(weight, 0.0f, 1.0f);
+    m_Weight = Math::Clamp01(weight);
 }
 
 void FootIKNode::Evaluate(EvaluationContext& ctx, AnimationPose& outPose)

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -312,6 +313,84 @@ inline float PolygonDoubledSignedArea(std::span<const Vector2> polygon)
 	return sum;
 }
 
+// The point of segment ab nearest to `point`; `a` when the segment has no length.
+inline Vector3 ClosestPointOnSegment(const Vector3& point, const Vector3& a, const Vector3& b)
+{
+	const Vector3 segment = b - a;
+	const float lengthSquared = segment.LengthSquared();
+	if (lengthSquared <= 0.0f)
+	    return a;
+	return a + segment * std::clamp(Vector3::Dot(point - a, segment) / lengthSquared, 0.0f, 1.0f);
+}
+
+// The point of segment ab nearest to `point` on the plane; `a` when the segment has no length.
+inline Vector2 ClosestPointOnSegment(const Vector2& point, const Vector2& a, const Vector2& b)
+{
+	const Vector2 segment = b - a;
+	const float lengthSquared = Vector2::Dot(segment, segment);
+	if (lengthSquared <= 0.0f)
+	    return a;
+	return a + segment * std::clamp(Vector2::Dot(point - a, segment) / lengthSquared, 0.0f, 1.0f);
+}
+
+// How far `point` is from segment ab on the plane.
+inline float DistanceToSegment(const Vector2& point, const Vector2& a, const Vector2& b)
+{
+	return (ClosestPointOnSegment(point, a, b) - point).Length();
+}
+
+// The point of triangle abc nearest to `point` (on its face, an edge or a corner). A degenerate
+// triangle (coincident or collinear corners, or a corner angle at `a` under about 0.001 radians)
+// resolves to the nearest point of its three edges.
+inline Vector3 ClosestPointOnTriangle(const Vector3& point, const Vector3& a, const Vector3& b,
+                                      const Vector3& c)
+{
+	// Squared sine of the corner angle at `a` below which the triangle is a segment.
+	constexpr float kDegenerateSineSquared = 1e-6f;
+	const Vector3 ab = b - a;
+	const Vector3 ac = c - a;
+	if (Vector3::Cross(ab, ac).LengthSquared() <=
+	    kDegenerateSineSquared * ab.LengthSquared() * ac.LengthSquared())
+	{
+	    const Vector3 onAb = ClosestPointOnSegment(point, a, b);
+	    const Vector3 onBc = ClosestPointOnSegment(point, b, c);
+	    const Vector3 onCa = ClosestPointOnSegment(point, c, a);
+	    const float dAb = (point - onAb).LengthSquared();
+	    const float dBc = (point - onBc).LengthSquared();
+	    const float dCa = (point - onCa).LengthSquared();
+	    return dAb <= dBc && dAb <= dCa ? onAb : (dBc <= dCa ? onBc : onCa);
+	}
+	const Vector3 ap = point - a;
+	const float d1 = Vector3::Dot(ab, ap);
+	const float d2 = Vector3::Dot(ac, ap);
+	if (d1 <= 0.0f && d2 <= 0.0f)
+	    return a;
+	const Vector3 bp = point - b;
+	const float d3 = Vector3::Dot(ab, bp);
+	const float d4 = Vector3::Dot(ac, bp);
+	if (d3 >= 0.0f && d4 <= d3)
+	    return b;
+	const float vc = d1 * d4 - d3 * d2;
+	if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f)
+	    return a + ab * (d1 / (d1 - d3));
+	const Vector3 cp = point - c;
+	const float d5 = Vector3::Dot(ab, cp);
+	const float d6 = Vector3::Dot(ac, cp);
+	if (d6 >= 0.0f && d5 <= d6)
+	    return c;
+	const float vb = d5 * d2 - d1 * d6;
+	if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f)
+	    return a + ac * (d2 / (d2 - d6));
+	const float va = d3 * d6 - d5 * d4;
+	if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f)
+	    return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+	// va + vb + vc is |ab x ac|^2 up to round-off, which the degenerate test keeps above zero.
+	const float denominator = va + vb + vc;
+	const float v = vb / denominator;
+	const float w = vc / denominator;
+	return a + ab * v + ac * w;
+}
+
 // Whether segments ab and cd share a point, ends and collinear overlaps included.
 inline bool SegmentsIntersect(const Vector2& a, const Vector2& b, const Vector2& c, const Vector2& d)
 {
@@ -330,6 +409,37 @@ inline bool SegmentsIntersect(const Vector2& a, const Vector2& b, const Vector2&
 	    return true;
 	return (d1 == 0.0f && within(c, d, a)) || (d2 == 0.0f && within(c, d, b)) || (d3 == 0.0f && within(a, b, c)) ||
 	       (d4 == 0.0f && within(a, b, d));
+}
+
+// Where segments ab and cd cross at one point: the fractions s along ab and t along cd, each in
+// [0, 1], packed as (s, t). Parallel and collinear segments give nothing, since they share no
+// single point.
+inline std::optional<Vector2> SegmentIntersectionFractions(const Vector2& a, const Vector2& b, const Vector2& c,
+                                                           const Vector2& d)
+{
+	const Vector2 ab = b - a;
+	const Vector2 cd = d - c;
+	const Vector2 ac = c - a;
+	const float denominator = ab.x * cd.y - ab.y * cd.x;
+	if (denominator == 0.0f)
+	    return std::nullopt;
+	const float s = (ac.x * cd.y - ac.y * cd.x) / denominator;
+	const float t = (ac.x * ab.y - ac.y * ab.x) / denominator;
+	if (s < 0.0f || s > 1.0f || t < 0.0f || t > 1.0f)
+	    return std::nullopt;
+	return Vector2(s, t);
+}
+
+// A point on the ground plane, seen from above (+Y up): (x, z).
+inline Vector2 GroundPoint(const Vector3& point)
+{
+	return Vector2(point.x, point.z);
+}
+
+// The distance between two points measured on the ground plane, ignoring their heights.
+inline float GroundDistance(const Vector3& a, const Vector3& b)
+{
+	return (GroundPoint(a) - GroundPoint(b)).Length();
 }
 
 // The convex hull of `points` (Andrew's monotone chain), counter-clockwise with +y up, without

@@ -109,17 +109,17 @@ static std::array<float, 16> ComputeWorldMatrix(World* world, EntityHandle entit
     while (true)
     {
         auto* p = world->GetComponent<Parent>(cur);
-        if (!p || !p->parent.IsValid() || !world->IsValid(p->parent))
+        if (!p || !p->Entity.IsValid() || !world->IsValid(p->Entity))
             break;
 
-        auto* pt = world->GetComponent<Transform>(p->parent);
+        auto* pt = world->GetComponent<Transform>(p->Entity);
         if (!pt)
             break;
 
         std::array<float, 16> tmp{};
         MultiplyMat4ColumnMajor(pt->matrix, out.data(), tmp.data());
         out = tmp;
-        cur = p->parent;
+        cur = p->Entity;
     }
 
     return out;

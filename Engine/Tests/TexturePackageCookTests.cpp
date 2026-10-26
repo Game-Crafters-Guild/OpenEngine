@@ -242,7 +242,10 @@ protected:
         std::string original;
         EXPECT_EQ(Manager.GetRegistry().TryGetMetaValue(Manifest.entries[0].sourcePath,
                                                       kTextureUsageMetaKey, original), Meta.contains(kTextureUsageMetaKey));
-        if (Meta.contains(kTextureUsageMetaKey)) EXPECT_EQ(original, Meta.at(kTextureUsageMetaKey));
+        if (Meta.contains(kTextureUsageMetaKey))
+        {
+            EXPECT_EQ(original, Meta.at(kTextureUsageMetaKey));
+        }
         Meta = record.kv;
     }
     bool Bake()

@@ -1285,7 +1285,9 @@ void ExpectFlex(const FlexExpectation& e)
     EXPECT_NEAR(DeclaredShrink(s), e.Shrink, 0.001f) << "flex: " << e.Declaration;
     EXPECT_EQ(s.Layout.FlexBasis.Unit, e.BasisUnit) << "flex: " << e.Declaration;
     if (e.BasisUnit != StyleLength::UnitType::Auto)
+    {
         EXPECT_NEAR(s.Layout.FlexBasis.Value, e.BasisValue, 0.001f) << "flex: " << e.Declaration;
+    }
 }
 
 constexpr auto kAuto = StyleLength::UnitType::Auto;
@@ -3211,10 +3213,10 @@ TEST(CSSParserTests, InvalidTextShadowsPreservePreviousDeclaration) {
 // the engine takes: it is ignored with a warning that names the fix.
 TEST(CSSParserTests, IgnoredTextShadowWarnsWithTheAcceptedForm) {
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto warnings = std::make_shared<std::vector<std::string>>();
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [warnings](const Logger::LogMessage& msg) { warnings->emplace_back(msg.Message.c_str()); });
     Logger::Log::AddSink(std::move(sink));
 

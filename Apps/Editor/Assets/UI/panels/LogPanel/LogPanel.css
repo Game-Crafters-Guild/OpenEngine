@@ -1,0 +1,329 @@
+/* The Log panel (Apps/Editor/Include/Panels/LogPanel.h).
+ *
+ * The panel requests this sheet for its own subtree; its layout is LogPanel.uxml beside it and each
+ * list row is LogRow.uxml. Severity is one class per part (log-row-glyph-<severity>,
+ * log-row-message-<severity>, log-filter-<severity>), set from C++; colors come from the theme's
+ * palette variables.
+ */
+
+.log-panel {
+	display: flex;
+	flex-direction: column;
+	flex-grow: 1;
+	min-width: 0;
+	min-height: 0;
+}
+
+/* The toolbar wraps onto a second line when the panel is too narrow for one: the filters stay on the
+   first line, and the actions and the search wrap together onto the next. The search takes a line of
+   its own only when the panel is narrower than the actions and the search's 200 px basis. */
+.log-toolbar {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: var(--ui_spacing_lg);
+	row-gap: var(--ui_spacing_xs);
+	padding: var(--ui_spacing_xs) var(--ui_spacing_md);
+	background-color: var(--ui_color_bg_toolbar);
+	border-bottom: 1px solid var(--ui_color_border_panel);
+	flex-shrink: 0;
+}
+
+.log-filters {
+	display: flex;
+	flex-direction: row;
+	column-gap: var(--ui_spacing_xs);
+}
+
+.log-toolbar-end {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: var(--ui_spacing_lg);
+	row-gap: var(--ui_spacing_xs);
+	flex-grow: 1;
+	min-width: 0;
+}
+
+.log-actions {
+	display: flex;
+	flex-direction: row;
+	column-gap: var(--ui_spacing_xs);
+}
+
+.log-search-host {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex-grow: 1;
+	flex-basis: 200px;
+	justify-content: flex-end;
+	min-width: 160px;
+	/* The height every panel search shares (theme/views.css, .panel-search-bar). */
+	height: 24px;
+}
+
+/* The shared .panel-search-bar is pinned absolutely to a side pane's edge (theme/views.css). The
+   Log panel's search sits in the toolbar's flow at the right instead, wherever panel searches sit
+   (it registers for the focus outline only, EditorSearchBars::RegisterFocusTarget). This sheet
+   applies after views.css, so one class wins over .panel-search-bar. */
+.log-search-bar {
+	position: relative;
+	left: unset;
+	right: unset;
+	bottom: unset;
+	top: unset;
+	flex-grow: 1;
+	flex-shrink: 1;
+	min-width: 160px;
+	max-width: 320px;
+}
+
+/* A shown severity ("active", the editor's toggle class) is filled, with its label and outline in
+   the severity's color; a hidden one is an outline with a dim label, and its count still reads.
+   The colors reach Button.css's secondary rules through its toggle variables. */
+.log-filter {
+	min-width: 84px;
+	--ui_button_toggle_on_background: var(--ui_color_bg_selected);
+}
+
+.log-filter-error {
+	--ui_button_secondary_text: var(--ui_color_error_text);
+	--ui_button_toggle_on_border: var(--ui_color_error_text);
+}
+
+.log-filter-warning {
+	--ui_button_secondary_text: var(--ui_color_warning_text);
+	--ui_button_toggle_on_border: var(--ui_color_warning_text);
+}
+
+.log-filter-info {
+	--ui_button_secondary_text: var(--ui_color_text_bright);
+	--ui_button_toggle_on_border: var(--ui_color_text);
+}
+
+.log-filter-debug {
+	--ui_button_secondary_text: var(--ui_color_text);
+	--ui_button_toggle_on_border: var(--ui_color_text_dim);
+}
+
+/* After the severity rules: at equal specificity the later rule sets the label color. A hidden
+   severity, and a shown one with no matching line, read dim: the color marks lines that are there. */
+.log-filter-off {
+	--ui_button_secondary_text: var(--ui_color_text_dim);
+}
+
+.log-filter-empty {
+	--ui_button_secondary_text: var(--ui_color_text_dim);
+	--ui_button_toggle_on_border: var(--ui_color_text_dim);
+}
+
+.log-split {
+	display: flex;
+	flex-direction: column;
+	flex-grow: 1;
+	min-width: 0;
+	min-height: 0;
+}
+
+.log-split--side-by-side {
+	flex-direction: row;
+}
+
+/* The list pane is the notice's positioned parent. */
+.log-list-pane {
+	position: relative;
+	min-width: 0;
+	min-height: 0;
+}
+
+/* The copy notice sits on the copied row's right end, where a long message is clipped anyway, so
+   the rows above and below stay readable. */
+.log-copy-notice {
+	--ui_transient_notice_align: flex-end;
+	--ui_transient_notice_inset: var(--ui_spacing_xl);
+}
+
+.log-view {
+	display: flex;
+	flex-direction: column;
+	flex-grow: 1;
+	min-width: 0;
+	min-height: 0;
+	background-color: var(--ui_color_bg_panel);
+}
+
+.log-list {
+	flex-grow: 1;
+	min-height: 0;
+}
+
+/* A row: the severity glyph, the time in a fixed-width column, the message's first line. Its height
+   is LogView::kRowHeight, which the list places every row at. */
+.log-row {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	column-gap: var(--ui_spacing_md);
+	padding: 0 var(--ui_spacing_md);
+	cursor: pointer;
+}
+
+.log-row:hover {
+	background-color: var(--ui_color_bg_item_hover);
+}
+
+/* The list sets "selected" on the row it binds; the state has no pseudo-class. */
+.log-row.selected {
+	background-color: var(--ui_color_bg_selected);
+}
+
+.log-row-glyph {
+	width: 14px;
+	height: 14px;
+	flex-shrink: 0;
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+}
+
+.log-row-glyph-error {
+	background-image: url("editor:Icons/alert-circle.svg");
+	background-image-tint: var(--ui_color_error_text);
+}
+
+.log-row-glyph-warning {
+	background-image: url("editor:Icons/alert-circle.svg");
+	background-image-tint: var(--ui_color_warning_text);
+}
+
+.log-row-glyph-info {
+	background-image: url("editor:Icons/info.svg");
+	background-image-tint: var(--ui_color_text_dim);
+}
+
+/* A small dot: a debug line matters least, and the shape tells it from an info line. */
+.log-row-glyph-debug {
+	background-image: url("editor:Icons/dot.svg");
+	background-size: 6px 6px;
+	background-image-tint: var(--ui_color_text_disabled);
+}
+
+.log-row-time {
+	font-family: var(--ui_font_mono);
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+	flex-shrink: 0;
+}
+
+.log-row-message {
+	font-size: var(--ui_font_size_list);
+	white-space: nowrap;
+	flex-grow: 1;
+	min-width: 0;
+}
+
+.log-row-message-error {
+	color: var(--ui_color_error_text);
+}
+
+.log-row-message-warning {
+	color: var(--ui_color_warning_text);
+}
+
+.log-row-message-info {
+	color: var(--ui_color_text);
+}
+
+.log-row-message-debug {
+	color: var(--ui_color_text_dim);
+}
+
+.log-detail-pane {
+	display: flex;
+	flex-direction: column;
+	min-width: 240px;
+	min-height: 120px;
+	background-color: var(--ui_color_bg_dockspace);
+}
+
+.log-detail-header {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	column-gap: var(--ui_spacing_md);
+	padding: var(--ui_spacing_sm) var(--ui_spacing_md);
+	background-color: var(--ui_color_bg_tabbar);
+	border-bottom: 1px solid var(--ui_color_border_panel);
+	flex-shrink: 0;
+}
+
+.log-detail-severity {
+	font-weight: 500;
+	color: var(--ui_color_text_bright);
+}
+
+.log-detail-time {
+	font-family: var(--ui_font_mono);
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+}
+
+.log-detail-source {
+	margin-left: auto;
+	min-width: 0;
+	flex-shrink: 1;
+}
+
+/* The folder glyph the menu's Open Source carries: the file name reads as a button, not a label.
+   The button adds its text label before the layout's glyph, so order puts the glyph first. */
+.log-detail-source-glyph {
+	order: -1;
+	width: 14px;
+	height: 14px;
+	flex-shrink: 0;
+	margin-right: var(--ui_spacing_sm);
+	background-image: url("editor:Icons/folder_open.svg");
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+	background-image-tint: var(--ui_color_text);
+	pointer-events: none;
+}
+
+.log-detail-scroll {
+	flex-grow: 1;
+	min-height: 0;
+}
+
+.log-detail-body {
+	display: flex;
+	flex-direction: column;
+	row-gap: var(--ui_spacing_md);
+	padding: var(--ui_spacing_md);
+	min-width: 0;
+}
+
+/* The whole message, selectable, in the monospace face: paths and numbers line up. */
+.log-detail-message {
+	font-family: var(--ui_font_mono);
+	font-size: var(--ui_font_size_list);
+	color: var(--ui_color_text_bright);
+	background-color: var(--ui_color_bg_field);
+	border-radius: var(--ui_radius_sm);
+	padding: var(--ui_spacing_sm);
+	white-space: normal;
+}
+
+.log-detail-section-title {
+	font-weight: 500;
+	color: var(--ui_color_text);
+}
+
+.log-detail-frames {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}

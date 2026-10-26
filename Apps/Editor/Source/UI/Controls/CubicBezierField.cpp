@@ -1,6 +1,7 @@
 #include "UI/Controls/CubicBezierField.h"
 
 #include "Editor/Settings/CurveEditorSettings.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIEvents.h"
@@ -83,8 +84,8 @@ void CubicBezierField::SetConfig(const Config& config)
 void CubicBezierField::SetShape(const CubicBezierShape& shape)
 {
     m_Shape = shape;
-    m_Shape.C1X = std::clamp(m_Shape.C1X, 0.0f, 1.0f);
-    m_Shape.C2X = std::clamp(m_Shape.C2X, 0.0f, 1.0f);
+    m_Shape.C1X = Math::Clamp01(m_Shape.C1X);
+    m_Shape.C2X = Math::Clamp01(m_Shape.C2X);
     MarkDirty(VisualDirty);
 }
 
@@ -141,9 +142,9 @@ void CubicBezierField::SetOnCurveDoubleClick(std::function<void()> callback)
 
 float CubicBezierField::EvaluateShape(const CubicBezierShape& shape, float normalizedTime)
 {
-    const float x = std::clamp(normalizedTime, 0.0f, 1.0f);
-    const float c1x = std::clamp(shape.C1X, 0.0f, 1.0f);
-    const float c2x = std::clamp(shape.C2X, 0.0f, 1.0f);
+    const float x = Math::Clamp01(normalizedTime);
+    const float c1x = Math::Clamp01(shape.C1X);
+    const float c2x = Math::Clamp01(shape.C2X);
 
     auto sampleX = [c1x, c2x](float u) {
         const float inv = 1.0f - u;
@@ -405,34 +406,34 @@ bool CubicBezierField::PointInGraph(const GraphRect& r, float x, float y)
 float CubicBezierField::ToNormalizedTime(float time) const
 {
     const float span = SpanOrEpsilon(m_Config.TimeMin, m_Config.TimeMax);
-    return std::clamp((time - m_Config.TimeMin) / span, 0.0f, 1.0f);
+    return Math::Clamp01((time - m_Config.TimeMin) / span);
 }
 
 float CubicBezierField::FromNormalizedTime(float normalizedTime) const
 {
-    return m_Config.TimeMin + std::clamp(normalizedTime, 0.0f, 1.0f) *
+    return m_Config.TimeMin + Math::Clamp01(normalizedTime) *
         SpanOrEpsilon(m_Config.TimeMin, m_Config.TimeMax);
 }
 
 float CubicBezierField::ToScreenX(const GraphRect& r, float normalizedTime) const
 {
-    return r.X + std::clamp(normalizedTime, 0.0f, 1.0f) * r.W;
+    return r.X + Math::Clamp01(normalizedTime) * r.W;
 }
 
 float CubicBezierField::ToScreenY(const GraphRect& r, float value) const
 {
     const float normalized = (value - m_Config.ValueMin) / SpanOrEpsilon(m_Config.ValueMin, m_Config.ValueMax);
-    return r.Y + (1.0f - std::clamp(normalized, 0.0f, 1.0f)) * r.H;
+    return r.Y + (1.0f - Math::Clamp01(normalized)) * r.H;
 }
 
 float CubicBezierField::FromScreenX(const GraphRect& r, float px) const
 {
-    return std::clamp((px - r.X) / r.W, 0.0f, 1.0f);
+    return Math::Clamp01((px - r.X) / r.W);
 }
 
 float CubicBezierField::FromScreenY(const GraphRect& r, float py) const
 {
-    const float normalized = std::clamp(1.0f - (py - r.Y) / r.H, 0.0f, 1.0f);
+    const float normalized = Math::Clamp01(1.0f - (py - r.Y) / r.H);
     return m_Config.ValueMin + normalized * SpanOrEpsilon(m_Config.ValueMin, m_Config.ValueMax);
 }
 

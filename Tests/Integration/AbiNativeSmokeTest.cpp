@@ -132,6 +132,9 @@ TEST(ScriptingAbi, GameUiExportsAreSafeWithNoHost)
 	// With no host, no instance id resolves — including one that was live in an earlier
 	// session, since ids are never reused.
 	EXPECT_EQ(GE_UIElement_SetWidthPercent(1, 50.0f), GE_Result_NotFound);
+	EXPECT_EQ(GE_UIElement_SetOffset(1, 10.0f, 20.0f), GE_Result_NotFound);
+	EXPECT_EQ(GE_UIElement_CapturePointer(1), GE_Result_NotFound);
+	EXPECT_EQ(GE_UIElement_ReleasePointer(0), GE_Result_NotFound);
 	EXPECT_EQ(GE_UIElement_SetLabelText(1, "100 / 100"), GE_Result_NotFound);
 	EXPECT_EQ(GE_UIElement_SetClass(1, "low-health", 1), GE_Result_NotFound);
 
@@ -230,6 +233,14 @@ TEST(ScriptingAbi, GameUiExportsAreSafeWithNoHost)
 	EXPECT_EQ(GE_UIElement_SetDropdownSelectedIndex(1, 0, 1), GE_Result_NotFound);
 	EXPECT_EQ(GE_UIElement_GetDropdownSelectedLabel(1, textBuf, sizeof(textBuf), &textLen),
 	          GE_Result_NotFound);
+
+	// Paint order: a dead handle is NotFound rather than a silent write.
+	EXPECT_EQ(GE_UIElement_SetZIndex(1, 10), GE_Result_NotFound);
+
+	// The rect: a dead handle is NotFound, and a null out-parameter is InvalidArg rather than a crash.
+	float rectX = 0.0f, rectY = 0.0f, rectWidth = 0.0f, rectHeight = 0.0f;
+	EXPECT_EQ(GE_UIElement_GetRect(1, &rectX, &rectY, &rectWidth, &rectHeight), GE_Result_NotFound);
+	EXPECT_EQ(GE_UIElement_GetRect(1, nullptr, &rectY, &rectWidth, &rectHeight), GE_Result_InvalidArg);
 }
 
 

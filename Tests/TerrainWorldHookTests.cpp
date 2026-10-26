@@ -252,7 +252,7 @@ TEST(TerrainWorldHooks, ReleaseWithServiceTornDownDoesNotCrash)
     EXPECT_EQ(t.TerrainDataHandle, 3u);
 }
 
-// §6.2 test 8, schema parity. TerrainSchema::Remove is reached by the blueprint
+// §6.2 test 8, schema parity. TerrainSchema::Remove is reached by the prefab
 // `removedComponents` override directive (SceneIO), the only production caller of
 // ISceneComponentSchema::Remove — not by the editor inspector, which calls
 // World::RemoveComponentImmediate directly. Collapsing the schema's inline release

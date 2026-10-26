@@ -9,6 +9,17 @@
 namespace GameEngine {
 namespace Rendering {
 
+    /// A canonical column-major matrix in the layout the graphics API expects
+    /// for a shader upload: unchanged for Vulkan, Metal and WebGPU (GLSL and
+    /// its kin read column-major), transposed for DirectX 12. An API not
+    /// listed uploads as-is.
+    inline Matrix4x4 ConvertMatrixForShader(const Matrix4x4& matrix, GraphicsAPI api)
+    {
+        if (api == GraphicsAPI::DirectX12)
+            return GameEngine::Mathematics::Transpose(matrix);
+        return matrix;
+    }
+
     /**
      * @brief Matrix utilities for graphics API conversion
      * 

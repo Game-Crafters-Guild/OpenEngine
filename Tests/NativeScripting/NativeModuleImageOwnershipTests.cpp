@@ -25,7 +25,7 @@
 // LoadLibrary at runtime, and — decisively — it compiles its OWN copy of the
 // header-inline RegisterEventHandler, exactly as a native user system does.
 
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 #include "Memory/Arena.h"
 #include "Memory/ImagePins.h"
 #include "NativeScripting/BuildCacheRecord.h"
@@ -101,7 +101,7 @@ using SetOnTreeSelectionChangedFn = void (*)(void*, int*);
 
 std::filesystem::path ProbeModulePath()
 {
-    const std::filesystem::path exeDir = GameEngine::PathUtils::GetExecutableDirectory();
+    const std::filesystem::path exeDir = GameEngine::ApplicationPaths::GetExecutableDirectory();
     return exeDir / "NativeScriptingProbe.dll";
 }
 

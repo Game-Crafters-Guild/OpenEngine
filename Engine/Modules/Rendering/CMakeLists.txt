@@ -453,7 +453,7 @@ if(GLSLC_EXECUTABLE)
         ge_compile_shader(
             OUTPUT ${SHADER_OUTPUT} SOURCE ${SHADER_SOURCE}
             DEFINES ${_defineList}
-            DEPENDS ${UI_SDF_INCLUDES}
+            DEPENDS ${UI_SDF_INCLUDES} ${SHADER_SOURCE_DIR}/Includes/error_function.glsl
             COMMENT "Compiling UI shader: ${_stem}.${_stage}")
         set(GE_ALL_SHADER_SPV_OUTPUTS ${GE_ALL_SHADER_SPV_OUTPUTS} PARENT_SCOPE)
     endfunction()
@@ -738,6 +738,7 @@ set(RENDERING_CORE_SOURCES
 	    Source/Materials/ShaderProfileDefines.cpp
 	    # Immediate-mode render graph (the RenderGraph rewrite; dirs rename to
 	    # RenderGraph in this slice-9 commit)
+	    Source/Core/RenderGraph/RGCrossFrameAccesses.cpp
 	    Source/Core/RenderGraph/RGGraph.cpp
 	    Source/Core/RenderGraph/RGFrame.cpp
 	    Source/Core/RenderGraph/RGFrameStamp.cpp
@@ -770,7 +771,6 @@ set(RENDERING_CORE_SOURCES
 
 	    # Common utilities
 	    Source/Common/Utils.cpp
-		    Source/Common/Math.cpp
 		    Source/Common/Frustum.cpp
 		    Source/Common/CubeLutColorDomain.cpp
 		    Source/Common/CubeLutFileParser.cpp
@@ -785,6 +785,7 @@ set(RENDERING_CORE_SOURCES
     Source/Core/DebugCommands.cpp
 
 	    Source/Passes/SRGBEncodePass.cpp
+    Source/Passes/MsaaColorResolvePass.cpp
     Source/Passes/TemporalAAOptions.cpp
     Source/Passes/TemporalDither.cpp
     Source/Passes/TonemapPass.cpp
@@ -890,6 +891,11 @@ add_library(GameEngineRendering OBJECT
 	# PRIVATE — Engine.dll splices FileSystem in itself; test executables that
 	# link this object library directly name FileSystemObjects instead.
 	target_link_libraries(GameEngineRendering PRIVATE FileSystem)
+	# AssetCore: shader sources are read through SharedFileRead, so an editor's
+	# safe-save can replace a header while a compile reads it. PRIVATE: Engine.dll
+	# splices AssetCore in itself; test executables get it through
+	# rendering_test_link_image.
+	target_link_libraries(GameEngineRendering PRIVATE AssetCore)
 
 	# Image: SkyRenderer decodes the full-moon texture for the procedural sky.
 	# PRIVATE: Engine.dll splices Image in itself; test executables splice its
@@ -1332,6 +1338,7 @@ if (TARGET CompileShaders AND (TARGET ShaderReflect OR GE_SHADERREFLECT_EXECUTAB
     _ge_add_shaderpkg_graphics(sun_glare sun_glare.vert sun_glare.frag)
     # MSAA variant: same fragment stage, a sampler2DMS depth probe in the vertex stage.
     _ge_add_shaderpkg_graphics(sun_glare_ms sun_glare_ms.vert sun_glare.frag)
+    _ge_add_shaderpkg_compute(sun_glare_casters sun_glare_casters.comp)
     _ge_add_shaderpkg_compute(sky_transmittance_lut sky_transmittance_lut.comp)
     _ge_add_shaderpkg_compute(sky_multiscatter_lut sky_multiscatter_lut.comp)
     _ge_add_shaderpkg_compute(sky_view_lut sky_view_lut.comp)
@@ -1401,6 +1408,8 @@ if (TARGET CompileShaders AND (TARGET ShaderReflect OR GE_SHADERREFLECT_EXECUTAB
     _ge_add_shaderpkg_compute(rt_shadow_denoise rt_shadow_denoise.comp)
     # Terrain shadows: the sun-space clearance map bake (TerrainShadowBake).
     _ge_add_shaderpkg_compute(terrain_shadow_bake terrain_shadow_bake.comp)
+    # ... and its lit field's mip chain, the shadow averaged over a far pixel (TerrainShadowFieldLit).
+    _ge_add_shaderpkg_compute(terrain_shadow_field_lit terrain_shadow_field_lit.comp)
     _ge_add_shaderpkg_compute(screen_space_shadow screen_space_shadow.comp)
     _ge_add_shaderpkg_compute(screen_space_shadow_prepare screen_space_shadow_prepare.comp)
     _ge_add_shaderpkg_compute(screen_space_shadow_resolve screen_space_shadow_resolve.comp)
@@ -1436,6 +1445,7 @@ if (TARGET CompileShaders AND (TARGET ShaderReflect OR GE_SHADERREFLECT_EXECUTAB
     _ge_add_shaderpkg_graphics(shadow_debug_overlay fullscreen_noinput.vert shadow_debug_overlay.frag)
     _ge_add_shaderpkg_graphics(tonemap fullscreen_noinput.vert tonemap.frag)
     _ge_add_shaderpkg_graphics(copy fullscreen_noinput.vert copy.frag)
+    _ge_add_shaderpkg_graphics(msaa_color_resolve fullscreen_noinput.vert msaa_color_resolve.frag)
     _ge_add_shaderpkg_graphics(clear_color_backdrop fullscreen_noinput.vert clear_color_backdrop.frag)
     _ge_add_shaderpkg_graphics(color_filter fullscreen_noinput.vert color_filter.frag)
     _ge_add_shaderpkg_graphics(hdr_color_fx fullscreen_noinput.vert hdr_color_fx.frag)
@@ -1630,11 +1640,13 @@ endfunction()
 
 # Helper: supply the OBJECT-library object files that GameEngineRendering's
 # consumers need but do not receive transitively: Logger and Memory (see
-# rendering_test_link_logger) and Image, whose decode SkyRenderer.cpp calls. Engine
-# splices Image in itself for app builds.
+# rendering_test_link_logger), Image, whose decode SkyRenderer.cpp calls, and
+# AssetCore, whose SharedFileRead reads shader sources. Engine splices Image and
+# AssetCore in itself for app builds.
 function(rendering_test_link_image target)
 	rendering_test_link_logger(${target})
 	target_sources(${target} PRIVATE $<TARGET_OBJECTS:Image>)
+	target_link_libraries(${target} PRIVATE AssetCore)
 endfunction()
 
 # GPU Culling automated test suite (built when BUILD_TESTING is enabled)
@@ -1735,6 +1747,15 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     )
     rendering_test_shader_paths(RenderingReverseZMathTests)
     add_test(NAME RenderingReverseZMathTests COMMAND RenderingReverseZMathTests)
+
+    # The reverse-Z convention at the pixel: default depth compare and clear, D32, the
+    # engine's projection, on the platform's device (Metal on macOS, Vulkan elsewhere).
+    add_executable(RenderingReverseZProbeTests Tests/ReverseZProbeTests.cpp)
+    target_link_libraries(RenderingReverseZProbeTests PRIVATE GameEngineRendering FileSystemObjects GTest::gtest GTest::gtest_main)
+    set_target_properties(RenderingReverseZProbeTests PROPERTIES
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON FOLDER "Rendering/Tests")
+    add_test(NAME RenderingReverseZProbeTests COMMAND $<TARGET_FILE:RenderingReverseZProbeTests>)
+    set_tests_properties(RenderingReverseZProbeTests PROPERTIES TIMEOUT 60 LABELS "Headless")
 
     # The sun's path from latitude and day of year (Rendering/Sky/SolarPath.h), and the sky's
     # sun and moon placement built on it: pure CPU maths, no device and no shaders.
@@ -3612,10 +3633,10 @@ endif()
 # -----------------------------------------------------------------------------
 
 # Every executable that links the GameEngineRendering OBJECT library directly hits
-# the same latent rot: OBJECT->OBJECT object files (Logger, Memory, Image) are not
-# spliced transitively on the VS generator, so they come up as unresolved externals
-# at link time. Rather than hand-maintain a rendering_test_link_image call next to
-# each of the ~150 test targets above, sweep this directory's executables once: any
+# the same latent rot: OBJECT->OBJECT object files (Logger, Memory, Image,
+# AssetCore) are not spliced transitively on the VS generator, so they come up as
+# unresolved externals at link time. Rather than hand-maintain a rendering_test_link_image
+# call next to each of the ~150 test targets above, sweep this directory's executables once: any
 # that link GameEngineRendering and have not already been spliced (no Logger objects
 # in their SOURCES yet) get the full helper here.
 get_property(_GE_RENDERING_DIR_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

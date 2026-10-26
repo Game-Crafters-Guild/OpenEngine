@@ -138,7 +138,7 @@ if(EMSCRIPTEN)
     endif()
 
     add_executable(RendererBrowserSmoke RendererBrowserSmoke.cpp)
-    target_link_libraries(RendererBrowserSmoke PRIVATE Logger Types Platform GameEngineRendering)
+    target_link_libraries(RendererBrowserSmoke PRIVATE Logger Types Platform AssetCore GameEngineRendering)
     set_target_properties(RendererBrowserSmoke PROPERTIES SUFFIX ".html" LINK_DEPENDS ${GE_WEB_SHELL})
     if(GE_WASM_SINGLE_THREAD)
         set(_ge_browser_env "SHELL:-s ENVIRONMENT=web")

@@ -285,7 +285,7 @@ TEST(HierarchyBenchmark, QueryReuse_ChildrenOf) {
     auto reuseSample = MeasureMs([&]() {
         out.clear();
         q.Each([&](EntityHandle e, const GameEngine::Components::Parent& p) {
-            if (p.parent == probeRoot) out.push_back(e);
+            if (p.Entity == probeRoot) out.push_back(e);
         });
         Sink(out);
     });
@@ -307,7 +307,7 @@ TEST(HierarchyBenchmark, QueryReuse_ChildrenOf) {
 namespace RelationBench {
 struct ParentOf {};
 using ParentIdx = GameEngine::ECS::RelationIndex<
-    ParentOf, GameEngine::Components::Parent, &GameEngine::Components::Parent::parent>;
+    ParentOf, GameEngine::Components::Parent, &GameEngine::Components::Parent::Entity>;
 }
 
 TEST(HierarchyBenchmark, RelationIndex_vs_Scan) {

@@ -306,7 +306,7 @@ std::unique_ptr<Pathfinding::GridMap> BakeNavigationGrid(const Pathfinding::Grid
                                                          const NavigationTerrainSource& terrain,
                                                          const NavigationStaticGeometry& geometry,
                                                          float32 stepHeight, float32 agentHeight,
-                                                         int32& outTerrainTileX, int32& outTerrainTileZ)
+                                                         Mathematics::Vector3& outWaitPoint)
 {
     auto grid = std::make_unique<Pathfinding::GridMap>(settings);
     const TriangleBuckets buckets(*grid, geometry.Triangles);
@@ -321,14 +321,14 @@ std::unique_ptr<Pathfinding::GridMap> BakeNavigationGrid(const Pathfinding::Grid
             float32 ground = buckets.GroundAt(x, z);
             if (terrain.Query.ContainsXZ(x, z))
             {
-                float32 height = 0.0f;
-                if (!terrain.Query.SampleHeight(x, z, height))
+                TerrainECS::SurfaceHeightSample sample;
+                if (!terrain.Query.SampleHeight(Mathematics::Vector3(x, 0.0f, z),
+                                                TerrainECS::SurfaceHeightPolicy::RequireFinest, sample))
                 {
-                    if (!terrain.Query.TileCoordinateAt(x, z, outTerrainTileX, outTerrainTileZ))
-                        outTerrainTileX = outTerrainTileZ = 0;
+                    outWaitPoint = Mathematics::Vector3(x, 0.0f, z);
                     return nullptr;
                 }
-                ground = std::max(ground, height);
+                ground = std::max(ground, sample.Height);
             }
             if (ground == kNoGround)
             {

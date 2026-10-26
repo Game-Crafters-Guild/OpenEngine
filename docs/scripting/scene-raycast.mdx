@@ -1,0 +1,55 @@
+---
+title: Scene raycast
+description: Cast a ray against the rendered scene (the meshes, the built-in primitives and the terrain) from native C++, with the options, the hit, meshes still preparing their picking data, and the thread rule.
+---
+
+`Scene::RaycastScene` in `Scene/SceneRaycast.h` casts a world-space ray against what the scene draws: every entity with a `WorldTransform` and a `MeshRenderer`, and the terrain. It answers with the triangle it hits, not with a physics body, so it works outside play mode and on meshes that have no collider. For a ray against the physics world, use [Physics from scripts](physics-from-scripts.mdx). +Y is up.
+
+Give the ray a unit direction. The raycast does not normalize it, and every distance (`MaxDistance` and the hit's `Distance`) is in units of the direction's length: meters when the direction has length 1.
+
+```cpp
+#include "Scene/SceneRaycast.h"
+
+GameEngine::Mathematics::Ray3D ray;
+ray.origin = GameEngine::Mathematics::Vector3(x, 100.0f, z);
+ray.direction = GameEngine::Mathematics::Vector3(0.0f, -1.0f, 0.0f);
+
+GameEngine::Scene::PickOptions options;
+options.MaxDistance = 1000.0f;
+const GameEngine::Scene::PickResult result = GameEngine::Scene::RaycastScene(ray, world, options);
+if (result.MeshBvhPending)
+    return; // ask again next frame: a mesh on the ray is still preparing its picking data
+if (result.Hit)
+    groundHeight = result.Best.WorldPosition.y;
+```
+
+`RaycastSceneAll` fills a list with every hit along the ray, front to back. The terrain gives at most its nearest hit. It returns true when a mesh on the ray is still preparing its picking data and gave no hit, so the list may change on a later frame.
+
+## Options
+
+| Field | Default | What it does |
+| --- | --- | --- |
+| `IncludeMeshes` | true | Test the meshes of model assets. |
+| `IncludePrimitives` | true | Test the built-in primitives (cube, sphere, capsule, plane). |
+| `IncludeTerrain` | true | Test the terrain. |
+| `IncludeBoundsFallback` | false | A renderer with no CPU mesh, or a mesh still preparing its picking data, answers with the top of its world box. Turn it on for a click that selects an object; leave it off when the hit becomes data, such as a height to place an object on. |
+| `IncludeDisabled` | false | Test disabled entities too. |
+| `LayerMask` | all layers | Test only renderers on these render layers. |
+| `MaxDistance` | infinity | The farthest hit, in units of the direction's length. |
+| `IgnoreEntities` | empty | Entities the ray passes through, such as the object being placed. |
+| `RestrictToEntity` | none | Test this entity's mesh and nothing else. |
+| `WaitForSceneTlas` | true | Bring the scene's spatial index up to date before the ray, which blocks while it refits after something moved. |
+
+## The hit
+
+`PickResult::Hit` says whether anything was hit, and `Best` is the nearest hit. A `PickHit` carries the entity, its `Kind` (`Mesh`, `Primitive`, `Terrain` or `Bounds`), the world position and normal, and the distance along the ray. A mesh or primitive hit also carries the submesh, the triangle index and the barycentric coordinates. The normal is perpendicular to the face that was hit, also when the entity is scaled by different amounts along its axes.
+
+A mesh and the terrain at the same distance (within 1e-5 of the distance, 1 mm at 100 m) answer with the mesh, in both calls: a mesh laid flush on the ground, such as a road or a floor plate, is what was put on top of it. A ray that starts inside a mesh hits the mesh's far face, from the inside.
+
+## Meshes still preparing their picking data
+
+A mesh of 256 triangles or more is tested through a bounding volume hierarchy, its picking data. The first ray that reaches the mesh starts a job that builds the data, or loads it from the project's cache, and the ray does not wait for it. Until the job finishes, the mesh gives no hit and the result has `MeshBvhPending` set when the mesh was nearer than every hit. Treat that result as "not known yet" and cast again on a later frame. With `IncludeBoundsFallback` on, the mesh answers with its box instead, and that hit has `MeshBvhPending` set. The spline recipes hold this way: a recipe whose ground is a mesh still preparing its picking data keeps its previous pieces and builds when the data is ready.
+
+## Thread rule
+
+Call the raycast on the main thread. It reads the live world and the CPU meshes of resident models, which a hot reload changes there.

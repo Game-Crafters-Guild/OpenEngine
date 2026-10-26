@@ -138,6 +138,16 @@
 	color: var(--ui_color_error_text);
 }
 
+/* A glyph the notice sets in place of its kind's (InspectorNotice::SetGlyph). These rules follow the
+   kind rules, so their image wins; the tint stays the kind's. */
+.inspector-notice-glyph-clock {
+	background-image: url("editor:Icons/timer.svg");
+}
+
+.inspector-notice-glyph-check {
+	background-image: url("editor:Icons/checked.svg");
+}
+
 /* The opaque variant, for a notice drawn over a view's 3D content rather than a panel: a solid plate
    that reads over any frame, edged in its kind's color (the plate rules above). */
 .inspector-notice-opaque .inspector-notice-plate {

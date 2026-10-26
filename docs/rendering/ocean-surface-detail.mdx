@@ -86,7 +86,7 @@ The water reflects its surroundings, weighted by the Fresnel term of the air and
 | `Specular` | Scales the Fresnel weight of the reflection. 1 is the full reflection; lower values let the water body show through toward the horizon. Default 1. |
 | `ReflectionStrength` | Scales the whole reflection, sky and planar capture alike (default 1). |
 | `PlanarReflectionStrength` | How strongly the planar capture covers the reflected environment (default 1, range 0 to 3). Above 1 it brightens the captured objects, and the sky does not show through them. |
-| `ShallowRefractionReflectionSuppression` | Lowers the reflection where the seabed shows through, so caustics stay readable (default 1; 0 keeps the full reflection). |
+| `ShallowReflectionSuppression` | Lowers the reflection where the seabed shows through, so caustics stay readable (default 1; 0 keeps the full reflection). |
 
 The sun and every other light reflect off the water as off any other surface: one highlight at the water's `Roughness` (default 0.12), with the same base reflectance from `IorAir` and `IorWater`, darkened by the shadows of every light. Ripples smaller than a pixel widen it, so a rough or distant sea spreads the sun into a path of glints. `Specular` and `ReflectionStrength` scale the reflection of the surroundings only, not the highlights of lights.
 

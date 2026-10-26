@@ -1,5 +1,7 @@
 #include "Components/Rendering/PostProcessEffects/HeightFogEffectPresets.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -60,7 +62,7 @@ float SampleDayScalar(float timeOfDayHours, const float dayKeyTimesHours[4],
     const float wrapStart = keyTimes[3];
     const float wrapEnd = keyTimes[0] + kDayHours;
     const float wrappedT = (t < keyTimes[0]) ? (t + kDayHours) : t;
-    const float u = std::clamp((wrappedT - wrapStart) / std::max(kEpsilon, wrapEnd - wrapStart), 0.0f, 1.0f);
+    const float u = Math::Clamp01((wrappedT - wrapStart) / std::max(kEpsilon, wrapEnd - wrapStart));
     return LerpFloat(values[3], values[0], u);
 }
 
@@ -341,7 +343,7 @@ float ComputeHeightFogNightBlend(float timeOfDayHours)
 
 void LerpHeightFogEffect(const HeightFogEffect& a, const HeightFogEffect& b, float t, HeightFogEffect& out)
 {
-    const float u = std::clamp(t, 0.0f, 1.0f);
+    const float u = Math::Clamp01(t);
     out = a;
     out.Intensity = LerpFloat(a.Intensity, b.Intensity, u);
     out.Density = LerpFloat(a.Density, b.Density, u);

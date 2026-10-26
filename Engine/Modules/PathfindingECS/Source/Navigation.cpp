@@ -1,7 +1,7 @@
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationScriptApi.h"
 
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 
@@ -17,6 +17,7 @@
 #include "Mathematics/Vector3.h"
 #include "Pathfinding/DetourNavMap.h"
 #include "Pathfinding/NavSurfaceFile.h"
+#include "Types/FormatNumber.h"
 #include "Types/StringUtils.h"
 
 #include <algorithm>
@@ -179,10 +180,12 @@ std::string FormatBakeStatus(const NavigationSurface& surface)
             return "Waiting for: the terrain's heightfield to be built";
         if (surface.BakeWait == Components::NavigationBakeWait::BakedData)
             return "Waiting for: the baked data (.navsurface) to load";
+        if (surface.BakeWait == Components::NavigationBakeWait::SplineRecipes)
+            return "Waiting for: the scene's spline recipes to build";
         if (surface.BakeWait == Components::NavigationBakeWait::Model)
             return "Waiting for: model " + ModelName(surface.BlockingModel.ToGuid()) + " is still loading";
-        return "Waiting for: terrain tile " + TilePair(surface.BlockingTileX, surface.BlockingTileZ) +
-               " is not resident";
+        return "Waiting for: terrain height near X " + FormatFixed(surface.BlockingPoint.x, 0) + ", Z " +
+               FormatFixed(surface.BlockingPoint.z, 0) + " to load";
     case NavigationBakePhase::Baking:
         return "Baking: " + FormatGroupedInteger(surface.BakeDone) + " of " + FormatGroupedInteger(surface.BakeTotal) +
                " " + Units(surface.Mode);
@@ -202,7 +205,7 @@ bool SurfaceBounds(ECS::World& world, ECS::EntityHandle surface, Mathematics::Ve
         return false;
     const auto* transform = world.GetComponent<Components::WorldTransform>(surface);
     const PathfindingECS::NavigationTerrainSource terrain =
-        component->FitBounds ? PathfindingECS::ResolveNavigationTerrainSource(world) : PathfindingECS::NavigationTerrainSource{};
+        component->FitBounds ? PathfindingECS::ResolveNavigationTerrainSource(world, transform) : PathfindingECS::NavigationTerrainSource{};
     // Only a fitted surface with no planar terrain reads the geometry's bounds.
     const PathfindingECS::NavigationStaticGeometry geometry = component->FitBounds && !terrain.Query.IsValid()
                                                                   ? PathfindingECS::GatherNavigationStaticGeometry(world)
@@ -223,7 +226,8 @@ bool ListBakeSources(ECS::World& world, ECS::EntityHandle surface, std::vector<B
     if (!component)
         return false;
     const auto* transform = world.GetComponent<Components::WorldTransform>(surface);
-    const PathfindingECS::NavigationTerrainSource terrain = PathfindingECS::ResolveNavigationTerrainSource(world);
+    const PathfindingECS::NavigationTerrainSource terrain =
+        PathfindingECS::ResolveNavigationTerrainSource(world, transform);
     const PathfindingECS::NavigationStaticGeometry geometry = PathfindingECS::GatherNavigationStaticGeometry(world);
     const PathfindingECS::NavigationBounds bounds =
         PathfindingECS::NavigationSurfaceBounds(*component, transform, terrain, geometry);

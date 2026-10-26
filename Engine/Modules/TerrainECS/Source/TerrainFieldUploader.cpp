@@ -1,4 +1,5 @@
 #include "TerrainFieldUploader.h"
+#include "Mathematics/Interpolation.h"
 #include "TerrainColorMapCompose.h"
 #include "TerrainECS/TerrainColorMap.h"
 #include "TerrainECS/TerrainGrassField.h"
@@ -40,8 +41,8 @@ const TerrainFieldUploadDesc& ColorMapUploadDesc()
 uint8 TerrainFieldUploader::SampleCoarse(const TerrainFieldData& field, float32 u, float32 v, uint32 channel) const
 {
     if (!field.IsActive()) return m_Desc.Neutral;
-    const float32 x = std::clamp(u, 0.0f, 1.0f) * (field.Width - 1);
-    const float32 z = std::clamp(v, 0.0f, 1.0f) * (field.Height - 1);
+    const float32 x = Math::Clamp01(u) * (field.Width - 1);
+    const float32 z = Math::Clamp01(v) * (field.Height - 1);
     const uint32 x0 = static_cast<uint32>(x), z0 = static_cast<uint32>(z);
     const uint32 x1 = std::min(x0 + 1, field.Width - 1), z1 = std::min(z0 + 1, field.Height - 1);
     // The colour map's rgb bytes are sRGB-encoded linear values: decoded before the filter and encoded

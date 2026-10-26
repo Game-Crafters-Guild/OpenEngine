@@ -18,7 +18,7 @@
       "kind": "visibleTextNotFullyClipped",
       "subtreeId": "LogListView",
       "scrollViewUnderId": "LogListView",
-      "requiredClasses": ["log-trace", "log-debug", "log-info", "log-warning", "log-error", "log-critical"],
+      "requiredClasses": ["log-row-message"],
       "frameStart": 220,
       "frameEnd": 330,
       "minVisiblePx": 2.0,

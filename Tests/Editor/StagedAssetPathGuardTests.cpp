@@ -1,7 +1,7 @@
 // Staged engine assets do not live at one fixed offset from the executable: a
 // macOS app bundle (the Editor, the Player) puts them at Contents/Resources/Assets,
 // a sibling of the Contents/MacOS directory the executable sits in, while every
-// other layout stages them at <exe>/Assets. PathUtils::GetInstallAssetsRoot() owns
+// other layout stages them at <exe>/Assets. ApplicationPaths::GetInstallAssetsRoot() owns
 // that rule; a lookup that joins the executable directory to "Assets" itself is
 // right on Windows and Linux and silently wrong in a macOS bundle, and a lookup that
 // spells the bundle's "Resources"/"Assets" sibling by hand is a second copy of
@@ -31,9 +31,9 @@
 // not start with '*' is reported, and a real join on a line that also carries
 // a "//" is not. The behavioural cases over each loader are what cover the rest.
 //
-// Two files may spell the rule: Engine/Source/Core/PathUtils.cpp, which owns it,
+// Two files may spell the rule: Engine/Source/Core/ApplicationPaths.cpp, which owns it,
 // and Engine/Modules/Rendering/Source/ShaderGraph/SgGraphFileIO.cpp, whose module
-// cannot link PathUtils (GameEngineRendering is linked standalone by its own test
+// cannot link ApplicationPaths (GameEngineRendering is linked standalone by its own test
 // executables) and whose copy ShaderGraphNodesRootTests pins to the owner.
 //
 // Source-level invariant, so it reads the source tree (GE_REPO_SOURCE_DIR), the
@@ -197,7 +197,7 @@ bool IsTestPath(const fs::path& relative)
 bool IsExempt(const fs::path& relative)
 {
     static const fs::path kOwners[] = {
-        fs::path("Engine") / "Source" / "Core" / "PathUtils.cpp",
+        fs::path("Engine") / "Source" / "Core" / "ApplicationPaths.cpp",
         fs::path("Engine") / "Modules" / "Rendering" / "Source" / "ShaderGraph" / "SgGraphFileIO.cpp",
     };
     return std::find(std::begin(kOwners), std::end(kOwners), relative) != std::end(kOwners);
@@ -249,7 +249,7 @@ TEST(StagedAssetPathGuardTests, NoProductionSourceResolvesStagedAssetsBesideTheR
     for (const std::string& v : violations)
         report += "\n  " + v;
     EXPECT_TRUE(violations.empty())
-        << "Resolve staged engine assets through PathUtils::GetInstallAssetsRoot() (Editor code:"
+        << "Resolve staged engine assets through ApplicationPaths::GetInstallAssetsRoot() (Editor code:"
            " Editor::GetEditorGlobalPaths().installAssetsRoot) — <exe>/Assets does not exist inside"
            " a macOS app bundle and Resources/Assets exists only in one. Offenders:"
         << report;
@@ -259,13 +259,13 @@ TEST(StagedAssetPathGuardTests, NoProductionSourceResolvesStagedAssetsBesideTheR
 TEST(StagedAssetPathGuardTests, TheScannerSeesEverySpellingAndLeavesLegalJoinsAlone)
 {
     const std::string literalJoin =
-        "const auto path = PathUtils::GetExecutableDirectory() / \"Assets/UI/Graph/x.uxml\";";
+        "const auto path = ApplicationPaths::GetExecutableDirectory() / \"Assets/UI/Graph/x.uxml\";";
     EXPECT_EQ(FindViolations("Literal.cpp", literalJoin).size(), 1u);
 
     // The spelling the defect actually wore: the "Assets" prefix behind a name.
     const std::string constantJoin =
         "constexpr const char* kRel = \"Assets/UI/Graph/x.uxml\";\n"
-        "const auto path = PathUtils::GetExecutableDirectory() / kRel;";
+        "const auto path = ApplicationPaths::GetExecutableDirectory() / kRel;";
     EXPECT_EQ(FindViolations("Constant.cpp", constantJoin).size(), 1u);
 
     // The bundle sibling spelled by hand, with either separator style.
@@ -283,7 +283,7 @@ TEST(StagedAssetPathGuardTests, TheScannerSeesEverySpellingAndLeavesLegalJoinsAl
 
     const std::string resolved =
         "constexpr const char* kRel = \"UI/Graph/x.uxml\";\n"
-        "const auto path = PathUtils::GetInstallAssetsRoot() / kRel;";
+        "const auto path = ApplicationPaths::GetInstallAssetsRoot() / kRel;";
     EXPECT_TRUE(FindViolations("Resolved.cpp", resolved).empty());
 
     // A project-relative Assets join is a different thing entirely and stays legal.
@@ -293,7 +293,7 @@ TEST(StagedAssetPathGuardTests, TheScannerSeesEverySpellingAndLeavesLegalJoinsAl
     // Non-asset payloads genuinely do sit beside the executable on every
     // platform, macOS bundles included; the guard must not chase them, and a
     // bundle's other resources (notices, the ICD) are not the asset root.
-    const std::string exeSibling = "const auto sdk = PathUtils::GetExecutableDirectory() / \"SDK\";";
+    const std::string exeSibling = "const auto sdk = ApplicationPaths::GetExecutableDirectory() / \"SDK\";";
     EXPECT_TRUE(FindViolations("Sibling.cpp", exeSibling).empty());
     const std::string notices = "const auto dst = contentRoot.parent_path() / \"Resources\" / \"ThirdPartyNotices\";";
     EXPECT_TRUE(FindViolations("Notices.cpp", notices).empty());

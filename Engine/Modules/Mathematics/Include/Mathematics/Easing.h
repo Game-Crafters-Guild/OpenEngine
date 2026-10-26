@@ -1,11 +1,12 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <string>
 #include <string_view>
 
 namespace GameEngine::Math
@@ -41,7 +42,7 @@ inline float CubicBezierEval(float x1, float y1, float x2, float y2, float x)
                   + 3.0f * t2 * (1.0f - x2);
         if (std::abs(dxt) < 1e-6f) break;
         t -= (xt - x) / dxt;
-        t = std::clamp(t, 0.0f, 1.0f);
+        t = Clamp01(t);
     }
 
     // Evaluate bezierY(t)
@@ -203,41 +204,6 @@ inline std::string_view ToTweenEasingName(TweenEasing easing)
     return "Linear";
 }
 
-/// UI label: inserts spaces at camel-case boundaries (e.g. QuadOut -> "Quad Out"). Parsing uses compact
-/// names from ToTweenEasingName / kTweenEasingEntries.
-inline std::string FormatTweenEasingDisplayName(std::string_view compactName)
-{
-    std::string out;
-    if (compactName.empty())
-        return out;
-    out.reserve(compactName.size() + compactName.size() / 4);
-    out.push_back(static_cast<char>(compactName[0]));
-    for (size_t i = 1; i < compactName.size(); ++i)
-    {
-        const unsigned char c = static_cast<unsigned char>(compactName[i]);
-        const unsigned char p = static_cast<unsigned char>(compactName[i - 1]);
-        const bool isCap = (c >= 'A' && c <= 'Z');
-        if (isCap)
-        {
-            const bool prevLower = (p >= 'a' && p <= 'z');
-            const bool prevUpper = (p >= 'A' && p <= 'Z');
-            const bool nextLower =
-                (i + 1 < compactName.size()) &&
-                static_cast<unsigned char>(compactName[i + 1]) >= 'a' &&
-                static_cast<unsigned char>(compactName[i + 1]) <= 'z';
-            if (prevLower || (prevUpper && nextLower))
-                out.push_back(' ');
-        }
-        out.push_back(static_cast<char>(c));
-    }
-    return out;
-}
-
-inline std::string FormatTweenEasingDisplayName(TweenEasing easing)
-{
-    return FormatTweenEasingDisplayName(ToTweenEasingName(easing));
-}
-
 inline bool TryParseTweenEasingName(std::string_view name, TweenEasing& out)
 {
     for (const auto& e : kTweenEasingEntries)
@@ -255,13 +221,13 @@ inline bool TryParseTweenEasingName(std::string_view name, TweenEasing& out)
 inline float EvalCubicBezierAnchored01(float anchorStartY, float anchorEndY,
                                        float c1x, float c1y, float c2x, float c2y, float t)
 {
-    const float x = std::clamp(t, 0.0f, 1.0f);
-    anchorStartY = std::clamp(anchorStartY, 0.0f, 1.0f);
-    anchorEndY = std::clamp(anchorEndY, 0.0f, 1.0f);
-    c1x = std::clamp(c1x, 0.0f, 1.0f);
-    c1y = std::clamp(c1y, 0.0f, 1.0f);
-    c2x = std::clamp(c2x, 0.0f, 1.0f);
-    c2y = std::clamp(c2y, 0.0f, 1.0f);
+    const float x = Clamp01(t);
+    anchorStartY = Clamp01(anchorStartY);
+    anchorEndY = Clamp01(anchorEndY);
+    c1x = Clamp01(c1x);
+    c1y = Clamp01(c1y);
+    c2x = Clamp01(c2x);
+    c2y = Clamp01(c2y);
 
     auto sampleX = [](float c1, float c2, float u) {
         const float inv = 1.0f - u;
@@ -291,7 +257,7 @@ inline float EvalCubicBezierAnchored01(float anchorStartY, float anchorEndY,
         else
             hi = u;
     }
-    return std::clamp(sampleY(u), 0.0f, 1.0f);
+    return Clamp01(sampleY(u));
 }
 
 inline float EvalCubicBezier01(float c1x, float c1y, float c2x, float c2y, float t)
@@ -301,7 +267,7 @@ inline float EvalCubicBezier01(float c1x, float c1y, float c2x, float c2y, float
 
 inline float EvalTweenEasing(TweenEasing easing, float t)
 {
-    const float x = std::clamp(t, 0.0f, 1.0f);
+    const float x = Clamp01(t);
     constexpr float kEasingPi = 3.14159265358979323846f;
 
     auto quadIn = [](float v) { return v * v; };
@@ -355,8 +321,8 @@ inline float EvalTweenEasing(TweenEasing easing, float t)
     switch (easing)
     {
     case TweenEasing::Linear: return x;
-    case TweenEasing::Smooth: return x * x * (3.0f - 2.0f * x);
-    case TweenEasing::Fade: return x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);
+    case TweenEasing::Smooth: return SmoothStep(0.0f, 1.0f, x);
+    case TweenEasing::Fade: return SmootherStep(0.0f, 1.0f, x);
     case TweenEasing::Constant: return (x < 1.0f) ? 0.0f : 1.0f;
     case TweenEasing::QuadIn: return quadIn(x);
     case TweenEasing::QuadOut: return quadOut(x);

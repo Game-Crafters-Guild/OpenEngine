@@ -1734,25 +1734,31 @@ void Window::ResetCursor()
     glfwSetCursor(m_Handle, nullptr); // reset to default
 }
 
-void Window::SetCursorLocked(bool locked)
+void Window::LockCursor(LockedCursorMotion motion)
 {
-    if (!m_Handle || locked == m_CursorLocked)
+    if (!m_Handle)
         return;
 
 #if defined(__EMSCRIPTEN__)
     // A browser grants pointer lock only inside a user gesture, which this
     // per-frame call is not.
+    (void)motion;
     return;
 #endif
 
-    m_CursorLocked = locked;
-    if (locked)
-    {
+    if (!m_CursorLocked)
         glfwSetInputMode(m_Handle, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        if (glfwRawMouseMotionSupported())
-            glfwSetInputMode(m_Handle, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    m_CursorLocked = true;
+    if (glfwRawMouseMotionSupported())
+        glfwSetInputMode(m_Handle, GLFW_RAW_MOUSE_MOTION, motion == LockedCursorMotion::Raw ? GLFW_TRUE : GLFW_FALSE);
+}
+
+void Window::UnlockCursor()
+{
+    if (!m_Handle || !m_CursorLocked)
         return;
-    }
+
+    m_CursorLocked = false;
     if (glfwRawMouseMotionSupported())
         glfwSetInputMode(m_Handle, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
     glfwSetInputMode(m_Handle, GLFW_CURSOR, m_CursorHidden ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);

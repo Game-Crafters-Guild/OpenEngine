@@ -44,7 +44,7 @@ constexpr const char* kNoMatchText = "No mark-ups match the search or the status
 std::vector<Dropdown::Option> StatusFilterOptions()
 {
     std::vector<Dropdown::Option> options;
-    options.push_back(Dropdown::Option{"", "All statuses"});
+    options.push_back(Dropdown::Option{"", "All Statuses"});
     if (const MarkupService* service = MarkupService::TryGet())
     {
         for (uint32 id = 0; id < service->GetTagCount(); ++id)
@@ -140,7 +140,7 @@ void MarkupsPanel::BindFrame()
     if (UIElement* host = FindById("MarkupsSearchHost"_sid); host && host != m_SearchHost.Get())
     {
         PanelSearchBarBuilt search =
-            BuildPanelSearchBar("markups-search-field", {}, [this](const std::string&) { RequestRebuild(); });
+            BuildPanelSearchBar("markups-search-field", [this](const std::string&) { RequestRebuild(); });
         search.RootPtr->SetPlaceholder("Search mark-ups");
         search.RootPtr->AddClass("markups-search");
         m_Search = MakeWeakRef(search.FieldPtr);

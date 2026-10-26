@@ -5,6 +5,7 @@
 #include "ECS/Components.h"
 #include "ECS/Query.h"
 #include "ECS/World.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -28,11 +29,6 @@ struct ExtractedWindVolume
     float HalfExtents[3]{0.5f, 0.5f, 0.5f};
     bool ValidSpatial = true;
 };
-
-float Clamp01(float v)
-{
-    return std::clamp(v, 0.0f, 1.0f);
-}
 
 void Normalize3(float& x, float& y, float& z)
 {
@@ -206,7 +202,7 @@ ResolvedWind WindVolumeResolver::ResolveAt(ECS::World& world,
     ResolvedWind result = baseWind;
     for (const ExtractedWindVolume& volume : volumes)
     {
-        const float influence = Clamp01(volume.Volume.Weight) * SpatialWeight(volume, worldX, worldY, worldZ);
+        const float influence = Math::Clamp01(volume.Volume.Weight) * SpatialWeight(volume, worldX, worldY, worldZ);
         if (influence <= 0.0f)
             continue;
 
@@ -287,7 +283,7 @@ void WindVolumeResolver::ExtractGPU(ECS::World& world, std::vector<Rendering::Wi
         gpu.VelocityWeight[0] = x * speed;
         gpu.VelocityWeight[1] = y * speed;
         gpu.VelocityWeight[2] = z * speed;
-        gpu.VelocityWeight[3] = Clamp01(v.Volume.Weight);
+        gpu.VelocityWeight[3] = Math::Clamp01(v.Volume.Weight);
         gpu.Gust[0] = std::max(v.Volume.Turbulence, 0.0f);
         gpu.Gust[1] = std::max(v.Volume.GustFrequency, 0.0f);
         gpu.Gust[2] = std::max(v.Volume.GustScale, 0.001f);

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "AssetCore/Types.h"
 #include "Types/StringId.h"
+#include "Types/Types.h"
 
 #include <cstddef>
 #include <cstdint>

@@ -145,6 +145,8 @@ target_include_directories(UI PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Include)
 # AssetManager.h includes FileWatcher/FileWatcher.h. Headers only: the
 # FileWatcher objects reach the binary through the Engine module splice.
 target_include_directories(UI PRIVATE $<TARGET_PROPERTY:FileWatcher,INTERFACE_INCLUDE_DIRECTORIES>)
+# AssetManager.h includes Events/Event.h (header-only).
+target_link_libraries(UI PRIVATE Events)
 
 # Third-party dependencies via vcpkg (optional for now; linked when present)
 find_package(pugixml CONFIG QUIET)
@@ -525,11 +527,11 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedMarkupUnseenDotTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedSearchPlaceholderTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedHeadingWeightTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedDropdownPictureRowTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FontWeightMatchTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ShippedFontFaceTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/StyleApplierTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UIHoverTransitionTests.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/MathInterpolationTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CSSTransitionParserTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/StyleInterpolationTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CssTransformStyleTests.cpp
@@ -582,6 +584,16 @@ if(BUILD_TESTING)
         COMMENT "Staging FloatingPanel.uxml for UIStyleTests"
         VERBATIM)
 
+    # Dropdown instantiates each picture row from this layout through the asset
+    # manager; ShippedDropdownPictureRowTests mount the staged Assets/ tree as the
+    # editor source, so the file sits next to the control's stylesheet.
+    add_custom_command(TARGET UIStyleTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/DropdownPictureRow.uxml"
+            "$<TARGET_FILE_DIR:UIStyleTests>/Assets/UI/controls/DropdownPictureRow.uxml"
+        COMMENT "Staging DropdownPictureRow.uxml for UIStyleTests"
+        VERBATIM)
+
     # Controls: buttons, toggles, dropdowns, fields and text inputs, sliders,
     # list, grid, tree and table views, popups, docking and focus hand-off.
     ge_add_ui_test(UIControlTests
@@ -603,6 +615,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextFieldPointerTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FieldCaptionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FloatFieldDragToChangeTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PointerLockTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextInputSelectionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ReleaseFocusHandoffTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextInputCursorTests.cpp

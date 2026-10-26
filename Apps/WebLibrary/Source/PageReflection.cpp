@@ -5,6 +5,7 @@
 #include "ECS/ComponentFieldRegistry.h"
 #include "ECS/ComponentRegistry.h"
 #include "Types/FlatMap.h"
+#include "Types/StringUtils.h"
 
 #include <nlohmann/json.hpp>
 
@@ -23,12 +24,6 @@ bool IsPageField(const ECS::FieldInfo& field)
 {
     return field.Type != ECS::FieldTypeId::Unknown &&
            !ECS::HasAnyFlag(field.Flags, ECS::FieldFlags::Hidden | ECS::FieldFlags::Transient);
-}
-
-std::string_view UnqualifiedName(std::string_view canonicalName)
-{
-    const size_t separator = canonicalName.rfind("::");
-    return separator == std::string_view::npos ? canonicalName : canonicalName.substr(separator + 2);
 }
 
 // The member name as the generated components.d.ts spells it: the leading capitals lowered,
@@ -54,7 +49,9 @@ nlohmann::ordered_json FieldJson(const ECS::FieldInfo& field)
     json["kind"] = std::string(KindName(field.Type));
     json["offset"] = field.Offset;
     json["size"] = field.Size;
-    json["count"] = field.Size / ElementSize(field.Type);
+    // A byte-run kind with no element width (Bytes) counts its bytes.
+    const std::uint32_t elementSize = ECS::FieldElementSize(field.Type);
+    json["count"] = elementSize == 0 ? field.Size : field.Size / elementSize;
     if (!field.EnumNames.empty())
     {
         nlohmann::ordered_json enumerators = nlohmann::ordered_json::array();
@@ -143,39 +140,6 @@ std::vector<PageComponent> ListPageComponents()
     std::sort(components.begin(), components.end(),
               [](const PageComponent& a, const PageComponent& b) { return a.Name < b.Name; });
     return components;
-}
-
-std::uint32_t ElementSize(ECS::FieldTypeId type)
-{
-    using ECS::FieldTypeId;
-    switch (type)
-    {
-    case FieldTypeId::Int16:
-    case FieldTypeId::UInt16:
-        return 2;
-    case FieldTypeId::Int32:
-    case FieldTypeId::UInt32:
-    case FieldTypeId::Float:
-    case FieldTypeId::EntityHandle:
-    case FieldTypeId::RenderLayerMask:
-        return 4;
-    case FieldTypeId::Int64:
-    case FieldTypeId::UInt64:
-    case FieldTypeId::Double:
-    case FieldTypeId::Vec2:
-        return 8;
-    case FieldTypeId::Vec3:
-        return 12;
-    case FieldTypeId::Vec4:
-    case FieldTypeId::Quat:
-    case FieldTypeId::Color:
-    case FieldTypeId::AssetGuid:
-        return 16;
-    case FieldTypeId::Mat4:
-        return 64;
-    default:
-        return 1;
-    }
 }
 
 std::string_view KindName(ECS::FieldTypeId type)

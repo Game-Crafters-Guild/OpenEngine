@@ -63,6 +63,7 @@ export const tools: ToolDef[] = [
       x: z.coerce.number().optional().describe("X in the editor window's UI coordinates (the logical pixels get_ui_tree reports), not desktop pixels"),
       y: z.coerce.number().optional().describe("Y in the editor window's UI coordinates (the logical pixels get_ui_tree reports), not desktop pixels"),
       button: z.enum(["left", "right", "middle"]).optional().describe("Mouse button (default left). right opens real context menus — on macOS the popup is deferred past the IPC reply, so this does not stall; on Windows the native popup's nested message loop blocks the debug server until the menu closes, so prefer open_context_menu there"),
+      clickCount: z.coerce.number().int().min(1).max(3).optional().describe("Clicks in one gesture (default 1): 2 is a double-click, 3 a triple-click. The presses land inside the platform's double-click interval at any frame rate, which two separate click_element calls cannot promise"),
     },
   }),
 

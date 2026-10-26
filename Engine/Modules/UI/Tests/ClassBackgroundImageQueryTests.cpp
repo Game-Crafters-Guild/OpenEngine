@@ -17,7 +17,7 @@
 #include "UI/ClassBackgroundImageQuery.h"
 #include "UI/UIStyle.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 
 #include <gtest/gtest.h>
 
@@ -29,7 +29,7 @@
 #include <string_view>
 #include <vector>
 
-using GameEngine::PathUtils;
+using GameEngine::ApplicationPaths;
 using GameEngine::Stylesheet;
 using GameEngine::StylesheetHandle;
 using GameEngine::UIParsing::CSSParser;
@@ -63,7 +63,7 @@ std::string ResolveIn(const std::string& cssText, std::string_view className)
 // the executable directory, never back into the source tree.
 std::filesystem::path ShippedUiRoot()
 {
-    return PathUtils::GetExecutableDirectory() / "Assets" / "UI";
+    return ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI";
 }
 
 std::string ReadShipped(const std::filesystem::path& relative)

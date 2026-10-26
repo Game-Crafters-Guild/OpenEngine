@@ -620,6 +620,7 @@ void RGFrame::RecordAndSubmit()
 
             // Remaining (non-hoisted) barriers — before BeginRenderPass, always.
             m_ScratchPassBarriers.clear();
+            m_ScratchRelocatedBarriers.clear();
             if (const RGBarrierBatch* bb = m_ScratchBatchOfSched[si])
             {
                 for (uint32_t k = 0; k < bb->Count; ++k)
@@ -627,8 +628,6 @@ void RGFrame::RecordAndSubmit()
                     const RGBarrier& b = m_Graph.Barriers()[bb->First + k];
                     if (b.FirstTouch)
                         continue; // hoisted
-                    if (barrierSubOf[bb->First + k] != kInvalidId)
-                        continue; // relocated onto a submission tail
                     // Cross-queue is a PHYSICAL property: producer and consumer
                     // on aliased logical queues share one queue's submission
                     // order, there is no semaphore between them, and rewriting
@@ -638,7 +637,12 @@ void RGFrame::RecordAndSubmit()
                         m_PhysicalQueueOf[b.SrcQueue] != sub.PhysicalQueue;
                     ResourceBarrier eb;
                     translate(b, crossPhysical, sub.Queue, eb);
-                    m_ScratchPassBarriers.push_back(eb);
+                    // A transition the plan placed on another submission's tail records
+                    // there; this list only notes the layout it leaves.
+                    if (barrierSubOf[bb->First + k] != kInvalidId)
+                        m_ScratchRelocatedBarriers.push_back(eb);
+                    else
+                        m_ScratchPassBarriers.push_back(eb);
                 }
             }
             if (!m_ScratchPassBarriers.empty())
@@ -649,6 +653,8 @@ void RGFrame::RecordAndSubmit()
                 ++m_Stats.BarrierBatchesEmitted;
                 m_Stats.BarriersEmitted += static_cast<uint32_t>(m_ScratchPassBarriers.size());
             }
+            if (!m_ScratchRelocatedBarriers.empty())
+                cl->RecordStateAfterBarriers(m_ScratchRelocatedBarriers);
 
             // Profiling bracket: render pass + exec lambda; per-pass barriers
             // and the hoist excluded (matches the old graph's bracket). CPU
@@ -750,13 +756,11 @@ void RGFrame::RecordAndSubmit()
         //   · relocated transition — the consumer is a submission in THIS frame
         //     that already waits on this one, and a semaphore signal/wait pair
         //     is a full memory dependency, not merely an execution one;
-        //   · export contract — the consumer is next frame. On a graphics
-        //     placement queue submission order covers it. On a NON-graphics
-        //     placement nothing in this frame's plan orders it: the device's
-        //     per-frame fences span MAX_FRAMES_IN_FLIGHT slots and the compute
-        //     fence is never armed for graph work, so the edge holds only while
-        //     some later frame carries a compute→graphics wait that transitively
-        //     covers it. That residual is Hole 1's open half, not a guarantee.
+        //   · export contract — the consumer is next frame. A consumer on the
+        //     placement's queue is ordered by submission order; one on another
+        //     queue waits on the placement's submission, because the plan records
+        //     the export as a write of the imported physical and the next frame's
+        //     plan orders conflicting accesses after it (RGCrossFrameAccesses).
         m_ScratchPassBarriers.clear();
         for (uint32_t k = 0; k < barrierSubOf.size(); ++k)
         {

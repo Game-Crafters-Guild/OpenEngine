@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 #include "Scripting/CoreCLRHost.h"
 #include "Scripting/PathResolver.h"
 
@@ -23,7 +23,7 @@ TEST(CoreClrHostingSmoke, InitializeAndSanityPing)
         GTEST_SKIP() << "Scripts runtimeconfig.json not found; ensure CoreBridge/HotReload are staged.";
     }
 
-    std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+    std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
     std::filesystem::path preferred = exeDir.parent_path() / "GameEngine.CoreBridge.dll";
     std::filesystem::path coreBridgeDll = ScriptingPaths::ResolveCoreBridgeDll(preferred);
     if (coreBridgeDll.empty() || !std::filesystem::exists(coreBridgeDll))

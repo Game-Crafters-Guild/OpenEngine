@@ -6,7 +6,7 @@
 #include "Mathematics/Vector3.h"
 #include "Pathfinding/DetourNavMap.h"
 #include "Pathfinding/GridMap.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "SceneView/ComponentGizmoRegistry.h"
 #include "SceneView/SceneViewGizmos.h"

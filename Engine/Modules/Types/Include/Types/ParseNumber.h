@@ -235,4 +235,30 @@ inline bool ParseStrictDecimal(std::string_view text, double& outValue)
     return true;
 }
 
+// A whole decimal integer: an optional '-' and digits, nothing before or after them (no space, no
+// '+', no hex). The whole text is the number, where ParseFloat reads the number at its start.
+// Locale-independent and never throws, unlike std::stoi. Nullopt when the text is not such a number
+// or it is past int64_t's range.
+inline std::optional<int64_t> ParseInt(std::string_view text)
+{
+    int64_t value = 0;
+    const char* end = text.data() + text.size();
+    const auto [ptr, ec] = std::from_chars(text.data(), end, value);
+    if (ec != std::errc{} || ptr != end)
+        return std::nullopt;
+    return value;
+}
+
+// ParseInt above for an unsigned integer: digits only, so "-1" is refused rather than wrapped as
+// std::stoull wraps it. Nullopt past uint64_t's range.
+inline std::optional<uint64_t> ParseUnsigned(std::string_view text)
+{
+    uint64_t value = 0;
+    const char* end = text.data() + text.size();
+    const auto [ptr, ec] = std::from_chars(text.data(), end, value);
+    if (ec != std::errc{} || ptr != end)
+        return std::nullopt;
+    return value;
+}
+
 } // namespace GameEngine

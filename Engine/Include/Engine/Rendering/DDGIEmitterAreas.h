@@ -1,9 +1,9 @@
 #pragma once
 
 #include "AssetCore/GUID.h"
+#include "Mathematics/Matrix3x3.h"
 #include "Mathematics/Matrix4x4.h"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -59,7 +59,7 @@ class DDGIEmitterAreas
         uint32_t MeshIndex = 0;
         uint64_t ContentHash = 0;
         uint64_t RegistryRevision = 0;
-        std::array<float, 9> LinearTransform{};
+        Mathematics::Matrix3x3 LinearTransform;  // the instance transform's upper-left 3x3
         float SurfaceArea = 0.0f;
     };
     // Sorted by InstanceIndex. Update walks instances in index order, so it

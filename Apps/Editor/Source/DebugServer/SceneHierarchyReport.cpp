@@ -46,8 +46,8 @@ json DescribeSceneHierarchy(ECS::World& world)
     for (const ECS::EntityHandle entity : world.GetAliveEntitiesSnapshot())
     {
         const auto* parent = world.GetComponent<Components::Parent>(entity);
-        if (parent && parent->parent.IsValid() && world.IsValid(parent->parent))
-            childrenByParent[parent->parent.id].push_back(entity);
+        if (parent && parent->Entity.IsValid() && world.IsValid(parent->Entity))
+            childrenByParent[parent->Entity.id].push_back(entity);
         else
             roots.push_back(entity);
     }

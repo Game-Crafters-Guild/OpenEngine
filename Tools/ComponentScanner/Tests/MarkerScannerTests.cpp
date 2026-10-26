@@ -54,6 +54,18 @@ TEST(MarkerScanner, DetectsEditorOnlyMarkerOnlyInALineComment)
     EXPECT_TRUE(m.NoAdd.empty());
 }
 
+// The text after a struct's @ge-readonly or @ge-engine-internal names the system that writes it; @ge-tag
+// marks a component with no fields.
+TEST(MarkerScanner, ReadsTheWriterAfterAStructMarkerAndTheTag)
+{
+    const MarkerLines m = Scan("// @ge-readonly TransformHierarchySystem\n// @ge-engine-internal: render extraction\n"
+                               "// @ge-tag\n// @ge-readonly");
+    EXPECT_EQ("TransformHierarchySystem", m.Writers.at(1));
+    EXPECT_EQ("render extraction", m.Writers.at(2));
+    EXPECT_EQ(1u, m.Tag.count(3));
+    EXPECT_EQ("", m.Writers.at(4));
+}
+
 TEST(MarkerScanner, DetectsMarkerInTrailingComment)
 {
     const MarkerLines m = Scan("float Radius = 1.0f;  // @ge-readonly runtime handle");

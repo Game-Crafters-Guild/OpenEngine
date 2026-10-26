@@ -101,6 +101,9 @@ private:
     void BeginDragToChange(float mouseX);
     void UpdateDragToChange(float mouseX);
     void EndDragToChange();
+    // Escape or another button during the drag: the value goes back to where
+    // the drag started, committed through the same value-changed path.
+    void CancelDragToChange();
 
     inline static bool m_BigNumberSpacingEnabled = true;
     bool m_UseCompactFormat = true;

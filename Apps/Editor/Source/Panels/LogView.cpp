@@ -1,287 +1,192 @@
 #include "Panels/LogView.h"
 
-#include "Platform/SystemMetrics.h"
-#include "Types/StringUtils.h"
-
-#include <chrono>
-#include <cctype>
-#include <deque>
-#include <iomanip>
-#include <sstream>
-#include <algorithm>
-
-#include "Logger/LogLevel.h"
+#include "AssetCore/SharedFileRead.h"
+#include "Editor/EditorPaths.h"
+#include "Input/KeyCodes.h"
+#include "Logger/LogSink.h"
+#include "Logger/Logger.h"
 #include "UI/Controls/Label.h"
-#include "UI/Controls/ScrollView.h"
+#include "UI/Controls/ListView.h"
+#include "UI/Interaction/Selection.h"
+#include "UI/Parsers/XMLParser.h"
+#include "UI/Registration/ElementRegistration.h"
+#include "UI/UIEvents.h"
+
+#include <algorithm>
+#include <array>
+#include <filesystem>
+#include <iterator>
+#include <optional>
+#include <utility>
+#include <vector>
 
 namespace GameEngine {
 
 namespace {
 
-LogView::StoredMessage MakeStoredMessage(const Logger::LogMessage& msg)
+constexpr const char* kRowLayoutAssetPath = "UI/panels/LogPanel/LogRow.uxml";
+constexpr const char* kGlyphId = "LogRowGlyph";
+constexpr const char* kTimeId = "LogRowTime";
+constexpr const char* kMessageId = "LogRowMessage";
+/// Only on rows whose entry names a source: elsewhere a double-click only selects.
+constexpr const char* kOpenSourceTooltip = "Double-click to open the source.";
+
+/// A burst (an asset scan) can queue thousands of lines; the list takes this many per frame and
+/// keeps the rest queued, so no single frame pays for the burst.
+constexpr size_t kMaxFlushPerFrame = 2000;
+/// Messages queued while the panel is not flushing (hidden, paused) are capped; the oldest go first,
+/// as the model would drop them anyway.
+constexpr size_t kMaxPending = 16384;
+
+/// One class per severity for each part of a row, indexed by LogModel::Severity.
+using SeverityClasses = std::array<const char*, LogModel::kSeverityCount>;
+constexpr SeverityClasses kGlyphSeverityClasses{"log-row-glyph-debug", "log-row-glyph-info", "log-row-glyph-warning",
+                                                "log-row-glyph-error"};
+constexpr SeverityClasses kMessageSeverityClasses{"log-row-message-debug", "log-row-message-info",
+                                                  "log-row-message-warning", "log-row-message-error"};
+
+std::string ReadRowLayoutText()
 {
-    LogView::StoredMessage stored;
-    stored.Level = msg.Level;
-    stored.Text = msg.Message;
-    stored.TimestampRaw = msg.Timestamp;
-    stored.SourceFile = msg.SourceFile;
-    stored.SourceLine = msg.SourceLine;
-    stored.Function = msg.Function;
-    stored.Backtrace = msg.Backtrace;
-    return stored;
+    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / kRowLayoutAssetPath;
+    std::string text;
+    if (!ReadFileTextShared(path, text))
+        Logger::Log::Error("Log panel: {} did not read, so the list shows empty rows. Check that it is staged under "
+                           "the editor asset mount.",
+                           path.generic_string());
+    return text;
 }
 
-std::string FormatTimestamp(const Logger::TimePoint& timestamp)
+// Read once per process: the list builds a row per pooled slot.
+const std::string& RowLayoutText()
 {
-    auto timeT = std::chrono::system_clock::to_time_t(timestamp);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        timestamp.time_since_epoch()) % 1000;
+    static const std::string s_Text = ReadRowLayoutText();
+    return s_Text;
+}
 
-    std::tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &timeT);
-#else
-    localtime_r(&timeT, &tm);
-#endif
+void SetSeverityClass(UIElement* part, const SeverityClasses& classes, LogModel::Severity severity)
+{
+    if (!part)
+        return;
+    for (const char* name : classes)
+        part->RemoveClass(name);
+    part->AddClass(classes[static_cast<size_t>(severity)]);
+}
 
-    std::ostringstream oss;
-    oss << std::setfill('0') << std::setw(2) << tm.tm_hour << ':'
-        << std::setw(2) << tm.tm_min << ':'
-        << std::setw(2) << tm.tm_sec << '.'
-        << std::setw(3) << ms.count();
-    return oss.str();
+std::string_view FirstLine(std::string_view text)
+{
+    const size_t end = text.find_first_of("\r\n");
+    return end == std::string_view::npos ? text : text.substr(0, end);
 }
 
 } // namespace
 
-// Lazy accessors: compute once, cache on the message. See header comment for rationale.
-const std::string& LogView::GetDisplayText(const StoredMessage& m)
-{
-    if (m.DisplayTextCache.empty())
+/// One pooled row: the parts of LogRow.uxml, found once when the row is built and set on every bind.
+class LogView::Row : public UIElement {
+public:
+    Row()
     {
-        m.DisplayTextCache.reserve(m.Text.size() + 32);
-        m.DisplayTextCache.assign("[");
-        m.DisplayTextCache += FormatTimestamp(m.TimestampRaw);
-        m.DisplayTextCache += "] [";
-        m.DisplayTextCache += Logger::LogLevelToString(m.Level);
-        m.DisplayTextCache += "] ";
-        m.DisplayTextCache += m.Text;
+        std::unique_ptr<UIElement> layout;
+        const std::string& layoutText = RowLayoutText();
+        if (layoutText.empty() || !UIParsing::XMLParser::ParseLayoutFromString(layoutText, layout, kRowLayoutAssetPath) ||
+            !layout)
+            return;
+        // The row takes the layout root's place: its classes and its parts.
+        for (const std::string& name : layout->GetClasses())
+            AddClass(name);
+        m_Glyph = layout->FindById(HashStringId(kGlyphId));
+        m_Time = dynamic_cast<Label*>(layout->FindById(HashStringId(kTimeId)));
+        m_Message = dynamic_cast<Label*>(layout->FindById(HashStringId(kMessageId)));
+        while (!layout->GetChildren().empty())
+            AddChild(layout->TakeChild(layout->GetChildren().front().get()));
     }
-    return m.DisplayTextCache;
-}
 
-const std::string& LogView::GetDisplayLower(const StoredMessage& m)
-{
-    if (m.DisplayLowerCache.empty())
+    void Bind(const LogModel::Entry& entry)
     {
-        m.DisplayLowerCache = ToLowerAscii(GetDisplayText(m));
+        const LogModel::Severity severity = LogModel::SeverityOf(entry.Level);
+        SetTooltip(LogModel::FindSourceToOpen(entry) ? kOpenSourceTooltip : "");
+        SetSeverityClass(m_Glyph, kGlyphSeverityClasses, severity);
+        if (m_Time)
+            m_Time->SetText(LogModel::FormatTime(entry));
+        if (m_Message)
+        {
+            SetSeverityClass(m_Message, kMessageSeverityClasses, severity);
+            m_Message->SetText(std::string(FirstLine(entry.Text)));
+        }
     }
-    return m.DisplayLowerCache;
-}
 
-void LogView::InvalidateDisplayCaches()
-{
-    for (auto& m : m_Messages)
+private:
+    UIElement* m_Glyph = nullptr;
+    Label* m_Time = nullptr;
+    Label* m_Message = nullptr;
+};
+
+class LogView::DataProvider : public ListChangeTrackingProvider {
+public:
+    explicit DataProvider(const LogModel& model) : m_Model(model) {}
+
+    int GetItemCount() const override { return static_cast<int>(m_Model.GetVisibleCount()); }
+    ListId GetItemId(int index) const override
     {
-        m.DisplayTextCache.clear();
-        m.DisplayLowerCache.clear();
+        const LogModel::Entry* entry = index >= 0 ? m_Model.GetVisibleEntry(static_cast<size_t>(index)) : nullptr;
+        return entry ? entry->Sequence : 0;
     }
-}
+    float GetItemHeight(int /*index*/) const override { return kRowHeight; }
 
-// LogDataProvider implementation
-int LogView::LogDataProvider::GetItemCount() const
-{
-    if (m_Owner->IsViewFiltered())
-        return static_cast<int>(m_Owner->m_FilteredIndices.size());
-    return static_cast<int>(m_Owner->m_Messages.size());
-}
-
-ListId LogView::LogDataProvider::GetItemId(int index) const
-{
-    // Use the underlying message index + 1 as a stable ID (0 is reserved for "no selection").
-    size_t messageIndex = static_cast<size_t>(index);
-    if (m_Owner->IsViewFiltered())
-    {
-        if (index < 0 || index >= static_cast<int>(m_Owner->m_FilteredIndices.size()))
-            return 0;
-        messageIndex = m_Owner->m_FilteredIndices[static_cast<size_t>(index)];
-    }
-    return static_cast<ListId>(messageIndex + 1);
-}
-
-float LogView::LogDataProvider::GetItemHeight(int /*index*/) const
-{
-    return m_Owner->m_RowHeight;
-}
+private:
+    const LogModel& m_Model;
+};
 
 LogView::LogView()
 {
     AddClass("log-view");
     SetId("LogView");
 
-    m_DataProvider = std::make_unique<LogDataProvider>(this);
-    SetupListView();
-}
+    m_DataProvider = std::make_unique<DataProvider>(m_Model);
+    m_SelectionModel = std::make_unique<UI::Interaction::SelectionModel>();
 
-LogView::~LogView() = default;
-
-void LogView::SetupListView()
-{
     auto listView = std::make_unique<ListView>();
     m_ListView = listView.get();
     m_ListView->SetId("LogListView");
     m_ListView->AddClass("log-list");
     m_ListView->SetFocusable(true);
     m_ListView->SetDataProvider(m_DataProvider.get());
-
-    m_SelectionModel = std::make_unique<UI::Interaction::SelectionModel>();
     m_ListView->SetSelectionModel(m_SelectionModel.get());
-
-    m_SelectionModel->SetOnChanged([this]() {
-        if (!m_OnMessageSelected)
-            return;
-        auto anchor = m_SelectionModel ? m_SelectionModel->GetAnchor() : 0;
-        if (anchor == 0)
+    m_SelectionModel->SetOnChanged([this]() { OnSelectionModelChanged(); });
+    m_ListView->SetItemFactory([this](ListId, IListDataProvider*) { return MakeRow(); });
+    m_ListView->SetItemBinder(
+        [this](UIElement* row, ListId, int index, IListDataProvider*)
         {
-            m_OnMessageSelected(0, nullptr);
-            return;
-        }
-        const size_t idx = static_cast<size_t>(anchor - 1);
-        if (idx >= m_Messages.size())
-        {
-            m_OnMessageSelected(0, nullptr);
-            return;
-        }
-        m_OnMessageSelected(idx, &m_Messages[idx]);
-    });
-
-    // Set up item factory - creates Label elements for log entries
-    m_ListView->SetItemFactory([](ListId /*id*/, IListDataProvider* /*provider*/) {
-        auto label = std::make_unique<Label>();
-        label->AddClass("log-line");
-        return label;
-    });
-
-    // Set up item binder - binds data to the Label
-    m_ListView->SetItemBinder([this](UIElement* element, ListId /*id*/, int index, IListDataProvider* /*provider*/) {
-        auto* label = static_cast<Label*>(element);
-        if (!label)
-            return;
-
-        size_t messageIndex = static_cast<size_t>(index);
-        if (IsViewFiltered())
-        {
-            if (index < 0 || index >= static_cast<int>(m_FilteredIndices.size()))
-                return;
-            messageIndex = m_FilteredIndices[static_cast<size_t>(index)];
-        }
-        if (messageIndex >= m_Messages.size())
-            return;
-
-        const auto& stored = m_Messages[messageIndex];
-
-        // Remove old level classes and add new one
-        label->RemoveClass("log-trace");
-        label->RemoveClass("log-debug");
-        label->RemoveClass("log-info");
-        label->RemoveClass("log-warning");
-        label->RemoveClass("log-error");
-        label->RemoveClass("log-critical");
-        label->AddClass(GetLogLevelClass(stored.Level));
-
-        label->SetText(GetDisplayText(stored));
-
-        auto& rowState = m_RowState[label];
-        rowState.MessageIndex = messageIndex;
-
-        // Wire up click handlers (only once per pooled element)
-        if (!rowState.ClickWired)
-        {
-            rowState.ClickWired = true;
-            rowState.LastClickTimeMs = 0;
-
-            // Mouse up - detect single click vs double click
-            label->RegisterEventHandler(kEventMouseUp, [this](UIEvent& e) {
-                UIElement* target = e.Target;
-                if (!target)
-                    return;
-
-                auto it = m_RowState.find(target);
-                if (it == m_RowState.end())
-                    return;
-                const size_t idx = it->second.MessageIndex;
-
-                if (idx >= m_Messages.size())
-                    return;
-
-                // Check for double click (within 400ms)
-                auto now = std::chrono::steady_clock::now();
-                auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-
-                const bool isDoubleClick =
-                    std::chrono::milliseconds(nowMs - it->second.LastClickTimeMs) <
-                    GameEngine::Platform::GetDoubleClickInterval();
-                it->second.LastClickTimeMs = nowMs;
-
-                // Selection is updated by ListView on MouseDown (Shift/Ctrl multi-select).
-                // We only handle copy and double-click here.
-                if (isDoubleClick)
-                {
-                    // Double click - open in IDE
-                    if (m_OnLineDoubleClicked)
-                        m_OnLineDoubleClicked(m_Messages[idx].Text);
-                }
-                else
-                {
-                    // Single click - copy all selected lines to clipboard
-                    if (m_OnLineClicked)
-                    {
-                        std::string toCopy = GetSelectedLinesAsText();
-                        if (toCopy.empty())
-                            toCopy = GetDisplayText(m_Messages[idx]);
-                        m_OnLineClicked(toCopy);
-                    }
-                }
-            });
-        }
-    });
-
+            if (row)
+                BindRow(*row, index);
+        });
+    m_ListView->SetOnItemActivated([this](ListId id) { OnItemActivated(id); });
+    m_ListView->SetOnContextMenu([this](ListId id, float x, float y) { OnListContextMenu(id, x, y); });
+    m_ListView->RegisterEventHandler(kEventKeyDown, [this](UIEvent& event) { OnListKeyDown(event); });
     AddChild(std::move(listView));
 }
 
-void LogView::Clear()
-{
-    {
-        std::lock_guard<std::mutex> lock(m_PendingMutex);
-        m_PendingMessages.clear();
-    }
-    m_Messages.clear();
-    m_FilteredIndices.clear();
+LogView::~LogView() = default;
 
-    if (m_ListView)
-        m_ListView->RefreshFromProvider();
+std::unique_ptr<UIElement> LogView::MakeRow()
+{
+    return std::make_unique<Row>();
 }
 
-size_t LogView::GetMessageCount() const
+void LogView::BindRow(UIElement& row, int index)
 {
-    return m_Messages.size();
+    const LogModel::Entry* entry = index >= 0 ? m_Model.GetVisibleEntry(static_cast<size_t>(index)) : nullptr;
+    // Every row comes from MakeRow.
+    if (entry)
+        static_cast<Row&>(row).Bind(*entry);
 }
 
 void LogView::AddMessage(const Logger::LogMessage& message)
 {
+    LogModel::Entry entry = LogModel::MakeEntry(message);
     std::lock_guard<std::mutex> lock(m_PendingMutex);
-    // Cap the staging deque so the drain thread can't grow it unboundedly
-    // when FlushPendingMessages is called less often (panel hidden, UI
-    // pause, burst arrival). Drop oldest pending messages on overflow —
-    // the visible LogView already preserves the most recent m_MaxMessages
-    // anyway, so dropping pre-flush avoids paying for messages that would
-    // immediately be trimmed by m_MaxMessages on flush.
-    constexpr std::size_t kMaxPending = 16384;
-    if (m_PendingMessages.size() >= kMaxPending)
-    {
-        m_PendingMessages.pop_front();
-    }
-    m_PendingMessages.push_back(MakeStoredMessage(message));
+    if (m_Pending.size() >= kMaxPending)
+        m_Pending.pop_front();
+    m_Pending.push_back(std::move(entry));
 }
 
 void LogView::FlushPendingMessages()
@@ -289,295 +194,181 @@ void LogView::FlushPendingMessages()
     if (m_Paused)
         return;
 
-    // Drain up to m_MaxFlushPerFrame messages. Excess stays queued so the next
-    // frame can continue absorbing without any single frame paying the full
-    // cost of a burst.
-    std::deque<StoredMessage> pending;
+    std::deque<LogModel::Entry> batch;
     {
         std::lock_guard<std::mutex> lock(m_PendingMutex);
-        if (m_PendingMessages.empty())
+        if (m_Pending.empty())
             return;
-        if (m_PendingMessages.size() <= m_MaxFlushPerFrame)
+        if (m_Pending.size() <= kMaxFlushPerFrame)
         {
-            pending.swap(m_PendingMessages);
+            batch.swap(m_Pending);
         }
         else
         {
-            const auto end = m_PendingMessages.begin() + static_cast<std::ptrdiff_t>(m_MaxFlushPerFrame);
-            pending.assign(std::make_move_iterator(m_PendingMessages.begin()),
-                           std::make_move_iterator(end));
-            m_PendingMessages.erase(m_PendingMessages.begin(), end);
+            const auto end = m_Pending.begin() + static_cast<std::ptrdiff_t>(kMaxFlushPerFrame);
+            batch.assign(std::make_move_iterator(m_Pending.begin()), std::make_move_iterator(end));
+            m_Pending.erase(m_Pending.begin(), end);
         }
     }
 
-    if (pending.empty())
-        return;
-
-    int appendedCount = 0;
-    int appendedVisible = 0;
-    const bool filtering = IsViewFiltered();
-    const size_t prevFilteredCount = m_FilteredIndices.size();
-
-    // Append raw messages only — no per-message string formatting. DisplayText
-    // and DisplayLower are produced lazily by the accessors if/when the ListView
-    // or search filter asks for them. SourceFile/Function were already copied
-    // into owned strings at AddMessage.
-    for (auto& stored : pending)
-    {
-        m_Messages.push_back(std::move(stored));
-        ++appendedCount;
-    }
-
-    // Batch-trim in one shot instead of per-message pop_front. Important when a
-    // burst overflows m_MaxMessages by thousands — the old loop did N separate
-    // erases plus marked trimmed=true after the first.
-    bool trimmed = false;
-    if (m_Messages.size() > m_MaxMessages)
-    {
-        const size_t excess = m_Messages.size() - m_MaxMessages;
-        m_Messages.erase(m_Messages.begin(),
-                         m_Messages.begin() + static_cast<std::ptrdiff_t>(excess));
-        trimmed = true;
-    }
-
-    // Maintain filtered indices (search text and/or severity toggles).
-    if (filtering)
-    {
-        if (trimmed || IsSeverityFilterActive())
-        {
-            RebuildFilteredIndices();
-        }
-        else if (!m_SearchFilterLower.empty())
-        {
-            // Search-only: append matching indices for new tail rows.
-            // GetDisplayLower() populates the message's cache on first use.
-            const size_t start = m_Messages.size() - static_cast<size_t>(appendedCount);
-            for (size_t i = start; i < m_Messages.size(); ++i)
-            {
-                if (MatchesSearch(m_Messages[i]))
-                    m_FilteredIndices.push_back(i);
-            }
-        }
-        appendedVisible = static_cast<int>(m_FilteredIndices.size() - prevFilteredCount);
-    }
-
-    // Update the ListView efficiently
-    if (m_ListView)
-    {
-        if (trimmed || filtering)
-        {
-            // Trim shifts indices; filtering changes the effective view size.
-            m_ListView->RefreshFromProvider();
-        }
-        else
-        {
-            // Only appended items - use fast path
-            m_ListView->NotifyItemsAppended(appendedCount);
-        }
-    }
-
-    // Auto-scroll to bottom
-    if (m_AutoScroll && (!filtering || appendedVisible > 0))
-        ScrollToBottom();
-}
-
-void LogView::ScrollToBottom()
-{
-    if (!m_ListView)
-        return;
-
-    m_ListView->ScrollToEnd();
-}
-
-const char* LogView::GetLogLevelClass(Logger::LogLevel level)
-{
-    switch (level)
-    {
-    case Logger::LogLevel::Trace:    return "log-trace";
-    case Logger::LogLevel::Debug:    return "log-debug";
-    case Logger::LogLevel::Info:     return "log-info";
-    case Logger::LogLevel::Warning:  return "log-warning";
-    case Logger::LogLevel::Error:    return "log-error";
-    case Logger::LogLevel::Critical: return "log-critical";
-    default:                         return "log-info";
-    }
-}
-
-bool LogView::IsSeverityFilterActive() const
-{
-    return !(m_ShowDebug && m_ShowInfo && m_ShowWarning && m_ShowError);
-}
-
-bool LogView::IsViewFiltered() const
-{
-    return !m_SearchFilterLower.empty() || IsSeverityFilterActive();
-}
-
-bool LogView::PassesLevelFilter(const StoredMessage& stored) const
-{
-    if (!IsSeverityFilterActive())
-        return true;
-    switch (stored.Level)
-    {
-    case Logger::LogLevel::Debug:
-        return m_ShowDebug;
-    case Logger::LogLevel::Info:
-        return m_ShowInfo;
-    case Logger::LogLevel::Warning:
-        return m_ShowWarning;
-    case Logger::LogLevel::Error:
-        return m_ShowError;
-    default:
-        return true;
-    }
-}
-
-void LogView::RebuildFilteredIndices()
-{
-    m_FilteredIndices.clear();
-    if (!IsViewFiltered())
-        return;
-    for (size_t i = 0; i < m_Messages.size(); ++i)
-    {
-        if (!PassesLevelFilter(m_Messages[i]))
-            continue;
-        if (!MatchesSearch(m_Messages[i]))
-            continue;
-        m_FilteredIndices.push_back(i);
-    }
-}
-
-void LogView::SetDebugFilterEnabled(bool enabled)
-{
-    if (m_ShowDebug == enabled)
-        return;
-    m_ShowDebug = enabled;
-    RebuildFilteredIndices();
-    if (m_ListView)
+    const LogModel::AppendResult result = m_Model.Append(batch);
+    if (result.Trimmed || m_Model.IsFiltered())
         m_ListView->RefreshFromProvider();
-}
-
-void LogView::SetInfoFilterEnabled(bool enabled)
-{
-    if (m_ShowInfo == enabled)
-        return;
-    m_ShowInfo = enabled;
-    RebuildFilteredIndices();
-    if (m_ListView)
-        m_ListView->RefreshFromProvider();
-}
-
-void LogView::SetWarningFilterEnabled(bool enabled)
-{
-    if (m_ShowWarning == enabled)
-        return;
-    m_ShowWarning = enabled;
-    RebuildFilteredIndices();
-    if (m_ListView)
-        m_ListView->RefreshFromProvider();
-}
-
-void LogView::SetErrorFilterEnabled(bool enabled)
-{
-    if (m_ShowError == enabled)
-        return;
-    m_ShowError = enabled;
-    RebuildFilteredIndices();
-    if (m_ListView)
-        m_ListView->RefreshFromProvider();
-}
-
-void LogView::SetSearchFilter(const std::string& filterText)
-{
-    m_SearchFilterLower = ToLowerAscii(filterText);
-    RebuildFilteredIndices();
-
-    if (m_ListView)
-        m_ListView->RefreshFromProvider();
-}
-
-void LogView::SetSearchField(const std::string& field)
-{
-    m_SearchField = field;
-    RebuildFilteredIndices();
-    if (m_ListView)
-        m_ListView->RefreshFromProvider();
-}
-
-bool LogView::MatchesSearch(const StoredMessage& stored) const
-{
-    if (m_SearchFilterLower.empty())
-        return true;
-
-    std::string searchable;
-    if (m_SearchField == "message")
-        searchable = stored.Text;
-    else if (m_SearchField == "level")
-        searchable = Logger::LogLevelToString(stored.Level);
-    else if (m_SearchField == "source")
-        searchable = stored.SourceFile + ":" + std::to_string(stored.SourceLine);
-    else if (m_SearchField == "function")
-        searchable = stored.Function;
     else
-        return GetDisplayLower(stored).find(m_SearchFilterLower) != std::string::npos ||
-               ToLowerAscii(stored.SourceFile).find(m_SearchFilterLower) != std::string::npos ||
-               ToLowerAscii(stored.Function).find(m_SearchFilterLower) != std::string::npos;
-
-    return ToLowerAscii(searchable).find(m_SearchFilterLower) != std::string::npos;
+        m_ListView->NotifyItemsAppended(static_cast<int>(result.Appended));
+    if (result.Trimmed)
+        DropSelectionNotShown();
+    if (result.AppendedVisible > 0)
+        m_ListView->ScrollToEnd();
+    NotifyEntriesChanged();
 }
 
-std::string LogView::GetAllMessagesAsText(bool includeFiltered) const
+void LogView::Clear()
 {
-    std::string out;
-
-    const bool useFilters = includeFiltered && IsViewFiltered();
-    if (useFilters)
     {
-        for (size_t idx : m_FilteredIndices)
-        {
-            if (idx >= m_Messages.size())
-                continue;
-            out += GetDisplayText(m_Messages[idx]);
-            out += '\n';
-        }
-        return out;
+        std::lock_guard<std::mutex> lock(m_PendingMutex);
+        m_Pending.clear();
     }
-
-    for (const auto& msg : m_Messages)
-    {
-        out += GetDisplayText(msg);
-        out += '\n';
-    }
-    return out;
+    m_Model.Clear();
+    m_SelectionModel->Clear();
+    m_ListView->RefreshFromProvider();
+    NotifyEntriesChanged();
 }
 
-std::string LogView::GetSelectedLinesAsText() const
+void LogView::SetSeverityShown(LogModel::Severity severity, bool shown)
 {
-    if (!m_SelectionModel)
-        return {};
-    auto ids = m_SelectionModel->GetSelection();
-    if (ids.empty())
-        return {};
-    std::vector<size_t> indices;
-    indices.reserve(ids.size());
-    for (UI::Interaction::ItemId id : ids)
+    m_Model.SetSeverityShown(severity, shown);
+    AfterFilterChange();
+}
+
+void LogView::SetSearch(std::string_view text)
+{
+    m_Model.SetSearch(text);
+    AfterFilterChange();
+}
+
+void LogView::SetSearchField(LogModel::SearchField field)
+{
+    m_Model.SetSearchField(field);
+    AfterFilterChange();
+}
+
+const LogModel::Entry* LogView::GetSelectedEntry() const
+{
+    const UI::Interaction::ItemId anchor = m_SelectionModel->GetAnchor();
+    return anchor != 0 ? m_Model.FindEntry(anchor) : nullptr;
+}
+
+std::vector<const LogModel::Entry*> LogView::GetSelectedEntries() const
+{
+    std::vector<UI::Interaction::ItemId> ids = m_SelectionModel->GetSelection();
+    // Sequences increase in arrival order, so sorted ids are oldest first.
+    std::sort(ids.begin(), ids.end());
+    std::vector<const LogModel::Entry*> entries;
+    entries.reserve(ids.size());
+    for (const UI::Interaction::ItemId id : ids)
     {
-        if (id == 0)
-            continue;
-        size_t msgIdx = static_cast<size_t>(id - 1);
-        if (msgIdx < m_Messages.size())
-            indices.push_back(msgIdx);
+        if (const LogModel::Entry* entry = m_Model.FindEntry(id))
+            entries.push_back(entry);
     }
-    if (indices.empty())
-        return {};
-    std::sort(indices.begin(), indices.end());
-    std::string out;
-    for (size_t idx : indices)
+    return entries;
+}
+
+std::optional<Mathematics::Rect> LogView::GetSelectedRowWindowRect() const
+{
+    const UI::Interaction::ItemId anchor = m_SelectionModel->GetAnchor();
+    const std::optional<size_t> row = anchor != 0 ? m_Model.FindVisibleRow(anchor) : std::nullopt;
+    if (!row)
+        return std::nullopt;
+    const Mathematics::Rect list = m_ListView->GetWindowRect();
+    const float top = list.Y + static_cast<float>(*row) * kRowHeight - m_ListView->GetScrollOffset();
+    if (top < list.Y || top + kRowHeight > list.Bottom())
+        return std::nullopt;
+    return Mathematics::Rect{list.X, top, list.Width, kRowHeight};
+}
+
+void LogView::OnPostLayout()
+{
+    UIElement::OnPostLayout();
+    if (!m_RevealSelectionAfterLayout)
+        return;
+    m_RevealSelectionAfterLayout = false;
+    const UI::Interaction::ItemId anchor = m_SelectionModel->GetAnchor();
+    if (const std::optional<size_t> row = anchor != 0 ? m_Model.FindVisibleRow(anchor) : std::nullopt)
+        m_ListView->ScrollIndexIntoView(static_cast<int>(*row));
+}
+
+void LogView::OnSelectionModelChanged()
+{
+    if (m_OnSelectionChanged)
+        m_OnSelectionChanged(GetSelectedEntry());
+}
+
+void LogView::OnItemActivated(uint64_t id)
+{
+    const LogModel::Entry* entry = m_Model.FindEntry(id);
+    if (entry && m_OnEntryActivated)
+        m_OnEntryActivated(*entry);
+}
+
+void LogView::OnListContextMenu(uint64_t id, float x, float y)
+{
+    if (id == 0 || !m_Model.FindEntry(id))
+        return;
+    if (!m_SelectionModel->IsSelected(id))
+        m_SelectionModel->SetSingle(id);
+    if (m_OnContextMenu)
+        m_OnContextMenu(x, y);
+}
+
+void LogView::OnListKeyDown(UIEvent& event)
+{
+    if (event.Key != Input::kKeyCode_C || !Input::IsPrimaryShortcutModifier(event.Mods) || !m_OnCopyShortcut)
+        return;
+    m_OnCopyShortcut();
+    event.Stop();
+}
+
+void LogView::AfterFilterChange()
+{
+    m_ListView->RefreshFromProvider();
+    DropSelectionNotShown();
+    NotifyEntriesChanged();
+}
+
+void LogView::DropSelectionNotShown()
+{
+    const std::vector<UI::Interaction::ItemId> selection = m_SelectionModel->GetSelection();
+    std::vector<UI::Interaction::ItemId> shown;
+    shown.reserve(selection.size());
+    for (const UI::Interaction::ItemId id : selection)
     {
-        out += GetDisplayText(m_Messages[idx]);
-        out += '\n';
+        const LogModel::Entry* entry = m_Model.FindEntry(id);
+        if (entry && m_Model.IsShown(*entry))
+            shown.push_back(id);
     }
-    return out;
+    if (shown.empty())
+    {
+        m_SelectionModel->Clear();
+        return;
+    }
+    if (shown.size() == selection.size())
+        return;
+    // A hidden anchor moves to the newest line still selected: sequences increase in arrival order.
+    const UI::Interaction::ItemId anchor = m_SelectionModel->GetAnchor();
+    const bool anchorShown = std::find(shown.begin(), shown.end(), anchor) != shown.end();
+    m_SelectionModel->SetSelection(shown, anchorShown ? anchor : *std::max_element(shown.begin(), shown.end()));
+}
+
+void LogView::NotifyEntriesChanged()
+{
+    if (m_OnEntriesChanged)
+        m_OnEntriesChanged();
 }
 
 } // namespace GameEngine
+
+namespace RegisterWidgets {
+static auto s_RegisterLogView = GameEngine::UIRegistration::RegisterWithFactory<GameEngine::LogView>(
+    "LogView", []() { return std::make_unique<GameEngine::LogView>(); });
+}

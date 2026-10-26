@@ -1,6 +1,7 @@
 #version 450
 
 #include "Includes/screen_position.glsl"
+#include "Includes/reverse_z.glsl"
 #include "Ocean/ocean_cascade_common.glsl"
 
 // Above-water reflected caustics from the ocean surface, composited over the scene.
@@ -222,7 +223,7 @@ void main()
     float heightAboveSeaLevel = worldPos.y - uOcean.x;
     bool inBand = heightAboveSeaLevel > 0.08 - uOcean.z
                && heightAboveSeaLevel < max(uReflectedCaustics.y, 1.0e-3) + uOcean.z;
-    if (uOcean.y < 0.5 || rawDepth <= 1.0e-6 || !inBand)
+    if (uOcean.y < 0.5 || IsBackgroundDepth(rawDepth) || !inBand)
     {
         outColor = vec4(original, 1.0);
         return;

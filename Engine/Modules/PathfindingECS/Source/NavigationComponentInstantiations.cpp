@@ -1,10 +1,10 @@
 // Explicit cross-DLL instantiation for PathfindingECS's public components.
 // See ECS/ECSTemplates.h for the rationale (GE_INSTANTIATE_ENGINE_COMPONENT).
-#include "PathfindingECS/Components/NavigationAgent.h"
+#include "Components/Navigation/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationDebugSettings.h"
 #include "PathfindingECS/Components/NavigationObstacle.h"
-#include "PathfindingECS/Components/NavigationSource.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSource.h"
+#include "Components/Navigation/NavigationSurface.h"
 
 #include "ECS/ECSTemplates.h"
 

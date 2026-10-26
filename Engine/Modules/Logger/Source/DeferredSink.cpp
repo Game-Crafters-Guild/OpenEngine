@@ -11,7 +11,7 @@ DeferredSink::DeferredSink(size_t heldRecordLimit)
 {
 }
 
-void DeferredSink::Attach(UniquePtr<LogSink> sink)
+void DeferredSink::Attach(std::unique_ptr<LogSink> sink)
 {
     assert(sink && "DeferredSink::Attach needs the sink the held records go to");
     std::lock_guard<std::mutex> lock(m_Mutex);

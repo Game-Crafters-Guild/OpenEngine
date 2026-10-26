@@ -69,6 +69,7 @@ static const std::unordered_map<String, AssetType>& GetExtensionMap()
         // Scene formats
         {".scene", AssetType::Scene},
         {".unity", AssetType::Scene},
+        {".prefab", AssetType::Prefab},
 
         // Material formats
         {".mat", AssetType::Material},
@@ -83,6 +84,7 @@ static const std::unordered_map<String, AssetType>& GetExtensionMap()
         {".geom", AssetType::Shader},
         {".comp", AssetType::Shader},
         {".shader", AssetType::Shader},
+        {".slang", AssetType::Shader}, // Slang module: an edit is announced like a GLSL include
 
         // Render pipeline / render graph formats
         {".rendergraph", AssetType::RenderPipeline},
@@ -294,6 +296,7 @@ bool IsTextBasedAssetType(AssetType type) {
         case AssetType::Script:
         case AssetType::CubeLut:
         case AssetType::Scene:
+        case AssetType::Prefab:
         case AssetType::Material:
         case AssetType::Shader:
         case AssetType::RenderPipeline:

@@ -4,6 +4,7 @@
 #include "Engine/Rendering/PostProcessEffectRegistry.h"
 #include "Engine/Rendering/VolumetricFogSettings.h"
 #include "Engine/Rendering/Exposure.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/NamedPushConstantWriter.h"
 
 #include <algorithm>
@@ -804,7 +805,7 @@ VolumetricFogSettings ToVolumetricFogSettings(const PostProcessSettings& setting
     fog.density = std::max(settings.VolumetricFogDensity, 0.0f) * std::max(settings.VolumetricFogIntensity, 0.0f);
     fog.baseHeight = settings.VolumetricFogBaseHeight;
     fog.heightFalloff = std::max(settings.VolumetricFogHeightFalloff, 0.01f);
-    fog.skyFade = std::clamp(settings.VolumetricFogSkyFade, 0.0f, 1.0f);
+    fog.skyFade = Math::Clamp01(settings.VolumetricFogSkyFade);
     fog.albedo[0] = std::clamp(settings.VolumetricFogAlbedoR, 0.0f, 8.0f);
     fog.albedo[1] = std::clamp(settings.VolumetricFogAlbedoG, 0.0f, 8.0f);
     fog.albedo[2] = std::clamp(settings.VolumetricFogAlbedoB, 0.0f, 8.0f);
@@ -822,7 +823,7 @@ VolumetricFogSettings ToVolumetricFogSettings(const PostProcessSettings& setting
     fog.ambientScatteringTint[2] = std::max(settings.VolumetricFogAmbientTintB, 0.0f);
     fog.noiseEnabled = settings.VolumetricFogNoiseEnabled != 0;
     fog.noiseScale = std::max(settings.VolumetricFogNoiseScale, 0.01f);
-    fog.noiseStrength = std::clamp(settings.VolumetricFogNoiseStrength, 0.0f, 1.0f);
+    fog.noiseStrength = Math::Clamp01(settings.VolumetricFogNoiseStrength);
     fog.noiseVelocity[0] = settings.VolumetricFogNoiseVelocityX;
     fog.noiseVelocity[1] = settings.VolumetricFogNoiseVelocityY;
     fog.noiseVelocity[2] = settings.VolumetricFogNoiseVelocityZ;
@@ -831,11 +832,11 @@ VolumetricFogSettings ToVolumetricFogSettings(const PostProcessSettings& setting
     fog.noiseChannelWeights[1] = std::max(settings.VolumetricFogNoiseChannelWeightG, 0.0f);
     fog.noiseChannelWeights[2] = std::max(settings.VolumetricFogNoiseChannelWeightB, 0.0f);
     fog.noiseChannelWeights[3] = std::max(settings.VolumetricFogNoiseChannelWeightA, 0.0f);
-    fog.densityThreshold = std::clamp(settings.VolumetricFogDensityThreshold, 0.0f, 1.0f);
+    fog.densityThreshold = Math::Clamp01(settings.VolumetricFogDensityThreshold);
     fog.densityThresholdSoftness = std::max(settings.VolumetricFogDensityThresholdSoftness, 0.0001f);
     fog.temporalEnabled = settings.VolumetricFogTemporalEnabled != 0;
     fog.temporalBlend = std::clamp(settings.VolumetricFogTemporalBlend, 0.0f, 0.99f);
-    fog.jitterStrength = std::clamp(settings.VolumetricFogJitterStrength, 0.0f, 1.0f);
+    fog.jitterStrength = Math::Clamp01(settings.VolumetricFogJitterStrength);
     fog.jitterMotion = settings.VolumetricFogJitterMotion != 0;
     fog.compositeDepthBias = settings.VolumetricFogCompositeDepthBias;
     fog.shadowBias = settings.VolumetricFogShadowBias;

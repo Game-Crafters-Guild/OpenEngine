@@ -15,6 +15,7 @@ namespace GameEngine.Scripting
     /// One rule of a fixture surface: an element struct, held in an array.
     /// </summary>
     [StructLayout(LayoutKind.Explicit, Size = 8)]
+    [BuiltInComponent("GameEngine::Components::FixtureRule")]
     public partial struct FixtureRule
     {
         /// <summary>

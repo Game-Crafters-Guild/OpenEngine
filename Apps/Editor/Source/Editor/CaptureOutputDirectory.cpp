@@ -1,6 +1,6 @@
 #include "Editor/CaptureOutputDirectory.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
 
 #include <string>
@@ -38,7 +38,7 @@ std::filesystem::path MakeProcessCaptureDirectory()
         // Anchor to the executable, never the working directory: the editor is
         // launched from varying cwds and must not drop captures into whatever
         // tree it happened to start in.
-        base = PathUtils::GetExecutableDirectory();
+        base = ApplicationPaths::GetExecutableDirectory();
     }
 
     std::filesystem::path dir =

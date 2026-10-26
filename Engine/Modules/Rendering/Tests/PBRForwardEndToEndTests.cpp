@@ -395,7 +395,9 @@ TEST(PBRForward, EndToEnd_ComputeLUT_Draw_Tonemap_Readback)
     { for (size_t i=0;i<tmSets.size();++i) if (tmSets[i]==setIndex) return (int)i; return -1; };
     int ordCombined = hasCombined ? OrdinalOf(tmCombinedSet) : -1;
     if (hasCombined)
+    {
         ASSERT_GE(ordCombined, 0);
+    }
     int ordImage = hasImage ? OrdinalOf(tmImageSet) : -1;
     int ordSampler = hasSampler ? OrdinalOf(tmSamplerSet) : -1;
     int ordUbo = tmUboFound ? OrdinalOf(tmUboSet) : -1;
@@ -716,7 +718,9 @@ TEST(PBRForward, EndToEnd_Tonemap_FromClearedHDR)
     { for (size_t i=0;i<ordSets.size();++i) if (ordSets[i]==setIndex) return (int)i; return -1; };
     int ordCombined = hasCombined ? OrdinalOf(combinedSet) : -1;
     if (hasCombined)
+    {
         ASSERT_GE(ordCombined, 0);
+    }
     int ordImage = hasImage ? OrdinalOf(imageSet) : -1;
     int ordSampler = hasSampler ? OrdinalOf(samplerSet) : -1;
     int ordUbo = hasUbo ? OrdinalOf(uboSet) : -1;

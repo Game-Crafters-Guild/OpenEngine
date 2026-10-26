@@ -80,7 +80,7 @@ class CapturingSink final : public Logger::LogSink
     }
     void Flush() override {}
     bool ShouldLog(Logger::LogLevel) const override { return true; }
-    Logger::String GetName() const override { return "D0LogCapture"; }
+    std::string GetName() const override { return "D0LogCapture"; }
 
   private:
     std::mutex m_Mutex;
@@ -96,7 +96,7 @@ std::shared_ptr<LogLines> InstallLogCapture()
     cfg.GlobalMinLevel = Logger::LogLevel::Info;
     Logger::Log::Initialize(cfg);
     Logger::Log::ClearSinks(); // drop the console sink Initialize seeds: capture only
-    Logger::Log::AddSink(Logger::MakeUnique<CapturingSink>(lines));
+    Logger::Log::AddSink(std::make_unique<CapturingSink>(lines));
     return lines;
 }
 
@@ -351,8 +351,10 @@ TEST(QueueOwnershipTransferExemption, StageValidityExemptionKeysOnFamilyIndicesN
     // run this test filtered for the armed evidence run.
     const std::string syncValLine = FindLine(logLines, "synchronization validation");
     if (!syncValLine.empty())
+    {
         EXPECT_NE(syncValLine.find("ENABLED"), std::string::npos)
             << "sync validation was asked for but did not arm: " << syncValLine;
+    }
     std::cout << "[ sync-val ] " << (syncValLine.empty() ? "not resolved in this process (instance "
                                                            "pre-created by an earlier test)"
                                                          : syncValLine)

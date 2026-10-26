@@ -18,7 +18,7 @@
 #include "UI/ResolvedStyle.h"
 #include "UI/UIStyle.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 
 #include <filesystem>
 #include <fstream>
@@ -27,7 +27,7 @@
 #include <string>
 
 using GameEngine::DisplayMode;
-using GameEngine::PathUtils;
+using GameEngine::ApplicationPaths;
 using GameEngine::UITesting::IsolatedUIFixture;
 
 namespace
@@ -38,7 +38,7 @@ namespace
 // executable directory, never back into the source tree.
 std::string ReadShippedCss(const std::string& relative)
 {
-    std::ifstream in(PathUtils::GetExecutableDirectory() / "Assets" / "UI" / relative,
+    std::ifstream in(ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI" / relative,
                      std::ios::binary);
     if (!in)
         return {};

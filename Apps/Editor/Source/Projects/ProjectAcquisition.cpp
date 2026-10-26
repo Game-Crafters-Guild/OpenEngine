@@ -2,17 +2,21 @@
 
 #include "Editor/EditorPaths.h"
 #include "Editor/Settings/SettingsStore.h"
+#include "Editor/ZipArchiveReader.h"
 #include "FileSystem/FileSystem.h"
 #include "Logger/Logger.h"
 #include "Projects/ProjectStartupScene.h"
 #include "Projects/SubprocessStream.h"
 #include "Platform/HttpClient.h"
-#include "Projects/ZipArchive.h"
 #include "Core/Application.h"
 #include "JobSystem/JobChannel.h"
+#include "Types/PathUtils.h"
 
+#include <cstdint>
 #include <cstdlib>
-#include <fstream>
+#include <exception>
+#include <optional>
+#include <span>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -39,6 +43,12 @@ constexpr char kPathListSeparator = ':';
 
 // Downloaded project archives are buffered in memory before extraction.
 constexpr size_t kMaxProjectArchiveBytes = 512ull * 1024 * 1024;
+
+// The most a project archive writes when it is extracted, in gibibytes. A downloaded archive is
+// at most kMaxProjectArchiveBytes, and a project's files (textures and meshes, mostly compressed
+// already) unpack to a few times that; a hostile archive stops here instead of filling the disk.
+constexpr std::uint64_t kMaxProjectExtractedGibibytes = 8;
+constexpr std::uint64_t kMaxProjectExtractedBytes = kMaxProjectExtractedGibibytes << 30;
 
 fs::path FindGitExecutable()
 {
@@ -102,7 +112,7 @@ void RemoveTreeForce(const fs::path& root)
     fs::remove_all(root, ec);
     if (ec)
         Logger::Log::Warning("Project acquisition: could not remove '{}': {}",
-                             root.generic_string(), ec.message());
+                             PathToUtf8(root), ec.message());
 }
 
 bool RunGit(const fs::path& git, const std::vector<std::string>& args, std::string& outError)
@@ -129,7 +139,7 @@ bool CopyTemplatePayload(const fs::path& templateDir, const fs::path& destinatio
     std::error_code ec;
     if (!fs::is_directory(templateDir, ec))
     {
-        outError = "Template folder not found: " + templateDir.generic_string();
+        outError = "Template folder not found: " + PathToUtf8(templateDir);
         return false;
     }
     for (fs::directory_iterator it(templateDir, ec), end; !ec && it != end; it.increment(ec))
@@ -142,7 +152,7 @@ bool CopyTemplatePayload(const fs::path& templateDir, const fs::path& destinatio
         // the destination may be OPFS, which has no permission bits to preserve.
         if (!FileSystem::CopyTree(it->path(), destination / it->path().filename()))
         {
-            outError = "Copy failed: " + it->path().filename().generic_string();
+            outError = "Copy failed: " + PathToUtf8(it->path().filename());
             return false;
         }
     }
@@ -170,6 +180,41 @@ bool MoveTree(const fs::path& from, const fs::path& to, std::string& outError)
     }
     RemoveTreeForce(from);
     return true;
+}
+
+// Extracts the archive into destination. When innerRoot is non-empty, only the
+// files under that archive-relative folder are extracted, with the prefix
+// stripped (a manifest zip source's "path"). Every entry is tried; the error names the first
+// entry that failed.
+bool ExtractProjectArchive(ZipArchiveReader& archive, const fs::path& destination,
+                           const std::string& innerRoot, std::string& outError)
+{
+    const std::string prefix = innerRoot.empty() ? std::string{} : innerRoot + "/";
+    std::vector<ZipEntryExtraction> extractions;
+    for (const std::string& name : archive.EntryNames())
+    {
+        if (name.starts_with(prefix))
+            extractions.push_back({name, destination / PathFromUtf8(name.substr(prefix.size()))});
+    }
+    if (extractions.empty())
+    {
+        outError = innerRoot.empty() ? "The archive is empty."
+                                     : "The archive has no folder '" + innerRoot + "'.";
+        return false;
+    }
+
+    std::vector<ZipEntryFailure> failures;
+    if (archive.ExtractEntries(extractions, failures, kMaxProjectExtractedBytes))
+        return true;
+    if (failures.front().PastSizeLimit)
+    {
+        outError = "The project is larger than " + std::to_string(kMaxProjectExtractedGibibytes) +
+                   " GiB, the most an archive import writes. Extract the archive yourself, then import the "
+                   "folder from the Folder tab.";
+        return false;
+    }
+    outError = "Could not extract '" + failures.front().EntryName + "': " + failures.front().Message;
+    return false;
 }
 
 void StampProjectSettings(const ProjectAcquireRequest& request, const fs::path& settingsFile)
@@ -279,25 +324,43 @@ void ProjectAcquisition::PublishTo(SharedState& state, ProjectAcquireState statu
 void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
                                    ProjectAcquireRequest request, WorkerContext context)
 {
-    const fs::path& destination = request.Destination;
+    const fs::path destination = request.Destination;
 
     // Only ever delete a destination this worker created — an "already
     // exists" verdict from the UI thread can go stale (or come back false on
     // IO error), and force-deleting a folder we didn't make is data loss.
     std::error_code ec;
     const bool destinationExisted = fs::exists(destination, ec);
+    try
+    {
+        Acquire(state, std::move(request), std::move(context), destinationExisted);
+    }
+    catch (const std::exception& exception)
+    {
+        Fail(*state, destination, destinationExisted,
+             std::string("The project could not be created: ") + exception.what());
+    }
+}
+
+void ProjectAcquisition::Fail(SharedState& state, const fs::path& destination, bool destinationExisted,
+                              std::string error)
+{
+    if (!destinationExisted)
+        RemoveTreeForce(destination);
+    PublishTo(state, ProjectAcquireState::Failed, destination, std::move(error));
+}
+
+void ProjectAcquisition::Acquire(const std::shared_ptr<SharedState>& state, ProjectAcquireRequest request,
+                                 WorkerContext context, bool destinationExisted)
+{
+    const fs::path& destination = request.Destination;
+    std::error_code ec;
     if (destinationExisted && !fs::is_empty(destination, ec))
     {
         PublishTo(*state, ProjectAcquireState::Failed, destination,
                 "The destination folder already exists and is not empty.");
         return;
     }
-
-    auto fail = [&](std::string error) {
-        if (!destinationExisted)
-            RemoveTreeForce(destination);
-        PublishTo(*state, ProjectAcquireState::Failed, destination, std::move(error));
-    };
 
     fs::create_directories(destination, ec);
     if (ec)
@@ -317,7 +380,7 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
         if (!CopyTemplatePayload(request.CatalogRoot / request.Entry.Source.Path, destination,
                                  error))
         {
-            fail(std::move(error));
+            Fail(*state, destination, destinationExisted, std::move(error));
             return;
         }
         break;
@@ -326,7 +389,8 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
     {
         if (context.GitExecutable.empty())
         {
-            fail("Cloning community projects requires Git. Install it from git-scm.com and retry.");
+            Fail(*state, destination, destinationExisted,
+                 "Cloning community projects requires Git. Install it from git-scm.com and retry.");
             return;
         }
 
@@ -366,24 +430,24 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
         // parser already restricts urls to http(s).
         cloneArgs.push_back("--");
         cloneArgs.push_back(request.Entry.Source.Url);
-        cloneArgs.push_back(PathArgUtf8(staging));
+        cloneArgs.push_back(PathToUtf8(staging));
 
         if (!RunGit(context.GitExecutable, cloneArgs, error))
         {
             RemoveTreeForce(staging);
-            fail("Clone failed: " + error);
+            Fail(*state, destination, destinationExisted, "Clone failed: " + error);
             return;
         }
         if (!subfolder.empty())
         {
             std::vector<std::string> sparseArgs = gitBase;
             sparseArgs.insert(sparseArgs.end(),
-                              {"-C", PathArgUtf8(staging), "sparse-checkout", "set", "--",
+                              {"-C", PathToUtf8(staging), "sparse-checkout", "set", "--",
                                subfolder});
             if (!RunGit(context.GitExecutable, sparseArgs, error))
             {
                 RemoveTreeForce(staging);
-                fail("Sparse checkout failed: " + error);
+                Fail(*state, destination, destinationExisted, "Sparse checkout failed: " + error);
                 return;
             }
         }
@@ -393,9 +457,9 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
         if (!fs::is_directory(contentRoot, ec) || fs::is_empty(contentRoot, ec))
         {
             RemoveTreeForce(staging);
-            fail(subfolder.empty()
-                     ? "The repository is empty."
-                     : "The repository has no folder '" + subfolder + "'.");
+            Fail(*state, destination, destinationExisted,
+                 subfolder.empty() ? "The repository is empty."
+                                   : "The repository has no folder '" + subfolder + "'.");
             return;
         }
 
@@ -406,7 +470,7 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
         if (!MoveTree(contentRoot, destination, error))
         {
             RemoveTreeForce(staging);
-            fail(std::move(error));
+            Fail(*state, destination, destinationExisted, std::move(error));
             return;
         }
         RemoveTreeForce(staging);
@@ -415,45 +479,29 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
 
     case ProjectSourceType::Zip:
     {
-        fs::path zipFile = request.LocalArchivePath;
-        fs::path downloadedZip;
-        if (zipFile.empty())
+        // A download is read from memory; an archive on disk is read in place.
+        HttpClient::HttpResponse response;
+        std::optional<ZipArchiveReader> archive;
+        if (request.LocalArchivePath.empty())
         {
-            const HttpClient::HttpResponse response =
-                HttpClient::Get(request.Entry.Source.Url, {}, kMaxProjectArchiveBytes);
+            response = HttpClient::Get(request.Entry.Source.Url, {}, kMaxProjectArchiveBytes);
             if (!response.success || response.statusCode != 200 || response.body.empty())
             {
-                fail("Download failed: " +
-                     (response.error.empty() ? "HTTP " + std::to_string(response.statusCode)
-                                             : response.error));
+                Fail(*state, destination, destinationExisted,
+                     "Download failed: " +
+                         (response.error.empty() ? "HTTP " + std::to_string(response.statusCode)
+                                                 : response.error));
                 return;
             }
-            downloadedZip = context.StagingRoot /
-                (request.Entry.Id + "-" + std::to_string(CurrentProcessId()) + ".zip");
-            fs::create_directories(downloadedZip.parent_path(), ec);
-            std::ofstream out(downloadedZip, std::ios::binary | std::ios::trunc);
-            if (!out ||
-                !out.write(response.body.data(),
-                           static_cast<std::streamsize>(response.body.size()))
-                     .good())
-            {
-                fail("Could not write the downloaded archive.");
-                return;
-            }
-            out.close();
-            zipFile = downloadedZip;
+            archive = ZipArchiveReader::OpenMemory(std::as_bytes(std::span(response.body)), &error);
         }
-
-        const bool extracted =
-            ExtractZipArchive(zipFile, destination, request.Entry.Source.Path, &error);
-        if (!downloadedZip.empty())
+        else
         {
-            fs::remove(downloadedZip, ec);
-            ec.clear();
+            archive = ZipArchiveReader::OpenFile(request.LocalArchivePath, &error);
         }
-        if (!extracted)
+        if (!archive || !ExtractProjectArchive(*archive, destination, request.Entry.Source.Path, error))
         {
-            fail(std::move(error));
+            Fail(*state, destination, destinationExisted, std::move(error));
             return;
         }
 
@@ -480,7 +528,8 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
                         fs::rename(child, destination / child.filename(), ec);
                         if (ec)
                         {
-                            fail("Could not restructure the extracted archive: " + ec.message());
+                            Fail(*state, destination, destinationExisted,
+                                 "Could not restructure the extracted archive: " + ec.message());
                             return;
                         }
                     }
@@ -493,7 +542,7 @@ void ProjectAcquisition::RunWorker(const std::shared_ptr<SharedState>& state,
     }
 
     case ProjectSourceType::Unsupported:
-        fail(request.Entry.Source.RefusalReason);
+        Fail(*state, destination, destinationExisted, request.Entry.Source.RefusalReason);
         return;
     }
 

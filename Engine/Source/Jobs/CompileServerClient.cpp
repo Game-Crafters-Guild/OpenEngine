@@ -3,7 +3,7 @@
 #include "Jobs/PipeTransport.h"
 #include "Jobs/WideStringUtil.h"
 #include "Logger/Logger.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Platform/Process.h"
 #include "Platform/Shell.h"
 #include "Scripting/ScriptTargetFramework.h"
@@ -933,7 +933,7 @@ bool CompileServerClient::FindHostPath(std::string& outPath)
         //   Editor.app/Contents/Resources/Managed/CompileServerHost/bin/<Config>/net10.0
         // (Contents/MacOS stays code-only for codesign). Empty outside a bundle.
         const std::filesystem::path bundleResources =
-            GameEngine::PathUtils::GetBundleResourcesDirectory(GameEngine::PathUtils::GetExecutableDirectory());
+            GameEngine::ApplicationPaths::GetBundleResourcesDirectory(GameEngine::ApplicationPaths::GetExecutableDirectory());
         if (!bundleResources.empty() && check(bundleResources))
         {
             logFound("under bundle Resources");
@@ -948,7 +948,7 @@ bool CompileServerClient::FindHostPath(std::string& outPath)
             return true;
         }
 
-        auto exeDir2 = GameEngine::PathUtils::GetExecutableDirectory();
+        auto exeDir2 = GameEngine::ApplicationPaths::GetExecutableDirectory();
         if (!exeDir2.empty() && check(exeDir2))
         {
             logFound("near executable directory");

@@ -283,7 +283,9 @@ TEST(OverlappingSourceRemap, ReclaimedGuidDoesNotStrandTheRemappedLoadGeneration
     const auto callbackStatus = callback.wait_for(std::chrono::seconds(10));
     EXPECT_EQ(callbackStatus, std::future_status::ready) << "the remapped generation lost its callback";
     if (callbackStatus == std::future_status::ready)
+    {
         EXPECT_TRUE(callback.get());
+    }
 
     release[1].set_value();
     ASSERT_EQ(replacement.wait_for(std::chrono::seconds(10)), std::future_status::ready);

@@ -80,3 +80,21 @@ TEST(CBTUpdateRestGateTest, NewInputsAndForcedUpdatesRestartTheCount)
         gate.OnActivityRead(gate.OnUpdateRecorded(false), Quiet());
     EXPECT_TRUE(gate.CanSkip(kInputsB));
 }
+
+// The inputs hold when they equal the previous call's (the camera is still), which is when the update
+// applies the rest rule; they stop holding the moment they change, and after a reset.
+TEST(CBTUpdateRestGateTest, InputsHoldOnlyWhileTheyRepeat)
+{
+    CBTUpdateRestGate gate;
+    EXPECT_FALSE(gate.InputsHeld());
+    gate.CanSkip(kInputsA);
+    EXPECT_FALSE(gate.InputsHeld()) << "the first update at new inputs is not at rest";
+    gate.CanSkip(kInputsA);
+    EXPECT_TRUE(gate.InputsHeld());
+    gate.CanSkip(kInputsB);
+    EXPECT_FALSE(gate.InputsHeld());
+    gate.CanSkip(kInputsB);
+    EXPECT_TRUE(gate.InputsHeld());
+    gate.Reset();
+    EXPECT_FALSE(gate.InputsHeld());
+}

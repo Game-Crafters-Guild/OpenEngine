@@ -4,7 +4,7 @@
 
 #include "EZTree/EZTreeOptions.h"
 
-#include "Core/Application.h" // PathUtils::GetExecutableDirectory
+#include "Core/ApplicationPaths.h"
 
 #include <array>
 #include <filesystem>
@@ -182,14 +182,14 @@ bool LoadPreset(std::string_view name, TreeOptions& outOptions, std::string* out
     // to the executable, never to the source or vcpkg tree — a shipped or
     // relocated build has neither.
     std::filesystem::path presetsDir =
-        PathUtils::GetExecutableDirectory() / "Assets" / "EZTree" / "Presets";
+        ApplicationPaths::GetExecutableDirectory() / "Assets" / "EZTree" / "Presets";
 #if defined(__APPLE__)
     {
         // macOS app bundle: staged assets live under Contents/Resources/Assets,
         // a sibling of the Contents/MacOS executable directory.
         std::error_code ec;
         if (!std::filesystem::is_directory(presetsDir, ec))
-            presetsDir = PathUtils::GetExecutableDirectory() / ".." / "Resources" / "Assets" /
+            presetsDir = ApplicationPaths::GetExecutableDirectory() / ".." / "Resources" / "Assets" /
                          "EZTree" / "Presets";
     }
 #endif

@@ -1,6 +1,7 @@
 #include "Inspectors/LightInspector.h"
 
 #include "InspectorRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include "Components/Rendering/Light.h"
@@ -159,19 +160,16 @@ constexpr float kKelvinGradientHiK = 12000.0f;
 // is scaled down by its largest channel, so the swatch keeps its hue instead of clipping it.
 static uint32_t LightColorToArgb(const float (&c)[3])
 {
-    auto clamp01 = [](float v) { return std::max(0.0f, std::min(1.0f, v)); };
     const float scale = 1.0f / std::max(1.0f, std::max(c[0], std::max(c[1], c[2])));
-    uint8_t r = static_cast<uint8_t>(clamp01(c[0] * scale) * 255.0f + 0.5f);
-    uint8_t g = static_cast<uint8_t>(clamp01(c[1] * scale) * 255.0f + 0.5f);
-    uint8_t b = static_cast<uint8_t>(clamp01(c[2] * scale) * 255.0f + 0.5f);
-    return (0xFFu << 24) | (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
+    return ColorUtils::PackArgbRounded(c[0] * scale, c[1] * scale, c[2] * scale, 1.0f);
 }
 
 static void ArgbToLightColor(uint32_t argb, float (&out)[3])
 {
-    out[0] = ((argb >> 16) & 0xFF) / 255.0f;
-    out[1] = ((argb >> 8) & 0xFF) / 255.0f;
-    out[2] = (argb & 0xFF) / 255.0f;
+    const ColorLinear color = ColorUtils::UnpackArgb(argb);
+    out[0] = color.r;
+    out[1] = color.g;
+    out[2] = color.b;
 }
 
 static void RefreshLightColorRow(ECS::World* world, ECS::EntityHandle entity,
@@ -189,30 +187,21 @@ static void RefreshLightColorRow(ECS::World* world, ECS::EntityHandle entity,
     rgbLabel->SetText(InspectorUI::FormatColorRgb(light->Color[0], light->Color[1], light->Color[2]));
 }
 
-// Linear RGB [0,1] -> sRGB-encoded ARGB bytes (0xFFRRGGBB).
-static uint32_t LinearToSrgbArgb(const float lin[3])
-{
-    auto u8 = [](float c) {
-        c = std::clamp(c, 0.0f, 1.0f);
-        const float s = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
-        return static_cast<uint32_t>(s * 255.0f + 0.5f);
-    };
-    return (0xFFu << 24) | (u8(lin[0]) << 16) | (u8(lin[1]) << 8) | u8(lin[2]);
-}
-
-// Kelvin -> chroma-boosted sRGB ARGB for the on-screen gradient ONLY (the light's real tint is the
-// unboosted KelvinToLinearRGB). The boost is applied in LINEAR space (Rec.709 luminance, preserving
-// brightness) BEFORE the sRGB encode; the gradient texture is stored as RGBA8_SRGB so the GPU
-// sampler decodes it back to linear for the UI's linear compositing — no double sRGB encode. True
-// blackbody is very desaturated (12000K is only a pale blue), so the boost makes warm/cool legible.
+// The sRGB ARGB color of a Kelvin temperature with its saturation boosted, for the on-screen
+// gradient only. The light's own tint is the unboosted KelvinToLinearRGB. The boost moves each
+// channel away from the Rec.709 luminance in linear space, so brightness stays the same, and the
+// sRGB encode comes after it. The gradient texture is RGBA8_SRGB, so the sampler decodes it back to
+// linear for the UI's linear blending and nothing is encoded twice. A true blackbody color is pale
+// (12000 K is only a light blue), so the boost makes warm and cool easy to tell apart.
 static uint32_t KelvinToBoostedSrgbArgb(float kelvin, float boost)
 {
-    float lin[3];
-    Components::KelvinToLinearRGB(kelvin, lin);
-    const float lum = ColorUtils::LinearRec709Luminance(lin);
-    for (float& c : lin)
-        c = std::clamp(lum + (c - lum) * boost, 0.0f, 1.0f);
-    return LinearToSrgbArgb(lin);
+    const ColorLinear tint = Components::KelvinToLinearRGB(kelvin);
+    const float lum = ColorUtils::LinearRec709Luminance(tint);
+    const ColorLinear boosted(
+        Math::Clamp01(Math::Lerp(lum, tint.r, boost)),
+        Math::Clamp01(Math::Lerp(lum, tint.g, boost)),
+        Math::Clamp01(Math::Lerp(lum, tint.b, boost)));
+    return ColorUtils::LinearToArgb(boosted);
 }
 
 // Lazily build a 256x1 RGBA8 texture of the Kelvin->color gradient and register it with the UI
@@ -317,7 +306,7 @@ class KelvinSlider : public Slider
 
         // Downward triangle indicator at the current value (the inherited ring thumb is hidden via
         // CSS). A dark outline triangle behind the blue one keeps it readable over any gradient hue.
-        const float norm = std::clamp((GetValue() - lo) / (hi - lo), 0.0f, 1.0f);
+        const float norm = Math::Clamp01((GetValue() - lo) / (hi - lo));
         const float vx = trackX + trackW * norm;
         const float halfW = 6.0f * cs;            // wider than before
         const float triTop = barY - 2.0f * cs;    // base sits just above the bar top (less proud)
@@ -988,7 +977,7 @@ void RegisterLightInspector()
 
             AddComponentFloatRowWithDrag<Components::Light>(ctx.Parent, "Fog Origin Fade", light->FogOriginFade, w, e, n,
                 undo, "Change Light Fog Origin Fade",
-                [](Components::Light& u, float v) { u.FogOriginFade = std::clamp(v, 0.0f, 1.0f); },
+                [](Components::Light& u, float v) { u.FogOriginFade = Math::Clamp01(v); },
                 0.2f, "Fraction of light range used to fade fog near the light source and reduce near-origin noise", extras);
         }
 

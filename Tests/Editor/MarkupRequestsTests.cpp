@@ -504,7 +504,7 @@ TEST_F(MarkupRequestsTest, ARegionWithAClearingAndALakeIsOneUndoStepAndContainsA
     EXPECT_EQ(created["markup"]["kind"], "region");
     ASSERT_NE(World.GetComponent<Components::MarkupRegion>(forest), nullptr);
     EXPECT_EQ(World.GetComponent<Components::MarkupRegion>(forest)->MemberCount, 2u);
-    EXPECT_EQ(World.GetComponent<Components::Parent>(clearing)->parent, forest);
+    EXPECT_EQ(World.GetComponent<Components::Parent>(clearing)->Entity, forest);
     EXPECT_EQ(World.GetComponent<Components::MarkupVolume>(forest), nullptr);
 
     const json points = json::array({json::array({150.0f, 30.0f}), json::array({100.0f, 100.0f}),
@@ -671,7 +671,7 @@ TEST_F(MarkupRequestsTest, APathRoundTripsItsPointsAndRefusesWhatItIsNot)
     EXPECT_TRUE(IsRefusal(Editor::UpdateMarkup(Context, {{"entityId", road}, {"center", {0, 0, 0}}})));
     EXPECT_TRUE(IsRefusal(Editor::UpdateMarkup(Context, {{"entityId", road}, {"outline", Square(0.0f, 0.0f, 10.0f)}})));
     EXPECT_TRUE(IsRefusal(Editor::UpdateMarkup(Context, {{"entityId", road}, {"kind", "region"}})));
-    EXPECT_NE(Editor::UpdateMarkup(Context, {{"entityId", road}, {"points", {{0, 0, 0}, {10, 0, 10}}}}).dump().find("Edit path"),
+    EXPECT_NE(Editor::UpdateMarkup(Context, {{"entityId", road}, {"points", {{0, 0, 0}, {10, 0, 10}}}}).dump().find("Edit Path"),
               std::string::npos)
         << "points on a path answered ok and changed nothing";
     EXPECT_FALSE(IsRefusal(Editor::UpdateMarkup(Context, {{"entityId", road}, {"status", "Requested"}})));
@@ -807,7 +807,7 @@ TEST_F(MarkupRequestsTest, ExclusionsAddedByAnUpdateAreOneUndoStep)
     const auto* region = World.GetComponent<Components::MarkupRegion>(ECS::EntityHandle(forest));
     ASSERT_EQ(region->MemberCount, 1u);
     const ECS::EntityHandle clearing = region->Members[0].Entity;
-    EXPECT_EQ(World.GetComponent<Components::Parent>(clearing)->parent, ECS::EntityHandle(forest));
+    EXPECT_EQ(World.GetComponent<Components::Parent>(clearing)->Entity, ECS::EntityHandle(forest));
     const json middle = json::array({json::array({100.0f, 100.0f})});
     EXPECT_FALSE(Editor::ContainsInMarkup(Context, {{"entityId", forest}, {"points", middle}})["inside"][0].get<bool>());
 
@@ -978,7 +978,7 @@ TEST_F(MarkupRequestsTest, ADuplicateRemapsTheMembersCopiedWithItAndSharesTheRes
     const ECS::EntityHandle copiedClearing = copied->Members[1].Entity;
     EXPECT_NE(copiedClearing, clearing);
     ASSERT_TRUE(World.IsValid(copiedClearing));
-    EXPECT_EQ(World.GetComponent<Components::Parent>(copiedClearing)->parent, copy);
+    EXPECT_EQ(World.GetComponent<Components::Parent>(copiedClearing)->Entity, copy);
     EXPECT_NE(World.GetComponent<Components::SplineComponent>(copy)->SplineDataIndex,
               World.GetComponent<Components::SplineComponent>(forest)->SplineDataIndex);
 

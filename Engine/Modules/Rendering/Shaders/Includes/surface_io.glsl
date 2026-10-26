@@ -170,6 +170,12 @@ struct SurfaceOutput
     // horizon/self-occlusion model (the unbounded ocean) use 0.
     float iblGroundDarkening;
 
+    // Share of the light around the surface that reaches it, 0..1, default 1: occlusion the surface
+    // knows of itself that no shadow map and no occlusion pass holds (the grass canopy over the lower
+    // blades and the ground under a field). The lighting scales the whole response by it, direct and
+    // ambient, diffuse, specular and transmitted alike, and leaves the emission.
+    float lightVisibility;
+
     // Share of the pixel the standard environment reflection covers, 0..1, default 1. It scales
     // the whole base specular lobe of the environment term (F0 * scale + bias) and the part of it
     // that screen-space reflections replace. specularWeight scales F0 only and keeps the grazing
@@ -266,6 +272,7 @@ SurfaceOutput DefaultSurfaceOutput()
     o.thinFilmIor = 1.3;
     o.thinFilmWeight = 0.0;
     o.iblGroundDarkening = 1.0;
+    o.lightVisibility = 1.0;
     o.environmentSpecularCoverage = 1.0;
     o.environmentReflectionWeight = vec3(0.0);
     o.emittedReflection = vec4(0.0);

@@ -36,7 +36,7 @@
 
 #include "IsolatedUIFixture.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "UI/ResolvedStyle.h"
 #include "UI/UIPrimitive.h"
 #include "UI/UIStyle.h"
@@ -53,7 +53,7 @@
 #include <string>
 #include <vector>
 
-using GameEngine::PathUtils;
+using GameEngine::ApplicationPaths;
 using GameEngine::UI::PrimitiveMode;
 using GameEngine::UI::UIClipRect;
 using GameEngine::UI::UIPrimitive;
@@ -65,7 +65,7 @@ namespace
 
 std::filesystem::path ShippedCssRoot()
 {
-    return PathUtils::GetExecutableDirectory() / "Assets" / "UI";
+    return ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI";
 }
 
 std::string ReadShippedCss(const std::filesystem::path& relative)

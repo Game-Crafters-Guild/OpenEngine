@@ -13,6 +13,7 @@
 #include "UI/UIManager.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
 
 #include <nlohmann/json.hpp>
 
@@ -500,7 +501,7 @@ void UnityImportModal::StartListScenes(const std::filesystem::path& bundle) {
     m_Worker = std::thread([this, dll, bundle]() {
         std::string stdoutAll;
         ConverterRunResult res = RunConverterHosted(
-            dll, {"--list-scenes", PathArgUtf8(bundle)},
+            dll, {"--list-scenes", PathToUtf8(bundle)},
             [&stdoutAll](const std::string& line) { stdoutAll += line; },
             m_CancelRequested);
         std::string tail = res.StderrTail;
@@ -632,13 +633,13 @@ void UnityImportModal::StartConversion(const std::vector<std::string>& sceneArgs
 
     std::vector<std::string> args;
     args.push_back("--pkg");
-    args.push_back(PathArgUtf8(m_BundlePath));
+    args.push_back(PathToUtf8(m_BundlePath));
     for (const auto& a : sceneArgs) args.push_back(a);
     args.push_back("--project");
-    args.push_back(PathArgUtf8(m_StageDir));
+    args.push_back(PathToUtf8(m_StageDir));
     if (!m_AssetDbPath.empty() && std::filesystem::exists(m_AssetDbPath)) {
         args.push_back("--assetdb");
-        args.push_back(PathArgUtf8(m_AssetDbPath));
+        args.push_back(PathToUtf8(m_AssetDbPath));
     }
     // Source textures stage as-is (--png); the engine's native import cooks
     // them (BC7/BC5 + mips, derived cache) once they land in Assets. The

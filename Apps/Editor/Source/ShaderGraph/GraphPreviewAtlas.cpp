@@ -19,12 +19,13 @@
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector3.h"
-#include "Rendering/Core/HashUtils.h"
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Core/ViewParamsLayout.h"
 #include "Rendering/Passes/TonemapPass.h"
 #include "Thumbnails/ModelThumbnailHandler.h"
+#include "Types/Fnv1a.h"
 #include "UI/UIManager.h"
 #include "UI/UITextureSpace.h"
 
@@ -244,14 +245,14 @@ bool GraphPreviewAtlas::TryGetBinding(const std::string& nodeId,
 
 bool GraphPreviewAtlas::ContentDigestMoved()
 {
-    uint64_t digest = Rendering::HashUtils::HashValue(
+    uint64_t digest = Hashing::Fnv1a64Value(
         0x9E37'79B9'7F4A'7C15ull, Engine::Renderer::Material::GetGlobalContentEpoch());
     auto& registry = m_Services->Materials().Registry();
     for (const NodeRequest& r : m_Requests)
     {
         const Engine::Renderer::Material* mat = registry.Find(r.MaterialGuid);
-        digest = Rendering::HashUtils::HashValue(digest, mat ? mat->GetVersion() : 0u);
-        digest = Rendering::HashUtils::HashValue(
+        digest = Hashing::Fnv1a64Value(digest, mat ? mat->GetVersion() : 0u);
+        digest = Hashing::Fnv1a64Value(
             digest, (mat && mat->GetGraphicsPipelineId().IsValid()) ? 1u : 0u);
     }
     if (digest == m_ContentDigest)
@@ -630,7 +631,7 @@ void GraphPreviewAtlas::TickRG(uint64_t windowId, UIManager* ui, RG::RGFrame& fr
             depthOps.Load = RG::RGLoadOp::Clear;
             depthOps.Store = RG::RGStoreOp::Store;
             // Reverse-Z: the far value is 0.
-            depthOps.Clear.Depth = 0.0f;
+            depthOps.Clear.Depth = Rendering::ReverseZ::kClearFar;
             p.AttachDepth(depth, depthOps, RG::RGDepthAccess::ReadWrite);
         },
         [this, draws = std::move(draws), resources = std::move(resources), sphere, sphereBindings,

@@ -5,10 +5,10 @@
 #include "NavigationMeshBake.h"
 #include "NavigationSourceCollector.h"
 
-#include "PathfindingECS/Components/NavigationAgent.h"
+#include "Components/Navigation/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
 #include "PathfindingECS/Components/NavigationObstacle.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
@@ -27,6 +27,7 @@
 #include "Pathfinding/NavigationWorld.h"
 #include "Pathfinding/ObstacleAvoidance.h"
 #include "Pathfinding/PathBuffer.h"
+#include "SplineRecipes/SplineRecipesScriptApi.h"
 #include "ECS/ChangeFilter.h"
 #include "TerrainECS/PlanarHeightfieldEditCursor.h"
 #include "Types/Fnv1a.h"
@@ -105,6 +106,7 @@ void CopyBakeStatus(const NavigationSurface& from, NavigationSurface& to)
     to.TilesBaking = from.TilesBaking;
     to.BlockingTileX = from.BlockingTileX;
     to.BlockingTileZ = from.BlockingTileZ;
+    to.BlockingPoint = from.BlockingPoint;
     to.BlockingModel = from.BlockingModel;
 }
 
@@ -275,6 +277,34 @@ void ReplanAgentsOn(ECS::World& world, Pathfinding::NavMapHandle map)
                 (state.Status == Pathfinding::PathStatus::Complete || state.Status == Pathfinding::PathStatus::Partial))
                 state.ReplanRequested = true;
         });
+}
+
+// Keeps a CPU window of finest pages at `point` for the next update when the terrain pages its
+// height (RequestSurfaceHeightWindow): a bake waiting there asks on every update it waits. False,
+// asking nothing, when the terrain's pages have no source yet (a height store still cooking).
+bool KeepTerrainHeightWindow(const NavigationTerrainSource& terrain, const Mathematics::Vector3& point)
+{
+    uint32 pageX = 0;
+    uint32 pageZ = 0;
+    if (!terrain.Query.FinestPageAt(point.x, point.z, pageX, pageZ))
+        return false;
+    TerrainECS::RequestSurfaceHeightWindow(point);
+    return true;
+}
+
+// Holds `surface`'s bake on the terrain height at `point`, which is not on the CPU yet: on the
+// level-0 page there, or on the terrain's height data while its pages have no source.
+void WaitForTerrainHeight(NavigationSurface& surface, const NavigationTerrainSource& terrain,
+                          const Mathematics::Vector3& point)
+{
+    surface.BakePhase = NavigationBakePhase::Waiting;
+    if (!KeepTerrainHeightWindow(terrain, point))
+    {
+        surface.BakeWait = NavigationBakeWait::TerrainData;
+        return;
+    }
+    surface.BakeWait = NavigationBakeWait::TerrainPage;
+    surface.BlockingPoint = point;
 }
 
 } // namespace
@@ -612,11 +642,19 @@ void NavigationSurfaceSystem::ReleaseUnboundMaps(ECS::World& world)
 void NavigationSurfaceSystem::StartBake(ECS::World& world, ECS::EntityHandle entity, NavigationSurface& surface,
                                         const Components::WorldTransform* transform, SurfaceRecord& record)
 {
-    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world);
+    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world, transform);
     if (terrain.Loading)
     {
         surface.BakePhase = NavigationBakePhase::Waiting;
         surface.BakeWait = NavigationBakeWait::TerrainData;
+        return;
+    }
+    // The recipes write roads, walls and the ground under them: a bake before they settle reads
+    // part of the scene. This update runs on a job, so it reads the recipe system's last answer.
+    if (!SplineRecipes::IsSceneSettledAtLastUpdate(world))
+    {
+        surface.BakePhase = NavigationBakePhase::Waiting;
+        surface.BakeWait = NavigationBakeWait::SplineRecipes;
         return;
     }
     if (const GUID model = FirstLoadingModel(world, entity, record); !model.IsNull())
@@ -836,9 +874,10 @@ void NavigationSurfaceSystem::StepMeshBake(ECS::World& world, ECS::EntityHandle 
 
     // The terrain's heightfield pointers are main-thread data and can change between frames, so it
     // is resolved again for every update's snapshots.
-    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world);
-    int32 waitX = 0, waitZ = 0;
-    const bool submitted = bake.SubmitTiles(terrain, pool, kTileSnapshotsPerUpdate, waitX, waitZ);
+    const NavigationTerrainSource terrain =
+        ResolveNavigationTerrainSource(world, world.GetComponent<Components::WorldTransform>(entity));
+    Mathematics::Vector3 waitPoint;
+    const bool submitted = bake.SubmitTiles(terrain, pool, kTileSnapshotsPerUpdate, waitPoint);
 
     std::vector<Pathfinding::NavTileKey> applied;
     Pathfinding::NavTileKey failed;
@@ -861,10 +900,7 @@ void NavigationSurfaceSystem::StepMeshBake(ECS::World& world, ECS::EntityHandle 
     surface.BakeTotal = bake.GetTileCount();
     if (!submitted)
     {
-        surface.BakePhase = NavigationBakePhase::Waiting;
-        surface.BakeWait = NavigationBakeWait::TerrainTile;
-        surface.BlockingTileX = waitX;
-        surface.BlockingTileZ = waitZ;
+        WaitForTerrainHeight(surface, terrain, waitPoint);
         return;
     }
     surface.BakePhase = NavigationBakePhase::Baking;
@@ -907,7 +943,7 @@ void NavigationSurfaceSystem::UpdateDirtyTiles(ECS::World& world, ECS::EntityHan
     auto* mesh = ResolveNavigationSurfaceMesh(world, surface);
     if (!mesh || !mesh->IsBuilt())
         return;
-    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world);
+    const NavigationTerrainSource terrain = ResolveNavigationTerrainSource(world, transform);
     if (!record.MeshKnown)
     {
         // A mesh another system instance baked: its chart and agent are the mesh's own, its extent
@@ -962,9 +998,11 @@ void NavigationSurfaceSystem::UpdateDirtyTiles(ECS::World& world, ECS::EntityHan
     std::vector<Pathfinding::NavTileKey> swapped;
     if (record.Rebake)
     {
-        // A tile on terrain that is not resident waits in the rebake and is submitted again next update.
-        int32 waitX = 0, waitZ = 0;
-        record.Rebake->SubmitTiles(terrain, pool, kTileRebakesPerUpdate, waitX, waitZ);
+        // A tile on terrain height not on the CPU yet waits in the rebake and is submitted again next
+        // update, with a CPU window kept there.
+        Mathematics::Vector3 waitPoint;
+        if (!record.Rebake->SubmitTiles(terrain, pool, kTileRebakesPerUpdate, waitPoint))
+            KeepTerrainHeightWindow(terrain, waitPoint);
         Pathfinding::NavTileKey failed;
         std::string error;
         const uint32 builtBefore = record.Rebake->GetBuiltTileCount();
@@ -1027,15 +1065,12 @@ void NavigationSurfaceSystem::BakeGrid(ECS::World& world, ECS::EntityHandle enti
     settings.Width = extent.X;
     settings.Depth = extent.Z;
 
-    int32 waitX = 0, waitZ = 0;
+    Mathematics::Vector3 waitPoint;
     std::unique_ptr<Pathfinding::GridMap> grid =
-        BakeNavigationGrid(settings, terrain, geometry, surface.StepHeight, surface.AgentHeight, waitX, waitZ);
+        BakeNavigationGrid(settings, terrain, geometry, surface.StepHeight, surface.AgentHeight, waitPoint);
     if (!grid)
     {
-        surface.BakePhase = NavigationBakePhase::Waiting;
-        surface.BakeWait = NavigationBakeWait::TerrainTile;
-        surface.BlockingTileX = waitX;
-        surface.BlockingTileZ = waitZ;
+        WaitForTerrainHeight(surface, terrain, waitPoint);
         record.Pending = true;
         return;
     }

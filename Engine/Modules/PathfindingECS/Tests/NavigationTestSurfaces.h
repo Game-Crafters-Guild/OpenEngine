@@ -3,7 +3,7 @@
 // Surfaces for the navigation suites: level ground and a NavigationSurface baked over it by
 // NavigationSurfaceSystem, as a scene would have them.
 
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PathfindingECS/Systems/NavigationSurfaceSystem.h"
 #include "PhysicsECS/Components/PhysicsBody.h"

@@ -15,10 +15,9 @@ namespace GameEngine
 namespace Components
 {
 
-/// Which passes draw a mesh. Off: the color passes only, no shadow. On: the color passes and
-/// the shadow passes. ShadowsOnly: the shadow passes only; the mesh is absent from every color
-/// pass (main view, reflections, picking) and still shadows the scene, the way a cheap proxy
-/// casts the shadow of a detailed object another renderer draws.
+/// Whether a mesh is drawn and whether it casts a shadow. Off: the mesh is drawn and casts no
+/// shadow. On: the mesh is drawn and casts a shadow. ShadowsOnly: the mesh is not drawn and still
+/// casts its shadow, the way a cheap proxy casts the shadow of a detailed building.
 enum class ShadowCasting : uint8
 {
     Off = 0,
@@ -55,6 +54,7 @@ struct MeshRenderer
     // MeshGPURegistry handle stored as raw uint64 (trivially copyable for ECS).
     // Cache filled on first bind from modelAssetGuid. Extraction uses this
     // when non-zero; zero means "not bound yet" (scene deserialize, spawn).
+    // @ge-hidden the engine's GPU handle: not script data, not saved in scenes
     uint64 meshGpuHandleId = 0;
     // Asset-backed material reference.
     // The extraction system resolves this via MaterialRegistry::Find.

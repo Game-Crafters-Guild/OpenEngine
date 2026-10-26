@@ -50,11 +50,6 @@ namespace Rendering {
         // Set by RenderServices when it takes a device; SPIR-V until then.
         void SetPreferredShaderSource(ShaderSourceKind kind);
 
-        // String utilities
-        std::string FormatString(const char* format, ...);
-        std::vector<std::string> SplitString(const std::string& str, char delimiter);
-        std::string ToUpper(const std::string& str);
-
         // File utilities
         bool FileExists(const std::string& path) noexcept;
         [[nodiscard]] std::vector<uint8_t> ReadFile(const std::string& path);
@@ -66,13 +61,6 @@ namespace Rendering {
         [[nodiscard]] std::vector<uint8_t> LoadShaderFile(const char* name);
         // Resolve a shader file path (SPIR-V or source) from common runtime locations.
         [[nodiscard]] std::string ResolveShaderPath(const char* name);
-
-
-        // Memory utilities
-        template<typename T>
-        std::unique_ptr<T> MakeUnique(T&& value) {
-            return std::make_unique<T>(std::forward<T>(value));
-        }
 
         // Alignment utilities
         constexpr size_t AlignUp(size_t value, size_t alignment) {

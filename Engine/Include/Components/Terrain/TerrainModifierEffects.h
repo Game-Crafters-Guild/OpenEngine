@@ -3,11 +3,12 @@
 #include "Components/AssetRef.h"
 #include "Components/Terrain/TerrainModifierBlend.h"
 #include "Components/Terrain/TerrainSurfaceRules.h"
+#include "Mathematics/Interpolation.h"
+#include "Types/Color.h"
 #include "Types/StringUtils.h"
 #include "Types/Types.h"
 
 #include <cstddef>
-#include <algorithm>
 #include <cmath>
 #include <string_view>
 #include <type_traits>
@@ -380,7 +381,7 @@ struct TerrainGrassEffect
 // Script writes also pass through this finite, bounded admission at gather.
 inline float32 ClampTerrainGrassEffectScale(float32 value)
 {
-    return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+    return std::isfinite(value) ? Math::Clamp01(value) : 1.0f;
 }
 
 // The height multiplier below which a region stops reading as short grass and starts reading as
@@ -407,7 +408,7 @@ struct TerrainColorEffect
     GE_TERRAIN_EFFECT_COMMON_FIELDS
 
     // Linear, each channel [0,1]. The default is the grass's default Soil Color.
-    float32 Color[3] = {0.10f, 0.075f, 0.045f};
+    ColorLinear Color{0.10f, 0.075f, 0.045f};
     // [0,1]: how far the ground moves toward Color. At 1 the ground is Color alone and loses its
     // material's pattern, so the default keeps half of it.
     float32 Strength = 0.5f;
@@ -417,7 +418,7 @@ struct TerrainColorEffect
 // and at gather: clamped to [0,1], and 0 when nonfinite, so a bad value writes nothing.
 inline float32 ClampTerrainColorEffectValue(float32 value)
 {
-    return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+    return std::isfinite(value) ? Math::Clamp01(value) : 0.0f;
 }
 
 static_assert(std::is_trivially_copyable_v<TerrainColorEffect>);

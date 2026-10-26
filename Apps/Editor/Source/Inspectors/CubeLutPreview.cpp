@@ -3,6 +3,7 @@
 #include "Inspectors/CubeLutPreviewPopover.h"
 #include "Input/KeyCodes.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Passes/CubeLutPreviewSources.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "UI/UIElement.h"
@@ -243,7 +244,7 @@ CubeLutPreview::~CubeLutPreview()
 
 void CubeLutPreview::SetIntensity(float intensity)
 {
-    m_Request.Intensity = std::clamp(intensity, 0.0f, 1.0f);
+    m_Request.Intensity = Math::Clamp01(intensity);
     for (auto& [band, request] : m_LutBands)
     {
         request.Intensity = m_Request.Intensity;

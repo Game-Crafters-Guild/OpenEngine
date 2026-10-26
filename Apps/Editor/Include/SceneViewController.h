@@ -3,6 +3,7 @@
 #include "ECS/ECS.h"
 #include "Editor/Settings/ProjectUIScaleBinding.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Ray.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
@@ -37,7 +38,7 @@
 namespace GameEngine
 {
 
-namespace Editor::Picking
+namespace Scene
 {
 struct PickHit;
 }
@@ -322,7 +323,7 @@ class SceneViewController
 
     // Grid opacity.
     float GetGridOpacity() const { return m_GridOpacity; }
-    void SetGridOpacity(float opacity) { m_GridOpacity = std::clamp(opacity, 0.0f, 1.0f); }
+    void SetGridOpacity(float opacity) { m_GridOpacity = Math::Clamp01(opacity); }
 
     // 2D/3D mode: orthographic side view (looking along +Z, Y up) vs perspective.
     // Switching tweens the camera to/from the locked 2D pose and flips projection.
@@ -555,6 +556,8 @@ class SceneViewController
     bool StepCameraHistoryForward();
 
   private:
+    void FramePerspectiveBounds(const Mathematics::AABB& bounds);
+
     // Clicks and hovers that arrived while the scene TLAS was refitting on the
     // job system. They apply on the frame the refit finishes, so the main
     // thread never waits for it; a newer hover replaces an older one.
@@ -786,7 +789,7 @@ class SceneViewController
     std::size_t m_PickCacheStructuralVersion = 0;
     bool m_PickCacheExactMode = false;
     bool m_PickCacheValid = false;
-    std::vector<Editor::Picking::PickHit> m_PickHits;
+    std::vector<Scene::PickHit> m_PickHits;
     std::vector<ECS::EntityHandle> m_PickCandidates;
     bool m_SuppressHoverNamePill = false;
     std::vector<ECS::EntityHandle> m_HoveredDescendants;

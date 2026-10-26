@@ -27,6 +27,8 @@ set(ECS_HEADERS
     Include/ECS/Types.h
     Include/ECS/World.h
     Include/ECS/Entity.h
+    Include/ECS/ClonePlan.h
+    Include/ECS/EntityRemap.h
     Include/ECS/Query.h
     Include/ECS/ComponentFlags.h
     Include/ECS/Components.h

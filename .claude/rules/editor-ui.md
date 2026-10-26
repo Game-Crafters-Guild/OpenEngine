@@ -20,6 +20,10 @@ paths:
 
 - A control is a class on the UI control base with its layout in XML and its styling in CSS, placed in the module that owns its use under that module's UI folder (`Controls`, `Inspectors`, `Panels` as the module needs) and registered through the registries. No imperative layout inside a panel, no control assembled from raw elements in place, no control filed under a hub. A control two modules share lives in the UI module's controls.
 
+## Understood without explanation
+
+Every surface a user sees or operates (a panel, an inspector section, a setting, a dialog, a menu, a notice, a control, user-facing text) is understood without explanation. A control that works but must be explained is a defect. The checklist is the UI/UX pass in the `change-scrutiny` skill (`.claude/skills/change-scrutiny/SKILL.md`); a change runs it before its pull request opens, and the body carries its line.
+
 ## Registration, hubs and ownership
 
 - New settings categories and fields go through `Editor::EditorSettingsRegistry` (EditorSDK; usable from engine systems and packages) and the `SettingsPanel` renders them from descriptors. Never a hand-built page in `SettingsPanel.cpp`; migrate legacy pages on contact. Persist through `SettingsStore`, never raw JSON.

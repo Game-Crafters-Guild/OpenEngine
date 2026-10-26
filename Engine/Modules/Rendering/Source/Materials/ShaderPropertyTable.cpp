@@ -1,7 +1,10 @@
 #include "Rendering/Materials/ShaderPropertyTable.h"
 
 #include "Rendering/Materials/MaterialParamsLayout.h"
+#include "Rendering/Materials/MaterialPropertyBinding.h"
 #include "Rendering/ShaderGraph/SgTagParser.h"
+#include "Types/ParseNumber.h"
+#include "Types/StringUtils.h"
 
 #include "ShaderDeformationEnvelopeParse.h"
 
@@ -9,11 +12,12 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
-#include <charconv>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <sstream>
 #include <unordered_map>
+#include <utility>
 
 namespace GameEngine::Rendering
 {
@@ -58,17 +62,6 @@ bool IsComposedProgramName(std::string_view name)
            HasPrefix(name, "uUser");
 }
 
-std::string Trim(std::string_view v)
-{
-    size_t b = 0;
-    size_t e = v.size();
-    while (b < e && std::isspace(static_cast<unsigned char>(v[b])))
-        ++b;
-    while (e > b && std::isspace(static_cast<unsigned char>(v[e - 1])))
-        --e;
-    return std::string(v.substr(b, e - b));
-}
-
 bool IsQuoted(std::string_view s)
 {
     return s.size() >= 2 && ((s.front() == '"' && s.back() == '"') ||
@@ -78,30 +71,6 @@ bool IsQuoted(std::string_view s)
 std::string Unquote(std::string_view s)
 {
     return IsQuoted(s) ? std::string(s.substr(1, s.size() - 2)) : std::string(s);
-}
-
-// "pulseSpeed" -> "Pulse Speed", "ao" -> "AO", "fresnelRimCap" -> "Fresnel Rim Cap".
-std::string DeriveDisplayName(std::string_view name)
-{
-    if (name == "ao")
-        return "AO";
-    std::string out;
-    out.reserve(name.size() + 4);
-    for (size_t i = 0; i < name.size(); ++i)
-    {
-        const char c = name[i];
-        if (c == '_')
-        {
-            out.push_back(' ');
-            continue;
-        }
-        const bool boundary = i > 0 && std::isupper(static_cast<unsigned char>(c)) &&
-                              !std::isupper(static_cast<unsigned char>(name[i - 1]));
-        if (boundary)
-            out.push_back(' ');
-        out.push_back(i == 0 ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c);
-    }
-    return out;
 }
 
 bool ParseType(std::string_view token, ShaderPropertyType& out)
@@ -125,7 +94,7 @@ bool ParseType(std::string_view token, ShaderPropertyType& out)
 
 bool ParseFloat(std::string_view text, float& out)
 {
-    const std::string s = Trim(text);
+    const std::string s(TrimWhitespaceView(text));
     if (s.empty())
         return false;
     // std::from_chars for float is unavailable on macOS before 26.0 with the
@@ -140,27 +109,24 @@ bool ParseFloat(std::string_view text, float& out)
     return true;
 }
 
-bool ParseInt(std::string_view text, int& out)
+// The int an authored default spells, surrounding space allowed; nullopt past int's range.
+std::optional<int> ParseTrimmedInt(std::string_view text)
 {
-    const std::string s = Trim(text);
-    if (s.empty())
-        return false;
-    const auto res = std::from_chars(s.data(), s.data() + s.size(), out);
-    return res.ec == std::errc{} && res.ptr == s.data() + s.size();
+    const std::optional<int64_t> value = ParseInt(TrimWhitespaceView(text));
+    if (!value || !std::in_range<int>(*value))
+        return std::nullopt;
+    return static_cast<int>(*value);
 }
 
+// The comma-separated fields of `text`, each trimmed. An empty text is one empty field, so an empty
+// default reports its component as not a number, and an empty values= list as missing a label.
 std::vector<std::string> SplitCommas(std::string_view text)
 {
+    if (text.empty())
+        return {std::string()};
     std::vector<std::string> parts;
-    size_t start = 0;
-    while (start <= text.size())
-    {
-        const size_t comma = text.find(',', start);
-        parts.push_back(Trim(text.substr(start, (comma == std::string::npos ? text.size() : comma) - start)));
-        if (comma == std::string::npos)
-            break;
-        start = comma + 1;
-    }
+    for (const std::string_view field : Split(text, ','))
+        parts.emplace_back(TrimWhitespaceView(field));
     return parts;
 }
 
@@ -171,7 +137,7 @@ std::string PeelTrailingFlags(std::string value, std::vector<std::string>& flags
 {
     for (;;)
     {
-        const std::string trimmed = Trim(value);
+        const std::string trimmed = TrimWhitespace(value);
         const size_t space = trimmed.find_last_of(" \t");
         if (space == std::string::npos)
             return trimmed;
@@ -393,7 +359,7 @@ struct Parser
         if (!ParseDefault(prop, hasDefault, defaultText, scan.Line))
             return;
         if (prop.DisplayName.empty())
-            prop.DisplayName = DeriveDisplayName(prop.Name);
+            prop.DisplayName = MaterialPropertyBinding::PropertyKeyLabel(prop.Name);
 
         for (const ShaderProperty& existing : Table.Properties)
         {
@@ -415,7 +381,7 @@ struct Parser
         {
             if (!hasDefault)
                 return true;
-            const std::string lower = Trim(text);
+            const std::string lower(TrimWhitespaceView(text));
             if (lower == "true" || lower == "1")
                 prop.Default[0] = 1.0f;
             else if (lower == "false" || lower == "0")
@@ -431,30 +397,30 @@ struct Parser
         {
             if (!hasDefault)
                 return true;
-            int v = 0;
-            if (!ParseInt(text, v))
+            const std::optional<int> v = ParseTrimmedInt(text);
+            if (!v)
             {
                 Error(line, "property '" + prop.Name + "': int default must be an integer");
                 return false;
             }
-            prop.Default[0] = static_cast<float>(v);
+            prop.Default[0] = static_cast<float>(*v);
             return true;
         }
         case ShaderPropertyType::Enum:
         {
             if (!hasDefault)
                 return true;
-            const std::string label = Trim(text);
+            const std::string label(TrimWhitespaceView(text));
             const auto it = std::find(prop.EnumValues.begin(), prop.EnumValues.end(), label);
             if (it != prop.EnumValues.end())
             {
                 prop.Default[0] = static_cast<float>(it - prop.EnumValues.begin());
                 return true;
             }
-            int v = 0;
-            if (ParseInt(label, v) && v >= 0 && static_cast<size_t>(v) < prop.EnumValues.size())
+            const std::optional<int> v = ParseTrimmedInt(label);
+            if (v && *v >= 0 && static_cast<size_t>(*v) < prop.EnumValues.size())
             {
-                prop.Default[0] = static_cast<float>(v);
+                prop.Default[0] = static_cast<float>(*v);
                 return true;
             }
             Error(line, "property '" + prop.Name + "': enum default '" + label + "' is not one of its values");

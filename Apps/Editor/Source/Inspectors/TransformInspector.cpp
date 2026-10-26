@@ -113,10 +113,10 @@ TRS ComputeWorldTRSForEntity(ECS::World* world, ECS::EntityHandle handle)
 
     if (auto* parentComp = e.Get<Parent>())
     {
-        ECS::Entity parentEntity(world, parentComp->parent);
+        ECS::Entity parentEntity(world, parentComp->Entity);
         if (parentEntity.IsValid())
         {
-            TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->parent);
+            TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->Entity);
             return CombineTRS(parentWorld, local);
         }
     }
@@ -150,7 +150,7 @@ void GetParentWorldTRS(ECS::World* world, ECS::EntityHandle handle,
         return; // identity parent
     }
 
-    TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->parent);
+    TRS parentWorld = ComputeWorldTRSForEntity(world, parentComp->Entity);
     outPos = parentWorld.position;
     outRot = parentWorld.rotation;
     outScale = parentWorld.scale;
@@ -1069,12 +1069,14 @@ private:
             }
         });
 
-        constexpr float kDragThresholdPx = 3.0f;
-        label->RegisterEventHandler(kEventMouseMove, [this, field, onChanging, dragDidMove](UIEvent& e) {
+        label->RegisterEventHandler(kEventMouseMove, [this, label, field, onChanging, dragDidMove](UIEvent& e) {
             if (m_DraggingLabel && m_DraggingVec3Field == field) {
                 float deltaX = e.X - m_DragStartX;
-                if (std::fabs(deltaX) > kDragThresholdPx)
-                    *dragDidMove = true;
+                if (!InspectorDrag::BeginLabelDragPastThreshold(label, *dragDidMove, deltaX))
+                {
+                    e.Stop();
+                    return;
+                }
                 Rendering::Vector3 newValue(
                     m_DragStartVec3.x + deltaX * InspectorDrag::kInspectorDragFloatSensitivity,
                     m_DragStartVec3.y + deltaX * InspectorDrag::kInspectorDragFloatSensitivity,
@@ -1097,12 +1099,33 @@ private:
             }
         });
 
+        label->RegisterEventHandler(kEventMouseCancel, [this, field, onChanged, dragDidMove](UIEvent& e)
+                                    { CancelLabelDrag(e, field, *dragDidMove, onChanged); });
+
         label->RegisterEventHandler(kEventMouseUp, [this, field, onChanging, onChanged](UIEvent& e) {
             if (e.Button == 1) {
                 ShowFieldContextMenu(field, onChanging, onChanged, e.X, e.Y);
                 e.Stop();
             }
         });
+    }
+
+    // Escape or another button during a row label drag: a drag that moved the row puts back its start
+    // values, and onChanged commits them.
+    void CancelLabelDrag(UIEvent& e, Vector3Field* field, bool dragDidMove,
+                         const std::function<void(const Rendering::Vector3&)>& onChanged)
+    {
+        if (!m_DraggingLabel || m_DraggingVec3Field != field)
+            return;
+        m_DraggingLabel = nullptr;
+        m_DraggingVec3Field = nullptr;
+        if (dragDidMove)
+        {
+            field->SetValue(m_DragStartVec3);
+            if (onChanged)
+                onChanged(m_DragStartVec3);
+        }
+        e.Stop();
     }
 
     const char* TransformVectorRowLabelForMenu(Vector3Field* field) const

@@ -1,12 +1,16 @@
 /* HierarchyNavigationBar (Apps/Editor/Include/Editor/Hierarchy/HierarchyNavigationBar.h).
  *
- * The Hierarchy's row of item size slider and search. The panel reserves the row's strip with
- * its own padding (theme/views.css, .hierarchy-panel); this sheet places the row in that strip
- * and lays out its two items. The row requests it for its own subtree.
+ * The Hierarchy's bottom bar: a rows glyph, then the item size slider. It stays at the bottom
+ * wherever the panel search sits. It leads with a 16px glyph as the Assets panel's bottom bar
+ * does, and has no plate of its own: the panel's fill is already the Assets bar's fill. The panel
+ * reserves the bar's strip with its own padding (theme/views.css, .hierarchy-panel); this sheet
+ * places the bar in that strip. The bar requests it for its own subtree.
  */
 .hierarchy-navigation-bar {
     position: absolute;
-    left: 8px;
+    /* 23px: the glyph on the tree's first icon column (8px panel inset plus the tree's 15px
+       row indent). */
+    left: 23px;
     right: 8px;
     bottom: 8px;
     height: 22px;
@@ -18,28 +22,21 @@
 }
 
 /* The tree's horizontal scrollbar takes the bottom of the panel: a 12px bar 4px above the panel
-   edge. The row rides 3px clear of it: 4 + 12 + 3 = 19px. A literal, because the bar's
+   edge. The bar rides 3px clear of it: 4 + 12 + 3 = 19px. A literal, because the bar's
    thickness is Scrollbar::kDefaultThicknessPx in C++, not a value any stylesheet can read. */
 .hierarchy-navigation-bar-above-scrollbar {
     bottom: 19px;
 }
 
-/* EditorSearchBars sets search-bar-at-top on the row when search bars sit at the top; the search
-   inside the row never carries it (EditorSearchBars::RegisterHosted), and this sheet applies only
-   to the row's subtree, so one class names the row. After the scrollbar lift, so it wins over it. */
-.search-bar-at-top {
-    top: 8px;
-    bottom: unset;
-}
-
-/* The panel search as the row's flexible item, in place of the panel-anchored placement that
-   .panel-search-bar gives a search sitting directly in a panel. */
-.hierarchy-navigation-bar-search {
-    position: relative;
-    top: unset;
-    bottom: unset;
-    left: unset;
-    right: unset;
-    flex: 1 1 auto;
-    min-width: 0;
+/* The rows glyph says what the slider sizes. It is the glyph of the Assets panel's list view. */
+.hierarchy-navigation-bar-size-icon {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    flex-shrink: 0;
+    background-image: url("editor:Icons/column-horizontal.svg");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-image-tint: var(--ui_icon_tint_default);
 }

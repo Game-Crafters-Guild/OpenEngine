@@ -1,0 +1,6 @@
+<!-- TransientNotice (Apps/Editor/Include/UI/Controls/TransientNotice.h): the plate, a check glyph
+     and the text. The text's id is the contract with TransientNotice.cpp. -->
+<UIElement class="transient-notice-plate">
+  <UIElement class="transient-notice-glyph" />
+  <Label id="TransientNoticeText" class="transient-notice-text" />
+</UIElement>

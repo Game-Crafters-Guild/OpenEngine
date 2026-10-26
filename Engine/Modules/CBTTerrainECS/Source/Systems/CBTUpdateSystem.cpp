@@ -9,6 +9,7 @@
 #include "Components/Terrain/Terrain.h"    // Components::Terrain (domain + tuning + handles)
 #include "Components/Terrain/TerrainPlanetRelief.h" // Components::TerrainPlanetRelief (base relief)
 #include "Engine/Rendering/RenderServices.h"
+#include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainTypes.h" // TerrainNeedsTiling (a tiled terrain keeps its lattice cap)
 #include "TerrainECS/TerrainRenderFeature.h" // unified-height dirty rect (tiled streaming)
 #include "TerrainECS/TerrainService.h" // TerrainService, TerrainData, DirtyRegionLog
@@ -482,10 +483,10 @@ void CBTUpdateSystem::ConsumeDirtyRegion(ECS::World& world, uint64 updateRecordC
     // reclassify without the pad. The log's Max is exclusive, so the raw upper edge is MaxX/W.
     const float invW = 1.0f / static_cast<float>(width);
     const float invH = 1.0f / static_cast<float>(height);
-    classify.DirtyMinU = std::clamp((static_cast<float>(region.MinX) - 1.0f) * invW, 0.0f, 1.0f);
-    classify.DirtyMinV = std::clamp((static_cast<float>(region.MinZ) - 1.0f) * invH, 0.0f, 1.0f);
-    classify.DirtyMaxU = std::clamp((static_cast<float>(region.MaxX) + 1.0f) * invW, 0.0f, 1.0f);
-    classify.DirtyMaxV = std::clamp((static_cast<float>(region.MaxZ) + 1.0f) * invH, 0.0f, 1.0f);
+    classify.DirtyMinU = Math::Clamp01((static_cast<float>(region.MinX) - 1.0f) * invW);
+    classify.DirtyMinV = Math::Clamp01((static_cast<float>(region.MinZ) - 1.0f) * invH);
+    classify.DirtyMaxU = Math::Clamp01((static_cast<float>(region.MaxX) + 1.0f) * invW);
+    classify.DirtyMaxV = Math::Clamp01((static_cast<float>(region.MaxZ) + 1.0f) * invH);
 
     // Mark the rect in-flight at the current heightfield version; do NOT commit the
     // cursor until a later frame confirms an update recorded it (above).

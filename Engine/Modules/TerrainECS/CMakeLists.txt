@@ -7,8 +7,6 @@ add_library(TerrainECS OBJECT
     Source/CoarseTileStandIn.cpp
     Source/TerrainBakeCache.cpp
     Source/BakeWarningLatch.cpp
-    Source/TerrainCollisionReadiness.cpp
-    Source/PlanarHeightQuery.cpp
     Source/PlanarHeightfieldEditCursor.cpp
     Source/TerrainHandleHygiene.cpp
     Source/TerrainGpuBake.cpp
@@ -27,7 +25,10 @@ add_library(TerrainECS OBJECT
     Source/RawHeightmap.cpp
     Source/AtlasResidencyController.cpp
     Source/PageLevelRule.cpp
+    Source/PageTable.cpp
     Source/PagedHeightSampler.cpp
+    Source/SurfaceHeightQuery.cpp
+    Source/TerrainSkyline.cpp
     Source/TerrainHeightSource.cpp
     Source/TerrainHeightPages.cpp
     Source/TerrainHeightPageFeature.cpp
@@ -39,12 +40,18 @@ add_library(TerrainECS OBJECT
     Source/Systems/TerrainWorldHooks.cpp
     Source/Systems/TerrainModifierSystem.cpp
     Source/Systems/TerrainModifierPageOverlay.cpp
+    Source/Systems/TerrainModifierSurfacePages.cpp
+    Source/TerrainSurfacePageBaker.cpp
+    Source/TerrainSurfacePageDriver.cpp
+    Source/TerrainSurfaceStore.cpp
     Source/TileStreamingManager.cpp
     Source/TerrainModifierComponents.cpp
     Source/TerrainColorMap.cpp
     Source/TerrainColorMapBaker.cpp
     Source/TerrainGrassField.cpp
+    Source/TerrainGrassCompose.cpp
     Source/TerrainFieldUploader.cpp
+    Source/TerrainRowBands.cpp
     Source/TerrainRoutePolyline.cpp
     Source/TerrainZonePayload.cpp
     Source/TerrainZoneAuthoring.cpp
@@ -76,6 +83,9 @@ target_link_libraries(TerrainECS
         # TerrainService.h exposes the asset-reload lane + decoded heightmap
         # cache (AssetReloadInvalidator / GUID members) in its public surface.
         AssetCore
+        # The height page store, its cooker and loader (the paged height source); SurfaceHeightQuery.h
+        # and TerrainService.h expose its page types.
+        PageStreaming
     PRIVATE
         # Engine intentionally NOT listed: Engine is now SHARED (Phase 1) and
         # PRIVATE-links TerrainECS itself. A direct TerrainECS -> Engine link
@@ -85,8 +95,6 @@ target_link_libraries(TerrainECS
         # expression below.
         JobSystem
         FileSystem
-        # The height page store, its cooker and loader (the paged height source).
-        PageStreaming
         Physics
         PhysicsECS
         Spline

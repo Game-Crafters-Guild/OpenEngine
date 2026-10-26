@@ -220,16 +220,16 @@ TEST_F(DescriptorBufferFixture, Pool_SpillGrowsNewBlock)
 TEST_F(DescriptorBufferFixture, Pool_SpillWarnsOncePerBlockNotPerAllocation)
 {
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto spillWarnings = std::make_shared<std::atomic<int>>(0);
     // Substring match on "spill": loose enough to survive rewording of the capacity,
     // counts or remedy, but renaming the event itself would red this gate.
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [spillWarnings](const Logger::LogMessage& msg)
         {
-            if (msg.Message.find("VulkanDescriptorBufferPool") != Logger::String::npos &&
-                msg.Message.find("spill") != Logger::String::npos)
+            if (msg.Message.find("VulkanDescriptorBufferPool") != std::string::npos &&
+                msg.Message.find("spill") != std::string::npos)
                 spillWarnings->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));
@@ -273,19 +273,19 @@ TEST_F(DescriptorBufferFixture, Pool_SpillWarnsOncePerBlockNotPerAllocation)
 TEST_F(DescriptorBufferFixture, Pool_SpillWarningNamesTheExhaustedRegion)
 {
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto perFrameWarnings = std::make_shared<std::atomic<int>>(0);
     auto persistentWarnings = std::make_shared<std::atomic<int>>(0);
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [perFrameWarnings, persistentWarnings](const Logger::LogMessage& msg)
         {
-            if (msg.Message.find("VulkanDescriptorBufferPool") == Logger::String::npos ||
-                msg.Message.find("spill") == Logger::String::npos)
+            if (msg.Message.find("VulkanDescriptorBufferPool") == std::string::npos ||
+                msg.Message.find("spill") == std::string::npos)
                 return;
-            if (msg.Message.find("per-frame region full") != Logger::String::npos)
+            if (msg.Message.find("per-frame region full") != std::string::npos)
                 perFrameWarnings->fetch_add(1);
-            else if (msg.Message.find("persistent region full") != Logger::String::npos)
+            else if (msg.Message.find("persistent region full") != std::string::npos)
                 persistentWarnings->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));
@@ -652,14 +652,14 @@ TEST_F(DescriptorPoolFixture, CreateDescriptorSet_RoutesThroughPool)
 TEST_F(DescriptorBufferFixture, UpdateDescriptorSet_UnresolvableHandleIsLogged)
 {
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto dropCount = std::make_shared<std::atomic<int>>(0);
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [dropCount](const Logger::LogMessage& msg)
         {
-            if (msg.Message.find("dropped") != Logger::String::npos &&
-                msg.Message.find("descriptor-buffer write") != Logger::String::npos)
+            if (msg.Message.find("dropped") != std::string::npos &&
+                msg.Message.find("descriptor-buffer write") != std::string::npos)
                 dropCount->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));
@@ -703,14 +703,14 @@ TEST_F(DescriptorBufferFixture, UpdateDescriptorSet_UnresolvableHandleIsLogged)
 TEST_F(DescriptorBufferFixture, UpdateDescriptorSet_DroppedArrayLogsOncePerUpdate)
 {
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto dropCount = std::make_shared<std::atomic<int>>(0);
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [dropCount](const Logger::LogMessage& msg)
         {
-            if (msg.Message.find("dropped") != Logger::String::npos &&
-                msg.Message.find("descriptor-buffer write") != Logger::String::npos)
+            if (msg.Message.find("dropped") != std::string::npos &&
+                msg.Message.find("descriptor-buffer write") != std::string::npos)
                 dropCount->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));
@@ -750,14 +750,14 @@ TEST_F(DescriptorBufferFixture, UpdateDescriptorSet_DroppedArrayLogsOncePerUpdat
 TEST_F(DescriptorBufferFixture, UpdateDescriptorSet_EmptyUpdateIsSilent)
 {
     Logger::Log::Initialize({});
-    auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+    auto sink = std::make_unique<Logger::CallbackSink>();
     auto* sinkPtr = sink.get();
     auto dropCount = std::make_shared<std::atomic<int>>(0);
-    const Logger::uint64 callbackId = sinkPtr->RegisterCallback(
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
         [dropCount](const Logger::LogMessage& msg)
         {
-            if (msg.Message.find("dropped") != Logger::String::npos &&
-                msg.Message.find("descriptor-buffer write") != Logger::String::npos)
+            if (msg.Message.find("dropped") != std::string::npos &&
+                msg.Message.find("descriptor-buffer write") != std::string::npos)
                 dropCount->fetch_add(1);
         });
     Logger::Log::AddSink(std::move(sink));

@@ -104,11 +104,11 @@ class DeleteEntitiesCommand final : public IEditorCommand
             {
                 if (!e.IsValid() || !world.IsValid(e))
                     return;
-                if (!p.parent.IsValid() || !world.IsValid(p.parent))
+                if (!p.Entity.IsValid() || !world.IsValid(p.Entity))
                     return;
                 if (world.HasComponent<Components::RuntimeOnlyEntity>(e))
                     return;
-                children[p.parent.index].push_back(e);
+                children[p.Entity.index].push_back(e);
             });
 
         std::vector<ECS::EntityHandle> stack;
@@ -264,7 +264,7 @@ class DeleteEntitiesCommand final : public IEditorCommand
         m_World->Query<ECS::Read<Components::Parent>>().IncludeDisabled().Each(
             [&](ECS::EntityHandle e, const Components::Parent& p)
             {
-                if (!e.IsValid() || !p.parent.IsValid() || doomed.count(p.parent.index) == 0)
+                if (!e.IsValid() || !p.Entity.IsValid() || doomed.count(p.Entity.index) == 0)
                     return;
                 if (m_World->HasComponent<Components::RuntimeOnlyEntity>(e))
                     generated.push_back(e);

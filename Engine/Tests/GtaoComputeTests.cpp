@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -41,6 +42,22 @@ using namespace GameEngine::Engine::Renderer;
 
 namespace
 {
+// The temporal pass's packed surface normal (9 bits per octahedral axis) with a
+// sample count of one: facing the camera, and facing away from it.
+constexpr float kPackedTowardCamera = 262143.0f;    // (0, 0, -1)
+constexpr float kPackedAwayFromCamera = 131328.0f;  // (0, 0, +1)
+
+// The same packing for any unit normal: octahedral, 9 bits per axis, count one.
+float PackedHistoryNormal(glm::vec3 n)
+{
+    n /= std::abs(n.x) + std::abs(n.y) + std::abs(n.z);
+    glm::vec2 p(n.x, n.y);
+    if (n.z < 0.0f)
+        p = glm::vec2((1.0f - std::abs(n.y)) * (n.x >= 0.0f ? 1.0f : -1.0f), (1.0f - std::abs(n.x)) * (n.y >= 0.0f ? 1.0f : -1.0f));
+    const glm::uvec2 q(glm::round(glm::clamp(p * 0.5f + 0.5f, 0.0f, 1.0f) * 511.0f));
+    return float(q.x | (q.y << 9u));
+}
+
 struct Image
 {
     TextureHandle Handle;
@@ -186,8 +203,8 @@ class GtaoComputeTest : public ::testing::Test
         Buffers.push_back(b);
         auto cl = Device->CreateCommandList(IDevice::QueueType::Graphics);
         cl->Begin();
+        Transition(cl.get(), i, ResourceState::CopySource, mip);
         cl->CopyTextureSubresourceToBuffer(i->Handle, mip, 0, b, w, h, 0, 0, 0, 0);
-        i->States[mip] = ResourceState::CopySource;
         Submit(cl.get());
         std::vector<float> result(count);
         const void* p = Device->MapBuffer(b);
@@ -239,6 +256,17 @@ class GtaoComputeTest : public ::testing::Test
             auto* linear = MakeImage(depth->Width, depth->Height, TextureFormat::R32_FLOAT);
             Run("gtao_prepare", depth->Width, depth->Height, {{"uDepth", depth}}, {{"uGuide", guide}, {"uDepthOut", linear}});
             inputs.emplace_back("uGuide", guide);
+        }
+        // A test that binds no raw sweep binds the blended input in its place,
+        // so the tolerance comes from that input's spread.
+        if (std::string(name) == "gtao_temporal" &&
+            std::none_of(inputs.begin(), inputs.end(), [](const auto& input)
+                         { return std::string(input.first) == "uSweep"; }))
+        {
+            auto it = std::find_if(inputs.begin(), inputs.end(), [](const auto& input)
+                                   { return std::string(input.first) == "uCurrent"; });
+            ASSERT_NE(it, inputs.end());
+            inputs.emplace_back("uSweep", it->second);
         }
         auto* queries = CaptureTimings ? Device->GetQueryPool() : nullptr;
         if (queries)
@@ -299,6 +327,7 @@ class GtaoComputeTest : public ::testing::Test
             pc.Add("directions", quality.Directions);
             pc.Add("steps", SweepSteps);
             pc.Add("noiseFrame", frame);
+            pc.Add("frameIndex", frame);
             pc.Add("historyValid", historyValid);
             pc.Flush(cl.get());
         }
@@ -356,6 +385,26 @@ class GtaoComputeTest : public ::testing::Test
             Run("gtao_upsample", w, h, {{"uDepth", depth}, {"uGuide", guide}, {"uAOIn", blur}}, {{"uAOOut", output}});
         }
         return {guide, mips, raw, output, blur};
+    }
+    // A 0.75-radius sphere in front of a plane at depth 6, 64 x 64 under the
+    // orthographic camera: occluded crease pixels where the noise phase matters.
+    Image* SphereOverPlaneDepth()
+    {
+        constexpr uint32_t kSize = 64;
+        constexpr float kRadius = 0.75f;
+        auto depth = MakeImage(kSize, kSize, TextureFormat::R32_FLOAT);
+        std::vector<float> data(kSize * kSize, Raw(6));
+        for (uint32_t y = 0; y < kSize; ++y)
+            for (uint32_t x = 0; x < kSize; ++x)
+            {
+                const float px = (float(x) + 0.5f) / kSize * 4 - 2;
+                const float py = (float(y) + 0.5f) / kSize * 4 - 2;
+                const float r2 = px * px + py * py;
+                if (r2 < kRadius * kRadius)
+                    data[y * kSize + x] = Raw(5.2f - std::sqrt(kRadius * kRadius - r2));
+            }
+        Upload(depth, data);
+        return depth;
     }
     // Read a texture the render graph owns (a pooled pipeline output) rather than
     // one this fixture allocated.
@@ -495,7 +544,7 @@ TEST_F(GtaoComputeTest, DenoiserAveragesAcrossSteepPlaneThroughDepthPlaneFit)
 {
     // A plane steep enough that adjacent texels differ by ~5% of their depth,
     // several times the plane tolerance: only the fitted-plane prediction keeps
-    // the x-neighbours in the kernel. Vertical AO stripes then average out; a
+    // the x-neighbors in the kernel. Vertical AO stripes then average out; a
     // depth-difference-only weight would leave them at full contrast.
     constexpr uint32_t kSize = 32;
     constexpr float kDarkStripe = 0.2f;
@@ -784,9 +833,11 @@ TEST_F(GtaoComputeTest, TemporalRejectsStaleDepthAndResetHistory)
             {{"uAOOut", output}, {"uSurfaceOut", surfaceOut}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, 0, valid);
         ExpectClear(Read(output));
     }
+    // The stored depth is the raw depth but for its lowest four mantissa bits,
+    // which hold the disagreement run.
     auto stored = Read(surfaceOut);
     for (size_t i = 0; i < stored.size(); i += 2)
-        EXPECT_FLOAT_EQ(stored[i], Raw(5));
+        EXPECT_NEAR(stored[i], Raw(5), Raw(5) * 0x1p-19f);
 }
 TEST_F(GtaoComputeTest, TemporalBlendsMatchingSurfaceAndRejectsDepthNormalAndOffscreenHistory)
 {
@@ -805,7 +856,7 @@ TEST_F(GtaoComputeTest, TemporalBlendsMatchingSurfaceAndRejectsDepthNormalAndOff
         now[i * 4 + 3] = ((i / 8 + i % 8) & 1u) ? 0.55f : 0.45f;
         old[i * 4 + 3] = 0.5f;
         guide[i * 2] = Raw(5);
-        guide[i * 2 + 1] = 1048575.0f; // packed (0,0,-1)
+        guide[i * 2 + 1] = kPackedTowardCamera;
     }
     Upload(current, now);
     Upload(history, old);
@@ -828,15 +879,57 @@ TEST_F(GtaoComputeTest, TemporalBlendsMatchingSurfaceAndRejectsDepthNormalAndOff
     for (size_t i = 0; i < 64; ++i)
     {
         guide[i * 2] = Raw(5);
-        guide[i * 2 + 1] = 524800.0f;
-    } // (0,0,+1)
+        guide[i * 2 + 1] = kPackedAwayFromCamera;
+    }
     Upload(surface, guide);
     EXPECT_NEAR(dispatch(1)[pixel], 0.45f, 0.001f);
     for (size_t i = 0; i < 64; ++i)
-        guide[i * 2 + 1] = 1048575.0f;
+        guide[i * 2 + 1] = kPackedTowardCamera;
     Upload(surface, guide);
     Params.ge_prevViewProj[12] = 20.0f;
     EXPECT_NEAR(dispatch(1)[pixel], 0.45f, 0.001f);
+}
+
+// A history tap is kept only when its stored normal is within the surface test's
+// 0.9 cosine (about 25.8 degrees) of the current one, so the packed normal must
+// resolve a tilt a few degrees either side of that angle.
+TEST_F(GtaoComputeTest, TemporalKeepsHistoryJustInsideTheNormalLimitAndRejectsItJustOutside)
+{
+    SetCamera(8, 8);
+    auto depth = MakeImage(8, 8, TextureFormat::R32_FLOAT);
+    Upload(depth, std::vector<float>(64, Raw(5)));
+    auto current = MakeImage(8, 8, TextureFormat::R16G16B16A16_FLOAT);
+    auto history = MakeImage(8, 8, TextureFormat::R16G16B16A16_FLOAT);
+    auto surface = MakeImage(8, 8, TextureFormat::R32G32_FLOAT);
+    auto output = MakeImage(8, 8, TextureFormat::R16G16B16A16_FLOAT);
+    auto surfaceOut = MakeImage(8, 8, TextureFormat::R32G32_FLOAT);
+    std::vector<float> now(256, 0.0f), old(256, 0.0f);
+    for (size_t i = 0; i < 64; ++i)
+    {
+        now[i * 4 + 2] = old[i * 4 + 2] = -1.0f;
+        now[i * 4 + 3] = ((i / 8 + i % 8) & 1u) ? 0.55f : 0.45f;
+        old[i * 4 + 3] = 0.5f;
+    }
+    Upload(current, now);
+    Upload(history, old);
+    const size_t pixel = (3 * 8 + 3) * 4 + 3;
+    auto blendWithHistoryTiltedBy = [&](float degrees)
+    {
+        const float tilt = glm::radians(degrees);
+        const float packed = PackedHistoryNormal(glm::vec3(0.0f, std::sin(tilt), -std::cos(tilt)));
+        std::vector<float> stored(128, 0.0f);
+        for (size_t i = 0; i < 64; ++i)
+        {
+            stored[i * 2] = Raw(5);
+            stored[i * 2 + 1] = packed;
+        }
+        Upload(surface, stored);
+        Run("gtao_temporal", 8, 8, {{"uDepth", depth}, {"uCurrent", current}, {"uHistory", history}, {"uHistorySurface", surface}},
+            {{"uAOOut", output}, {"uSurfaceOut", surfaceOut}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, 0, 1);
+        return Read(output)[pixel];
+    };
+    EXPECT_GT(blendWithHistoryTiltedBy(23.0f), 0.47f) << "a history inside the normal limit was rejected";
+    EXPECT_NEAR(blendWithHistoryTiltedBy(28.0f), 0.45f, 0.001f) << "a history outside the normal limit was kept";
 }
 
 // History lives at sweep resolution, so a reprojected full-resolution UV has to be
@@ -844,13 +937,12 @@ TEST_F(GtaoComputeTest, TemporalBlendsMatchingSurfaceAndRejectsDepthNormalAndOff
 // extent - 3067 px is 1534 half-res texels, not 1533.5 - so deriving the history
 // texel from the full-resolution extent slides the read by up to half a texel,
 // worst at the right and bottom edges, and a still camera then accumulates a
-// neighbour's history every frame.
+// neighbor's history every frame.
 TEST_F(GtaoComputeTest, TemporalReadsHistoryAtItsOwnTexelOnOddViewports)
 {
     constexpr uint32_t kWidth = 31, kHeight = 17;      // odd: half-res is 16 x 9
     constexpr uint32_t kHalfWidth = 16, kHalfHeight = 9;
     constexpr uint32_t kMarkedColumn = 8;
-    constexpr float kPackedTowardCamera = 1048575.0f;  // octahedral (0, 0, -1)
     SetCamera(kWidth, kHeight);
     auto depth = MakeImage(kWidth, kHeight, TextureFormat::R32_FLOAT);
     Upload(depth, std::vector<float>(kWidth * kHeight, Raw(5)));
@@ -897,18 +989,7 @@ TEST_F(GtaoComputeTest, TemporalReadsHistoryAtItsOwnTexelOnOddViewports)
 TEST_F(GtaoComputeTest, TemporalReducesStaticSamplingVariance)
 {
     SetCamera(64, 64, true);
-    auto depth = MakeImage(64, 64, TextureFormat::R32_FLOAT);
-    std::vector<float> data(64 * 64, Raw(6));
-    for (uint32_t y = 0; y < 64; ++y)
-        for (uint32_t x = 0; x < 64; ++x)
-        {
-            float px = (float(x) + 0.5f) / 64 * 4 - 2;
-            float py = (float(y) + 0.5f) / 64 * 4 - 2;
-            float r2 = px * px + py * py;
-            if (r2 < 0.75f * 0.75f)
-                data[y * 64 + x] = Raw(5.2f - std::sqrt(0.75f * 0.75f - r2));
-        }
-    Upload(depth, data);
+    auto depth = SphereOverPlaneDepth();
     Image* history[2] = {MakeImage(32, 32, TextureFormat::R16G16B16A16_FLOAT), MakeImage(32, 32, TextureFormat::R16G16B16A16_FLOAT)};
     Image* surface[2] = {MakeImage(32, 32, TextureFormat::R32G32_FLOAT), MakeImage(32, 32, TextureFormat::R32G32_FLOAT)};
     Upload(history[1], std::vector<float>(32 * 32 * 4, 0.0f));
@@ -919,7 +1000,7 @@ TEST_F(GtaoComputeTest, TemporalReducesStaticSamplingVariance)
         uint32_t write = frame & 1u, read = write ^ 1u;
         auto evaluation = Spatial(depth, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, frame & 7u);
         auto spatial = evaluation.Filtered;
-        Run("gtao_temporal", 32, 32, {{"uGuide", evaluation.Guide}, {"uDepth", depth}, {"uCurrent", spatial}, {"uHistory", history[read]}, {"uHistorySurface", surface[read]}},
+        Run("gtao_temporal", 32, 32, {{"uGuide", evaluation.Guide}, {"uDepth", depth}, {"uCurrent", spatial}, {"uSweep", evaluation.RawAO}, {"uHistory", history[read]}, {"uHistorySurface", surface[read]}},
             {{"uAOOut", history[write]}, {"uSurfaceOut", surface[write]}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, 0, frame > 0 ? 1u : 0u);
         if (frame < 8)
             continue;
@@ -943,6 +1024,271 @@ TEST_F(GtaoComputeTest, TemporalReducesStaticSamplingVariance)
     RecordProperty("temporal_variance", temporalVariance / 1024);
     EXPECT_GT(spatialVariance, 1e-6);
     EXPECT_LT(temporalVariance, spatialVariance * 0.95);
+}
+
+// At a still camera the sweep cycles through eight noise phases. The temporal
+// pass has to average them and then stop changing: a pass that keeps a fixed
+// share of the current phase shows each phase's residue every frame, which is
+// visible shimmer on foliage without TAA. The rule: after the warm-up, no
+// covered texel changes by one 8-bit step (1/255) between frames, and each
+// settles on the mean of the eight phases.
+TEST_F(GtaoComputeTest, TemporalSettlesOnTheMeanOfTheNoisePhasesAtAStillCamera)
+{
+    constexpr uint32_t kPhases = 8, kSize = 32, kTexels = kSize * kSize;
+    constexpr uint32_t kWarmUpFrames = 128, kMeasuredFrames = 16;
+    constexpr float kStillStep = 1.0f / 255.0f;
+    constexpr float kMeanTolerance = 2.0f / 255.0f;
+    SetCamera(64, 64, true);
+    auto depth = SphereOverPlaneDepth();
+    std::vector<Frame> phases;
+    std::vector<double> phaseMean(kTexels, 0.0);
+    float largestPhaseSpread = 0.0f;
+    std::vector<float> low(kTexels, 1.0f), high(kTexels, 0.0f);
+    for (uint32_t phase = 0; phase < kPhases; ++phase)
+    {
+        phases.push_back(Spatial(depth, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, phase));
+        const auto values = Read(phases.back().Filtered);
+        for (uint32_t i = 0; i < kTexels; ++i)
+        {
+            phaseMean[i] += values[i * 4 + 3] / double(kPhases);
+            low[i] = std::min(low[i], values[i * 4 + 3]);
+            high[i] = std::max(high[i], values[i * 4 + 3]);
+        }
+    }
+    for (uint32_t i = 0; i < kTexels; ++i)
+        largestPhaseSpread = std::max(largestPhaseSpread, high[i] - low[i]);
+    ASSERT_GT(largestPhaseSpread, 4.0f * kStillStep) << "the phases do not differ; the check would pass vacuously";
+
+    Image* history[2] = {MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT), MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT)};
+    Image* surface[2] = {MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT), MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT)};
+    Upload(history[1], std::vector<float>(kTexels * 4, 0.0f));
+    Upload(surface[1], std::vector<float>(kTexels * 2, 0.0f));
+    std::vector<float> previous;
+    float largestStep = 0.0f, largestMeanError = 0.0f;
+    for (uint32_t frame = 0; frame < kWarmUpFrames + kMeasuredFrames; ++frame)
+    {
+        const uint32_t write = frame & 1u, read = write ^ 1u;
+        const Frame& phase = phases[frame % kPhases];
+        Run("gtao_temporal", kSize, kSize, {{"uGuide", phase.Guide}, {"uDepth", depth}, {"uCurrent", phase.Filtered}, {"uSweep", phase.RawAO}, {"uHistory", history[read]}, {"uHistorySurface", surface[read]}},
+            {{"uAOOut", history[write]}, {"uSurfaceOut", surface[write]}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, frame, frame > 0 ? 1u : 0u);
+        auto accumulated = Read(history[write]);
+        if (frame >= kWarmUpFrames)
+            for (uint32_t i = 0; i < kTexels; ++i)
+            {
+                largestStep = std::max(largestStep, std::abs(accumulated[i * 4 + 3] - previous[i * 4 + 3]));
+                largestMeanError = std::max(largestMeanError, float(std::abs(accumulated[i * 4 + 3] - phaseMean[i])));
+            }
+        previous = std::move(accumulated);
+    }
+    RecordProperty("largest_phase_spread", std::to_string(largestPhaseSpread));
+    RecordProperty("largest_settled_step", std::to_string(largestStep));
+    RecordProperty("largest_error_from_phase_mean", std::to_string(largestMeanError));
+    EXPECT_LT(largestStep, kStillStep);
+    EXPECT_LT(largestMeanError, kMeanTolerance);
+}
+
+// A long, settled history of occlusion that the surface no longer has (an object
+// moved away) must not linger: the history is far outside the current noise, so
+// its count restarts and it is clamped near the current values on the first frame.
+TEST_F(GtaoComputeTest, TemporalLetsGoOfOcclusionAMovedObjectLeftBehind)
+{
+    constexpr uint32_t kSize = 8, kTexels = kSize * kSize;
+    constexpr float kOpen = 0.9f, kNoise = 0.02f, kLeftBehind = 0.2f;
+    constexpr uint32_t kSettledCountField = 63u << 18;
+    SetCamera(kSize, kSize);
+    auto depth = MakeImage(kSize, kSize, TextureFormat::R32_FLOAT);
+    Upload(depth, std::vector<float>(kTexels, Raw(5)));
+    auto current = MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT);
+    Image* history[2] = {MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT), MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT)};
+    Image* surface[2] = {MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT), MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT)};
+    std::vector<float> now(kTexels * 4, 0.0f), old(kTexels * 4, 0.0f), stored(kTexels * 2, 0.0f);
+    for (uint32_t i = 0; i < kTexels; ++i)
+    {
+        now[i * 4 + 2] = old[i * 4 + 2] = -1.0f;
+        now[i * 4 + 3] = ((i / kSize + i % kSize) & 1u) ? kOpen + kNoise : kOpen - kNoise;
+        old[i * 4 + 3] = kLeftBehind;
+        stored[i * 2] = Raw(5);
+        stored[i * 2 + 1] = float(uint32_t(kPackedTowardCamera) | kSettledCountField);
+    }
+    Upload(current, now);
+    Upload(history[1], old);
+    Upload(surface[1], stored);
+    const size_t center = (3 * kSize + 3);
+    for (uint32_t frame = 0; frame < 4; ++frame)
+    {
+        const uint32_t write = frame & 1u, read = write ^ 1u;
+        Run("gtao_temporal", kSize, kSize, {{"uDepth", depth}, {"uCurrent", current}, {"uHistory", history[read]}, {"uHistorySurface", surface[read]}},
+            {{"uAOOut", history[write]}, {"uSurfaceOut", surface[write]}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, frame, 1);
+        const float visibility = Read(history[write])[center * 4 + 3];
+        if (frame == 0)
+        {
+            EXPECT_NEAR(visibility, now[center * 4 + 3], 0.05f) << "the left-behind occlusion survived the first frame";
+            EXPECT_LE((uint32_t(Read(surface[write])[center * 2 + 1]) >> 18) + 1, 2u) << "the history kept its count";
+        }
+        else
+            EXPECT_NEAR(visibility, now[center * 4 + 3], 0.02f) << "frame " << frame;
+    }
+}
+
+// A texel with no neighbors on its own surface (a thin leaf, a silhouette tip)
+// has no spread to test its history against, so only its count bound lets go of
+// occlusion an object left behind: a settled history 0.4 too dark clears to
+// within 2/255 of the current value in under a second at 60 frames per second.
+// The shader's bound of 12 samples takes about 50 frames; 16 takes more than 56.
+TEST_F(GtaoComputeTest, TemporalLetsGoOfOcclusionOnATexelWithNoNeighborsOnItsSurface)
+{
+    constexpr uint32_t kSize = 8, kTexels = kSize * kSize;
+    constexpr float kOpen = 0.9f, kNoise = 0.02f, kLeftBehind = 0.4f;
+    constexpr float kCleared = 2.0f / 255.0f;
+    constexpr uint32_t kClearFrames = 56;
+    constexpr uint32_t kSettledCountField = 63u << 18;
+    SetCamera(kSize, kSize);
+    const size_t center = 3 * kSize + 3;
+    std::vector<float> depths(kTexels, Raw(5));
+    depths[center] = Raw(4.5f);
+    auto depth = MakeImage(kSize, kSize, TextureFormat::R32_FLOAT);
+    Upload(depth, depths);
+    auto current = MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT);
+    Image* history[2] = {MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT), MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT)};
+    Image* surface[2] = {MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT), MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT)};
+    std::vector<float> now(kTexels * 4, 0.0f);
+    for (uint32_t i = 0; i < kTexels; ++i)
+    {
+        now[i * 4 + 2] = -1.0f;
+        now[i * 4 + 3] = ((i / kSize + i % kSize) & 1u) ? kOpen + kNoise : kOpen - kNoise;
+    }
+    Upload(current, now);
+    Upload(history[1], std::vector<float>(kTexels * 4, 0.0f));
+    Run("gtao_temporal", kSize, kSize, {{"uDepth", depth}, {"uCurrent", current}, {"uHistory", history[1]}, {"uHistorySurface", surface[1]}},
+        {{"uAOOut", history[0]}, {"uSurfaceOut", surface[0]}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, 0, 0);
+    // The pass's own surface record, with the count of a long-settled history.
+    auto stored = Read(surface[0]);
+    auto old = now;
+    for (uint32_t i = 0; i < kTexels; ++i)
+    {
+        old[i * 4 + 3] = now[i * 4 + 3] - kLeftBehind;
+        stored[i * 2 + 1] = float((uint32_t(stored[i * 2 + 1]) & 0x3FFFFu) | kSettledCountField);
+    }
+    Upload(history[1], old);
+    Upload(surface[1], stored);
+    uint32_t cleared = 0;
+    for (uint32_t frame = 0; frame < kClearFrames && cleared == 0; ++frame)
+    {
+        const uint32_t write = frame & 1u, read = write ^ 1u;
+        Run("gtao_temporal", kSize, kSize, {{"uDepth", depth}, {"uCurrent", current}, {"uHistory", history[read]}, {"uHistorySurface", surface[read]}},
+            {{"uAOOut", history[write]}, {"uSurfaceOut", surface[write]}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, frame + 1, 1);
+        if (std::abs(Read(history[write])[center * 4 + 3] - now[center * 4 + 3]) < kCleared)
+            cleared = frame + 1;
+    }
+    RecordProperty("frames_to_clear", std::to_string(cleared));
+    EXPECT_NE(cleared, 0u) << "the left-behind occlusion lasted more than " << kClearFrames << " frames";
+}
+
+// The short count bound is for a texel with no spread to test against. A texel
+// whose 3x3 has a wide raw-sweep spread keeps the long count, so on foliage
+// whose phases differ by 0.16 it still stops changing at a still camera.
+TEST_F(GtaoComputeTest, TemporalSettlesAtRestWhenThePhasesDifferWidely)
+{
+    constexpr uint32_t kSize = 8, kTexels = kSize * kSize;
+    constexpr uint32_t kWarmUpFrames = 160, kMeasuredFrames = 16;
+    constexpr float kOpen = 0.6f, kSweepSpread = 0.1f;
+    constexpr float kStillStep = 1.0f / 255.0f;
+    constexpr std::array<float, 8> kPhaseOffsets = {0.08f, -0.08f, 0.04f, -0.04f, 0.06f, -0.06f, 0.02f, -0.02f};
+    SetCamera(kSize, kSize);
+    auto depth = MakeImage(kSize, kSize, TextureFormat::R32_FLOAT);
+    Upload(depth, std::vector<float>(kTexels, Raw(5)));
+    auto sweep = MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT);
+    std::vector<float> sweepValues(kTexels * 4, 0.0f);
+    for (uint32_t i = 0; i < kTexels; ++i)
+        sweepValues[i * 4 + 3] = ((i / kSize + i % kSize) & 1u) ? kOpen + kSweepSpread : kOpen - kSweepSpread;
+    Upload(sweep, sweepValues);
+    std::vector<Image*> phases;
+    for (float offset : kPhaseOffsets)
+    {
+        std::vector<float> values(kTexels * 4, 0.0f);
+        for (uint32_t i = 0; i < kTexels; ++i)
+        {
+            values[i * 4 + 2] = -1.0f;
+            values[i * 4 + 3] = kOpen + offset;
+        }
+        phases.push_back(MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT));
+        Upload(phases.back(), values);
+    }
+    Image* history[2] = {MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT), MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT)};
+    Image* surface[2] = {MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT), MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT)};
+    Upload(history[1], std::vector<float>(kTexels * 4, 0.0f));
+    Upload(surface[1], std::vector<float>(kTexels * 2, 0.0f));
+    const size_t center = 3 * kSize + 3;
+    float previous = 0.0f, largestStep = 0.0f;
+    for (uint32_t frame = 0; frame < kWarmUpFrames + kMeasuredFrames; ++frame)
+    {
+        const uint32_t write = frame & 1u, read = write ^ 1u;
+        Run("gtao_temporal", kSize, kSize, {{"uDepth", depth}, {"uCurrent", phases[frame % phases.size()]}, {"uSweep", sweep}, {"uHistory", history[read]}, {"uHistorySurface", surface[read]}},
+            {{"uAOOut", history[write]}, {"uSurfaceOut", surface[write]}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, frame, frame > 0 ? 1u : 0u);
+        const float visibility = Read(history[write])[center * 4 + 3];
+        if (frame >= kWarmUpFrames)
+            largestStep = std::max(largestStep, std::abs(visibility - previous));
+        previous = visibility;
+    }
+    RecordProperty("largest_settled_step_wide_phases", std::to_string(largestStep));
+    EXPECT_LT(largestStep, kStillStep) << "a texel with a spread to test against lost its long count";
+}
+
+// Occlusion that arrives inside the tolerance (an object set down on sand, whose
+// raw sweep has a small spread) must not form over seconds: the sample sits on
+// the same side of the history every frame, so the history's count is cut and
+// a settled history 0.4 too light reaches 90 percent of the new value quickly.
+TEST_F(GtaoComputeTest, TemporalTakesUpOcclusionThatArrivesOnALowSpreadSurface)
+{
+    constexpr uint32_t kSize = 8, kTexels = kSize * kSize;
+    constexpr float kOpen = 0.9f, kArriving = 0.4f, kNoise = 0.01f, kSweepSpread = 0.05f;
+    constexpr float kReached = 0.1f * kArriving;
+    constexpr uint32_t kReachFrames = 24;
+    constexpr uint32_t kSettledCountField = 63u << 18;
+    SetCamera(kSize, kSize);
+    auto depth = MakeImage(kSize, kSize, TextureFormat::R32_FLOAT);
+    Upload(depth, std::vector<float>(kTexels, Raw(5)));
+    auto current = MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT);
+    auto sweep = MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT);
+    Image* history[2] = {MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT), MakeImage(kSize, kSize, TextureFormat::R16G16B16A16_FLOAT)};
+    Image* surface[2] = {MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT), MakeImage(kSize, kSize, TextureFormat::R32G32_FLOAT)};
+    std::vector<float> now(kTexels * 4, 0.0f), sweepValues(kTexels * 4, 0.0f);
+    for (uint32_t i = 0; i < kTexels; ++i)
+    {
+        const bool odd = ((i / kSize + i % kSize) & 1u) != 0;
+        now[i * 4 + 2] = -1.0f;
+        now[i * 4 + 3] = kOpen - kArriving + (odd ? kNoise : -kNoise);
+        sweepValues[i * 4 + 3] = kOpen - kArriving + (odd ? kSweepSpread : -kSweepSpread);
+    }
+    Upload(current, now);
+    Upload(sweep, sweepValues);
+    Upload(history[1], std::vector<float>(kTexels * 4, 0.0f));
+    Run("gtao_temporal", kSize, kSize, {{"uDepth", depth}, {"uCurrent", current}, {"uSweep", sweep}, {"uHistory", history[1]}, {"uHistorySurface", surface[1]}},
+        {{"uAOOut", history[0]}, {"uSurfaceOut", surface[0]}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, 0, 0);
+    // The pass's own surface record with the count of a long-settled history,
+    // and that history as open as the ground was before the object arrived.
+    auto stored = Read(surface[0]);
+    auto open = now;
+    for (uint32_t i = 0; i < kTexels; ++i)
+    {
+        open[i * 4 + 3] = now[i * 4 + 3] + kArriving;
+        stored[i * 2 + 1] = float((uint32_t(stored[i * 2 + 1]) & 0x3FFFFu) | kSettledCountField);
+    }
+    Upload(history[1], open);
+    Upload(surface[1], stored);
+    const size_t center = 3 * kSize + 3;
+    uint32_t reached = 0;
+    for (uint32_t frame = 0; frame < 4 * kReachFrames && reached == 0; ++frame)
+    {
+        const uint32_t write = frame & 1u, read = write ^ 1u;
+        Run("gtao_temporal", kSize, kSize, {{"uDepth", depth}, {"uCurrent", current}, {"uSweep", sweep}, {"uHistory", history[read]}, {"uHistorySurface", surface[read]}},
+            {{"uAOOut", history[write]}, {"uSurfaceOut", surface[write]}}, GetGtaoQualitySettings(GtaoQuality::Medium), 2.0f, frame + 1, 1);
+        if (std::abs(Read(history[write])[center * 4 + 3] - now[center * 4 + 3]) <= kReached)
+            reached = frame + 1;
+    }
+    RecordProperty("frames_to_ninety_percent", std::to_string(reached));
+    EXPECT_NE(reached, 0u) << "the arriving occlusion took more than " << 4 * kReachFrames << " frames to reach 90 percent";
+    EXPECT_LE(reached, kReachFrames) << "the arriving occlusion formed too slowly";
 }
 
 TEST_F(GtaoComputeTest, ProductionNodeExecutesBothResolutionPathsAndKeepsViewHistoriesSeparate)
@@ -994,6 +1340,13 @@ TEST_F(GtaoComputeTest, ProductionNodeExecutesBothResolutionPathsAndKeepsViewHis
         auto depth = MakeImage(32, 32, TextureFormat::R32_FLOAT);
         Upload(depth, std::vector<float>(1024, Raw(5)));
         auto color = MakeImage(32, 32, TextureFormat::R16G16B16A16_FLOAT);
+        // The node binds by reflected name, so the shader's set 0 must name uSweep.
+        ShaderPackage temporalShader{};
+        std::string error;
+        ASSERT_TRUE(LoadShaderPkg("Shaders/gtao_temporal.shaderpkg", Device->PreferredShaderSource(), temporalShader, &error)) << error;
+        EXPECT_TRUE(std::any_of(temporalShader.meta.Sets.begin(), temporalShader.meta.Sets.end(), [](const auto& set)
+                                { return set.Set == 0 && std::any_of(set.Bindings.begin(), set.Bindings.end(), [](const auto& binding)
+                                                                     { return binding.Name == "uSweep"; }); }));
         for (uint32_t index : {0u, 1u, 3u, 4u})
         {
             if (index == 4)
@@ -1013,16 +1366,23 @@ TEST_F(GtaoComputeTest, ProductionNodeExecutesBothResolutionPathsAndKeepsViewHis
             EXPECT_NE(a.Id, b.Id);
             frame.MarkOutput(a);
             frame.MarkOutput(b);
-            size_t upsample = 0, temporal = 0, mipPasses = 0;
-            for (uint32_t pass = 0; pass < frame.Graph().PassCount(); ++pass)
+            size_t upsample = 0, temporal = 0, temporalSamplingSweep = 0, mipPasses = 0;
+            const auto& graph = frame.Graph();
+            for (uint32_t pass = 0; pass < graph.PassCount(); ++pass)
             {
-                const std::string name = frame.Graph().PassName(pass);
+                const std::string name = graph.PassName(pass);
                 upsample += name.find("GTAOUpsample") != std::string::npos;
                 temporal += name.find("GTAOTemporal") != std::string::npos;
                 mipPasses += name.find("GTAODepthMip") != std::string::npos;
+                if (name.find("GTAOTemporal") == std::string::npos)
+                    continue;
+                temporalSamplingSweep += std::any_of(graph.Accesses().begin(), graph.Accesses().end(), [&](const RenderGraph::RGAccessRecord& access)
+                                                     { return access.Pass == pass && !RenderGraph::IsWrite(access.Access) &&
+                                                              std::string(graph.ResourceName(access.Resource)) == "GTAO.Raw"; });
             }
             EXPECT_EQ(upsample, index == 4 ? 0u : 2u);
             EXPECT_EQ(temporal, index == 4 ? 0u : 2u);
+            EXPECT_EQ(temporalSamplingSweep, temporal) << "the temporal pass must bind the raw sweep as uSweep: its tolerance is that texture's spread";
             EXPECT_EQ(mipPasses, 10u);
             frame.Execute();
             Device->WaitForIdle();

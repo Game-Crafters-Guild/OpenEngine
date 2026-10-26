@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ECS/ECS.h"
-#include "PathfindingECS/Components/NavigationSource.h"
+#include "Components/Navigation/NavigationSource.h"
 #include "Types/Types.h"
 
 #include <string>

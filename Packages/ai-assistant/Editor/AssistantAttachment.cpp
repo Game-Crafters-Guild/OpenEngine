@@ -2,7 +2,7 @@
 
 #include "AssistantTools.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Editor/Registries/DebugRequestGateRegistry.h"
 #include "Platform/Process.h"
 
@@ -24,7 +24,7 @@ std::filesystem::path ConfigFile(uint64_t conversation)
     std::error_code error;
     std::filesystem::path base = std::filesystem::temp_directory_path(error);
     if (error || base.empty())
-        base = PathUtils::GetExecutableDirectory();
+        base = ApplicationPaths::GetExecutableDirectory();
     return base / "gameengine_mcp" / ("pid-" + std::to_string(Platform::GetCurrentProcessId())) /
            ("assistant-" + std::to_string(conversation) + ".json");
 }
@@ -40,7 +40,7 @@ std::string JoinNames(const std::vector<std::string>& names)
 
 std::filesystem::path AssistantAttachment::StagedServerScript()
 {
-    return PathUtils::GetExecutableDirectory() / "mcp" / "dist" / "index.js";
+    return ApplicationPaths::GetExecutableDirectory() / "mcp" / "dist" / "index.js";
 }
 
 std::string AssistantAttachment::Unavailable()

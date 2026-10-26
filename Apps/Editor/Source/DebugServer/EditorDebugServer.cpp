@@ -19,7 +19,7 @@
 #include <cerrno>
 #endif
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 
 #include <Logger/Logger.h>
 
@@ -76,7 +76,7 @@ static void AppendServerDiag(const char* what, int err, size_t clientCount)
     // Anchored to the exe, not the cwd — the editor may be launched from
     // anywhere and runtime artifacts must not land in the source tree.
     static const std::string s_DiagPath =
-        (PathUtils::GetExecutableDirectory() / "EditorDebugServer-diag.txt").string();
+        (ApplicationPaths::GetExecutableDirectory() / "EditorDebugServer-diag.txt").string();
     if (FILE* f = std::fopen(s_DiagPath.c_str(), "a"))
     {
         const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -517,7 +517,7 @@ try
                   "answering everything, so this editor (pid {}, {}) runs on WITHOUT a debug "
                   "server. Give it its own port via GE_EDITOR_DEBUG_PORT, and find the current "
                   "owner with `netstat -ano | findstr :{}`.",
-                  port, CurrentProcessId(), PathUtils::GetExecutableDirectory().string(), port);
+                  port, CurrentProcessId(), ApplicationPaths::GetExecutableDirectory().string(), port);
         SocketClose(listenSock);
         m_Running.store(false, std::memory_order_relaxed);
         SignalStartupComplete(false);
@@ -536,7 +536,7 @@ try
     // Provenance on the hello line: several editors share this machine, and the
     // first question about any of them is which process and which staged tree.
     LOG_INFO("EditorDebugServer: Listening on port {} (pid {}, {})", port, CurrentProcessId(),
-             PathUtils::GetExecutableDirectory().string());
+             ApplicationPaths::GetExecutableDirectory().string());
 
     uint16_t wakePort = 0;
     SocketType wakeSock = CreateWakeSocket(wakePort);

@@ -167,7 +167,7 @@ endfunction()
 # staged as resources in Contents/Resources. Contents/MacOS holds code only:
 # codesign seals every file there as code, and refuses a directory whose name
 # looks like a nested bundle. The runtime half of this rule is
-# PathUtils::InstallContentRootFor.
+# ApplicationPaths::InstallContentRootFor.
 #
 function(ge_get_staged_content_dir target_name out_var)
   get_target_property(_ge_is_bundle ${target_name} MACOSX_BUNDLE)
@@ -414,7 +414,7 @@ endfunction()
 # Stage one source file at relative_dest under a target's runtime layout
 # directory (bin/<Config>/Tests for ge_set_output_tests targets) — the
 # exe-anchored root a test reads staged content from
-# (PathUtils::GetInstallAssetsRoot() is <exe>/Assets for a test executable).
+# (ApplicationPaths::GetInstallAssetsRoot() is <exe>/Assets for a test executable).
 # Every executable in one layout directory shares that tree, so several targets
 # may name the same destination: keyed by layout directory + relative_dest, the
 # copy is made once and each declaring target depends on it — building any one

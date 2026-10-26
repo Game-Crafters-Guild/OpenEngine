@@ -37,6 +37,7 @@
 #include "TestDeviceHelper.h"
 #include "TestEnvVar.h"
 #include "TestTempDir.h"
+#include "Types/Color.h"
 
 #include <gtest/gtest.h>
 
@@ -891,7 +892,8 @@ TEST_F(MarkupSceneViewTest, TheGlowCompositesPremultipliedOverTheScene)
     for (const auto& [entity, x, shape] : {std::tuple(box, kReadbackBoxTexel, "box"),
                                            std::tuple(sphere, kReadbackSphereTexel, "sphere")})
     {
-        const std::array<float32, 3> rgb = Editor::MarkupDisplayRgb(*m_World.GetComponent<Markup>(entity));
+        const ColorSRGB color = Editor::MarkupDisplayRgb(*m_World.GetComponent<Markup>(entity));
+        const std::array<float32, 3> rgb = {color.r, color.g, color.b};
         for (std::size_t channel = 0; channel < 3; ++channel)
         {
             const float expected = rgb[channel] * MarkupRenderFeature::kBodyAlpha +
@@ -923,7 +925,8 @@ TEST_F(MarkupSceneViewTest, TheGlowDrawsAContactLineWhereABodyMeetsTheScene)
                               kGap, GlslShim::MarkupGlow::MarkupGlowContactBandWidth(0.0f, 19.0f));
     ASSERT_GT(contact, 0.5f) << "the instrument: 1 cm must sit well inside the band";
     const float coverage = alpha * (1.0f - contact) + contact;
-    const std::array<float32, 3> rgb = Editor::MarkupDisplayRgb(*m_World.GetComponent<Markup>(box));
+    const ColorSRGB color = Editor::MarkupDisplayRgb(*m_World.GetComponent<Markup>(box));
+    const std::array<float32, 3> rgb = {color.r, color.g, color.b};
     for (std::size_t channel = 0; channel < 3; ++channel)
     {
         const float expected = rgb[channel] * coverage + kReadbackScene[channel] * (1.0f - coverage);

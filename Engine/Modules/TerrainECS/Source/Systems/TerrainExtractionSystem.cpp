@@ -1,7 +1,9 @@
 #include "TerrainECS/Systems/TerrainExtractionSystem.h"
+#include "Mathematics/Interpolation.h"
 #include "TerrainECS/TerrainHandleHygiene.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainFieldUploader.h"
+#include "TerrainSkyline.h"
 #include "TerrainECS/TerrainGrassAlpha.h"
 #include "TerrainECS/TerrainGrassAuthoredBits.h"
 #include "TerrainECS/TerrainRenderFeature.h"
@@ -9,7 +11,7 @@
 #include "TerrainECS/AtlasResidencyController.h"
 #include "TerrainECS/AtlasTileNormal.h"
 #include "TerrainECS/TerrainSizingPlan.h"
-#include "TerrainECS/PlanarHeightQuery.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainHeightPageDriver.h"
 #include "TerrainECS/TerrainHeightPageFeature.h"
 #include "CBTTerrain/CBTLayout.h" // kAtlasMaxTiles (F2 cap warn)
@@ -35,6 +37,7 @@
 #include "Terrain/CDLODSelection.h"
 #include "Logger/Logger.h"
 #include "Rendering/CameraTypes.h"
+#include "Rendering/Sky/SkySettings.h"
 #include "Core/CpuProfiler.h"
 
 #include <algorithm>
@@ -220,7 +223,7 @@ void ApplyGrassTextureParams(Terrain::TerrainGPUParams& params,
         std::max(1u, grass->AtlasTileCount),
         1u,
         std::max(1u, params.GrassAtlasColumns * params.GrassAtlasRows));
-    params.GrassAlphaCutoff = std::clamp(grass->AlphaCutoff, 0.0f, 1.0f);
+    params.GrassAlphaCutoff = Math::Clamp01(grass->AlphaCutoff);
     params.GrassNormalStrength = std::max(0.0f, grass->NormalStrength);
     params.GrassTextureCardsPerSquareMeter = std::max(0.0f, grass->TextureCardsPerSquareMeter);
     params.GrassTextureSize = std::max(0.0f, grass->TextureSize);
@@ -286,10 +289,14 @@ TerrainColorMapBinding PublishAtlasColorMap(TerrainFieldUploader& uploader, Terr
 // The one writer of a terrain row's grass parameters, shared by the tiled and the untiled path:
 // the authored component clamped to its supported ranges, Root Color resolved (Auto derives it
 // from Tip Color, so the GPU never sees the sentinel), the texture-card bindings, and the enabled
-// bit cleared when the row places nothing. A terrain with no TerrainGrass (`grass` null) gets the
-// disabled row with the GPU defaults.
+// bit cleared when the row places nothing or its placement waits for its grass control field
+// (`placementWaitsForField`, the caller's gate). Every value derived from the enabled bit is
+// written after it is final, so a row whose grass does not draw carries none: no canopy depth,
+// which the terrain surface would otherwise shade the ground with. A terrain with no TerrainGrass
+// (`grass` null) gets the disabled row with the GPU defaults.
 void WriteGrassParams(Terrain::TerrainGPUParams& params,
                       const Components::TerrainGrass* grass,
+                      bool placementWaitsForField,
                       Engine::Renderer::RenderServices* renderServices)
 {
     params.GrassEnabled = TerrainGrassAuthoredBits(grass);
@@ -304,14 +311,16 @@ void WriteGrassParams(Terrain::TerrainGPUParams& params,
     params.GrassBladeSegments = grass ? std::clamp(grass->BladeSegments,
         Components::kMinTerrainGrassBladeSegments,
         Components::kMaxTerrainGrassBladeSegments) : 5u;
-    params.GrassMaskThreshold = grass ? std::clamp(grass->MaskThreshold, 0.0f, 1.0f) : 1.0f;
+    params.GrassMaskThreshold = grass ? Math::Clamp01(grass->MaskThreshold) : 1.0f;
     params.GrassDensityFalloff = grass ? std::max(0.0f, grass->DensityFalloff) : 0.0f;
     params.GrassRange = grass ? std::max(0.0f, grass->Range) : 0.0f;
     params.GrassPlacementSeed = grass ? grass->PlacementSeed : 0.0f;
     params.GrassWindStrength = grass ? std::max(0.0f, grass->WindStrength) : 0.0f;
     params.GrassLayerIndex = grass ? std::min(grass->LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u) : 0u;
     params.GrassBrightness = grass ? std::max(0.0f, grass->Brightness) : 1.0f;
-    params.GrassGroundingStrength = grass ? std::clamp(grass->GroundingStrength, 0.0f, 1.0f) : 0.0f;
+    params.GrassGroundingStrength = grass ? Math::Clamp01(grass->GroundingStrength) : 0.0f;
+    params.GrassGroundTintHeight =
+        grass ? std::clamp(grass->GroundTintHeight, Components::kMinTerrainGrassGroundTintHeight, 1.0f) : 1.0f;
     params.GrassRandomScale = grass ? std::max(0.0f, grass->RandomScale) : 0.0f;
     params.GrassRandomBrightness = grass ? std::max(0.0f, grass->RandomBrightness) : 0.0f;
     params.GrassTranslucency = grass ? std::max(0.0f, grass->Translucency) : 0.0f;
@@ -326,13 +335,15 @@ void WriteGrassParams(Terrain::TerrainGPUParams& params,
     params.GrassWindFlutterSpeed = grass ? grass->WindFlutterSpeed : 2.2f;
     params.GrassWindSeed = grass ? grass->WindSeed : 3.0f;
     params.GrassClumpSize = grass ? std::max(0.0f, grass->ClumpSize) : 0.0f;
-    params.GrassClumpHeightVariance = grass ? std::clamp(grass->ClumpHeightVariance, 0.0f, 1.0f) : 0.0f;
-    params.GrassClumpAlignment = grass ? std::clamp(grass->ClumpAlignment, 0.0f, 1.0f) : 0.0f;
-    params.GrassClumpTaper = grass ? std::clamp(grass->ClumpTaper, 0.0f, 1.0f) : 0.0f;
-    params.GrassHueVariation = grass ? std::clamp(grass->HueVariation, 0.0f, 1.0f) : 0.0f;
+    params.GrassClumpHeightVariance = grass ? Math::Clamp01(grass->ClumpHeightVariance) : 0.0f;
+    params.GrassClumpAlignment = grass ? Math::Clamp01(grass->ClumpAlignment) : 0.0f;
+    params.GrassClumpTaper = grass ? Math::Clamp01(grass->ClumpTaper) : 0.0f;
+    params.GrassHueVariation = grass ? Math::Clamp01(grass->HueVariation) : 0.0f;
     params.GrassRootFadeStart = grass ? std::clamp(grass->RootFadeStart, Components::kMinTerrainGrassRootFadeStart, 1.0f - Components::kMinTerrainGrassRootFadeSpan) : 0.0f;
     params.GrassRootFadeEnd = grass ? std::clamp(grass->RootFadeEnd, params.GrassRootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f) : 1.0f;
     ApplyGrassTextureParams(params, grass, renderServices);
+    if (placementWaitsForField)
+        params.GrassEnabled &= ~Terrain::kTerrainGrassBitEnabled;
     ClearGrassEnabledIfNothingToPlace(params);
     params.GrassCanopyOcclusion =
         Terrain::TerrainGrassCanopyOcclusionDepth(params, grass ? grass->CanopyShade : 0.0f);
@@ -497,6 +508,10 @@ void TerrainExtractionSystem::ForgetRetiredTiledTerrains(TerrainService& service
 // lattice inside the march -- finer would interpolate between the same two corners twice.
 static constexpr float32 kSkylineMarchDistance = 8000.0f;
 static constexpr float32 kSkylineMarchStep = 4.0f;
+// How far, as an angle seen from the eye, a kept skyline station may sit from the march's line:
+// the sun's angular radius, the width the glare fades the skyline over, so every kept station lies
+// inside the disc's own span of azimuth.
+static constexpr float32 kSkylineAngularTolerance = Rendering::kSunAngularRadiusRad;
 
 // The terrain skyline along the sun's azimuth, per view, handed to the sun glare.
 //
@@ -509,6 +524,9 @@ static constexpr float32 kSkylineMarchStep = 4.0f;
 // inside the viewport, so a sun one degree outside the frame edge cannot be occluded by
 // anything, and the halo switched off the frame its centre crossed in. A skyline is a property
 // of the terrain and the eye, so it holds on- and off-frame and past any cascade distance.
+//
+// Each view keeps its skyline across frames (TerrainSkyline): a frame where its eye, the sun and
+// the terrain under its stations stayed put samples nothing.
 void TerrainExtractionSystem::PublishSunGlareSkyline(ECS::World& world)
 {
     GE_CPU_PROFILE_SCOPE("Terrain.SunGlareSkyline");
@@ -524,32 +542,44 @@ void TerrainExtractionSystem::PublishSunGlareSkyline(ECS::World& world)
     if (!settings.showSunDisk)
         return;
 
-    // Resolved every frame rather than cached: the query holds pointers into terrain residency
-    // that streaming moves, and a stale one would march over freed tiles.
-    const PlanarHeightQuery ground = ResolvePlanarHeightQuery(world);
-
     // The WHOLE set, replaced each frame. Scratch reused so the refill does not allocate.
+    ++m_SkylinePublish;
     m_SkylineScratch.clear();
     for (const Rendering::ViewDesc& view : m_RenderServices->Views().GetViews())
     {
         float32 tangent = Engine::Renderer::SunGlareRenderFeature::kNoSkyline;
+        const Rendering::CameraData* camera = m_RenderServices->Views().FindCameraData(view.cameraId);
+        const Mathematics::Vector3 eye =
+            camera ? Mathematics::Vector3(camera->cameraPos[0], camera->cameraPos[1], camera->cameraPos[2])
+                   : Mathematics::Vector3{};
+        // The terrain under the eye, resolved every frame rather than cached: the query is a view of
+        // the height pages, valid until their next Update. The skyline takes coarse answers
+        // (AcceptCoarse), so a far ridge reads the pinned level the GPU draws there.
+        const SurfaceHeightQuery ground = camera ? ResolveSurfaceHeightQuery(world, eye) : SurfaceHeightQuery{};
         if (ground.IsValid())
         {
-            const Rendering::CameraData* camera =
-                m_RenderServices->Views().FindCameraData(view.cameraId);
-            if (camera)
-            {
-                const float32 marched = TerrainHorizonTangent(
-                    ground, camera->cameraPos[0], camera->cameraPos[1], camera->cameraPos[2],
-                    settings.scatteringSunDir[0], settings.scatteringSunDir[2],
-                    kSkylineMarchDistance, kSkylineMarchStep);
-                if (marched != kNoTerrainHorizon)
-                    tangent = marched;
-            }
+            ViewSkylineState& state = m_ViewSkylines.GetOrInsert(view.id);
+            state.LastPublish = m_SkylinePublish;
+            if (!state.Skyline)
+                state.Skyline = std::make_unique<TerrainSkyline>();
+            const float32 answered = state.Skyline->Tangent(
+                ground, eye,
+                settings.scatteringSunDir[0], settings.scatteringSunDir[2], kSkylineMarchDistance, kSkylineMarchStep,
+                kSkylineAngularTolerance);
+            if (answered != TerrainSkyline::kNoSkyline)
+                tangent = answered;
         }
         m_SkylineScratch.push_back({view.id, tangent});
     }
     glare->SetSkylines(m_SkylineScratch.data(), m_SkylineScratch.size());
+
+    // A view this publish did not answer drops its kept stations.
+    m_RetiredSkylineViews.clear();
+    for (const auto& [viewId, state] : m_ViewSkylines)
+        if (state.LastPublish != m_SkylinePublish)
+            m_RetiredSkylineViews.push_back(viewId);
+    for (uint32 viewId : m_RetiredSkylineViews)
+        m_ViewSkylines.Erase(viewId);
 }
 
 void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
@@ -661,6 +691,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
 
     // Assert that the modifier system is not concurrently accessing terrain data.
     terrainService->AssertNoModifierAccess();
+
+    // The dynamic bodies' CPU height windows, before the terrains' page requests read them.
+    terrainService->GetHeightPages().GatherBodyWindows(world);
 
     std::vector<TerrainInstanceInfo> activeInfos;
     std::vector<Terrain::TerrainGPUParams> paramsArray;
@@ -908,50 +941,10 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                         deltaTime, m_AtlasFadeSeconds);
                 }
 
-                // ---- Batched quadtree update for tiles integrated this frame ----
-
                 const std::vector<TileCoord>& integratedTiles = *integratedTilesThisFrame;
-                if (!integratedTiles.empty() || tiled->QuadtreeDirty ||
-                    !tiled->DirtyQuadtreeTiles.empty())
-                {
-                    GE_CPU_PROFILE_SCOPE("Terrain.QuadtreeSync");
-                    // Falsifiable idle-cost signal: the global-quadtree finalize walks
-                    // per-tile node min/max (O(nodes), or O(samples) on the sample-scan
-                    // fallback path) and is INVISIBLE to Terrain.TileUpload/TileBake — so
-                    // if this fires every frame on an idle tiled terrain, it is the hidden
-                    // per-frame cost. Silent unless it actually runs (gated on integrated
-                    // tiles or a dirty quadtree).
-                    static const bool kTileDebug = std::getenv("GE_TERRAIN_TILE_DEBUG") != nullptr;
-                    if (kTileDebug)
-                        Logger::Log::Info("Terrain.QuadtreeSync integrated={} quadtreeDirty={}",
-                                          integratedTiles.size(), tiled->QuadtreeDirty ? 1 : 0);
-                    for (const auto& intCoord : integratedTiles)
-                    {
-                        auto tileIt = tiled->Tiles.find(intCoord);
-                        if (tileIt != tiled->Tiles.end() && tileIt->second &&
-                            !tileIt->second->PrecomputedQuadtreeNodes.empty())
-                        {
-                            // Use pre-computed min/max from job thread (no heightfield scan).
-                            terrainService->PatchTileInGlobalQuadtreePrecomputed(
-                                tiledHandle, intCoord,
-                                tileIt->second->PrecomputedQuadtreeNodes.data(),
-                                tileIt->second->PrecomputedQuadtreeNodesPerAxis);
-                        }
-                        else
-                        {
-                            // Fallback: scan heightfield on main thread.
-                            terrainService->PatchTileInGlobalQuadtree(tiledHandle, intCoord);
-                        }
-                    }
-                    terrainService->FinalizeGlobalQuadtreeUpdates(tiledHandle);
-                }
 
-                if (!tiled->GlobalQuadtree.IsBuilt())
-                {
-                    return; // No tiles loaded yet.
-                }
-
-                // ---- Global GPU TerrainData (holds the global quadtree for render node) ----
+                // ---- Global GPU TerrainData ----
+                // The whole-terrain handle the render feature and the height pages address.
 
                 TerrainHandle globalGpuHandle{tiled->GlobalGpuHandleIndex, tiled->GlobalGpuHandleGeneration};
                 auto* globalData = terrainService->GetTerrainData(globalGpuHandle);
@@ -960,15 +953,16 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     if (tiled->GlobalGpuHandleIndex != 0 || tiled->GlobalGpuHandleGeneration != 0)
                         return; // Stale handle
 
-                    // Create a lightweight TerrainData for the global quadtree.
-                    // Minimal heightfield (3x3); only the quadtree and morph ranges matter.
+                    // A placeholder TerrainData: a minimal 3x3 heightfield and one LOD level. The
+                    // handle keys the terrain in the render feature and the height pages; the
+                    // single-terrain path never reads it, so it carries no LOD structure.
                     Terrain::TerrainConfig globalConfig{};
                     globalConfig.HeightmapWidth = 3;
                     globalConfig.HeightmapHeight = 3;
                     globalConfig.WorldSizeX = terrain.SizeX;
                     globalConfig.WorldSizeZ = terrain.SizeZ;
                     globalConfig.HeightScale = terrain.HeightScale;
-                    globalConfig.LODLevels = tiled->GlobalQuadtree.GetNumLevels();
+                    globalConfig.LODLevels = 1;
                     globalConfig.LODRangeScale = Terrain::kDefaultLODRangeScale;
                     globalConfig.PatchGridSize = Terrain::kDefaultGridSize;
 
@@ -992,84 +986,11 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                                    pageFocalScale);
                 }
 
-                // Sync global quadtree to the GPU slot.
-                globalData->Quadtree = tiled->GlobalQuadtree;
-                globalData->Config.LODLevels = tiled->GlobalQuadtree.GetNumLevels();
                 globalData->Config.WorldSizeX = terrain.SizeX;
                 globalData->Config.WorldSizeZ = terrain.SizeZ;
                 globalData->Config.HeightScale = terrain.HeightScale;
                 globalData->Config.LODRangeScale = Terrain::kDefaultLODRangeScale;
                 globalData->Config.PatchGridSize = Terrain::kDefaultGridSize;
-
-                // ---- Compute morph ranges for the global quadtree ----
-                // Within-tile levels use normal chained ranges.
-                // Tile-level and above use FLT_MAX to force subdivision,
-                // preventing multi-tile patches that can't be assigned to one tile.
-
-                if (!tiled->MorphRangesComputed ||
-                    tiled->CachedLODRangeScale != Terrain::kDefaultLODRangeScale ||
-                    tiled->CachedFarClip != maxViewFarClip)
-                {
-                    const uint32 globalLevels = tiled->GlobalQuadtree.GetNumLevels();
-                    const uint32 tileLevels = tiled->Config.TileConfig.LODLevels;
-                    const uint32 finestNodesPerAxis = tiled->GlobalQuadtree.GetNodesPerAxisAtLevel(0);
-                    const float32 patchSizeX = terrain.SizeX / static_cast<float32>(finestNodesPerAxis);
-                    const float32 patchSizeZ = terrain.SizeZ / static_cast<float32>(finestNodesPerAxis);
-                    const float32 baseRange = std::max(patchSizeX, patchSizeZ) * Terrain::kDefaultLODRangeScale;
-                    constexpr float32 kMorphStartRatio = 0.66f;
-
-                    // The coarsest renderable LOD range is clamped to the far clip
-                    // plane so we never select patches beyond what the camera can see.
-                    // Use the lesser of streaming radius and far clip.
-                    const float32 maxRenderDist = std::min(streamR, maxViewFarClip);
-
-                    // Within-tile levels (0 to tileLevels-3): normal LOD ranges.
-                    for (uint32 i = 0; i + 2 < tileLevels && i < globalLevels; ++i)
-                        tiled->VisRanges[i] = Terrain::CDLODSelection::ComputeLODRange(i, baseRange, Terrain::kDefaultLODRangeScale);
-
-                    // Coarsest within-tile level: extend to cover the visible distance
-                    // so far tiles render coarse patches instead of disappearing.
-                    if (tileLevels >= 2 && tileLevels - 2 < globalLevels)
-                    {
-                        tiled->VisRanges[tileLevels - 2] = std::max(
-                            Terrain::CDLODSelection::ComputeLODRange(tileLevels - 2, baseRange, Terrain::kDefaultLODRangeScale),
-                            maxRenderDist);
-                    }
-
-                    // Tile-level and above: always enter, never produce multi-tile patches.
-                    for (uint32 i = (tileLevels > 0 ? tileLevels - 1 : 0); i < globalLevels; ++i)
-                        tiled->VisRanges[i] = std::numeric_limits<float32>::max();
-
-                    // Compute chained morph start/end.
-                    float32 prevMorphStart = 0.0f;
-                    for (uint32 i = 0; i < globalLevels; ++i)
-                    {
-                        if (tiled->VisRanges[i] < 1e30f)
-                        {
-                            tiled->MorphEnd[i] = tiled->VisRanges[i];
-                            tiled->MorphStart[i] = prevMorphStart + (tiled->MorphEnd[i] - prevMorphStart) * kMorphStartRatio;
-                            prevMorphStart = tiled->MorphStart[i];
-                        }
-                        else
-                        {
-                            // Tile-level and above: these nodes always subdivide, so
-                            // morph must be 0. With FLT_MAX for both, the shader computes
-                            // (dist - FLT_MAX) / max(0, 0.001) → clamped to 0.
-                            tiled->MorphStart[i] = std::numeric_limits<float32>::max();
-                            tiled->MorphEnd[i] = std::numeric_limits<float32>::max();
-                        }
-                    }
-
-                    tiled->MorphRangesComputed = true;
-                    tiled->CachedLODRangeScale = Terrain::kDefaultLODRangeScale;
-                    tiled->CachedFarClip = maxViewFarClip;
-                }
-
-                // Sync morph ranges to global GPU data.
-                std::memcpy(globalData->VisRanges, tiled->VisRanges, sizeof(tiled->VisRanges));
-                std::memcpy(globalData->MorphStart, tiled->MorphStart, sizeof(tiled->MorphStart));
-                std::memcpy(globalData->MorphEnd, tiled->MorphEnd, sizeof(tiled->MorphEnd));
-                globalData->MorphRangesComputed = true;
 
                 // Grid mesh is now updated on the render thread (BuildForView)
                 // to avoid races between extraction and rendering.
@@ -1909,7 +1830,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                     tiled->SplatResplatPending = true;
                                     tiled->SplatResplatIdleFrames = 0;
                                     ++tiled->Revision;
-                                    tiled->QuadtreeDirty = true;
                                     terrainService->MarkGpuReadbackSplatPending();
                                     static const bool kGpuBakeDebug =
                                         std::getenv("GE_TERRAIN_GPU_BAKE_DEBUG") != nullptr;
@@ -2042,7 +1962,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 //
                 // The render extent is the REAL area the unified heightmap covers
                 // (extent.WorldSizeX/Z = tilesPerAxis * tileWorldSize), computed above —
-                // NOT the power-of-2 square the global quadtree rounds up to, which would
+                // NOT a power-of-two square, which would
                 // stretch a non-square / non-pow2-tile-count terrain. CBT maps
                 // world = origin + uv*size and samples the same uv, so size must match it.
                 Terrain::TerrainGPUParams params{};
@@ -2074,7 +1994,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                            ? Terrain::kTerrainFlagHasNormalmap : 0u)
                     | (feature->GetSplatmapTexture(globalGpuHandle).IsValid()
                            ? Terrain::kTerrainFlagHasSplatmap : 0u);
-                WriteGrassParams(params, grass, m_RenderServices);
 
                 // Atlas-backed terrains have no unified heightmap (HeightmapBindless == 0). The grass
                 // placement compute reads the kTerrainFlagAtlasBacked bit (set above) and routes its
@@ -2092,7 +2011,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                         ? m_GrassFieldUploader->UpdateAtlas(*feature, globalGpuHandle, *tiled, atlasGeo, atlasRows)
                         : m_GrassFieldUploader->UpdateUnified(*feature, globalGpuHandle, tiled->GrassUnifiedField);
                     feature->RegisterFieldsBindless(globalGpuHandle, *m_RenderServices);
-                    const bool required = atlasBacked ? tiled->GrassRegionsActive : tiled->GrassUnifiedField.IsActive();
+                    const bool required = atlasBacked
+                        ? tiled->GrassRegionsActive || !tiled->GrassCoarseField.Initialized
+                        : tiled->GrassUnifiedField.GatesPlacement();
                     const bool namedMaps = m_RenderServices->GetProfile().IsCompat();
                     const bool sampleable = atlasBacked
                         ? feature->FieldCanBeSampled(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Atlas)
@@ -2101,17 +2022,18 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                            && feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Coarse) != 0))
                         : feature->FieldCanBeSampled(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Unified)
                           && (namedMaps || feature->GetFieldBindlessIndex(TerrainField::GrassControl, globalGpuHandle, TerrainFieldMap::Unified) != 0);
-                    // A defined white clear is not yet authored content. Keep
-                    // pending fields out of placement until upload + publication.
+                    // A defined white clear is not yet authored content, and a field
+                    // whose first compose has not landed says nothing yet. Keep both
+                    // out of placement until upload + publication.
                     if (required && (!grassControlsActive || !sampleable))
                     {
-                        params.GrassEnabled &= ~Terrain::kTerrainGrassBitEnabled;
                         grassControlsSuppressed = true;
                         ++m_GrassControlSuppressedTicks;
                     }
                 }
                 else
                     feature->ReleaseFieldResources(TerrainField::GrassControl, globalGpuHandle);
+                WriteGrassParams(params, grass, grassControlsSuppressed, m_RenderServices);
                 if (grassControlsActive && !atlasBacked)
                 {
                     params.Flags |= Terrain::kTerrainFlagHasGrassControls;
@@ -2165,7 +2087,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 info.SizeZ = extent.WorldSizeZ;
                 info.HeightScale = terrain.HeightScale;
                 info.LODRangeScale = Terrain::kDefaultLODRangeScale;
-                info.LODLevels = tiled->GlobalQuadtree.GetNumLevels();
+                info.LODLevels = globalData->Config.LODLevels;
                 info.MaterialTiling = terrain.MaterialTiling;
                 info.Handle = globalGpuHandle;
                 info.HeightmapTexture = infoHeightTex;
@@ -2209,15 +2131,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 if (!atlasRows.empty())
                     std::memcpy(info.AtlasRowBytes.data(), atlasRows.data(),
                                 info.AtlasRowBytes.size());
-                info.Quadtree = tiled->GlobalQuadtree;
                 info.PatchGridSize = Terrain::kDefaultGridSize;
-                info.MorphRangesComputed = tiled->MorphRangesComputed;
-                if (tiled->MorphRangesComputed)
-                {
-                    std::memcpy(info.VisRanges, tiled->VisRanges, sizeof(info.VisRanges));
-                    std::memcpy(info.MorphStart, tiled->MorphStart, sizeof(info.MorphStart));
-                    std::memcpy(info.MorphEnd, tiled->MorphEnd, sizeof(info.MorphEnd));
-                }
                 activeInfos.push_back(std::move(info));
 
                 // Tile unloading is handled by TileStreamingManager::UnloadDistantTiles.
@@ -2522,7 +2436,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                        ? Terrain::kTerrainFlagHasNormalmap : 0u)
                 | (feature->GetSplatmapTexture(handle).IsValid()
                        ? Terrain::kTerrainFlagHasSplatmap : 0u);
-            WriteGrassParams(params, grass, m_RenderServices);
             bool grassControlsSuppressed = false;
             if (grass)
             {
@@ -2532,15 +2445,15 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 params.GrassControlBindless = feature->GetFieldBindlessIndex(TerrainField::GrassControl, handle, TerrainFieldMap::Unified);
                 const bool sampleable = feature->FieldCanBeSampled(TerrainField::GrassControl, handle, TerrainFieldMap::Unified)
                     && (m_RenderServices->GetProfile().IsCompat() || params.GrassControlBindless != 0);
-                if (data->GrassField.IsActive() && (!ready || !sampleable))
+                if (data->GrassField.GatesPlacement() && (!ready || !sampleable))
                 {
-                    params.GrassEnabled &= ~Terrain::kTerrainGrassBitEnabled;
                     grassControlsSuppressed = true;
                     ++m_GrassControlSuppressedTicks;
                 }
             }
             else
                 feature->ReleaseFieldResources(TerrainField::GrassControl, handle);
+            WriteGrassParams(params, grass, grassControlsSuppressed, m_RenderServices);
             const TerrainColorMapBinding colorMap = PublishUnifiedColorMap(
                 *m_ColorMapUploader, *feature, *m_RenderServices, handle, data->ColorMap);
             if (colorMap.Unified)
@@ -2551,9 +2464,8 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             paramsArray.push_back(params);
 
             // Cache terrain instance info for render node.
-            // Snapshot the quadtree and morph ranges so the render thread
-            // never accesses TerrainData directly (avoids cross-thread race
-            // when the modifier system rebuilds the quadtree).
+            // A snapshot, so the render thread never reads TerrainData directly
+            // (the modifier system rewrites it on the main thread).
             TerrainInstanceInfo info{};
             info.WorldOriginX = worldX;
             info.WorldOriginY = worldXf.matrix[13];
@@ -2576,7 +2488,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             info.GrassControlsSuppressedPlacement = grassControlsSuppressed;
             info.ColorMapBindlessIndex = params.ColorMapBindless;
             info.GrassRegionsActive = (params.Flags & Terrain::kTerrainFlagHasGrassControls) != 0;
-            info.Quadtree = data->Quadtree;
             info.PatchGridSize = data->Config.PatchGridSize;
             info.MorphRangesComputed = data->MorphRangesComputed;
             if (data->MorphRangesComputed)

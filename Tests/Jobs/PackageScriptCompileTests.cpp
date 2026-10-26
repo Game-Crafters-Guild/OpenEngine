@@ -7,7 +7,7 @@
 // and the prebuilt rule: a declared DLL stands in for a module with no sources.
 
 #include "CompileServerTestHost.h"
-#include "Core/Application.h" // PathUtils
+#include "Core/ApplicationPaths.h"
 #include "Engine/Build/DotnetHost.h"
 #include "EngineLogCapture.h" // Engine/Tests
 #include "JobSystem/WorkStealingThreadPool.h"
@@ -459,7 +459,7 @@ TEST(PackageCompileE2E, GeneratedCsprojAndServerCompileTheSameModule)
     if (!IsDotnetSdkAvailable())
         GTEST_SKIP() << "no .NET SDK: `dotnet build` of the generated csproj cannot run";
 
-    const fs::path exeDir = PathUtils::GetExecutableDirectory();
+    const fs::path exeDir = ApplicationPaths::GetExecutableDirectory();
     const fs::path pkgRoot = MakeTempDir("parity");
     PackageCodeModule module = MakeCsModule(pkgRoot);
     module.AssemblyName = "ParityPack";
@@ -575,7 +575,7 @@ PackageCodeModule MakePrebuiltModule(const fs::path& pkgRoot)
 // module's; only the image format is checked before staging.
 void ShipManagedAssembly(const PackageCodeModule& module)
 {
-    const fs::path source = PathUtils::GetExecutableDirectory() / "GameEngine.Scripting.ABI.dll";
+    const fs::path source = ApplicationPaths::GetExecutableDirectory() / "GameEngine.Scripting.ABI.dll";
     ASSERT_TRUE(fs::exists(source)) << source;
     std::error_code ec;
     fs::create_directories(module.PrebuiltDir, ec);
@@ -679,7 +679,7 @@ TEST(PrebuiltPackageModule, DeclaredFileThatIsNotADotNetAssemblyIsRefused)
     ASSERT_TRUE(ws.Initialized);
     const PackageCodeModule module = MakePrebuiltModule(ws.Root / "closed-pack");
     const fs::path declaredDll = module.PrebuiltDir / "ClosedPack.dll";
-    const fs::path nativeDll = PathUtils::GetExecutableDirectory() / "Engine.dll";
+    const fs::path nativeDll = ApplicationPaths::GetExecutableDirectory() / "Engine.dll";
     ASSERT_TRUE(fs::exists(nativeDll)) << nativeDll;
 
     for (const char* fixture : {"plain bytes", "native DLL"})

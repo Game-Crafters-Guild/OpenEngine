@@ -28,10 +28,6 @@
 #include <sstream>
 #include <type_traits>
 
-#if defined(__GNUG__)
-#include <cxxabi.h>
-#endif
-
 #include "Editor/EditorTreeTitleIconVars.h"
 #include "Editor/Hierarchy/HierarchyEntityIcon.h"
 #include "Editor/Settings/SettingsStore.h"
@@ -155,7 +151,7 @@
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/Rendering/Skybox.h"
 #include "Components/Rendering/WindVolume.h"
-#include "Components/SceneBlueprintInstance.h"
+#include "Components/PrefabInstance.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/SceneSubsceneInstance.h"
 #include "Components/Spline/SplineComponent.h"
@@ -620,63 +616,8 @@ std::string GetDefaultValueForType(const std::string& typeName)
     return "0";
 }
 
-static void StripLeading(std::string& s, const char* prefix)
-{
-    if (!prefix)
-        return;
-    const size_t n = std::strlen(prefix);
-    if (s.size() >= n && s.compare(0, n, prefix) == 0)
-    {
-        s.erase(0, n);
-    }
-}
-
-static std::string PrettifyTypeName(const char* typeName)
-{
-    std::string s = typeName ? std::string(typeName) : std::string();
-
-#if defined(__GNUG__)
-    int status = 0;
-    if (char* demangled = abi::__cxa_demangle(s.c_str(), nullptr, nullptr, &status))
-    {
-        if (status == 0)
-            s = demangled;
-        std::free(demangled);
-    }
-#endif
-
-    // MSVC often prefixes with "struct " / "class ".
-    StripLeading(s, "struct ");
-    StripLeading(s, "class ");
-
-    // Strip common namespaces for UI display.
-    StripLeading(s, "GameEngine::Components::");
-    StripLeading(s, "GameEngine::ECS::");
-    StripLeading(s, "GameEngine::");
-    StripLeading(s, "Components::");
-    StripLeading(s, "ECS::");
-
-    std::string pretty;
-    pretty.reserve(s.size() + 8);
-    for (size_t i = 0; i < s.size(); ++i)
-    {
-        const unsigned char ch = static_cast<unsigned char>(s[i]);
-        if (i > 0 && std::isupper(ch))
-        {
-            const unsigned char prev = static_cast<unsigned char>(s[i - 1]);
-            const bool prevIsLowerOrDigit = std::islower(prev) || std::isdigit(prev);
-            const bool nextIsLower = (i + 1 < s.size()) &&
-                                     std::islower(static_cast<unsigned char>(s[i + 1]));
-            if (prevIsLowerOrDigit || nextIsLower)
-                pretty.push_back(' ');
-        }
-        pretty.push_back(s[i]);
-    }
-
-    return pretty.empty() ? std::string("Component") : pretty;
-}
-
-// Human-readable display names for known components (avoids showing mangled typeid names like N10GameEngine10components12MeshRendererE).
+// Titles of built-in components. TryFindComponentTypeIdByName reads a title back to its type for the
+// component clipboard and the saved component settings, so a title here is also that type's key.
 static const std::unordered_map<ECS::ComponentTypeId, std::string>& GetComponentDisplayNames()
 {
     static std::unordered_map<ECS::ComponentTypeId, std::string> s_Names;
@@ -720,7 +661,7 @@ static const std::unordered_map<ECS::ComponentTypeId, std::string>& GetComponent
         s_Names[ECS::GetComponentTypeId<AnimatedNodeRef>()] = "Animated Node";
 
         s_Names[ECS::GetComponentTypeId<SceneEntityTag>()] = "Scene Entity Tag";
-        s_Names[ECS::GetComponentTypeId<SceneBlueprintInstance>()] = "Scene Blueprint Instance";
+        s_Names[ECS::GetComponentTypeId<PrefabInstance>()] = "Prefab Instance";
         s_Names[ECS::GetComponentTypeId<SceneSubsceneInstance>()] = "Scene Subscene Instance";
 
         s_Names[ECS::GetComponentTypeId<Components::Terrain>()] = "Terrain";
@@ -871,7 +812,7 @@ static std::vector<ECS::ComponentTypeId> CollectVisibleComponentSignature(ECS::W
 
 static int SortKeyForComponent(ECS::ComponentTypeId typeId)
 {
-    // Stable ordering: core, rendering, authoring components, then physics.
+    // Stable, human-friendly ordering: core -> rendering -> everything else.
     static const ECS::ComponentTypeId transformId = ECS::GetComponentTypeId<Transform>();
     static const ECS::ComponentTypeId nameId = ECS::GetComponentTypeId<Name>();
     static const ECS::ComponentTypeId parentId = ECS::GetComponentTypeId<Parent>();
@@ -910,7 +851,8 @@ static int SortKeyForComponent(ECS::ComponentTypeId typeId)
 
     // Mesh/skinned renderer sit directly under Transform for primitive and
     // model entities. Terrain (mutually exclusive with MeshRenderer on the
-    // same entity) shares the same slot. Physics sections follow all authoring sections.
+    // same entity) shares the same slot, with physics body/collider family
+    // immediately below.
     if (typeId == meshRendererId)
         return 30;
     if (typeId == meshMaterialInspectorSectionId)
@@ -931,19 +873,19 @@ static int SortKeyForComponent(ECS::ComponentTypeId typeId)
         return 39;
 
     if (typeId == physicsBodyId)
-        return 2000;
+        return 40;
     if (typeId == physicsColliderId)
-        return 2001;
+        return 41;
     if (typeId == physicsColliderOwnerId)
-        return 2002;
+        return 42;
     if (typeId == boxColliderId)
-        return 2003;
+        return 43;
     if (typeId == sphereColliderId)
-        return 2004;
+        return 44;
     if (typeId == planeColliderId)
-        return 2005;
+        return 45;
     if (typeId == capsuleColliderId)
-        return 2006;
+        return 46;
 
     // A modifier volume sits above the effects that stack inside it, so the
     // section order the user drags is already the stack order. Effects take
@@ -1151,8 +1093,8 @@ static std::string ComponentTitle(ECS::ComponentTypeId typeId)
     //     section header and the Add Effect picker cannot drift apart.
     if (const auto* terrainEffect = TerrainECS::FindTerrainEffectType(typeId))
         return std::string(terrainEffect->Title);
-    // 1. Explicit override for names that don't derive cleanly (acronyms like
-    //    "CRT"/"LUT", or renamed labels like LocalBounds -> "World Bounds").
+    // 1. The built-in titles (LocalBounds reads "World Bounds"). An entry that equals the
+    //    derived title stays: it is the type's clipboard and saved-settings key.
     const auto& displayNames = GetComponentDisplayNames();
     auto it = displayNames.find(typeId);
     if (it != displayNames.end())
@@ -1160,12 +1102,12 @@ static std::string ComponentTitle(ECS::ComponentTypeId typeId)
     // 2. Reflected components carry a normalized, cross-compiler-stable name;
     //    derive the title from it so no per-component map entry is needed.
     if (const std::string_view canonical = ECS::ComponentFieldRegistry::GetCanonicalName(typeId); !canonical.empty())
-        return PrettifyTypeName(std::string(canonical).c_str());
+        return Editor::ComponentTypeNameAsWords(canonical);
     // 3. Fallback for a component with no reflected field table: the handler's
     //    canonical type name, which is the same normalized spelling on every
     //    compiler.
     if (ECS::IComponentHandler* handler = ECS::ComponentRegistry::GetHandler(typeId))
-        return PrettifyTypeName(handler->GetTypeName());
+        return Editor::ComponentTypeNameAsWords(handler->GetTypeName());
     return "Component " + std::to_string(static_cast<std::size_t>(typeId));
 }
 
@@ -2024,11 +1966,9 @@ InspectorPanel::InspectorPanel()
     m_BottomRoot = bottom.get();
     AddChild(std::move(bottom));
 
-    // Search bar placement and visibility are controlled via Settings.
+    // Search bar placement is controlled via Settings.
     auto built = BuildPanelSearchBar(
         "inspector-search-field",
-        []()
-        { return SettingsPanel::GetSearchBarsVisible(); },
         {}, // onTextChanged (on Enter)
         [this](const std::string& text)
         { ApplySearchFilter(text); }, // onTextChanging (real-time)
@@ -2041,6 +1981,7 @@ InspectorPanel::InspectorPanel()
     );
     m_SearchBar = built.RootPtr;
     m_SearchField = built.FieldPtr;
+    AddClass("panel-search-host");
     AddChild(std::move(built.Root));
     SettingsPanel::RegisterSearchBar(m_SearchBar, built.IconPtr);
 
@@ -5650,6 +5591,7 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                 m_DragStartX = e.X;
                 m_DragStartValue = fieldPtr->GetValue();
                 m_DragVariableName = varName;
+                m_DragBegun = false;
                 
                 // Highlight the field when dragging starts
                 HighlightVariableField(varName);
@@ -5668,6 +5610,8 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                                            {
             if (m_LeftMouseDragging && m_DraggingLabel == nameLabelPtr && m_DraggingField == fieldPtr) {
                 float totalDeltaX = e.X - m_DragStartX;
+                if (!InspectorDrag::BeginLabelDragPastThreshold(nameLabelPtr, m_DragBegun, totalDeltaX))
+                    return;
                 AdjustValueByDrag(varName, fieldPtr, totalDeltaX);
                 HighlightVariableField(varName);
             } });
@@ -5704,6 +5648,9 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                 }
                 e.Stop();
             } });
+
+        nameLabelPtr->RegisterEventHandler(kEventMouseCancel, [this, varName, fieldPtr, nameLabelPtr](UIEvent& e)
+                                           { CancelScriptVariableDrag(e, varName, fieldPtr, nameLabelPtr); });
 
         sectionContent->AddChild(std::move(row));
     }
@@ -5806,6 +5753,23 @@ void InspectorPanel::FocusScriptVariableField(const std::string& varName)
     {
         apply();
     }
+}
+
+void InspectorPanel::CancelScriptVariableDrag(UIEvent& e, const std::string& varName, TextField* field,
+                                              UIElement* label)
+{
+    if (!m_LeftMouseDragging || m_DraggingLabel != label)
+        return;
+    m_LeftMouseDragging = false;
+    m_DraggingLabel = nullptr;
+    m_DraggingField = nullptr;
+    if (field->GetValue() != m_DragStartValue)
+    {
+        field->SetValue(m_DragStartValue);
+        if (m_OnVariableEdited)
+            m_OnVariableEdited(varName, m_DragStartValue);
+    }
+    e.Stop();
 }
 
 void InspectorPanel::AdjustValueByDrag(const std::string& varName, TextField* field, float totalDeltaX)

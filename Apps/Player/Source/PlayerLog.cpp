@@ -15,7 +15,7 @@ namespace GameEngine
 
 Logger::DeferredSink& StartPlayerLog()
 {
-    auto sink = Logger::MakeUnique<Logger::DeferredSink>();
+    auto sink = std::make_unique<Logger::DeferredSink>();
     Logger::DeferredSink& heldRecords = *sink;
     Logger::Log::AddSink(std::move(sink));
     return heldRecords;
@@ -36,7 +36,7 @@ void OpenPlayerLogFile(Logger::DeferredSink& heldRecords, const std::filesystem:
     fileConfig.includeSource = false;
     // The file is read after a crash; losing its tail to buffering defeats it.
     fileConfig.autoFlush = true;
-    auto fileSink = Logger::MakeUnique<Logger::FileSink>(fileConfig);
+    auto fileSink = std::make_unique<Logger::FileSink>(fileConfig);
     const bool fileOpened = fileSink->IsAvailable();
     heldRecords.Attach(std::move(fileSink));
     if (fileOpened)

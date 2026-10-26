@@ -333,6 +333,7 @@ void PlayModeManager::ExitPlayMode()
     if (m_State == PlayModeState::ChangeReview)
         return;
 
+    m_ExitRequested = false;
     SetState(PlayModeState::ExitingPlay);
 
     // Best-effort managed play-mode exit hook (called before tearing down runtime systems).
@@ -373,13 +374,13 @@ void PlayModeManager::ExitPlayMode()
         GameEngine::PhysicsECS::PhysicsWorldService::Shutdown();
     }
 
-    // Release per-tile and per-face terrain-collider slots. The collider entities
-    // are runtime-only and vanish with the snapshot restore below, but that path
-    // never runs the TerrainPhysicsSystem teardown sweep, so their tile-physics /
-    // planet-face slots would otherwise leak across Play sessions.
+    // Release per-page and per-face terrain-collider slots. The collider entities are
+    // runtime-only and vanish with the snapshot restore below, but that path never runs
+    // the TerrainPhysicsSystem teardown sweep, so their page and planet-face slots would
+    // otherwise leak across Play sessions.
     if (auto* terrain = TerrainECS::TerrainService::TryGet())
     {
-        terrain->ReleaseAllTilePhysicsHandles();
+        terrain->ReleaseAllPagePhysicsHandles();
         terrain->ReleaseAllPlanetFacePhysicsHandles();
     }
 
@@ -514,9 +515,22 @@ void PlayModeManager::DiscardPendingChanges()
         SetState(PlayModeState::Edit);
 }
 
+void PlayModeManager::RequestExitPlayMode()
+{
+    // A script's OnCreate runs while play is entered, before the state becomes Play.
+    if (IsPlayingOrPaused() || m_State == PlayModeState::EnteringPlay)
+        m_ExitRequested = true;
+}
+
 void PlayModeManager::Tick(float deltaSeconds)
 {
     m_EntryGate.Update();
+    // ExitPlayMode clears the request, so a request never outlives the play session it was made in.
+    if (m_ExitRequested && IsPlayingOrPaused())
+    {
+        ExitPlayMode();
+        return;
+    }
     if (m_State != PlayModeState::Play)
         return;
 

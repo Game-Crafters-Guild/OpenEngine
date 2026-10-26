@@ -249,7 +249,10 @@ struct Command
         // World::SetEntityEnabledImmediate at flush: the same single move as an
         // immediate switch, so a queued switch keeps the derived tag exactly
         // where an immediate one would (see SetEntityEnabledImmediate).
-        SET_ENTITY_ENABLED
+        SET_ENTITY_ENABLED,
+        // World::SetComponentBytesFromScriptImmediate at flush: a script's write merges with
+        // the component's value at that point, not at the time it was queued.
+        SET_COMPONENT_FROM_SCRIPT
     };
 
     Type type;

@@ -42,7 +42,9 @@ struct Probe : ns::IUserSystem
         ++Posts;
         LastDelta = dt;
         if (ReenterPost)
+        {
             EXPECT_FALSE(ns::PostSimulateUserSystems(world));
+        }
         if (ThrowPost)
             throw std::runtime_error("late callback test");
     }

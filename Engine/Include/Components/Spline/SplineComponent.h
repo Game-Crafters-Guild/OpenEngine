@@ -15,8 +15,8 @@ struct SplineComponent
     // Handle into SplineService (generational for safe access). Runtime-only: a load
     // re-creates the spline and binds a fresh handle, so a saved handle would alias a
     // live spline of the same session.
-    uint32 SplineDataIndex = 0;      // [DoNotSerialize]
-    uint32 SplineDataGeneration = 0; // [DoNotSerialize]
+    uint32 SplineDataIndex = 0;      // [DoNotSerialize] @ge-readonly
+    uint32 SplineDataGeneration = 0; // [DoNotSerialize] @ge-readonly
 
     // Default radius for newly added control points.
     float32 DefaultRadius = 5.0f;

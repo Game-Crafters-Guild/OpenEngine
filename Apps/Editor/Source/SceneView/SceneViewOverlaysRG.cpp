@@ -14,6 +14,7 @@
 // they capture by value only (the sole pointer capture, &m_GridRenderer, is
 // safe because the controller strictly outlives this frame's Execute()).
 
+#include "Mathematics/Interpolation.h"
 #include "SceneViewController.h"
 
 #include "Assets/AssetManager.h"
@@ -46,6 +47,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Geometry/VertexAttributeFlags.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "SceneView/SceneViewGizmos.h"
@@ -667,9 +669,9 @@ void SceneViewController::DeclareOverlaysRG(RenderGraph::RGFrame& frame, RenderG
                 pdTris.topology = PrimitiveTopology::TriangleList;
                 outTris = PipelineDescTranslator::InternGraphics(*device, pdTris);
             };
-            internPair(CompareOp::GreaterOrEqual, "SV_Gizmos_Lines", "SV_Gizmos_Triangles",
+            internPair(ReverseZ::kNearerOrEqual, "SV_Gizmos_Lines", "SV_Gizmos_Triangles",
                        idLinesVisible, idTrisVisible);
-            internPair(CompareOp::Less, "SV_Gizmos_Lines_Occluded", "SV_Gizmos_Triangles_Occluded",
+            internPair(ReverseZ::kFarther, "SV_Gizmos_Lines_Occluded", "SV_Gizmos_Triangles_Occluded",
                        idLinesOccluded, idTrisOccluded);
             // Opt-in third pair for GizmoDepthMode::AlwaysOnTop and Handle: no depth test,
             // so the group draws once at full strength wherever it lands.
@@ -1020,7 +1022,7 @@ void SceneViewController::DeclareSelectionOutlineRG(RenderGraph::RGFrame& frame,
         MaskDraw d{};
         d.alphaTest = alphaTexture.IsValid();
         d.alphaTexture = alphaTexture;
-        d.alphaCutoff = std::clamp(alphaCutoff, 0.0f, 1.0f);
+        d.alphaCutoff = Math::Clamp01(alphaCutoff);
         d.uvScale[0] = uvScaleX;
         d.uvScale[1] = uvScaleY;
         d.uvOffset[0] = uvOffsetX;

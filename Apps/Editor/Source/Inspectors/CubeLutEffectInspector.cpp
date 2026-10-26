@@ -16,6 +16,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/AssetField.h"
 
 #include <algorithm>
@@ -45,7 +46,7 @@ std::shared_ptr<CubeLutPreview> AddLutPreview(UIElement* parent, ECS::EntityHand
     CubeLutStripRequest request{};
     request.Lut = effect.LutAssetGuid.ToGuid();
     request.Owner = entity.id + 1u;
-    request.Intensity = std::clamp(effect.Intensity, 0.0f, 1.0f);
+    request.Intensity = Math::Clamp01(effect.Intensity);
     request.Look = static_cast<int32_t>(look);
     request.Stage = static_cast<uint32_t>(effect.Stage);
     return CubeLutPreview::Build(field, request, effect.Enabled, CubeLutPreviewSize::Inspector,
@@ -130,10 +131,10 @@ void RegisterCubeLutEffectInspector()
                 [w, e, n, undo](CubeLutStage v) { CommitStage(w, e, n, undo, v); });
 
         AddComponentFloatRowWithDrag<LUT>(ctx.Parent, "Intensity",
-            std::clamp(effect->Intensity, 0.0f, 1.0f), w, e, n, undo,
+            Math::Clamp01(effect->Intensity), w, e, n, undo,
             "Change LUT Intensity",
             [preview](LUT& u, float v) {
-                u.Intensity = std::clamp(v, 0.0f, 1.0f);
+                u.Intensity = Math::Clamp01(v);
                 if (preview)
                     preview->SetIntensity(u.Intensity);
             },

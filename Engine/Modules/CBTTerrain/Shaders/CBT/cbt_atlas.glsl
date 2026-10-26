@@ -77,8 +77,7 @@ struct CBTAtlasParams
 };
 
 // Terrain UV [0,1]^2 -> tile grid coord + tile-local UV [0,1]. The right/bottom
-// tile owns a shared boundary UV (localUV = 0), matching the CPU mirror and
-// SampleTiledHeightNormalized.
+// tile owns a shared boundary UV (localUV = 0), matching the CPU mirror.
 void CBT_AtlasTile(vec2 terrainUV, CBTAtlasParams p, out ivec2 tile, out vec2 localUV)
 {
     vec2 clamped = clamp(terrainUV, 0.0, 1.0);

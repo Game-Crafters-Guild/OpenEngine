@@ -41,6 +41,7 @@
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Core/NoneCullingStrategy.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Passes/TonemapPass.h"
 #include "Thumbnails/ModelThumbnailHandlerShared.h"
 
@@ -230,10 +231,10 @@ void ModelThumbnailHandler::SpawnOrUpdateModel(RenderLane& lane, Slot& slot, con
 
         // Parent model root to orbit root.
         Components::Parent parentComp{};
-        parentComp.parent = lane.orbitRootEntity;
+        parentComp.Entity = lane.orbitRootEntity;
         auto* existingParent = thumbWorld.GetComponentForWrite<Components::Parent>(lane.spawnedResult.rootEntity);
         if (existingParent)
-            existingParent->parent = lane.orbitRootEntity;
+            existingParent->Entity = lane.orbitRootEntity;
         else
             thumbWorld.AddComponentImmediate(lane.spawnedResult.rootEntity, parentComp);
 
@@ -746,7 +747,7 @@ void ModelThumbnailHandler::SubmitThumbnailRenderRG(WindowState& ws, RenderLane&
         clear.clearColorValue[2] = 0.0f;
         clear.clearColorValue[3] = 0.0f;
         clear.clearDepth = true;
-        clear.clearDepthValue = 0.0f;
+        clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
         m_RenderServices->Views().SetViewClearConfig(lane.viewId, clear);
     }
 
@@ -774,10 +775,11 @@ void ModelThumbnailHandler::SubmitThumbnailRenderRG(WindowState& ws, RenderLane&
     {
         const std::string msaaName = MakeSizedTargetName("Editor.ModelThumb.RG.ColorMSAA", w, h);
         td.sampleCount = samples;
-        // Matches the HDR resolve format below — a format mismatch is an
-        // invalid MSAA resolve (VUID-06865).
+        // Matches the HDR resolve format below: the world pass resolves only
+        // into a target of the color's format, and samples this one to do it.
         td.format = static_cast<uint32_t>(Rendering::TextureFormat::R16G16B16A16_FLOAT);
-        td.usage = static_cast<uint32_t>(Rendering::TextureUsage::RenderTarget);
+        td.usage = static_cast<uint32_t>(Rendering::TextureUsage::RenderTarget) |
+                   static_cast<uint32_t>(Rendering::TextureUsage::ShaderResource);
         td.debugName = msaaName.c_str();
         msaaColor = frame.ImportPersistentTexture(msaaName.c_str(), td);
     }
@@ -1200,7 +1202,7 @@ void ModelThumbnailHandler::SpawnOrUpdateMaterialEntity(RenderLane& lane,
         thumbWorld.AddComponentImmediate(lane.primitiveEntity, localXf);
 
         Components::Parent parentComp{};
-        parentComp.parent = lane.orbitRootEntity;
+        parentComp.Entity = lane.orbitRootEntity;
         thumbWorld.AddComponentImmediate(lane.primitiveEntity, parentComp);
 
         lane.isSpawnedMaterial = true;

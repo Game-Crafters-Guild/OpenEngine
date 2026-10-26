@@ -21,7 +21,8 @@ namespace ComponentMirrorResolver
 
 // `headers` and `reflected` are the component scan's (ReflectedStruct::Source indexes `headers`),
 // `aliases` its `using` aliases by simple name. `modulesDir` holds the modules whose Include trees
-// the enum table reads, and `description` the script API whose type names a mirror must not take.
+// the component headers' includes are looked up in for the enum table (IncludeGraph), and
+// `description` the script API whose type names a mirror must not take.
 ComponentMirrors Resolve(const std::vector<ComponentHeader>& headers, const std::vector<ReflectedStruct>& reflected,
                          const std::map<std::string, std::string>& aliases, const std::filesystem::path& modulesDir,
                          const ApiDescription& description, std::vector<ApiRefusal>& outRefusals);

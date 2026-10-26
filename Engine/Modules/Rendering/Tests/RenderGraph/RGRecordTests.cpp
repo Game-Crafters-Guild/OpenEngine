@@ -145,6 +145,43 @@ uint32_t BuildAndExecuteFrame(RGFrame& frame, uint64_t frameIndex)
     frame.Execute();
     return sawCmd;
 }
+
+// The exposure history's shape: a compute pass rewrites a persistent buffer that a graphics pass of
+// the same frame reads. The next frame's rewrite must be ordered after this frame's read.
+void ExecuteHistoryFrame(RGFrame& frame, uint64_t frameIndex)
+{
+    frame.BeginFrame(frameIndex);
+    BufferDesc historyDesc;
+    historyDesc.size = 16;
+    historyDesc.usage = static_cast<uint32_t>(BufferUsage::Storage);
+    RGBuffer history = frame.ImportPersistentBuffer("CrossFrame.History", historyDesc);
+    RGTexture color = frame.CreateTexture("CrossFrame.Color", ColorDesc());
+    frame.AddComputePass(
+        "CrossFrame.Write", 0, [&](RGPassBuilder& p) { p.Write(history); }, [](RGContext&) {});
+    frame.AddPass(
+        "CrossFrame.Read", 0,
+        [&](RGPassBuilder& p)
+        {
+            p.Read(history);
+            p.AttachColor(0, color, {.Load = RGLoadOp::Clear});
+        },
+        [](RGContext&) {});
+    frame.MarkOutput(color);
+    frame.Execute();
+}
+
+bool ComputeWaitsOnGraphics(const RGFrame& frame)
+{
+    for (const RGSubmission& s : frame.Graph().Submissions())
+    {
+        if (s.Queue != RGQueue::Compute)
+            continue;
+        for (uint32_t i = 0; i < s.WaitCount; ++i)
+            if (s.Waits[i].Queue == static_cast<uint32_t>(RGQueue::Graphics))
+                return true;
+    }
+    return false;
+}
 } // namespace
 
 TEST(RGRecord, RecordsSubmitsAndSignalsAcrossQueues)
@@ -355,6 +392,80 @@ TEST(RGRecord, CrossQueueLayoutTransitionRecordsAtTheProducerTailAndValidatesCle
     EXPECT_EQ(stats.ErrorCount, 0u) << VuidSummary(stats);
 }
 
+// A transition the plan places on another submission still leaves its layout on the
+// consuming pass's list: compute clears a texture, graphics copies it to a buffer, and the
+// CopyDst -> CopySrc transition records at the compute tail. The copy reads the layout from
+// its own list's record, so it is not refused, the texels come back, and the frame validates.
+TEST(RGRecord, CrossQueueTransitionLeavesItsLayoutOnTheConsumerList)
+{
+    DisarmValidationAssert();
+    auto dev = MakeDevice(/*debugLayer=*/true);
+    if (!dev)
+        GTEST_SKIP() << "no validation-layer device available";
+    if (dev->GetComputeQueueFamilyIndex() == dev->GetGraphicsQueueFamilyIndex())
+        GTEST_SKIP() << "no separate compute queue family: every transition records on one list";
+    const bool validationActive = dev->GetValidationStats().Enabled;
+    FramePools pools(dev.get());
+    RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.SetPhysicalQueueMap(RGFrame::kIdentityQueueMap);
+    dev->ResetValidationStats();
+
+    constexpr uint32_t kSize = 8;
+    constexpr size_t kBytes = static_cast<size_t>(kSize) * kSize * 4;
+    const BufferHandle readback = dev->CreateReadbackBuffer(kBytes, "Xq.CopyReadback");
+    ASSERT_TRUE(readback.IsValid());
+
+    frame.BeginFrame(0);
+    TextureDesc desc = ColorDesc(kSize, kSize);
+    desc.usage = static_cast<uint32_t>(TextureUsage::ShaderResource | TextureUsage::TransferSrc |
+                                       TextureUsage::TransferDst);
+    RGTexture tex = frame.CreateTexture("Xq.Cleared", desc);
+    frame.AddComputePass("Xq.Clear", 0, [&](RGPassBuilder& p) { p.Write(tex, RGTextureWrite::CopyDst); },
+                         [tex](RGContext& ctx)
+                         {
+                             const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                             ctx.Cmd->ClearColorImageSubresource(ctx.GetTexture(tex), 0, 0, white);
+                         });
+    frame.AddPass("Xq.Copy", 1,
+                  [&](RGPassBuilder& p)
+                  {
+                      p.Read(tex, RGTextureRead::CopySrc);
+                      p.PreventCulling();
+                  },
+                  [tex, readback](RGContext& ctx)
+                  {
+                      ctx.Cmd->CopyTextureSubresourceToBuffer(ctx.GetTexture(tex), 0, 0, readback, kSize,
+                                                              kSize);
+                  });
+    frame.Execute();
+    dev->WaitForIdle();
+
+    const auto& barriers = frame.Graph().Barriers();
+    const auto& placement = frame.Graph().BarrierSubmissions();
+    ASSERT_EQ(placement.size(), barriers.size());
+    bool relocated = false;
+    for (uint32_t i = 0; i < barriers.size(); ++i)
+    {
+        const RGBarrier& b = barriers[i];
+        relocated |= b.Resource == tex.Id && b.NewLayout == RGImageLayout::TransferSrc && placement[i] != kInvalidId;
+    }
+    ASSERT_TRUE(relocated) << "the transition into the copy source must record on the compute tail; the check is void";
+
+    const auto* bytes = static_cast<const uint8_t*>(dev->MapBuffer(readback));
+    ASSERT_NE(bytes, nullptr);
+    size_t whiteBytes = 0;
+    for (size_t i = 0; i < kBytes; ++i)
+        whiteBytes += bytes[i] == 255 ? 1u : 0u;
+    dev->UnmapBuffer(readback);
+    dev->DestroyBuffer(readback);
+    EXPECT_EQ(whiteBytes, kBytes) << "the copy was refused or read a discarded image";
+
+    if (!validationActive)
+        GTEST_SKIP() << "validation layer not present: the texels are asserted, the layout verdict is unavailable";
+    const ValidationStats stats = dev->GetValidationStats();
+    EXPECT_EQ(stats.ErrorCount, 0u) << VuidSummary(stats);
+}
+
 // The export-hole gate: a compute pass writes a persistent texture whose
 // export contract restores ShaderReadOnly, under the identity (true-async)
 // map on a real device. The restore must record at the COMPUTE tail — the
@@ -491,6 +602,71 @@ TEST(RGRecord, SubmissionTokenTracksPerQueueCompletion)
     const auto gfx1 = frame.SubmissionToken(RGQueue::Graphics);
     EXPECT_GT(gfx1.value, gfx0.value) << "tokens advance monotonically across frames";
     dev->WaitForIdle();
+}
+
+// A frame's cross-frame waits come from the timeline values the device has completed, read when
+// the frame is planned: once the previous frame's work has finished, its accesses order nothing, so
+// the compute work does not wait for the previous frame's graphics work.
+TEST(RGRecord, CrossFrameWaitOnCompletedWorkIsDropped)
+{
+    auto dev = MakeDevice(false);
+    if (!dev)
+        GTEST_SKIP() << "no headless device available";
+    FramePools pools(dev.get());
+    RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.SetPhysicalQueueMap(RGFrame::kIdentityQueueMap);
+
+    ExecuteHistoryFrame(frame, 0);
+    dev->WaitForIdle();
+    ExecuteHistoryFrame(frame, 1);
+    EXPECT_FALSE(ComputeWaitsOnGraphics(frame))
+        << "the rewrite waits for a graphics read the device has already completed";
+    dev->WaitForIdle();
+}
+
+// The completed values are the device's, never the submitted ones: while the graphics queue is held
+// on an external semaphore, the previous frame's graphics read has not finished, so the compute
+// rewrite keeps its wait. The hold is released on the transfer queue, which no frame here uses.
+TEST(RGRecord, CrossFrameWaitOnUnfinishedWorkIsKept)
+{
+    auto dev = MakeDevice(false);
+    if (!dev)
+        GTEST_SKIP() << "no headless device available";
+    const uint32_t transferFamily = dev->GetTransferQueueFamilyIndex();
+    if (transferFamily == dev->GetGraphicsQueueFamilyIndex() || transferFamily == dev->GetComputeQueueFamilyIndex())
+        GTEST_SKIP() << "the release needs a transfer queue apart from the graphics and compute queues";
+    const SemaphoreHandle hold = dev->CreateTimelineSemaphore(0);
+    ASSERT_TRUE(hold.IsValid());
+    BufferDesc fillDesc;
+    fillDesc.size = 16;
+    fillDesc.usage = static_cast<uint32_t>(BufferUsage::TransferDst);
+    const BufferHandle fillTarget = dev->CreateBuffer(fillDesc);
+    ASSERT_TRUE(fillTarget.IsValid());
+    auto holdList = dev->CreateCommandList(IDevice::QueueType::Graphics);
+    auto releaseList = dev->CreateCommandList(IDevice::QueueType::Transfer);
+    ASSERT_TRUE(holdList && releaseList);
+    // The fill is a command behind the wait: every later graphics signal is ordered after it.
+    holdList->Begin();
+    holdList->FillBuffer(fillTarget, 0, fillDesc.size, 0);
+    holdList->End();
+    releaseList->Begin();
+    releaseList->End();
+    {
+        FramePools pools(dev.get());
+        RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.SetPhysicalQueueMap(RGFrame::kIdentityQueueMap);
+
+        ASSERT_TRUE(dev->QueueSubmit(IDevice::QueueType::Graphics, {holdList.get()}, {{hold, 1}}, {}));
+        // The graphics queue now waits for the release below: nothing may return before it.
+        ExecuteHistoryFrame(frame, 0);
+        ExecuteHistoryFrame(frame, 1);
+        EXPECT_TRUE(ComputeWaitsOnGraphics(frame))
+            << "the rewrite does not wait for a graphics read the device has not finished";
+        EXPECT_TRUE(dev->QueueSubmit(IDevice::QueueType::Transfer, {releaseList.get()}, {}, {{hold, 1}}));
+        dev->WaitForIdle();
+    }
+    dev->DestroyBuffer(fillTarget);
+    dev->DestroySemaphore(hold);
 }
 
 // Class pin (instance 1 of "absence of a sync token reads as completion"): a queue

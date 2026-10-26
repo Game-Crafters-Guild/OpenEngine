@@ -1,0 +1,121 @@
+---
+title: Zip archives in editor packages
+description: Open a .zip archive from an Editor-kind package module, list its files, and extract the files you choose.
+---
+
+An Editor-kind package module links the EditorSDK. The EditorSDK has a zip reader, `ZipArchiveReader`, so a package does not need an external `unzip` tool or its own zip library. Use it to import a downloaded asset pack, or to take only some of the files from an archive. See [native C++ scripting](../scripting/native-cpp-scripting.mdx#project-layout) for package modules and their kinds.
+
+## The reader
+
+```cpp title="Editor/ZipArchiveReader.h"
+namespace GameEngine::Editor
+{
+struct ZipEntryExtraction
+{
+    std::string EntryName;
+    std::filesystem::path Destination;
+};
+
+struct ZipEntryFailure
+{
+    std::string EntryName;
+    std::string Message;
+};
+
+class ZipArchiveReader
+{
+  public:
+    static constexpr std::uint64_t kDefaultMaxExtractedBytes = std::uint64_t{512} << 20;
+
+    static std::optional<ZipArchiveReader> OpenFile(const std::filesystem::path& zipFile, std::string* outError);
+    static std::optional<ZipArchiveReader> OpenMemory(std::span<const std::byte> archive, std::string* outError);
+
+    const std::vector<std::string>& EntryNames() const;
+    bool ExtractEntries(std::span<const ZipEntryExtraction> entries, std::vector<ZipEntryFailure>& outFailures,
+                        std::uint64_t maxTotalBytes = kDefaultMaxExtractedBytes);
+};
+}
+```
+
+| Call | What it does |
+|---|---|
+| `OpenFile` | Opens an archive on disk. The reader reads the file in place, so a large pack is not loaded into memory. |
+| `OpenMemory` | Opens an archive that is already in memory, for example a download. The reader does not copy the bytes. Keep them alive and unchanged while the reader exists. |
+| `EntryNames` | Gives the names of the archive's files, in archive order. The names are UTF-8 and use `/` between folders. Folder entries are not in the list. |
+| `ExtractEntries` | Writes each chosen entry to its own destination file. It creates missing folders. It writes at most `maxTotalBytes` in one call (see [Untrusted archives](#untrusted-archives)). It returns `true` when every entry was extracted. |
+
+Both open calls return no reader when the file or the bytes are not a valid .zip archive. Then `outError` tells why. A truncated archive, or an archive whose file table points past its end, does not open.
+
+## Import one folder of a pack
+
+This example copies the files under `Models/GLB format/` into a folder of the project. It keeps the subfolders under that folder.
+
+```cpp title="Copy one folder of an archive into the project"
+#include <Editor/ZipArchiveReader.h>
+#include <Logger/Logger.h>
+#include <Types/PathUtils.h>
+
+namespace fs = std::filesystem;
+using namespace GameEngine::Editor;
+
+bool ImportPackModels(const fs::path& packZip, const fs::path& assetsFolder)
+{
+    std::string error;
+    std::optional<ZipArchiveReader> archive = ZipArchiveReader::OpenFile(packZip, &error);
+    if (!archive)
+    {
+        Logger::Log::Error("Could not open '{}': {}", GameEngine::PathToUtf8(packZip), error);
+        return false;
+    }
+
+    const std::string folder = "Models/GLB format/";
+    std::vector<ZipEntryExtraction> chosen;
+    for (const std::string& name : archive->EntryNames())
+    {
+        if (name.starts_with(folder))
+            chosen.push_back({name, assetsFolder / "Pack" / GameEngine::PathFromUtf8(name.substr(folder.size()))});
+    }
+
+    std::vector<ZipEntryFailure> failures;
+    archive->ExtractEntries(chosen, failures);
+    for (const ZipEntryFailure& failure : failures)
+        Logger::Log::Warning("Could not extract '{}': {}", failure.EntryName, failure.Message);
+    return failures.empty();
+}
+```
+
+An archive with `Models/GLB format/tree.glb` and `Models/GLB format/Rocks/rock.glb` gives `Pack/tree.glb` and `Pack/Rocks/rock.glb`. The other files of the archive are not written.
+
+Make a destination path from an entry name with `PathFromUtf8`. A path made directly from a `std::string` reads it in the active code page on Windows, so a name such as `café.glb` gets other characters. To put a path in a message, use `PathToUtf8`. On Windows, `path::string()` and `path::generic_string()` throw when the active code page has no character for a name, such as `日本` on a Western system.
+
+## Untrusted archives
+
+A downloaded archive can be hostile. The reader checks each entry when the archive opens. It leaves these entries out of `EntryNames`, and writes a warning to the log for each one:
+
+- A name that is not UTF-8. Some older zip tools write names in a code page such as 437, and no path can be made from such a name. To import these files, zip them again with a tool that writes UTF-8 names.
+- A name that is absolute, or contains `\`, `:` or a null character.
+- A name with a folder or file name that ends in `.` or a space (this includes `.` and `..`). Windows removes these characters, so the file gets another name.
+- A name with a folder or file name that Windows opens as a device: `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM0` to `COM9`, `LPT0` to `LPT9`, and `COM` or `LPT` with a superscript `¹`, `²` or `³`, in any case and with any extension (`aux.txt`, `Models/nul.glb`).
+- An encrypted entry, or an entry with a compression method that the reader does not support.
+- A name that an earlier entry of the archive already has. The names are compared without case and in one Unicode form, because Windows and macOS find `Tree.glb` and `tree.glb`, or `Ärger.txt` and `ärger.txt`, as the same file, and macOS also finds the two Unicode forms of `café.txt` as one file. The first entry with the name is kept.
+- Entries whose bytes overlap the bytes of another entry, from the local header to the end of the data. A zip bomb uses shared data to expand far past its own size.
+
+Thus you can append any name from `EntryNames` to a destination folder with `PathFromUtf8`, and on every platform the file stays in that folder under that name.
+
+`ExtractEntries` refuses a name that `EntryNames` does not give. It puts the name in `outFailures` and extracts the other entries.
+
+These checks do not limit the size of one entry. Deflate lets an entry expand to about 1000 times its compressed size, so a 1 MB archive can hold an entry of 1 GB. `ExtractEntries` therefore writes at most `maxTotalBytes` in one call, counted by the sizes the entries declare. The default, `kDefaultMaxExtractedBytes`, is 512 MiB. The limit is checked before any entry is written. When the chosen entries together declare more than the limit, no entry is written: each one goes into `outFailures` with `PastSizeLimit` set, and its message gives the total and the limit. So the limit never leaves a pack half extracted. To extract a larger pack, pass a larger limit:
+
+```cpp title="Extract a pack of up to 4 GiB"
+archive->ExtractEntries(chosen, failures, std::uint64_t{4} << 30);
+```
+
+## Failures
+
+Each entry that fails goes into `outFailures` with a message. An entry fails when the archive has no file with that name, when its data is corrupt, or when its file cannot be written, for example on a full disk. The message of a write failure gives the reason from the system. The other entries are still extracted. When the chosen entries go past the size limit, every entry fails and none is written.
+
+A failed entry leaves no file. The reader writes each entry to its destination path with `.partial` added, then renames the file when the entry is complete. A file that is already at the destination is replaced only by a complete entry.
+
+:::note
+A reader is used from one thread at a time.
+:::

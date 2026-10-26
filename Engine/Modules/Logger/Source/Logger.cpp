@@ -109,7 +109,7 @@ void Log::Initialize(const Config& config)
             consoleConfig.MinLevel = config.GlobalMinLevel;
             consoleConfig.IncludeSource = config.EnableSourceLocation;
             consoleConfig.UseStderr = config.ConsoleUseStderr;
-            state.Sinks.push_back(MakeUnique<ConsoleSink>(consoleConfig));
+            state.Sinks.push_back(std::make_unique<ConsoleSink>(consoleConfig));
         }
 
         state.m_EffectiveMinLevel.store(state.m_Config.GlobalMinLevel, std::memory_order_relaxed);
@@ -230,7 +230,7 @@ void Log::Shutdown()
     state.m_EffectiveMinLevel.store(LogLevel::Off, std::memory_order_relaxed);
 }
 
-void Log::AddSink(UniquePtr<LogSink> sink)
+void Log::AddSink(std::unique_ptr<LogSink> sink)
 {
     if (!sink)
         return;
@@ -347,7 +347,7 @@ void Log::MaybeAttachBacktrace(LogMessage& msg)
         return;
     if (s_SuppressBacktraces.load(std::memory_order_relaxed))
         return;
-    auto frames = MakeShared<const Vector<BacktraceFrame>>(CaptureBacktrace(kBacktraceMaxFrames, 2));
+    auto frames = std::make_shared<const std::vector<BacktraceFrame>>(CaptureBacktrace(kBacktraceMaxFrames, 2));
     if (!frames->empty())
         msg.Backtrace = std::move(frames);
 }
@@ -393,7 +393,7 @@ void Log::CriticalImpl(std::string_view message)
         return;
     }
 
-    LogMessage msg(LogLevel::Critical, String(message.data(), message.size()));
+    LogMessage msg(LogLevel::Critical, std::string(message.data(), message.size()));
     msg.SetThreadId(GetCachedThreadId());
     MaybeAttachBacktrace(msg);
 
@@ -420,7 +420,7 @@ void Log::CriticalImplWithSource(std::string_view message,
         return;
     }
 
-    LogMessage msg(LogLevel::Critical, String(message.data(), message.size()));
+    LogMessage msg(LogLevel::Critical, std::string(message.data(), message.size()));
     msg.SetThreadId(GetCachedThreadId());
     msg.SourceFile = file;
     msg.SourceLine = line;
@@ -899,24 +899,24 @@ void ReportUnreadableSourcePointer(const char* src)
 }
 } // namespace
 
-String CopySourceCString(const char* src)
+std::string CopySourceCString(const char* src)
 {
     if (!src)
         return {};
     if (s_SourceProbeUnavailable.load(std::memory_order_relaxed) != 0)
         return {};
-    char buf[kMaxSourceCString];
-    size_t n = 0;
-    if (!TryCopyCString(src, buf, kMaxSourceCString, n))
+    char copy[kMaxSourceCString];
+    size_t length = 0;
+    if (!TryCopyCString(src, copy, kMaxSourceCString, length))
     {
         if (s_SourceProbeUnavailable.load(std::memory_order_relaxed) == 0)
             ReportUnreadableSourcePointer(src);
         return {};
     }
-    return String(buf, n);
+    return std::string(copy, length);
 }
 
-void LogMessage::SetSourceLocation(const char* file, int32 line, const char* function)
+void LogMessage::SetSourceLocation(const char* file, std::int32_t line, const char* function)
 {
     SourceFile = CopySourceCString(file);
     SourceLine = line;

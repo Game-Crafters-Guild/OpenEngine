@@ -18,6 +18,7 @@
 #include "AssetCore/GUID.h"
 #include "Components/Rendering/Particles.h"
 #include "Components/Rendering/WorldSectorCoord.h"
+#include "Core/ApplicationPaths.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneIOContext.h"
 #include "Scene/RenderLayerMaskText.h"
@@ -26,6 +27,8 @@
 #include "Components/Terrain/TerrainGrass.h"
 #include "Components/Terrain/TerrainModifiers.h"
 #include "Components/Terrain/TerrainPlanetRelief.h"
+#include "Components/MathReflectionTraits.h"
+#include "Components/RenderLayerMaskReflectionTraits.h"
 #include "Components/Transform.h"
 #include "Core/CpuProfiler.h"
 #include "Core/DebugMetrics.h"
@@ -36,6 +39,7 @@
 #include "DebugServer/CameraProjectionReport.h"
 #include "Editor/CaptureOutputDirectory.h"
 #include "DebugServer/ComponentValueReader.h"
+#include "Mathematics/Interpolation.h"
 #include "DebugServer/RenderLayerMaskValue.h"
 #include "DebugServer/DebugServerReply.h"
 #include "DebugServer/EditorDebugServer.h"
@@ -74,6 +78,7 @@
 #include "ECSModules/Rendering/RenderingLoop.h"
 #include "ECS/ComponentFieldRegistry.h"
 #include "ECS/ComponentRegistry.h"
+#include "ECS/FieldAccess.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/ReflectionJson.h"
 #include "ECSModules/Rendering/ClipStore.h"
@@ -199,6 +204,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -224,6 +230,49 @@ static bool IEquals(std::string_view a, std::string_view b)
     return true;
 }
 
+// The number a JSON array holds at `index`, or `stored` when the array is short there or the
+// entry is not a number, so a partial array keeps the components it does not name.
+static float JsonComponentOr(const json& array, std::size_t index, float stored)
+{
+    return index < array.size() && array[index].is_number() ? array[index].get<float>() : stored;
+}
+
+// Element 0 of a Vec2/Vec3/Vec4 field, its components replaced by those a JSON array gives.
+template <class TVector>
+static void WriteVectorFromJson(const ECS::FieldInfo& field, std::span<std::byte> component, const json& value)
+{
+    TVector composite;
+    if (!value.is_array() || !ECS::ReadFieldElement(field, std::span<const std::byte>(component), 0, composite))
+        return;
+    for (std::size_t i = 0; i < sizeof(TVector) / sizeof(float); ++i)
+        composite[i] = JsonComponentOr(value, i, composite[i]);
+    ECS::WriteFieldElement(field, component, 0, composite);
+}
+
+// Element 0 of a Quat field from a JSON array in the quaternion's storage order, the order the
+// read side emits.
+static void WriteQuaternionFromJson(const ECS::FieldInfo& field, std::span<std::byte> component, const json& value)
+{
+    Mathematics::Quaternion composite;
+    if (!value.is_array() || !ECS::ReadFieldElement(field, std::span<const std::byte>(component), 0, composite))
+        return;
+    glm::quat& stored = composite.GetGLM();
+    for (glm::length_t i = 0; i < stored.length(); ++i)
+        stored[i] = JsonComponentOr(value, static_cast<std::size_t>(i), stored[i]);
+    ECS::WriteFieldElement(field, component, 0, composite);
+}
+
+// Element 0 of a Color field from a JSON array [r, g, b, a].
+static void WriteColorFromJson(const ECS::FieldInfo& field, std::span<std::byte> component, const json& value)
+{
+    ColorLinear composite;
+    if (!value.is_array() || !ECS::ReadFieldElement(field, std::span<const std::byte>(component), 0, composite))
+        return;
+    composite = ColorLinear(JsonComponentOr(value, 0, composite.r), JsonComponentOr(value, 1, composite.g),
+                            JsonComponentOr(value, 2, composite.b), JsonComponentOr(value, 3, composite.a));
+    ECS::WriteFieldElement(field, component, 0, composite);
+}
+
 // Write one JSON value into a component's raw bytes for a single reflected field,
 // dispatching on its FieldTypeId. Type-guarded so a mismatched JSON value is
 // ignored rather than throwing. Float/Vec/Color accept a JSON array for the
@@ -235,35 +284,11 @@ static bool IEquals(std::string_view a, std::string_view b)
 // this contract exists to prevent. `world` supplies entity-handle liveness. A refusal with
 // a reason the caller can act on (the forms a render layer field takes) puts it in `outReason`.
 static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
-                               const ECS::FieldInfo& f, const json& v, std::string& outReason)
+                               const ECS::FieldInfo& field, const json& value, std::string& outReason)
 {
-    // The integer/enum stores below memcpy a value's low bytes into the field; that assumes a
-    // little-endian host (every shipping target). A big-endian port would byte-swap.
-    static_assert(std::endian::native == std::endian::little, "WriteFieldFromJson assumes little-endian");
     using ECS::FieldTypeId;
-    const std::size_t off = f.Offset;
-    const auto fits = [&](std::size_t n)
-    { return off + n <= bytes.size(); };
-    const auto writeFloats = [&](std::uint32_t count)
-    {
-        if (!v.is_array())
-            return;
-        for (std::uint32_t i = 0; i < count && i < v.size(); ++i)
-        {
-            if (!v[i].is_number() || !fits(i * 4 + 4))
-                continue;
-            float x = v[i].get<float>();
-            std::memcpy(bytes.data() + off + i * 4, &x, 4);
-        }
-    };
-    const auto storeInt = [&]<class T>()
-    {
-        if (v.is_number() && fits(sizeof(T)))
-        {
-            auto x = static_cast<T>(v.get<long long>());
-            std::memcpy(bytes.data() + off, &x, sizeof(T));
-        }
-    };
+    const std::span<std::byte> component = std::as_writable_bytes(std::span(bytes));
+    const std::size_t offset = field.Offset;
     // Enum-by-name: a reflected enum field collapses to its underlying integer Type but
     // carries an EnumNames table. Accept the enumerator NAME the scene format + inspector
     // use (e.g. RenderMode="Fullscreen"), resolving it to the integer value. A numeric
@@ -274,101 +299,90 @@ static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
     // failing over IPC is the get/set disagreement this surface exists to remove.
     // ReflectedEnumNameDrift pins the precondition: no reflected enum has two enumerators
     // differing only by case.
-    if (!f.EnumNames.empty() && v.is_string() && f.Size <= sizeof(std::int64_t) && fits(f.Size))
+    if (!field.EnumNames.empty() && value.is_string())
     {
-        const std::string name = v.get<std::string>();
-        for (const auto& e : f.EnumNames)
+        const std::string name = value.get<std::string>();
+        for (const auto& enumerator : field.EnumNames)
         {
-            if (IEquals(e.Name, name))
-            {
-                std::memcpy(bytes.data() + off, &e.Value, f.Size); // low bytes (LE, asserted above)
-                return true;
-            }
+            if (IEquals(enumerator.Name, name))
+                return ECS::WriteFieldInteger(field, component, 0, enumerator.Value);
         }
         // Accept a numeric STRING (e.g. "1") as the underlying integer too, matching the lenient
         // JSON-number path — callers/scripts sometimes quote enum values.
-        long long num = 0;
-        if (auto [ptr, ec] = std::from_chars(name.data(), name.data() + name.size(), num);
-            ec == std::errc{} && ptr == name.data() + name.size())
+        long long number = 0;
+        if (auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), number);
+            error == std::errc{} && end == name.data() + name.size())
         {
-            std::memcpy(bytes.data() + off, &num, f.Size);
-            return true;
+            return ECS::WriteFieldInteger(field, component, 0, number);
         }
         return false; // not a known enumerator name or integer → report rather than silently no-op
     }
-    switch (f.Type)
+    switch (field.Type)
     {
     case FieldTypeId::Bool:
-        if (fits(1))
-            bytes[off] = (v.is_boolean() ? v.get<bool>() : (v.is_number() && v.get<double>() != 0.0)) ? 1 : 0;
+        ECS::WriteFieldElement(field, component, 0,
+                               value.is_boolean() ? value.get<bool>() : (value.is_number() && value.get<double>() != 0.0));
         break;
     case FieldTypeId::Int8:
-        storeInt.operator()<std::int8_t>();
-        break;
     case FieldTypeId::UInt8:
-        storeInt.operator()<std::uint8_t>();
-        break;
     case FieldTypeId::Int16:
-        storeInt.operator()<std::int16_t>();
-        break;
     case FieldTypeId::UInt16:
-        storeInt.operator()<std::uint16_t>();
-        break;
     case FieldTypeId::Int32:
-        storeInt.operator()<std::int32_t>();
-        break;
     case FieldTypeId::UInt32:
-        storeInt.operator()<std::uint32_t>();
+    case FieldTypeId::Int64:
+    case FieldTypeId::UInt64:
+        if (value.is_number())
+            ECS::WriteFieldInteger(field, component, 0, value.get<long long>());
         break;
     case FieldTypeId::RenderLayerMask:
     {
         // A layer list ([0, 2] or the scene text "[0, 2]"), "all" or "none"; the read side reports the text.
         Rendering::RenderLayerMask layers;
-        if (!fits(sizeof(layers)) || !Editor::ReadRenderLayerMaskValue(v, f.Name, layers, outReason))
+        if (!Editor::ReadRenderLayerMaskValue(value, field.Name, layers, outReason))
             return false;
-        std::memcpy(bytes.data() + off, &layers, sizeof(layers));
-        return true;
+        return ECS::WriteFieldElement(field, component, 0, layers);
     }
-    case FieldTypeId::Int64:
-        storeInt.operator()<std::int64_t>();
-        break;
-    case FieldTypeId::UInt64:
-        storeInt.operator()<std::uint64_t>();
-        break;
     case FieldTypeId::Double:
-        if (v.is_number() && fits(8))
-        {
-            double x = v.get<double>();
-            std::memcpy(bytes.data() + off, &x, 8);
-        }
+        if (value.is_number())
+            ECS::WriteFieldElement(field, component, 0, value.get<double>());
         break;
     case FieldTypeId::Float:
-        if (v.is_array())
-            writeFloats(f.Size / 4); // float[N] (e.g. Color[3])
-        else if (v.is_number() && fits(4))
+        if (value.is_array())
         {
-            float x = v.get<float>();
-            std::memcpy(bytes.data() + off, &x, 4);
+            // float[N] (e.g. Color[3]): one array entry per element; a non-number keeps its element.
+            for (std::uint32_t element = 0; element < value.size(); ++element)
+            {
+                if (value[element].is_number())
+                    ECS::WriteFieldElement(field, component, element, value[element].get<float>());
+            }
+        }
+        else if (value.is_number())
+        {
+            ECS::WriteFieldElement(field, component, 0, value.get<float>());
         }
         break;
     case FieldTypeId::Vec2:
-        writeFloats(2);
+        WriteVectorFromJson<Mathematics::Vector2>(field, component, value);
         break;
     case FieldTypeId::Vec3:
-        writeFloats(3);
+        WriteVectorFromJson<Mathematics::Vector3>(field, component, value);
         break;
     case FieldTypeId::Vec4:
+        WriteVectorFromJson<Mathematics::Vector4>(field, component, value);
+        break;
     case FieldTypeId::Quat:
+        WriteQuaternionFromJson(field, component, value);
+        break;
     case FieldTypeId::Color:
-        writeFloats(4);
+        WriteColorFromJson(field, component, value);
         break;
     case FieldTypeId::String:
-        if (v.is_string() && f.Size > 0 && fits(f.Size))
+        if (value.is_string() && field.Size > 0 && offset + field.Size <= bytes.size())
         {
-            const std::string s = v.get<std::string>();
-            const std::size_t n = std::min<std::size_t>(s.size(), f.Size - 1);
-            std::memcpy(bytes.data() + off, s.data(), n);
-            bytes[off + n] = 0;
+            const std::string text = value.get<std::string>();
+            const std::size_t length = std::min<std::size_t>(text.size(), field.Size - 1);
+            std::memcpy(bytes.data() + offset, text.data(), length);
+            bytes[offset + length] = 0;
         }
         break;
     case FieldTypeId::AssetGuid:
@@ -376,35 +390,29 @@ static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
         // An AssetRef<T> (MaterialRef/ModelRef/TextureRef) is a 16-byte GUID. Accept a GUID
         // string or {"guid":"..."}; the component write-back re-resolves it during extraction
         // (e.g. the renderer's MaterialRegistry::Find), so set_component can assign a material.
-        const json* g = v.is_string()                           ? &v
-                        : (v.is_object() && v.contains("guid"))  ? &v.at("guid")
+        const json* guidValue = value.is_string()                           ? &value
+                        : (value.is_object() && value.contains("guid"))  ? &value.at("guid")
                                                                  : nullptr;
-        if (!g || !g->is_string())
-            return v.is_null(); // null = leave the ref as-is (ok); any other non-string is malformed -> report
-        if (!fits(GUID::kSize))
-            break;
-        const std::string s = g->get<std::string>();
-        if (s.empty())
+        if (!guidValue || !guidValue->is_string())
+            return value.is_null(); // null = leave the ref as-is (ok); any other non-string is malformed -> report
+        const std::string text = guidValue->get<std::string>();
+        if (text.empty())
         {
             // "" CLEARS the reference. It is what a read emits for an unset ref, so this is the
             // half that makes get_entity_components output writable back: a payload carrying an
             // unset ref has to land as unset, not silently keep whatever the target already held.
             // (JSON null, above, means "no value supplied" and still leaves the ref alone; the
             // read shape never emits it.)
-            std::memset(bytes.data() + off, 0, GUID::kSize);
-            return true;
+            return ECS::WriteFieldElement(field, component, 0, GUID::Null());
         }
         // The GUID string ctor fills zeros (not throw) on a malformed string. If it isn't a
         // raw GUID, treat the string as an asset PATH and resolve it (so MCP can assign any
         // AssetRef<> by path, e.g. "UI/Hud.uxml", matching the scene format).
-        GUID guid{s};
+        GUID guid{text};
         if (guid.IsNull())
-            guid = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(std::filesystem::path(s));
+            guid = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(std::filesystem::path(text));
         if (!guid.IsNull())
-        {
-            std::memcpy(bytes.data() + off, guid.GetData().data(), GUID::kSize);
-            return true;
-        }
+            return ECS::WriteFieldElement(field, component, 0, guid);
         // Non-empty string that's neither a raw GUID nor a resolvable asset path: leave the
         // existing ref untouched and report it (restores the diagnostic the deleted UIDocument
         // special-case had) instead of a silent no-op masquerading as success.
@@ -412,29 +420,22 @@ static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
     }
     case FieldTypeId::EntityHandle:
     {
-        if (!fits(sizeof(std::uint32_t)))
-            return false;
         // JSON null clears the link. That IS a write, unlike the zero below.
-        if (v.is_null())
-        {
-            const ECS::EntityHandle cleared{};
-            std::memcpy(bytes.data() + off, &cleared.id, sizeof cleared.id);
-            return true;
-        }
-        if (!v.is_number())
+        if (value.is_null())
+            return ECS::WriteFieldElement(field, component, 0, ECS::EntityHandle{});
+        if (!value.is_number())
             return false;
-        const auto raw = v.get<std::int64_t>();
-        if (raw < 0 || raw > std::numeric_limits<std::uint32_t>::max())
+        const auto rawId = value.get<std::int64_t>();
+        if (rawId < 0 || rawId > std::numeric_limits<std::uint32_t>::max())
             return false;
         // EntityHandle::IsValid only tests the kInvalidEntity sentinel, so a ZEROED id
         // passes it while naming no entity — versions are minted from 1, so (0,0) never
         // exists. Liveness lives in the World; ask it, or a raw byte round-trip would
         // store a handle that every reader then silently ignores.
-        const ECS::EntityHandle handle{static_cast<std::uint32_t>(raw)};
+        const ECS::EntityHandle handle{static_cast<std::uint32_t>(rawId)};
         if (!world.IsValid(handle))
             return false;
-        std::memcpy(bytes.data() + off, &handle.id, sizeof handle.id);
-        return true;
+        return ECS::WriteFieldElement(field, component, 0, handle);
     }
     case FieldTypeId::Mat4:
     case FieldTypeId::Bytes:
@@ -733,7 +734,6 @@ static ComponentApplyResult ApplyComponentFields(ECS::World* world, ECS::EntityH
         sc.SplineDataIndex = handle.Index();
         sc.SplineDataGeneration = handle.Generation();
         sc.DefaultRadius = defaultRadius;
-        sc.ShowWidthEnvelope = fields.Value("ShowWidthEnvelope", existing ? existing->ShowWidthEnvelope : true);
 
         if (!existing)
             world->AddComponentImmediate(entity, sc);
@@ -1182,6 +1182,33 @@ static float TriangularDitherAt(uint32_t px, uint32_t py)
     return s * (1.0f - std::sqrt(std::max(0.0f, 1.0f - std::abs(o))));
 }
 
+// Clamp-to-edge bilinear sample of a plane of 3 floats per pixel, at pixel-center
+// coordinates (sx, sy).
+static Mathematics::Vector3 SampleEncodedPlaneBilinear(
+    const std::vector<float>& plane, uint32_t width, uint32_t height, float sx, float sy)
+{
+    const float fx = std::clamp(sx - 0.5f, 0.0f, static_cast<float>(width - 1));
+    const float fy = std::clamp(sy - 0.5f, 0.0f, static_cast<float>(height - 1));
+    const uint32_t x0 = static_cast<uint32_t>(fx);
+    const uint32_t y0 = static_cast<uint32_t>(fy);
+    const uint32_t x1 = std::min(x0 + 1, width - 1);
+    const uint32_t y1 = std::min(y0 + 1, height - 1);
+    const float tx = fx - static_cast<float>(x0);
+    const float ty = fy - static_cast<float>(y0);
+    const float* p00 = &plane[(static_cast<size_t>(y0) * width + x0) * 3];
+    const float* p10 = &plane[(static_cast<size_t>(y0) * width + x1) * 3];
+    const float* p01 = &plane[(static_cast<size_t>(y1) * width + x0) * 3];
+    const float* p11 = &plane[(static_cast<size_t>(y1) * width + x1) * 3];
+    Mathematics::Vector3 rgb;
+    for (size_t c = 0; c < 3; ++c)
+    {
+        const float top = p00[c] + (p10[c] - p00[c]) * tx;
+        const float bot = p01[c] + (p11[c] - p01[c]) * tx;
+        rgb[c] = top + (bot - top) * ty;
+    }
+    return rgb;
+}
+
 // Gradient-aware deband on the encoded float plane — the CPU mirror of
 // encode_srgb.frag's pre-dither DebandEncoded, kept so captures continue to
 // match the screen (the same parity contract as TriangularDitherAt above):
@@ -1210,30 +1237,6 @@ static std::vector<float> DebandEncodedPlane(
     constexpr float kGolden = 0.61803399f;
     constexpr float kTwoPi = 6.2831853f;
 
-    auto fract = [](float v) -> float { return v - std::floor(v); };
-    auto sampleBilinear = [&](float sx, float sy, float rgb[3])
-    {
-        // Pixel-center coordinates in, clamp-to-edge bilinear out.
-        const float fx = std::clamp(sx - 0.5f, 0.0f, static_cast<float>(width - 1));
-        const float fy = std::clamp(sy - 0.5f, 0.0f, static_cast<float>(height - 1));
-        const uint32_t x0 = static_cast<uint32_t>(fx);
-        const uint32_t y0 = static_cast<uint32_t>(fy);
-        const uint32_t x1 = std::min(x0 + 1, width - 1);
-        const uint32_t y1 = std::min(y0 + 1, height - 1);
-        const float tx = fx - static_cast<float>(x0);
-        const float ty = fy - static_cast<float>(y0);
-        const float* p00 = &enc[(static_cast<size_t>(y0) * width + x0) * 3];
-        const float* p10 = &enc[(static_cast<size_t>(y0) * width + x1) * 3];
-        const float* p01 = &enc[(static_cast<size_t>(y1) * width + x0) * 3];
-        const float* p11 = &enc[(static_cast<size_t>(y1) * width + x1) * 3];
-        for (int c = 0; c < 3; ++c)
-        {
-            const float top = p00[c] + (p10[c] - p00[c]) * tx;
-            const float bot = p01[c] + (p11[c] - p01[c]) * tx;
-            rgb[c] = top + (bot - top) * ty;
-        }
-    };
-
     std::vector<float> out(enc.size());
     for (uint32_t py = 0; py < height; ++py)
     {
@@ -1243,44 +1246,36 @@ static std::vector<float> DebandEncodedPlane(
             const float u2 = InterleavedGradientNoiseAt(px, py, 11.0f);
             const float cx = static_cast<float>(px) + 0.5f;
             const float cy = static_cast<float>(py) + 0.5f;
-            float res[3];
             const float* center = &enc[(static_cast<size_t>(py) * width + px) * 3];
-            res[0] = center[0];
-            res[1] = center[1];
-            res[2] = center[2];
+            Mathematics::Vector3 debanded(center[0], center[1], center[2]);
             for (int i = 1; i <= kIterations; ++i)
             {
-                const float r1 = fract(u1 + static_cast<float>(i) * kGolden);
-                const float r2 = fract(u2 + static_cast<float>(i) * kGolden);
+                const float r1 = Math::Fract(u1 + static_cast<float>(i) * kGolden);
+                const float r2 = Math::Fract(u2 + static_cast<float>(i) * kGolden);
                 const float dist = baseRadius * static_cast<float>(i) * (0.25f + 0.75f * r1);
                 const float angle = kTwoPi * r2;
                 const float ox = dist * std::cos(angle);
                 const float oy = dist * std::sin(angle);
-                float t0[3], t1[3], t2[3], t3[3];
-                sampleBilinear(cx + ox, cy + oy, t0);
-                sampleBilinear(cx - oy, cy + ox, t1);
-                sampleBilinear(cx - ox, cy - oy, t2);
-                sampleBilinear(cx + oy, cy - ox, t3);
+                const Mathematics::Vector3 t0 = SampleEncodedPlaneBilinear(enc, width, height, cx + ox, cy + oy);
+                const Mathematics::Vector3 t1 = SampleEncodedPlaneBilinear(enc, width, height, cx - oy, cy + ox);
+                const Mathematics::Vector3 t2 = SampleEncodedPlaneBilinear(enc, width, height, cx - ox, cy - oy);
+                const Mathematics::Vector3 t3 = SampleEncodedPlaneBilinear(enc, width, height, cx + oy, cy - ox);
                 // Gate against the ORIGINAL center (mirrors DebandEncoded):
                 // bounds total displacement to one threshold by construction.
-                float avg[3];
+                Mathematics::Vector3 avg;
                 bool pass = true;
-                for (int c = 0; c < 3; ++c)
+                for (size_t c = 0; c < 3; ++c)
                 {
                     avg[c] = 0.25f * (t0[c] + t1[c] + t2[c] + t3[c]);
                     pass = pass && std::abs(avg[c] - center[c]) < threshold;
                 }
                 if (pass)
-                {
-                    res[0] = avg[0];
-                    res[1] = avg[1];
-                    res[2] = avg[2];
-                }
+                    debanded = avg;
             }
             float* dst = &out[(static_cast<size_t>(py) * width + px) * 3];
-            dst[0] = res[0];
-            dst[1] = res[1];
-            dst[2] = res[2];
+            dst[0] = debanded[0];
+            dst[1] = debanded[1];
+            dst[2] = debanded[2];
         }
     }
     return out;
@@ -2164,7 +2159,7 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
     if (world->HasComponent<Components::Parent>(entity))
     {
         auto* c = world->GetComponent<Components::Parent>(entity);
-        components["Parent"] = {{"parentId", c->parent.id}};
+        components["Parent"] = {{"parentId", c->Entity.id}};
         serialized.insert(ECS::GetComponentTypeId<Components::Parent>());
     }
 
@@ -2310,8 +2305,7 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
         components["SplineComponent"] = {
             {"SplineDataIndex", c->SplineDataIndex},
             {"SplineDataGeneration", c->SplineDataGeneration},
-            {"DefaultRadius", c->DefaultRadius},
-            {"ShowWidthEnvelope", c->ShowWidthEnvelope}};
+            {"DefaultRadius", c->DefaultRadius}};
         serialized.insert(ECS::GetComponentTypeId<Components::SplineComponent>());
     }
 
@@ -2381,10 +2375,11 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
             if (name.starts_with(ECS::kComponentDisabledNamePrefix))
                 continue;
 
-            // Use short name (strip namespace prefix) for JSON keys.
-            auto lastColon = name.rfind("::");
-            if (lastColon != std::string::npos)
-                name = name.substr(lastColon + 2);
+            // The key drops a native component's C++ namespace and keeps a script component's own
+            // namespace ("Game.Combat.Health"): two script components with one class name can sit on
+            // one entity, and set_component finds each by its key.
+            if (const size_t scope = name.rfind("::"); scope != std::string::npos)
+                name.erase(0, scope + 2);
             if (!serialized.count(typeId))
                 components[name] = SerializeDynamicComponent(world, entity, typeId);
             AddComponentEnabledState(components[name], world, entity, typeId);
@@ -2792,6 +2787,8 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                 result["mouseCaptured"] = app.m_Windows[0]->ui->IsMouseCaptured();
                 result["pointerLocked"] = app.m_RuntimeInput &&
                     app.m_RuntimeInput->GetPointerLockState() == Input::PointerLockState::Locked;
+                // The main window's cursor is hidden and held (a game lock or a UI value drag).
+                result["cursorLocked"] = app.m_Windows[0]->window->IsCursorLocked();
                 result["captureElementId"] = app.m_Windows[0]->ui->GetCaptureId();
             }
         }
@@ -3441,8 +3438,21 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         if (button < 0)
             return Editor::RefuseRequest("button must be non-negative");
 
-        // Frame 1: move + press.
+        // A double or triple click: the presses land inside the platform's double-click
+        // interval whatever the frame rate, which two separate requests cannot promise.
+        constexpr int kMaxClickCount = 3;
+        int clickCount = 1;
+        if (json error; !Editor::ReadClickCount(ctx.params, kMaxClickCount, clickCount, error))
+            return error;
+
+        // Frame 1: move, then every click but the last whole, then the last press. The UI
+        // dispatches each edge as it arrives, so the earlier clicks complete in this frame.
         Editor::InjectMouseMove(wndCtx->inputConfig, wndCtx->window.get(), wndCtx->ui.get(), x, y);
+        for (int click = 1; click < clickCount; ++click)
+        {
+            Editor::InjectMouseButton(wndCtx->inputConfig, wndCtx->ui.get(), button, true);
+            Editor::InjectMouseButton(wndCtx->inputConfig, wndCtx->ui.get(), button, false);
+        }
         Editor::InjectMouseButton(wndCtx->inputConfig, wndCtx->ui.get(), button, true);
 
         // Defer the release to the next frame so the UI processes the press first.
@@ -3454,7 +3464,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         float clickY = y;
         int clickButton = button;
         auto framesToSkip = std::make_shared<int>(1);
-        server.EnqueueDeferredResponse(ctx.id, [wndCtx, clickX, clickY, clickButton, framesToSkip](json& outResult) -> bool
+        server.EnqueueDeferredResponse(ctx.id, [wndCtx, clickX, clickY, clickButton, clickCount, framesToSkip](json& outResult) -> bool
         {
             if (*framesToSkip > 0)
             {
@@ -3479,7 +3489,8 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             const std::string hit = wndCtx->ui->GetHoveredElementDebugName();
             Editor::InjectMouseMove(wndCtx->inputConfig, wndCtx->window.get(), wndCtx->ui.get(), clickX, clickY);
             Editor::InjectMouseButton(wndCtx->inputConfig, wndCtx->ui.get(), clickButton, false);
-            outResult = json{{"clicked", true}, {"x", clickX}, {"y", clickY}, {"button", clickButton}, {"hit", hit}};
+            outResult = json{{"clicked", true}, {"x", clickX}, {"y", clickY}, {"button", clickButton},
+                             {"clickCount", clickCount}, {"hit", hit}};
             return true;
         });
 
@@ -7877,6 +7888,10 @@ void RegisterDebugHandlers(EditorDebugServer& server,
     // Movie recording automation: drives GameViewController's recording
     // directly (the panel UI flow is interaction-heavy and its embedded
     // variant swallows failure statuses). action=start|stop|status.
+    // The status and stop replies carry "recording" (true until the encoder has
+    // closed the file), "finalizing" (the session ended and the encoder is still
+    // writing the index), "failure" (only when the encoder failed to open or write
+    // the file) and "framesWritten"; status adds "width" and "height".
     // The debug recording path bypasses MovieRecorderPanel's normal start/stop
     // callbacks, so retain the requested path and publish it when stopping.
     auto debugMoviePath = std::make_shared<std::filesystem::path>();
@@ -7925,13 +7940,24 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             debugMoviePath->clear();
             if (!completedPath.empty() && app.m_MovieRecorder)
                 app.m_MovieRecorder->NotifyExternalRecordingFinished(completedPath);
-            return json{{"ok", true}, {"recording", gameView->GetMovieCapture().IsRecording()},
-                        {"framesWritten", gameView->GetMovieCapture().GetFramesWritten()}};
         }
-        return json{{"recording", gameView->GetMovieCapture().IsRecording()},
-                    {"framesWritten", gameView->GetMovieCapture().GetFramesWritten()},
-                    {"width", gameView->GetMovieCapture().GetWidth()},
-                    {"height", gameView->GetMovieCapture().GetHeight()}}; });
+        // "recording" stays true until the container is closed, so a caller that
+        // polls it until false opens a complete file when "failure" is absent.
+        const auto& capture = gameView->GetMovieCapture();
+        const auto status = capture.GetRecordingStatus();
+        json reply{{"recording", status.Recording},
+                   {"finalizing", status.Finalizing},
+                   {"framesWritten", capture.GetFramesWritten()}};
+        if (!status.Failure.empty())
+            reply["failure"] = status.Failure;
+        if (action == "stop")
+        {
+            reply["ok"] = true;
+            return reply;
+        }
+        reply["width"] = capture.GetWidth();
+        reply["height"] = capture.GetHeight();
+        return reply; });
 
     // 16. set_scene_tool
     // Switch the active scene view tool.
@@ -8319,6 +8345,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             case RG::RGCullReason::NotCulled:      return "NotCulled";
             case RG::RGCullReason::NoConsumer:     return "NoConsumer";
             case RG::RGCullReason::ProducerCulled: return "ProducerCulled";
+            case RG::RGCullReason::Overwritten:    return "Overwritten";
             case RG::RGCullReason::Cycle:           return "Cycle";
             }
             return "?";
@@ -8490,7 +8517,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             !error.is_null())
             return error;
 
-        float target[3] = {0.0f, 0.0f, 0.0f};
+        Mathematics::Vector3 target(0.0f, 0.0f, 0.0f);
         bool framedBounds = false;
         float autoDistance = 0.0f; // subtree-derived; used when the caller omits distance
 
@@ -8512,27 +8539,20 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             Editor::SubtreeWorldBounds subtree;
             if (Editor::ComputeSubtreeWorldBounds(*world, entity, subtree) && subtree.HasBounds)
             {
-                const Mathematics::Vector3 center = subtree.Center();
-                target[0] = center.x;
-                target[1] = center.y;
-                target[2] = center.z;
+                target = subtree.Center();
                 autoDistance = std::max(subtree.Radius() * 1.8f, 0.5f);
                 framedBounds = true;
             }
             else if (auto* xf = world->GetComponent<Components::Transform>(entity))
             {
                 auto pos = xf->GetPosition();
-                target[0] = pos.x;
-                target[1] = pos.y;
-                target[2] = pos.z;
+                target = Mathematics::Vector3(pos.x, pos.y, pos.z);
             }
         }
         else if (ctx.params.contains("target"))
         {
             auto& t = ctx.params["target"];
-            target[0] = t[0].get<float>();
-            target[1] = t[1].get<float>();
-            target[2] = t[2].get<float>();
+            target = Mathematics::Vector3(t[0].get<float>(), t[1].get<float>(), t[2].get<float>());
         }
         else
         {
@@ -8554,7 +8574,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         }
 
         SceneViewCameraPose pose{};
-        if (!Editor::ComputeLookAtPose(Mathematics::Vector3(target[0], target[1], target[2]),
+        if (!Editor::ComputeLookAtPose(target,
                                        Mathematics::Vector3(dirX, dirY, dirZ), distance, pose))
             return Editor::RefuseRequest("Direction vector is zero");
         const float camX = pose.Pos[0];
@@ -8568,7 +8588,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         json response{
             {"ok", true},
             {"position", {camX, camY, camZ}},
-            {"target", {target[0], target[1], target[2]}},
+            {"target", {target.x, target.y, target.z}},
             {"yawDeg", yawDeg},
             {"pitchDeg", pitchDeg},
             {"distance", distance},
@@ -9732,9 +9752,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         json result = json::object();
         result["workspaceRoot"] = wsRoot.string();
         result["assetRoot"] = assetRoot.string();
-        result["sdkPath"] = (PathUtils::GetExecutableDirectory() / "SDK").string();
-        result["sdkLibDebugExists"] = std::filesystem::is_directory(PathUtils::GetExecutableDirectory() / "SDK" / "lib" / "Debug");
-        result["sdkLibReleaseExists"] = std::filesystem::is_directory(PathUtils::GetExecutableDirectory() / "SDK" / "lib" / "Release");
+        result["sdkPath"] = (ApplicationPaths::GetExecutableDirectory() / "SDK").string();
+        result["sdkLibDebugExists"] = std::filesystem::is_directory(ApplicationPaths::GetExecutableDirectory() / "SDK" / "lib" / "Debug");
+        result["sdkLibReleaseExists"] = std::filesystem::is_directory(ApplicationPaths::GetExecutableDirectory() / "SDK" / "lib" / "Release");
 
         // Count files in asset root
         int assetFileCount = 0;
@@ -9860,7 +9880,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                 // bind world rotations identifies whether two rigs share
                 // a canonical T-pose at bind.
                 json worldRest = json::array();
-                std::vector<std::array<float, 4>> worldQuats(skel->BoneCount);
+                std::vector<Mathematics::Quaternion> worldQuats(skel->BoneCount, Mathematics::Quaternion(1.0f, 0.0f, 0.0f, 0.0f));
                 const bool useTopo = !skel->TopologicalOrder.empty()
                     && skel->TopologicalOrder.size() == skel->BoneCount;
                 for (uint32_t i = 0; i < skel->BoneCount; ++i)
@@ -9868,25 +9888,18 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     const uint32_t b = useTopo ? skel->TopologicalOrder[i] : i;
                     const float* rp = (b * 4u + 3u < skel->RestRotation.size())
                         ? &skel->RestRotation[b * 4u] : nullptr;
-                    glm::quat local = rp
-                        ? glm::quat(rp[3], rp[0], rp[1], rp[2])
-                        : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+                    const Mathematics::Quaternion local = rp
+                        ? Mathematics::Quaternion(rp[3], rp[0], rp[1], rp[2])
+                        : Mathematics::Quaternion(1.0f, 0.0f, 0.0f, 0.0f);
                     const int32 parent = (b < skel->Parent.size()) ? skel->Parent[b] : -1;
-                    glm::quat world;
-                    if (parent < 0) world = local;
-                    else
-                    {
-                        const auto& p = worldQuats[static_cast<size_t>(parent)];
-                        glm::quat parentW(p[3], p[0], p[1], p[2]);
-                        world = parentW * local;
-                    }
-                    world = glm::normalize(world);
-                    worldQuats[b] = {world.x, world.y, world.z, world.w};
+                    const Mathematics::Quaternion world =
+                        parent < 0 ? local : worldQuats[static_cast<size_t>(parent)] * local;
+                    worldQuats[b] = world.Normalized();
                 }
                 for (uint32_t b = 0; b < skel->BoneCount; ++b)
                 {
-                    const auto& w = worldQuats[b];
-                    worldRest.push_back({w[0], w[1], w[2], w[3]});
+                    const glm::quat& w = worldQuats[b].GetGLM();
+                    worldRest.push_back({w.x, w.y, w.z, w.w});
                 }
                 skelJson["restWorld"] = std::move(worldRest);
             }

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Logger/Types.h"
-
+#include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <string_view>
 
@@ -16,7 +16,7 @@ namespace Logger {
 /**
  * @brief Log levels for filtering and categorizing log messages
  */
-enum class LogLevel : uint8 {
+enum class LogLevel : std::uint8_t {
     Trace = 0,      // Detailed trace information (very verbose)
     Debug = 1,      // Debug information (verbose)
     Info = 2,       // General information (normal)

@@ -22,13 +22,14 @@ std::string SerializeGraphFileText(const SgGraphDocument& doc, const std::string
 bool SaveGraphFile(const std::filesystem::path& path, const SgGraphDocument& doc, const std::string& body);
 /** Writes `text` only when it differs from what is already on disk. Rewriting
     identical bytes re-arms the shader-edit file watcher, whose recompile
-    rewrites the file again — a self-sustaining loop on an idle editor. */
+    rewrites the file again — a self-sustaining loop on an idle editor. A write that
+    happens announces itself (NotifyShaderSourcesChanged). */
 bool WriteGraphFileTextIfChanged(const std::filesystem::path& path, const std::string& text);
 bool SaveCompiledGraphFile(const std::filesystem::path& path, const SgGraphDocument& doc,
                              const SgNodeLibraryIndex& library);
 
 /** Engine shader-graph node helper root: "Shaders/Graph/Nodes" under the install assets
-    root the build stages for this executable (the PathUtils::GetInstallAssetsRoot() rule).
+    root the build stages for this executable (the ApplicationPaths::GetInstallAssetsRoot() rule).
     The host registers it through SetEngineGraphNodesRoot (the engine knows its install
     assets root; this module does not); until then the module's own copy of the layout rule
     resolves it. Empty when nothing is staged; a binary that reflects the node library must

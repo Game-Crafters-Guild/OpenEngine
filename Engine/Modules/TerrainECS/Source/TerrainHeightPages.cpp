@@ -1,6 +1,11 @@
 #include "TerrainECS/TerrainHeightPages.h"
 
 #include "TerrainECS/TerrainAtlas.h"
+#include "TerrainECS/TerrainService.h"
+#include "Components/Transform.h"
+#include "ECS/Query.h"
+#include "ECS/World.h"
+#include "PhysicsECS/Components/PhysicsBody.h"
 #include "CBTTerrain/CBTLayout.h"
 #include "PageStreaming/PageCache.h"
 #include "PageStreaming/PageTableEntry.h"
@@ -8,9 +13,11 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <iterator>
 
 namespace GameEngine::TerrainECS
 {
@@ -28,6 +35,90 @@ void PageAxisUV(uint32 page, uint32 level, uint32 samples, float32& outMin, floa
     const float32 inv = samples > 1u ? 1.0f / static_cast<float32>(samples - 1u) : 0.0f;
     outMin = std::max(0.0f, (static_cast<float32>(page) * span - margin) * inv);
     outMax = std::min(1.0f, (static_cast<float32>(page + 1u) * span + margin) * inv);
+}
+
+// The terrain UV along an axis of `samples` over which the surface reads a level-`level` sample of
+// [first, last]: the bilinear tap between two samples of that level reads both, so one sample of
+// the level on each side.
+void ReachAxisUV(uint32 first, uint32 last, uint32 level, uint32 samples, float32& outMin, float32& outMax)
+{
+    const float32 step = static_cast<float32>(1u << level);
+    const float32 inv = samples > 1u ? 1.0f / static_cast<float32>(samples - 1u) : 0.0f;
+    outMin = std::max(0.0f, (static_cast<float32>(first) - 1.0f) * step * inv);
+    outMax = std::min(1.0f, (static_cast<float32>(last) + 1.0f) * step * inv);
+}
+
+// Grows `rect` (or starts it, when `any` is false) to hold terrain-UV rect [minU, maxU] x [minV, maxV].
+void UniteDirty(uint32 terrainKey, uint32 generation, float32 minU, float32 minV, float32 maxU, float32 maxV,
+                HeightPageDirtyRect& rect, bool& any)
+{
+    if (!any)
+    {
+        rect = HeightPageDirtyRect{terrainKey, generation, minU, minV, maxU, maxV};
+        any = true;
+        return;
+    }
+    rect.MinU = std::min(rect.MinU, minU);
+    rect.MinV = std::min(rect.MinV, minV);
+    rect.MaxU = std::max(rect.MaxU, maxU);
+    rect.MaxV = std::max(rect.MaxV, maxV);
+}
+
+// The page table's budget under `profile`.
+PageTableBudget TableBudget(const HeightPageProfile& profile)
+{
+    return PageTableBudget{profile.DenseTableWords, profile.TableMidBlocks, profile.TableLeafBlocks};
+}
+
+// The residency's budget under `profile`: the one CPU budget of decoded pages (design D5's CPU
+// cache) and the synchronous CPU window fetches a frame (design D3).
+PageStreaming::PageResidencyBudget ResidencyBudget(const HeightPageProfile& profile)
+{
+    PageStreaming::PageResidencyBudget budget;
+    budget.CpuBytes = profile.CpuBytes;
+    budget.CpuSyncFetchPages = profile.CpuSyncFetchPages;
+    return budget;
+}
+
+// The level-0 pages of one CPU window.
+constexpr uint64 kPagesPerWindow = 4;
+// Body windows may hold 1 / this of the CPU height pages' budget (desktop 64 MiB: 62 bodies; Steam
+// Deck 32 MiB: 31); the rest of the budget stays with the camera windows and the pinned levels.
+constexpr uint64 kBodyWindowBudgetDivisor = 4;
+
+// The page along one axis under page coordinate `c` (level-0 pages from the footprint's corner) and
+// its neighbor on the nearer side, both inside [0, pages).
+void WindowAxis(float32 c, uint32 pages, uint32& own, uint32& neighbor)
+{
+    const int64 last = static_cast<int64>(pages) - 1;
+    const int64 under = std::clamp(static_cast<int64>(std::floor(c)), int64{0}, last);
+    const int64 nearer = c - static_cast<float32>(under) < 0.5f ? under - 1 : under + 1;
+    own = static_cast<uint32>(under);
+    neighbor = static_cast<uint32>(std::clamp(nearer, int64{0}, last));
+}
+
+// The level-0 pages of the CPU window around `center` (design D3: two pages wide): on each axis the
+// page under the center and its neighbor on the nearer side, so the center has at least half a page
+// of level-0 samples on every side; the page under the center first. Nothing for a center more than
+// a page off the footprint.
+void AppendWindowPages(const PageRequestTerrain& shape, const PageStreaming::PageStoreLevel& level0,
+                       const Mathematics::Vector3& center, std::vector<PageStreaming::PageAddress>& out)
+{
+    const float32 pageMetersX = shape.Level0TexelX * static_cast<float32>(PageStreaming::kPageOwnedSamples);
+    const float32 pageMetersZ = shape.Level0TexelZ * static_cast<float32>(PageStreaming::kPageOwnedSamples);
+    const float32 x = (center.x - shape.OriginX) / pageMetersX;
+    const float32 z = (center.z - shape.OriginZ) / pageMetersZ;
+    const float32 pagesX = static_cast<float32>(level0.PagesX);
+    const float32 pagesZ = static_cast<float32>(level0.PagesZ);
+    if (!(x >= -1.0f && x <= pagesX + 1.0f && z >= -1.0f && z <= pagesZ + 1.0f))
+        return; // off the footprint, or a degenerate placement
+    uint32 ownX = 0, nearX = 0, ownZ = 0, nearZ = 0;
+    WindowAxis(x, level0.PagesX, ownX, nearX);
+    WindowAxis(z, level0.PagesZ, ownZ, nearZ);
+    out.push_back(PageStreaming::PageAddress{0, 0, ownX, ownZ});
+    out.push_back(PageStreaming::PageAddress{0, 0, nearX, ownZ});
+    out.push_back(PageStreaming::PageAddress{0, 0, ownX, nearZ});
+    out.push_back(PageStreaming::PageAddress{0, 0, nearX, nearZ});
 }
 
 // True when the requester of a terrain configured with `a` asks for the same pages as one
@@ -49,42 +140,26 @@ bool LogResidency()
 // The pages of the residency line's address lists, at most; the rest are counted.
 constexpr std::size_t kLoggedAddressesPerList = 32;
 
-// The level, page X and page Z of table entry index `entry`.
-void EntryAddress(const PageTable& table, uint32 entry, uint32& level, uint32& x, uint32& z)
+// The order the residency log lists pages in: level-major, row-major.
+bool LogOrder(const PageStreaming::PageAddress& a, const PageStreaming::PageAddress& b)
 {
-    level = 0;
-    while (level + 1u < table.Levels.size() && entry >= table.Levels[level + 1u].FirstEntry)
-        ++level;
-    const uint32 local = entry - table.Levels[level].FirstEntry;
-    x = local % table.Levels[level].PagesX;
-    z = local / table.Levels[level].PagesX;
+    if (a.Level != b.Level)
+        return a.Level < b.Level;
+    return a.Z != b.Z ? a.Z < b.Z : a.X < b.X;
 }
 
-// " L<level>(x,z)" for each of `entries`, the first `limit`, then the count left.
-std::string AddressList(const PageTable& table, const std::vector<uint32>& entries, std::size_t limit)
+// " L<level>(x,z)" for each of `pages`, the first `limit`, then the count left.
+std::string AddressList(const std::vector<PageStreaming::PageAddress>& pages, std::size_t limit)
 {
     std::string out;
-    for (std::size_t i = 0; i < entries.size() && i < limit; ++i)
-    {
-        uint32 level = 0, x = 0, z = 0;
-        EntryAddress(table, entries[i], level, x, z);
-        out += std::format(" L{}({},{})", level, x, z);
-    }
-    if (entries.size() > limit)
-        out += std::format(" +{} more", entries.size() - limit);
+    for (std::size_t i = 0; i < pages.size() && i < limit; ++i)
+        out += std::format(" L{}({},{})", pages[i].Level, pages[i].X, pages[i].Z);
+    if (pages.size() > limit)
+        out += std::format(" +{} more", pages.size() - limit);
     return out.empty() ? std::string(" none") : out;
 }
 
 } // namespace
-
-uint64 PageTableWordCount(uint32 samplesX, uint32 samplesZ, uint32 slotCount)
-{
-    const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(samplesX, samplesZ);
-    if (levels.empty() || levels.size() > CBTTerrain::kCBTPageMaxLevels)
-        return ~0ull;
-    const uint64 entries = static_cast<uint64>(levels.back().FirstEntry) + levels.back().PagesX * levels.back().PagesZ;
-    return CBTTerrain::kCBTPageFadeOffsetWords + static_cast<uint64>(slotCount) + entries;
-}
 
 HeightPageProfile PlatformHeightPageProfile()
 {
@@ -95,17 +170,14 @@ HeightPageProfile PlatformHeightPageProfile()
 #endif
 }
 
-std::string PageTableRefusal(std::string_view name, uint32 samplesX, uint32 samplesZ, const HeightPageProfile& profile)
+std::string DenseDirectoryRefusal(std::string_view name, uint32 samplesX, uint32 samplesZ)
 {
-    const uint64 words = PageTableWordCount(samplesX, samplesZ, profile.Slots);
-    if (words <= profile.TableWordCap)
+    constexpr uint32 kLimit = PageStreaming::kCpuDirectoryMaxSamplesPerAxis;
+    if (samplesX <= kLimit && samplesZ <= kLimit)
         return {};
-    constexpr float64 kWordsPerMiB = 1024.0 * 1024.0 / sizeof(uint32);
-    return std::format("{} ({} x {} samples) does not stream its height on this platform: its page table needs {} "
-                       "words ({:.1f} MiB), over the platform's cap of {} words ({:.1f} MiB). It draws from its "
-                       "height texture. Lower its samples per meter or its size to stream it.",
-                       name, samplesX, samplesZ, words, static_cast<float64>(words) / kWordsPerMiB,
-                       profile.TableWordCap, static_cast<float64>(profile.TableWordCap) / kWordsPerMiB);
+    return std::format("{} ({} x {} samples) does not stream its height: pages stream for heightmaps of at most {} "
+                       "samples along an axis. Split it into terrains of at most {} samples a side.",
+                       name, samplesX, samplesZ, kLimit, kLimit);
 }
 
 std::string OverlayRefusal(std::string_view name, uint64 overlayBytes, const HeightPageProfile& profile)
@@ -115,7 +187,8 @@ std::string OverlayRefusal(std::string_view name, uint64 overlayBytes, const Hei
     constexpr float64 kBytesPerMiB = 1024.0 * 1024.0;
     return std::format("{} does not stream its height on this platform: its height modifiers reach so much of it "
                        "that their page overlay needs {} bytes ({:.1f} MiB), over the platform's cap of {} bytes "
-                       "({:.1f} MiB). It draws from its height texture. Shrink the modifiers' bounds (a "
+                       "({:.1f} MiB). It draws from its height texture, and its CPU height (picks, placement, "
+                       "navigation) reads it without those modifiers. Shrink the modifiers' bounds (a "
                        "terrain-wide modifier reaches every sample) or lower the terrain's samples per meter to "
                        "stream it.",
                        name, overlayBytes, static_cast<float64>(overlayBytes) / kBytesPerMiB, profile.OverlayByteCap,
@@ -134,37 +207,44 @@ std::string OverlayGridRefusal(std::string_view name, uint32 storeX, uint32 stor
 {
     return std::format("{} does not stream its height while height modifiers reach it: its heightmap's grid ({} x {} "
                        "samples) is not the terrain's tile lattice ({} x {} samples), on which the modifiers are "
-                       "baked. It draws from its height texture. Import the heightmap at {} x {} samples to stream "
+                       "baked. It draws from its height texture, and its CPU height (picks, placement, navigation) "
+                       "reads it without those modifiers. Import the heightmap at {} x {} samples to stream "
                        "it with its modifiers.",
                        name, storeX, storeZ, latticeX, latticeZ, latticeX, latticeZ);
 }
 
 void PackPageTableWords(const PageTable& table, const PageCacheGeometry& geometry, std::vector<uint32>& out)
 {
-    out.assign(CBTTerrain::kCBTPageFadeOffsetWords + table.SlotFade.size() + table.Entries.size(), 0u);
-    if (table.Levels.empty())
+    const std::span<const float32> fades = table.SlotFades();
+    const std::span<const uint32> words = table.Words();
+    out.assign(CBTTerrain::kCBTPageFadeOffsetWords + fades.size() + words.size(), 0u);
+    const std::span<const PageStreaming::PageStoreLevel> levels = table.Levels();
+    if (levels.empty())
         return;
-    out[0] = table.Levels.front().SamplesX;
-    out[1] = table.Levels.front().SamplesZ;
-    out[2] = static_cast<uint32>(table.Levels.size());
+    out[0] = levels.front().SamplesX;
+    out[1] = levels.front().SamplesZ;
+    out[2] = static_cast<uint32>(levels.size());
     out[3] = geometry.SlotsPerRow;
-    out[4] = static_cast<uint32>(table.SlotFade.size());
-    for (std::size_t level = 0; level < table.Levels.size(); ++level)
+    out[4] = static_cast<uint32>(fades.size());
+    out[5] = table.FloorLevel();
+    out[6] = table.TierCount();
+    out[7] = table.DirectoryOffset();
+    for (std::size_t level = 0; level < levels.size(); ++level)
     {
         uint32* shape = out.data() + CBTTerrain::kCBTPageHeaderWords + 4u * level;
-        shape[0] = table.Levels[level].FirstEntry;
-        shape[1] = table.Levels[level].PagesX;
-        shape[2] = table.Levels[level].PagesZ;
+        shape[0] = table.LevelOffsets()[level];
+        shape[1] = levels[level].PagesX;
+        shape[2] = levels[level].PagesZ;
     }
-    uint32* fades = out.data() + CBTTerrain::kCBTPageFadeOffsetWords;
-    for (std::size_t slot = 0; slot < table.SlotFade.size(); ++slot)
-        fades[slot] = std::bit_cast<uint32>(table.SlotFade[slot]);
-    std::memcpy(fades + table.SlotFade.size(), table.Entries.data(), table.Entries.size() * sizeof(uint32));
+    uint32* fadeWords = out.data() + CBTTerrain::kCBTPageFadeOffsetWords;
+    for (std::size_t slot = 0; slot < fades.size(); ++slot)
+        fadeWords[slot] = std::bit_cast<uint32>(fades[slot]);
+    std::memcpy(fadeWords + fades.size(), words.data(), words.size() * sizeof(uint32));
 }
 
 TerrainHeightPages::TerrainHeightPages(JobSystem::WorkStealingThreadPool* pool, AssetIOService* io,
                                        const HeightPageProfile& profile)
-    : m_Residency(pool, io, PageStreaming::PageResidencyBudget{})
+    : m_Residency(pool, io, ResidencyBudget(profile))
     , m_Profile(profile)
     , m_SlotCount(profile.Slots)
     , m_Geometry(MakePageCacheGeometry(profile.Slots))
@@ -173,7 +253,7 @@ TerrainHeightPages::TerrainHeightPages(JobSystem::WorkStealingThreadPool* pool, 
 
 void TerrainHeightPages::ReportRefusal(uint32 terrain, const std::string& refusal)
 {
-    std::string& logged = m_Refusals[terrain];
+    std::string& logged = m_Refusals.GetOrInsert(terrain);
     if (logged == refusal)
         return;
     logged = refusal;
@@ -182,6 +262,9 @@ void TerrainHeightPages::ReportRefusal(uint32 terrain, const std::string& refusa
 
 void TerrainHeightPages::Configure(PagedTerrain& terrain, const PagedTerrainRequest& request)
 {
+    const bool sameSource = terrain.Stream != 0 && terrain.SourceIdentity == request.SourceIdentity &&
+                            terrain.Shape.SamplesX == request.Shape.SamplesX &&
+                            terrain.Shape.SamplesZ == request.Shape.SamplesZ;
     if (terrain.Stream == 0)
         terrain.Stream = m_NextStream++;
     terrain.Identity = request.SourceIdentity;
@@ -190,19 +273,29 @@ void TerrainHeightPages::Configure(PagedTerrain& terrain, const PagedTerrainRequ
     terrain.Shape.CacheSlots = m_SlotCount;
     terrain.Requester.Configure(terrain.Shape);
     const PageRequestTerrain& shape = terrain.Shape;
-    terrain.Table.Reset(shape.SamplesX, shape.SamplesZ, m_SlotCount);
+    terrain.Table.Reset(shape.SamplesX, shape.SamplesZ, m_SlotCount, TableBudget(m_Profile));
     PackPageTableWords(terrain.Table, m_Geometry, terrain.Words);
     terrain.Version = ++m_TableVersion;
-    m_Residency.Configure(terrain.Stream, kHeightPageField, request.Source);
+    // The stream hangs on the source alone, not on the GPU cache: a GPU restart (frames in flight
+    // changed) keeps its loaded pages, so the CPU readers keep theirs.
+    if (!sameSource)
+    {
+        m_Residency.Configure(terrain.Stream, kHeightPageField, request.Source);
+        terrain.SourceIdentity = request.SourceIdentity;
+    }
     terrain.Overlay = request.Overlay;
     terrain.OverlayVersion = request.OverlayVersion;
+    terrain.OverlayChanged = request.OverlayChanged;
+    terrain.OverlayChangedSince = request.OverlayChangedSince;
+    terrain.GpuPages = request.GpuPages;
     // The intent: the CBT logs the frame from which it draws the pages (CBTRenderFeature).
     Logger::Log::Info("Terrain pages: {} (terrain {} generation {}) streams its height pages ({} x {} samples, {} "
-                      "levels)",
+                      "levels){}",
                       terrain.Label, request.Terrain, request.TerrainGeneration, shape.SamplesX, shape.SamplesZ,
-                      terrain.Table.Levels.size());
+                      terrain.Table.Levels().size(), request.GpuPages ? "" : " for the CPU only");
     // The terrain's height changes source (from its texture, or from its previous pages).
-    AddWholeTerrainDirty(request.Terrain, terrain);
+    if (terrain.GpuPages)
+        AddWholeTerrainDirty(request.Terrain, terrain);
 }
 
 void TerrainHeightPages::AddWholeTerrainDirty(uint32 terrainKey, const PagedTerrain& terrain)
@@ -212,8 +305,8 @@ void TerrainHeightPages::AddWholeTerrainDirty(uint32 terrainKey, const PagedTerr
 
 bool TerrainHeightPages::NeedsSource(uint32 terrain, uint64 sourceIdentity) const
 {
-    const auto it = m_Terrains.find(terrain);
-    return it == m_Terrains.end() || it->second.Identity != sourceIdentity;
+    const PagedTerrain* paged = m_Terrains.Find(terrain);
+    return !paged || paged->Identity != sourceIdentity;
 }
 
 void TerrainHeightPages::Request(const PagedTerrainRequest& request, std::span<const Mathematics::Vector3> cameras,
@@ -221,15 +314,24 @@ void TerrainHeightPages::Request(const PagedTerrainRequest& request, std::span<c
 {
     if (m_FramesInFlight == 0)
         return; // the field's cache is configured by the first Update
-    auto [it, inserted] = m_Terrains.try_emplace(request.Terrain);
-    PagedTerrain& terrain = it->second;
+    const bool inserted = !m_Terrains.Contains(request.Terrain);
+    PagedTerrain& terrain = m_Terrains.GetOrInsert(request.Terrain);
     terrain.Generation = request.TerrainGeneration;
     if (inserted || terrain.Identity != request.SourceIdentity || request.Shape.SamplesX != terrain.Shape.SamplesX ||
         request.Shape.SamplesZ != terrain.Shape.SamplesZ)
     {
         Configure(terrain, request);
     }
-    else if (!SamePlacement(request.Shape, terrain.Shape))
+    else if (terrain.GpuPages != request.GpuPages)
+    {
+        // The GPU starts or stops drawing the pages (its texture meanwhile); the CPU pages stay.
+        terrain.GpuPages = request.GpuPages;
+        terrain.Table.Reset(terrain.Shape.SamplesX, terrain.Shape.SamplesZ, m_SlotCount, TableBudget(m_Profile));
+        PackPageTableWords(terrain.Table, m_Geometry, terrain.Words);
+        terrain.Version = ++m_TableVersion;
+        AddWholeTerrainDirty(request.Terrain, terrain);
+    }
+    if (!SamePlacement(request.Shape, terrain.Shape))
     {
         // Moved or rescaled: the resident pages are keyed by terrain UV and stay valid, but the
         // requester asks for the pages under the cameras at the new placement, and every bisector's
@@ -258,61 +360,151 @@ void TerrainHeightPages::Request(const PagedTerrainRequest& request, std::span<c
         }
         terrain.Overlay = request.Overlay;
         terrain.OverlayVersion = request.OverlayVersion;
+        terrain.OverlayChanged = request.OverlayChanged;
+        terrain.OverlayChangedSince = request.OverlayChangedSince;
     }
-    m_Refusals.erase(request.Terrain);
+    if (terrain.GpuPages)
+        m_Refusals.Erase(request.Terrain); // a refused terrain streams its CPU pages only
     terrain.Requested = true;
-    terrain.Requester.Build(cameras, view, m_Wants);
+    terrain.OriginY = request.OriginY;
+    terrain.HeightScale = request.HeightScale;
+    m_Wants.clear();
+    if (terrain.GpuPages)
+        terrain.Requester.Build(cameras, view, m_Wants);
     m_Residency.Request(terrain.Stream, m_Wants);
+    RequestCpuWindows(terrain, cameras);
     if (LogResidency())
     {
-        terrain.WantedEntries.clear();
+        terrain.WantedPages.clear();
         for (const PageStreaming::PageWant& want : m_Wants)
-        {
-            const PageStreaming::PageStoreLevel& level = terrain.Table.Levels[want.Address.Level];
-            terrain.WantedEntries.push_back(level.FirstEntry + want.Address.Z * level.PagesX + want.Address.X);
-        }
-        std::sort(terrain.WantedEntries.begin(), terrain.WantedEntries.end());
+            terrain.WantedPages.push_back(want.Address);
+        std::sort(terrain.WantedPages.begin(), terrain.WantedPages.end());
     }
+}
+
+void TerrainHeightPages::RequestCpuWindows(const PagedTerrain& terrain, std::span<const Mathematics::Vector3> cameras)
+{
+    m_WindowPages.clear();
+    const PageStreaming::PageStoreLevel& level0 = terrain.Table.Levels().front();
+    for (const Mathematics::Vector3& camera : cameras)
+        AppendWindowPages(terrain.Shape, level0, camera, m_WindowPages);
+    for (const Mathematics::Vector3& center : m_ReaderWindowCenters)
+        AppendWindowPages(terrain.Shape, level0, center, m_WindowPages);
+    AppendBodyWindows(terrain, cameras);
+    m_Residency.RequestCpu(terrain.Stream, terrain.Requester.FirstPinnedLevel(), m_WindowPages);
+}
+
+void TerrainHeightPages::AppendBodyWindows(const PagedTerrain& terrain, std::span<const Mathematics::Vector3> cameras)
+{
+    // The bodies nearest a camera first, as many as a quarter of the CPU budget holds windows for.
+    const uint64 bodyBytes = kPagesPerWindow * static_cast<uint64>(PageStreaming::kPageSampleCount) * sizeof(float32);
+    const std::size_t bound = static_cast<std::size_t>(m_Profile.CpuBytes / kBodyWindowBudgetDivisor / bodyBytes);
+    m_BodyOrder.clear();
+    for (uint32 body = 0; body < m_BodyWindowCenters.size(); ++body)
+    {
+        float32 nearest = 0.0f;
+        for (std::size_t camera = 0; camera < cameras.size(); ++camera)
+        {
+            const Mathematics::Vector3 offset = m_BodyWindowCenters[body] - cameras[camera];
+            const float32 squared = Mathematics::Vector3::Dot(offset, offset);
+            nearest = camera == 0 ? squared : std::min(nearest, squared);
+        }
+        m_BodyOrder.emplace_back(nearest, body);
+    }
+    const bool overBound = m_BodyOrder.size() > bound;
+    if (overBound)
+    {
+        std::nth_element(m_BodyOrder.begin(), m_BodyOrder.begin() + static_cast<std::ptrdiff_t>(bound), m_BodyOrder.end());
+        m_BodyOrder.resize(bound);
+        if (!m_BodiesOverBound)
+            Logger::Log::Warning("Terrain CPU height pages: {} dynamic bodies; the {} nearest a camera keep their finest "
+                                 "pages, the others read the pinned levels until fewer bodies move.",
+                                 m_BodyWindowCenters.size(), bound);
+    }
+    m_BodiesOverBound = overBound;
+    std::sort(m_BodyOrder.begin(), m_BodyOrder.end());
+    const PageStreaming::PageStoreLevel& level0 = terrain.Table.Levels().front();
+    for (const auto& [squaredDistance, body] : m_BodyOrder)
+        AppendWindowPages(terrain.Shape, level0, m_BodyWindowCenters[body], m_WindowPages);
+}
+
+void TerrainHeightPages::GatherBodyWindows(ECS::World& world)
+{
+    m_BodyWindowCenters.clear();
+    world.Query<ECS::Read<Components::PhysicsBody>, ECS::Read<Components::WorldTransform>>().Each(
+        [this](const Components::PhysicsBody& body, const Components::WorldTransform& transform) {
+            if (body.motionType == Physics::MotionType::Dynamic)
+                m_BodyWindowCenters.push_back(transform.GetPosition());
+        });
+}
+
+void TerrainHeightPages::RequestReaderWindow(const Mathematics::Vector3& center)
+{
+    m_ReaderWindowCenters.push_back(center);
+}
+
+bool TerrainHeightPages::FetchFinestPage(const TerrainHandle& terrain, const Mathematics::Vector3& worldPoint)
+{
+    const PagedTerrain* paged = m_Terrains.Find(terrain.Index);
+    if (!paged || paged->Generation != terrain.Generation)
+        return false;
+    uint32 pageX = 0;
+    uint32 pageZ = 0;
+    if (!SurfaceQuery(terrain).FinestPageAt(worldPoint.x, worldPoint.z, pageX, pageZ))
+        return false;
+    return m_Residency.FetchCpuPage(paged->Stream, PageStreaming::PageAddress{0, 0, pageX, pageZ});
+}
+
+SurfaceHeightQuery TerrainHeightPages::SurfaceQuery(const TerrainHandle& terrain) const
+{
+    const PagedTerrain* paged = m_Terrains.Find(terrain.Index);
+    if (!paged || paged->Generation != terrain.Generation)
+        return {};
+    const SurfaceHeightEdits edits{paged->SourceIdentity, paged->OverlayVersion, paged->OverlayChanged,
+                                   paged->OverlayChangedSince};
+    return SurfaceHeightQuery(m_Residency.CpuPages(paged->Stream), paged->Table.Levels(), paged->Shape, paged->OriginY,
+                              paged->HeightScale, paged->Overlay.get(), edits);
+}
+
+std::span<const PageStreaming::PageAddress> TerrainHeightPages::CpuWindowPages(const TerrainHandle& terrain) const
+{
+    const PagedTerrain* paged = m_Terrains.Find(terrain.Index);
+    if (!paged || paged->Generation != terrain.Generation)
+        return {};
+    return m_Residency.CpuWindow(paged->Stream);
 }
 
 void TerrainHeightPages::LogResidencyChange(PagedTerrain& terrain)
 {
-    const PageTable& table = terrain.Table;
-    std::vector<uint32> missing; // wanted, not resident
-    std::vector<uint32> extra;   // resident, not wanted
-    std::vector<uint32> resident;
+    std::vector<PageStreaming::PageAddress> resident;
+    terrain.Table.AppendResident(resident);
+    std::sort(resident.begin(), resident.end(), LogOrder);
+    std::sort(terrain.WantedPages.begin(), terrain.WantedPages.end(), LogOrder);
+    std::vector<PageStreaming::PageAddress> missing; // wanted, not resident
+    std::vector<PageStreaming::PageAddress> extra;   // resident, not wanted
+    std::set_difference(terrain.WantedPages.begin(), terrain.WantedPages.end(), resident.begin(), resident.end(),
+                        std::back_inserter(missing), LogOrder);
+    std::set_difference(resident.begin(), resident.end(), terrain.WantedPages.begin(), terrain.WantedPages.end(),
+                        std::back_inserter(extra), LogOrder);
     std::string counts;
-    for (std::size_t level = 0; level < table.Levels.size(); ++level)
+    for (std::size_t level = 0; level < terrain.Table.Levels().size(); ++level)
     {
-        const uint32 first = table.Levels[level].FirstEntry;
-        const uint32 end = first + table.Levels[level].PagesX * table.Levels[level].PagesZ;
-        uint32 wanted = 0, residentCount = 0, both = 0;
-        for (uint32 entry = first; entry < end; ++entry)
-        {
-            const bool isWanted = std::binary_search(terrain.WantedEntries.begin(), terrain.WantedEntries.end(), entry);
-            const bool isResident = table.Entries[entry] != PageStreaming::kNoPage;
-            wanted += isWanted ? 1u : 0u;
-            residentCount += isResident ? 1u : 0u;
-            both += isWanted && isResident ? 1u : 0u;
-            if (isWanted && !isResident)
-                missing.push_back(entry);
-            if (isResident && !isWanted)
-                extra.push_back(entry);
-            if (isResident)
-                resident.push_back(entry);
-        }
-        counts += std::format(" L{} {}/{}/{}", level, wanted, residentCount, both);
+        const auto onLevel = [level](const PageStreaming::PageAddress& page) { return page.Level == level; };
+        const std::size_t wanted = std::ranges::count_if(terrain.WantedPages, onLevel);
+        const std::size_t residentCount = std::ranges::count_if(resident, onLevel);
+        const std::size_t notResident = std::ranges::count_if(missing, onLevel);
+        counts += std::format(" L{} {}/{}/{}", level, wanted, residentCount, wanted - notResident);
     }
     std::string line = std::format("wanted/resident/both per level:{}; wanted not resident{}; resident not wanted{}",
-                                   counts, AddressList(table, missing, kLoggedAddressesPerList),
-                                   AddressList(table, extra, kLoggedAddressesPerList));
+                                   counts, AddressList(missing, kLoggedAddressesPerList),
+                                   AddressList(extra, kLoggedAddressesPerList));
     if (line == terrain.LoggedResidency)
         return;
     Logger::Log::Info("Terrain pages: {} {}", terrain.Label, line);
     // Once the residency matches the request, the whole resident set, so a settled pose's level map can be
     // rebuilt from the log.
     if (missing.empty() && extra.empty())
-        Logger::Log::Info("Terrain pages: {} resident:{}", terrain.Label, AddressList(table, resident, resident.size()));
+        Logger::Log::Info("Terrain pages: {} resident:{}", terrain.Label, AddressList(resident, resident.size()));
     terrain.LoggedResidency = std::move(line);
 }
 
@@ -337,16 +529,21 @@ void TerrainHeightPages::Update(uint64 frameIndex, float32 deltaSeconds, bool te
     }
     for (uint32 key : m_Forgotten)
     {
-        AddWholeTerrainDirty(key, m_Terrains[key]); // back to its texture
+        PagedTerrain& forgotten = *m_Terrains.Find(key);
+        if (forgotten.GpuPages)
+            AddWholeTerrainDirty(key, forgotten); // back to its texture
         Logger::Log::Info("Terrain pages: {} (terrain {} generation {}) stops streaming its height pages",
-                          m_Terrains[key].Label, key, m_Terrains[key].Generation);
-        m_Residency.Forget(m_Terrains[key].Stream);
-        m_Terrains.erase(key);
+                          forgotten.Label, key, forgotten.Generation);
+        m_Residency.Forget(forgotten.Stream);
+        m_Terrains.Erase(key);
     }
 
     m_Residency.Update(frameIndex, deltaSeconds, teleport);
+    m_ReaderWindowCenters.clear(); // a reader still waiting asks again
     for (auto& [key, terrain] : m_Terrains)
     {
+        if (!terrain.GpuPages)
+            continue; // the CPU reads its pages, the GPU draws its texture
         CollectStreamChanges(key, terrain);
         if (LogResidency())
             LogResidencyChange(terrain);
@@ -357,31 +554,52 @@ void TerrainHeightPages::AddDirtyPage(uint32 terrainKey, const PagedTerrain& ter
                                       const PageStreaming::PageAddress& address, HeightPageDirtyRect& rect,
                                       bool& any) const
 {
-    const PageStreaming::PageStoreLevel& level0 = terrain.Table.Levels.front();
+    const PageStreaming::PageStoreLevel& level0 = terrain.Table.Levels().front();
     float32 minU = 0.0f, maxU = 0.0f, minV = 0.0f, maxV = 0.0f;
     PageAxisUV(address.X, address.Level, level0.SamplesX, minU, maxU);
     PageAxisUV(address.Z, address.Level, level0.SamplesZ, minV, maxV);
-    if (!any)
-    {
-        rect = HeightPageDirtyRect{terrainKey, terrain.Generation, minU, minV, maxU, maxV};
-        any = true;
-        return;
-    }
-    rect.MinU = std::min(rect.MinU, minU);
-    rect.MinV = std::min(rect.MinV, minV);
-    rect.MaxU = std::max(rect.MaxU, maxU);
-    rect.MaxV = std::max(rect.MaxV, maxV);
+    UniteDirty(terrainKey, terrain.Generation, minU, minV, maxU, maxV, rect, any);
+}
+
+void TerrainHeightPages::AddDirtyRewrite(uint32 terrainKey, const PagedTerrain& terrain,
+                                         const PageStreaming::PageRewrite& rewrite, HeightPageDirtyRect& rect,
+                                         bool& any) const
+{
+    // Only the samples of the page's level that the edit reaches changed: a coarse page covers a
+    // large part of the terrain, the edit's reach at its level a few of its samples.
+    const PageStreaming::PageAddress& address = rewrite.Page.Address;
+    const PageStreaming::PageStoreLevel& level0 = terrain.Table.Levels().front();
+    const PageStreaming::PageSampleRect reach =
+        PageStreaming::Level0RectReach(terrain.Table.Levels(), rewrite.Level0Rect, address.Level);
+    float32 pageMinU = 0.0f, pageMaxU = 0.0f, pageMinV = 0.0f, pageMaxV = 0.0f;
+    PageAxisUV(address.X, address.Level, level0.SamplesX, pageMinU, pageMaxU);
+    PageAxisUV(address.Z, address.Level, level0.SamplesZ, pageMinV, pageMaxV);
+    float32 minU = 0.0f, maxU = 0.0f, minV = 0.0f, maxV = 0.0f;
+    ReachAxisUV(reach.MinX, reach.MaxX, address.Level, level0.SamplesX, minU, maxU);
+    ReachAxisUV(reach.MinZ, reach.MaxZ, address.Level, level0.SamplesZ, minV, maxV);
+    minU = std::max(minU, pageMinU);
+    minV = std::max(minV, pageMinV);
+    maxU = std::min(maxU, pageMaxU);
+    maxV = std::min(maxV, pageMaxV);
+    if (minU > maxU || minV > maxV)
+        return; // nothing under the page's footprint changed
+    UniteDirty(terrainKey, terrain.Generation, minU, minV, maxU, maxV, rect, any);
 }
 
 void TerrainHeightPages::CollectStreamChanges(uint32 terrainKey, PagedTerrain& terrain)
 {
     const PageStreaming::PageCache& cache = m_Residency.FieldCache(kHeightPageField);
-    if (UpdatePageTable(cache, terrain.Stream, terrain.Table) != 0u)
+    m_LateEntries.clear();
+    const uint32 writes = UpdatePageTable(cache, terrain.Stream, terrain.Table);
+    terrain.Table.TakeLateEntries(m_LateEntries);
+    if (writes != 0u)
     {
         PackPageTableWords(terrain.Table, m_Geometry, terrain.Words);
         terrain.Version = ++m_TableVersion;
     }
 
+    // An assigned or released page changes the height source over its whole footprint, and a fading
+    // page blends its whole footprint with its parent; a rewritten page changed where its edit reaches.
     HeightPageDirtyRect rect;
     bool any = false;
     for (const PageStreaming::CachedPage& page : cache.Transitions())
@@ -390,9 +608,11 @@ void TerrainHeightPages::CollectStreamChanges(uint32 terrainKey, PagedTerrain& t
     for (const PageStreaming::CachedPage& page : cache.FadeChanges())
         if (page.Stream == terrain.Stream)
             AddDirtyPage(terrainKey, terrain, page.Address, rect, any);
-    for (const PageStreaming::CachedPage& page : cache.Rewrites())
-        if (page.Stream == terrain.Stream)
-            AddDirtyPage(terrainKey, terrain, page.Address, rect, any);
+    for (const PageStreaming::PageAddress& address : m_LateEntries)
+        AddDirtyPage(terrainKey, terrain, address, rect, any); // a waiting page took its entry
+    for (const PageStreaming::PageRewrite& rewrite : cache.Rewrites())
+        if (rewrite.Page.Stream == terrain.Stream)
+            AddDirtyRewrite(terrainKey, terrain, rewrite, rect, any);
     if (any)
         m_DirtyRects.push_back(rect);
 
@@ -400,12 +620,12 @@ void TerrainHeightPages::CollectStreamChanges(uint32 terrainKey, PagedTerrain& t
     {
         if (upload.Page.Stream != terrain.Stream)
             continue;
-        const std::vector<float32>* samples = m_Residency.Samples(terrain.Stream, upload.Page.Address);
-        if (samples == nullptr)
+        const std::vector<uint8>* bytes = m_Residency.Bytes(terrain.Stream, upload.Page.Address);
+        if (bytes == nullptr)
             continue;
-        HeightPageUpload& out = m_Uploads.emplace_back(HeightPageUpload{upload.Slot, *samples});
+        HeightPageUpload& out = m_Uploads.emplace_back(HeightPageUpload{upload.Slot, *bytes});
         if (terrain.Overlay)
-            terrain.Overlay->ApplyToPage(upload.Page.Address, out.Samples);
+            terrain.Overlay->ApplyToPage(upload.Page.Address, PageStreaming::HeightSamples(out.Bytes));
     }
 }
 
@@ -420,11 +640,12 @@ void TerrainHeightPages::RestartOnDeviceEpoch(uint64 deviceEpoch)
     for (auto& [key, terrain] : m_Terrains)
     {
         // Its streams' loaded pages stay; their slots are gone: no entry may name one.
-        const PageStreaming::PageStoreLevel& level0 = terrain.Table.Levels.front();
-        terrain.Table.Reset(level0.SamplesX, level0.SamplesZ, m_SlotCount);
+        const PageStreaming::PageStoreLevel& level0 = terrain.Table.Levels().front();
+        terrain.Table.Reset(level0.SamplesX, level0.SamplesZ, m_SlotCount, TableBudget(m_Profile));
         PackPageTableWords(terrain.Table, m_Geometry, terrain.Words);
         terrain.Version = ++m_TableVersion;
-        AddWholeTerrainDirty(key, terrain);
+        if (terrain.GpuPages)
+            AddWholeTerrainDirty(key, terrain);
     }
 }
 
@@ -432,16 +653,17 @@ void TerrainHeightPages::PagedTerrains(std::vector<uint32>& out) const
 {
     out.clear();
     for (const auto& [key, terrain] : m_Terrains)
-        out.push_back(key);
+        if (terrain.GpuPages)
+            out.push_back(key);
 }
 
 const std::vector<uint32>* TerrainHeightPages::TableWords(uint32 terrain, uint64& version) const
 {
-    const auto it = m_Terrains.find(terrain);
-    if (it == m_Terrains.end())
+    const PagedTerrain* paged = m_Terrains.Find(terrain);
+    if (!paged || !paged->GpuPages)
         return nullptr;
-    version = it->second.Version;
-    return &it->second.Words;
+    version = paged->Version;
+    return &paged->Words;
 }
 
 } // namespace GameEngine::TerrainECS

@@ -18,7 +18,7 @@ void DisabledInHierarchySystem::Update(World& world, float32 /*deltaTime*/)
     if (m_Derivation.BindIfNeeded(world))
     {
         AutoComponentRegistrar<Parent>::EnsureRegistered();
-        world.SetParentRelation(GetComponentTypeId<Parent>(), static_cast<uint32>(offsetof(Parent, parent)));
+        world.SetParentRelation(GetComponentTypeId<Parent>(), static_cast<uint32>(offsetof(Parent, Entity)));
     }
     m_Derivation.Update(world);
 }

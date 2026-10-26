@@ -2,9 +2,9 @@
 // solves per Update, oldest request first, whatever raised the request, with
 // the rest queued.
 #include "PathfindingECS/NavigationService.h"
-#include "PathfindingECS/Components/NavigationAgent.h"
+#include "Components/Navigation/NavigationAgent.h"
 #include "PathfindingECS/Components/NavigationAgentState.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "NavigationTestSurfaces.h"
 #include "PathfindingECS/Systems/NavigationSurfaceSystem.h"
 #include "PathfindingECS/Systems/NavigationMovementSystem.h"

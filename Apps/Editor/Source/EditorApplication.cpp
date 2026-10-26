@@ -58,6 +58,7 @@
 #include "Assets/Packages/PackageCodeModules.h"
 #include "Assets/Packages/PackageNativeCache.h"
 #include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/CpuProfiler.h"
 #include "Editor/Shortcuts/DiagnosticShortcuts.h"
 #include "Core/Engine.h"
@@ -210,10 +211,10 @@
 #include "Markups/MarkupEditorBridge.h"
 #include "Markups/MarkupEditorSurfaces.h"
 #include "SceneView/BuiltInSceneViewTools.h"
-#include "Placement/RecipeControllers.h"
 #include "PlayMode/PlayModeEntryModal.h"
 #include "PlayMode/PlayModeManager.h"
 #include "PlayMode/GameViewPointerLock.h"
+#include "PlayMode/WindowCursorLock.h"
 #include "PlayMode/RuntimeInputConnection.h"
 #include "Scene/SceneEditorController.h"
 #include "Scene/SceneThumbnailCapture.h"
@@ -1308,6 +1309,50 @@ static T* FindFirstPanelOfType(const std::vector<std::unique_ptr<UIElement>>& pa
     return nullptr;
 }
 
+void EditorApplication::OnPlayModeStateChanged(Editor::PlayModeState state)
+{
+    UpdatePlayModeToolbar(state);
+
+    if (auto* hierarchyPanel = FindFirstPanelOfType<HierarchyPanel>(m_PanelStorage))
+    {
+        if (state == Editor::PlayModeState::EnteringPlay || state == Editor::PlayModeState::ExitingPlay)
+        {
+            hierarchyPanel->StashSelectionForPlayModeTransition();
+        }
+        else if (state == Editor::PlayModeState::Play || state == Editor::PlayModeState::Edit ||
+                 state == Editor::PlayModeState::ChangeReview)
+        {
+            // Defer until after WorldStructureChanged refresh PostActions.
+            hierarchyPanel->PostAction([hierarchyPanel]()
+                                       { hierarchyPanel->RestoreStashedSelectionAfterPlayModeTransition(); });
+        }
+    }
+
+    if (state != Editor::PlayModeState::Edit && state != Editor::PlayModeState::ChangeReview)
+        return;
+
+    // Every way play stops reaches this point, so play fullscreen ends here, and the toolbar's
+    // toggle shows the setting for the next play.
+    ExitPlayFullscreen();
+    if (m_TopToolbar)
+        m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
+
+    // The snapshot restore writes directly to ECS without emitting per-component notifications.
+    // Force the inspector to rebuild so it picks up the restored values.
+    if (auto* inspectorPanel = FindFirstPanelOfType<InspectorPanel>(m_PanelStorage))
+    {
+        auto* world = EngineCore::GetInstance().EnsurePrimaryWorld();
+        inspectorPanel->ShowEntity(world, inspectorPanel->GetInspectedEntity(), /*force=*/true);
+    }
+}
+
+void EditorApplication::RequestGameExit(int)
+{
+    // A script asks from inside OnCreate or OnUpdate; play stops after those callbacks return.
+    if (m_PlayMode)
+        m_PlayMode->RequestExitPlayMode();
+}
+
 static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServices* rs)
 {
     using namespace Components;
@@ -1473,18 +1518,13 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
     // queued startup scene to be requested.
     m_SceneEditor->SetBootFlowActiveProbe(
         [this]() { return ShouldIdleWorldPathForProjectPicker() || !m_DeferredStartupSceneWorkspace.empty(); });
-    // The recipe controllers' generated entities are scoped to the open scene
-    // (RecipeControllers::ReleaseSceneScoped). Release them at the swap, while the
-    // outgoing world is still the one they describe. Wired here rather than at the
-    // panel-construction site because a scene can be swapped with no panel in
-    // play (--scene, MCP open_scene).
+    // The editor services release their scene-scoped state at a swap, against the
+    // outgoing world. Wired here, not at panel construction: a scene can swap with
+    // no panel (--scene, MCP open_scene).
     m_SceneEditor->SetSceneScopedGeneratorRelease([this]()
     {
-        auto* world = EngineCore::GetInstance().EnsurePrimaryWorld();
-        if (!world)
-            return;
-        if (m_RecipeControllers)
-            m_RecipeControllers->ReleaseSceneScoped(*world, MainRenderServices());
+        if (auto* world = EngineCore::GetInstance().EnsurePrimaryWorld())
+            m_EditorServices.ReleaseSceneScoped(*world);
     });
     Editor::RegisterAssetPipelineCommands([this]() -> std::optional<std::filesystem::path>
     {
@@ -1621,42 +1661,7 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
             this);
 #endif
 
-        m_PlayMode->SetOnStateChanged([this](GameEngine::Editor::PlayModeState s)
-                                      {
-                                          this->UpdatePlayModeToolbar(s);
-
-                                          if (auto* hierarchyPanel = FindFirstPanelOfType<HierarchyPanel>(m_PanelStorage))
-                                          {
-                                              if (s == GameEngine::Editor::PlayModeState::EnteringPlay ||
-                                                  s == GameEngine::Editor::PlayModeState::ExitingPlay)
-                                              {
-                                                  hierarchyPanel->StashSelectionForPlayModeTransition();
-                                              }
-                                              else if (s == GameEngine::Editor::PlayModeState::Play ||
-                                                       s == GameEngine::Editor::PlayModeState::Edit ||
-                                                       s == GameEngine::Editor::PlayModeState::ChangeReview)
-                                              {
-                                                  // Defer until after WorldStructureChanged refresh PostActions.
-                                                  hierarchyPanel->PostAction([hierarchyPanel]()
-                                                                             {
-                                                                                 hierarchyPanel->RestoreStashedSelectionAfterPlayModeTransition();
-                                                                             });
-                                              }
-                                          }
-
-                                          // When leaving play mode, the snapshot restore writes directly to ECS
-                                          // without emitting per-component notifications. Force the inspector to
-                                          // rebuild so it picks up the restored values.
-                                          if (s == GameEngine::Editor::PlayModeState::Edit ||
-                                              s == GameEngine::Editor::PlayModeState::ChangeReview)
-                                          {
-                                              if (auto* ip = FindFirstPanelOfType<InspectorPanel>(m_PanelStorage))
-                                              {
-                                                  auto* world = EngineCore::GetInstance().EnsurePrimaryWorld();
-                                                  ip->ShowEntity(world, ip->GetInspectedEntity(), /*force=*/true);
-                                              }
-                                          }
-                                      });
+        m_PlayMode->SetOnStateChanged([this](Editor::PlayModeState state) { OnPlayModeStateChanged(state); });
     }
 
     // Allow disabling the native toolbar to bisect shutdown issues
@@ -1760,7 +1765,7 @@ void EditorApplication::ConfigureFromCommandLine(const GameEngine::Editor::Start
     // Stamp session provenance here, before Initialize(), so the branch recorded is the
     // one this binary was built from. The worktree comes from the executable directory,
     // which cannot drift; the branch is read once and deliberately never refreshed.
-    m_SessionDescriptor = Editor::Startup::DeriveEditorSessionDescriptor(PathUtils::GetExecutableDirectory(),
+    m_SessionDescriptor = Editor::Startup::DeriveEditorSessionDescriptor(ApplicationPaths::GetExecutableDirectory(),
                                                                         args.sessionLabel);
 }
 
@@ -2195,7 +2200,7 @@ bool EditorApplication::Initialize()
     // embedded resources or bundle icons.
 #if !defined(_WIN32) && !defined(__APPLE__)
     {
-        const auto iconPath = PathUtils::GetExecutableDirectory() / "AppIcon.png";
+        const auto iconPath = ApplicationPaths::GetExecutableDirectory() / "AppIcon.png";
         Vector<uint8> iconBytes;
         if (ReadFileBytesShared(iconPath, iconBytes))
         {
@@ -2265,9 +2270,6 @@ bool EditorApplication::Initialize()
             if (m_PlayFullscreenActive && state != GameEngine::Editor::PlayModeState::Edit)
             {
                 m_PlayMode->ExitPlayMode();
-                ExitPlayFullscreen();
-                if (m_TopToolbar)
-                    m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
                 return true;
             }
         }
@@ -2291,9 +2293,6 @@ bool EditorApplication::Initialize()
                 if (state != GameEngine::Editor::PlayModeState::Edit)
                 {
                     m_PlayMode->ExitPlayMode();
-                    ExitPlayFullscreen();
-                    if (m_TopToolbar)
-                        m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
                     return true;
                 }
             }
@@ -2543,6 +2542,7 @@ bool EditorApplication::Initialize()
             {
                 if (auto* rgBuild = sm->GetSystem<Engine::Renderer::RenderGraphBuildSystem>())
                     rgBuild->SetSkipFrameGraphBuild(true);
+                m_EditorServices.Start({m_UndoRedo.get(), *sm});
             }
         }
 
@@ -2818,7 +2818,8 @@ bool EditorApplication::Initialize()
             Editor::ApplySavedHiDpiPlatformSettings(main->uiPlatform.get());
 
             // Set cursor callback to change OS cursor based on hovered UI element's CSS cursor property.
-            SetupUICursorCallback(main->ui.get(), main->window.get());
+            main->cursorLock = std::make_unique<Editor::WindowCursorLock>(*main->window);
+            SetupUICursorCallback(main->ui.get(), main->window.get(), main->cursorLock.get());
         }
 
         // Wire tooltip settings into UIManager so it respects user preferences.
@@ -3883,14 +3884,10 @@ bool EditorApplication::Initialize()
             {m_ThumbnailProvider.get(), m_EditorContext->ThumbnailHostWindowId, openAsset, m_PanelManager.get(), main,
              assetViewPanel});
 
-        // Log double-click and stack-frame clicks open the named source location.
+        // The Log panel's Open Source and stack-frame clicks open the named source location.
         if (logPanel)
-        {
-            logPanel->SetOnOpenInIDE([sourceOpener](const std::string& lineText)
-                                     { sourceOpener.OpenLogLine(lineText); });
             logPanel->SetOnOpenSourceFile([sourceOpener](const std::string& file, int line)
                                           { sourceOpener.OpenLogSourceFile(file, line); });
-        }
 
         // Context-menu "Edit (Internal)" for text-ish assets:
         // Defer to Update() so we never rebuild dockspace during native/menu callbacks.
@@ -4731,9 +4728,6 @@ bool EditorApplication::Initialize()
                             if (m_PlayMode->GetState() != GameEngine::Editor::PlayModeState::Edit)
                             {
                                 m_PlayMode->ExitPlayMode();
-                                ExitPlayFullscreen();
-                                if (m_TopToolbar)
-                                    m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
                             }
                         };
                         Logger::Log::Info("[Startup]   Panel wiring (pre-toolbar): {:.1f}ms", MsSince(tDockSub));
@@ -5631,7 +5625,7 @@ void EditorApplication::WireNativeScriptingForProject(const std::filesystem::pat
     if (!nativeScripts || projectRoot.empty())
         return;
 
-    const std::filesystem::path sdkRoot = PathUtils::GetExecutableDirectory() / "SDK";
+    const std::filesystem::path sdkRoot = ApplicationPaths::GetExecutableDirectory() / "SDK";
     GameEngine::NativeScripting::NativeBuildConfig cfg;
     std::string manifestErr;
     if (!GameEngine::NativeScripting::LoadSdkManifest(sdkRoot, cfg, manifestErr))
@@ -6677,19 +6671,6 @@ void EditorApplication::Update(float64 deltaTime)
         }
     }
 
-    // Maintain what the recipe components on splines generate, and the terrain
-    // effects under a generated run (Placement/RecipeControllers.h).
-    {
-        GE_CPU_PROFILE_SCOPE("EditorApplication.Update.RecipeControllers");
-        if (auto* world = EngineCore::GetInstance().EnsurePrimaryWorld())
-        {
-            if (!m_RecipeControllers)
-                m_RecipeControllers = std::make_unique<Editor::RecipeControllers>();
-            m_RecipeControllers->Update(*world, MainRenderServices(), m_UndoRedo.get(),
-                                        static_cast<float>(deltaTime));
-        }
-    }
-
     // Drive scene document UX (Ctrl+S save/save-as, dirty prompt, scene open requests).
     if (m_SceneEditor)
     {
@@ -6944,7 +6925,7 @@ void EditorApplication::Update(float64 deltaTime)
 
         if (m_RuntimeInput)
             m_GameViewPointerLock->Update(*m_RuntimeInput,
-                                          gameViewHost ? gameViewHost->window.get() : nullptr,
+                                          gameViewHost ? gameViewHost->cursorLock.get() : nullptr,
                                           m_PlayMode &&
                                               m_PlayMode->GetState() == GameEngine::Editor::PlayModeState::Play);
     }
@@ -7187,9 +7168,6 @@ void EditorApplication::Update(float64 deltaTime)
                 else if (state != GameEngine::Editor::PlayModeState::Edit)
                 {
                     m_PlayMode->ExitPlayMode();
-                    ExitPlayFullscreen();
-                    if (m_TopToolbar)
-                        m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
                 }
             }
 
@@ -7511,9 +7489,6 @@ bool EditorApplication::InvokeUiReplayCommand(std::uint32_t commandId, std::stri
             return true;
 
         m_PlayMode->ExitPlayMode();
-        ExitPlayFullscreen();
-        if (m_TopToolbar)
-            m_TopToolbar->SetFullscreenActive(m_PlayFullscreenOnEnter);
         return true;
     }
 
@@ -8164,7 +8139,8 @@ void EditorApplication::Render()
             }
             if (win && win->window)
             {
-                m_GameViewPointerLock->ForgetWindow(win->window.get());
+                m_GameViewPointerLock->ForgetCursorLock(win->cursorLock.get());
+                win->cursorLock.reset();
                 win->window->Destroy();
                 win->window.reset();
             }
@@ -8213,7 +8189,7 @@ WindowInputRouterConfig::PlaySurface EditorApplication::GetPlaySurface(Platform:
             return surface;
         surface.gameplaySink = m_RuntimeInput.get();
         surface.gameUi = win->gameView ? win->gameView->GetGameUI() : nullptr;
-        surface.pointerLocked = m_GameViewPointerLock->IsLockedTo(window);
+        surface.pointerLocked = m_GameViewPointerLock->IsLockedTo(win->cursorLock.get());
         // The mapper maps from the context resolved here instead of finding the
         // window again. Holding it raw is safe because a surface is built and
         // spent inside one routing call (WindowInputRouter::RouteMouseMove), with
@@ -8345,6 +8321,9 @@ void EditorApplication::OnShutdown()
     // and with it every ECS system holding a subscription.
     FileWatchingService::GetInstance().StopWatching();
 
+    // The editor services hold systems of the schedule; they go before the loop
+    // destroys the systems.
+    m_EditorServices.Stop();
     // Disable engine-managed rendering loop early so ECS rendering systems
     // can no longer submit GPU work during teardown.
     EngineCore::GetInstance().DisableRenderingLoop();
@@ -8513,6 +8492,9 @@ void EditorApplication::OnShutdown()
         // Window
         if (win->window)
         {
+            if (m_GameViewPointerLock)
+                m_GameViewPointerLock->ForgetCursorLock(win->cursorLock.get());
+            win->cursorLock.reset();
             win->window->Destroy();
             win->window.reset();
         }
@@ -8622,7 +8604,7 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
     }
     if (routing.gvPanel && ctx->ui)
         routing.gvPanel->PrepareForFirstMount(ctx->ui.get());
-    routing.forceGameViewRecord = ctx->gameView && ctx->gameView->GetMovieCapture().IsRecording();
+    routing.forceGameViewRecord = ctx->gameView && ctx->gameView->GetMovieCapture().IsSessionOpen();
     if (routing.rg2Scene && ctx->gameView)
     {
         if (routing.forceGameViewRecord)

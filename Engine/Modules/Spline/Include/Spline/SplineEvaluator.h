@@ -37,7 +37,7 @@ inline constexpr StringId kWidth = "width"_sid;
 // ---- Spatial queries ----
 
 // Find the closest point on the spline to a query position.
-// Uses segment AABB broad phase + ternary search refinement.
+// Uses a nearest-first segment AABB broad phase + ternary search refinement.
 [[nodiscard]] ClosestPointResult FindClosestPoint(const SplineData& spline,
                                                    const Mathematics::Vector3& queryPos);
 
@@ -65,16 +65,24 @@ inline constexpr StringId kWidth = "width"_sid;
 // Signed XZ distance to the spline's swept footprint: the XZ distance to the
 // path minus the interpolated radius there. Positive = outside the footprint,
 // negative = inside. Points enclosed by a closed spline are always negative.
+//
+// `cutoff` bounds the work for a caller that only needs distances below it (a
+// falloff ramp that is zero beyond its width). Where the segment bounds (sampled
+// boxes, the same approximation the broad phase makes) put the footprint at least
+// `cutoff` away, the curve is not searched and the result is a value at or beyond
+// `cutoff` rather than the distance. A result below `cutoff` is the full search's,
+// to the accuracy of those bounds. Pass infinity for the distance everywhere.
+// Requires valid segment bounds cache.
 [[nodiscard]] float32 SignedDistanceToSplineXZ(const SplineData& spline,
-                                               float32 worldX, float32 worldZ);
+                                               float32 worldX, float32 worldZ, float32 cutoff);
 
 // Signed XZ distance to the swept BAND only: the region a closed spline encloses
 // never counts as inside, so a closed path stays a ring instead of becoming a
 // disc. Identical to SignedDistanceToSplineXZ on open splines, which enclose
 // nothing — the two differ exactly where a modifier volume must choose between
-// "along this loop" and "inside this loop".
+// "along this loop" and "inside this loop". `cutoff` as for SignedDistanceToSplineXZ.
 [[nodiscard]] float32 SignedDistanceToSplineBandXZ(const SplineData& spline,
-                                                   float32 worldX, float32 worldZ);
+                                                   float32 worldX, float32 worldZ, float32 cutoff);
 
 // ---- Per-point channels ----
 

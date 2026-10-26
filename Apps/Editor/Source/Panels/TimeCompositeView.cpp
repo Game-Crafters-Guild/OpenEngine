@@ -2,6 +2,7 @@
 
 #include "Editor/DragDropPayloads.h"
 #include "Input/InputSystem.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 #include "UI/Interaction/Payload.h"
 #include "UI/Registration/ElementRegistration.h"
@@ -2404,7 +2405,7 @@ void TimeCompositeView::PerformDrop(const UI::Interaction::DropRequest& request)
     const float rangeDuration = std::max(0.001f, m_RangeEnd - m_RangeStart);
     float timeOffset = m_RangeStart;
     if (lw > 0.0f)
-        timeOffset = m_RangeStart + std::clamp((m_DropLastHoverX - lx) / lw, 0.0f, 1.0f) * rangeDuration;
+        timeOffset = m_RangeStart + Math::Clamp01((m_DropLastHoverX - lx) / lw) * rangeDuration;
 
     const size_t trackHint = static_cast<size_t>(request.hit.TargetId);
     m_OnMediaDropped(trackHint, timeOffset, mediaPaths);

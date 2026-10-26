@@ -150,39 +150,9 @@ class CBTContentAwareSplit : public ::testing::Test
     }
 
     // Uploads `data` (kLatticeDim^2 normalized heights) into `tex`, from `prior`.
-    void Upload(TextureHandle tex, const std::vector<float>& data, ResourceState prior)
-    {
-        const size_t bytes = data.size() * sizeof(float);
-        BufferHandle staging = m_Device->CreateUploadBuffer(bytes, "CBT.Test.HeightStaging");
-        m_Device->UpdateBuffer(staging, 0, bytes, data.data());
-        auto cl = m_Device->CreateCommandList(IDevice::QueueType::Graphics);
-        cl->Begin();
-        cl->CopyBufferToTextureSubresource(staging, tex, 0, 0, kLatticeDim, kLatticeDim, 0,
-                                           static_cast<size_t>(kLatticeDim) * sizeof(float), 1, 0,
-                                           0, 0, prior);
-        cl->Barrier(ResourceBarrier::CreateTextureBarrier(tex, ResourceState::CopyDest,
-                                                          ResourceState::ShaderResource));
-        cl->End();
-        std::vector<CommandList*> lists{cl.get()};
-        m_Device->ExecuteCommandLists(lists);
-        m_Device->WaitForIdle();
-        m_Device->DestroyBuffer(staging);
-    }
-
     TextureHandle MakeTexture(const std::vector<float>& data)
     {
-        TextureDesc td{};
-        td.width = kLatticeDim;
-        td.height = kLatticeDim;
-        td.format = static_cast<uint32_t>(TextureFormat::R32_FLOAT);
-        td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) |
-                   static_cast<uint32_t>(TextureUsage::TransferDst);
-        td.persistent = true;
-        td.debugName = "CBT.Test.Heights";
-        TextureHandle tex = m_Device->CreateTexture(td);
-        if (tex.IsValid())
-            Upload(tex, data, ResourceState::Undefined);
-        return tex;
+        return MakeR32Texture(*m_Device, kLatticeDim, kLatticeDim, data, "CBT.Test.Heights");
     }
 
     TextureHandle MakeFlatTexture(float value)
@@ -440,7 +410,8 @@ TEST_F(CBTContentAwareSplit, InPlaceEditAnnouncedByADirtyRectCoarsens)
     BindEverySlot(inst, tex);
     const CBTFrameParams p = WalkParams(kLatticeCap, kFlatPx, 0.5f);
     const Result ridged = Converge(inst, p, kLatticeCap, kConvergeFrames, 0u);
-    Upload(tex, std::vector<float>(relief.size(), 0.5f), ResourceState::ShaderResource);
+    UploadR32Texture(*m_Device, tex, kLatticeDim, kLatticeDim, std::vector<float>(relief.size(), 0.5f),
+                     ResourceState::ShaderResource);
     const Result flat = Converge(inst, p, kLatticeCap, kConvergeFrames, kConvergeFrames,
                                  /*forceFirst*/ false, /*editFirst*/ true);
     std::printf("in-place edit: relief %u live, flattened (edit rect only) %u live\n", ridged.Live, flat.Live);

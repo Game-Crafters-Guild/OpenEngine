@@ -89,13 +89,7 @@ struct SkySettings
 
     float moonArcPosition = 0.5f;
     bool fallingStarsEnabled = true;
-    float fallingStarAmount = 0.35f;
-    float fallingStarFrequency = 0.35f;
-    float fallingStarSpeed = 1.0f;
-    float fallingStarLength = 1.0f;
-    float fallingStarThickness = 1.0f;
-    float fallingStarDotSize = 1.0f;
-    float fallingStarDotSize2D = 1.0f;
+    float fallingStarIntervalSeconds = 5.0f; // the mean time between two falling stars
 
     float nightSkyBlend = 0.0f;
     float skyTimeSeconds = 0.0f;
@@ -111,7 +105,7 @@ struct SkySettings
     float starTwinkleRate = 1.0f;
     /// Artistic: the core's size (1 = physical), the spikes' share of the glow, their length in glow
     /// radii, and the shape (0 = the round point, 1 = the sparkle).
-    float starCoreScale = 0.85f;
+    float starCoreScale = 0.75f;
     float starSpikes = 0.2f;
     float starSpikeLength = 0.6f;
     uint32_t starShape = 0;

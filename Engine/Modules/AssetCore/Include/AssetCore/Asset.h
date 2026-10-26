@@ -1,9 +1,9 @@
 #pragma once
 
-#include "AssetCore/Types.h"
 #include "AssetCore/GUID.h"
 #include "AssetCore/AssetTypes.h"
 #include "AssetCore/AssetTypeId.h"
+#include "Types/Types.h"
 #include <atomic>
 #include <filesystem>
 #include <utility>

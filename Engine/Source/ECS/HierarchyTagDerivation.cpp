@@ -107,7 +107,7 @@ void HierarchyTagDerivation<TSelf, TDerived>::CollectCandidates(World& world)
         [&](EntityHandle entity, const Parent& parent)
         {
             EntityState& state = TouchState(entity);
-            state.Parent = parent.parent;
+            state.Parent = parent.Entity;
             MarkCandidate(state, entity);
         });
 

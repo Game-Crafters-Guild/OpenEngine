@@ -104,3 +104,53 @@ TEST(ScanMode, ScansARootWhosePathIsNotAscii)
     EXPECT_NE(std::string::npos, out.str().find("ComponentScanner.summary reflected=1 skipped=0"));
     EXPECT_TRUE(fs::exists(root.parent_path() / "Out.gen.cpp"));
 }
+
+// A game's own component with an AssetRef<...> field reflects; any other templated field still
+// skips its struct with the reason.
+TEST(ScanMode, DetectBaseReflectsAnAssetRefFieldAndSkipsOtherTemplates)
+{
+    GameEngine::TestUtils::ScopedTempDir scratch(GameEngine::TestUtils::MakeUniqueTempDirectory("ComponentScannerAssetRef"));
+    const fs::path root = scratch.Path() / "Components";
+    fs::create_directories(root);
+    std::ofstream(root / "Pickup.h", std::ios::binary)
+        << "struct Pickup : ECS::ComponentBase { GameEngine::Components::AssetRef<AssetType::Audio> Sound; float Radius = 1.0f; };\n"
+           "struct Stack : ECS::ComponentBase { Handle<int> Top; };\n";
+    const fs::path outPath = scratch.Path() / "Out.gen.cpp";
+    std::ostringstream out;
+    std::ostringstream err;
+
+    const int exitCode = GameEngine::ComponentScanner::Run(
+        {"--in", Utf8Text(root), "--out", Utf8Text(outPath), "--detect-base", "ComponentBase"}, out, err);
+
+    EXPECT_EQ(0, exitCode) << err.str();
+    EXPECT_NE(std::string::npos, out.str().find("ComponentScanner.summary reflected=1 skipped=1")) << out.str();
+    EXPECT_NE(std::string::npos, ReadFile(outPath).find("GE_REGISTER_COMPONENT_FIELD(Pickup, Sound)"));
+    EXPECT_NE(std::string::npos, out.str().find("Stack [Pickup.h] -- field 'Top' type 'Handle<int>' is templated")) << out.str();
+}
+
+// A game's component naming an enum the game declares in a header outside the scanned folder, under
+// an include root it passes, gets the enum's name table the same way an engine component does.
+TEST(ScanMode, DetectBaseResolvesAnEnumFromAnIncludedHeaderUnderAnIncludeRoot)
+{
+    GameEngine::TestUtils::ScopedTempDir scratch(GameEngine::TestUtils::MakeUniqueTempDirectory("ComponentScannerEnumRoot"));
+    const fs::path root = scratch.Path() / "Components";
+    const fs::path includeRoot = scratch.Path() / "Include";
+    fs::create_directories(root);
+    fs::create_directories(includeRoot / "Shared");
+    std::ofstream(includeRoot / "Shared" / "Faction.h", std::ios::binary)
+        << "#pragma once\nnamespace Game { enum class Faction : uint8 { Neutral = 0, Raiders = 2 }; }\n";
+    std::ofstream(root / "Allegiance.h", std::ios::binary)
+        << "#include \"Shared/Faction.h\"\nstruct Allegiance : ECS::ComponentBase { Game::Faction Side = Game::Faction::Neutral; };\n";
+    const fs::path outPath = scratch.Path() / "Out.gen.cpp";
+    std::ostringstream out;
+    std::ostringstream err;
+
+    const int exitCode = GameEngine::ComponentScanner::Run({"--in", Utf8Text(root), "--enum-include-root", Utf8Text(includeRoot),
+                                                            "--out", Utf8Text(outPath), "--detect-base", "ComponentBase"},
+                                                           out, err);
+
+    EXPECT_EQ(0, exitCode) << err.str();
+    const std::string generated = ReadFile(outPath);
+    EXPECT_NE(std::string::npos, generated.find("GE_REFLECT_ENUM_TABLE_VALUE(\"Raiders\", 2)")) << generated;
+    EXPECT_NE(std::string::npos, generated.find("GE_REFLECT_ENUM_FIELD(Allegiance, Side, Faction)")) << generated;
+}

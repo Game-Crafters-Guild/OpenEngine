@@ -920,6 +920,7 @@ TEST_F(SkyAtmosphereLutReferenceTest, TheMoonLightsTheNightSkyFromItsOwnDirectio
     const double moonElevation = 40.0 * kPi / 180.0;
     const double moon[3] = {-std::cos(moonElevation), std::sin(moonElevation), 0.0};
     const Rendering::SkySystemConfig config{};
+    const float moonColor[3] = {config.moonColor.r, config.moonColor.g, config.moonColor.b};
     const std::vector<Rgb> lut = RunSkyView(sun, true, kCameraHeight, 1.0f, moon);
     for (const uint32_t row : {kSkyViewSize / 2u, SkyViewRowAtElevation(10.0)})
     {
@@ -927,7 +928,7 @@ TEST_F(SkyAtmosphereLutReferenceTest, TheMoonLightsTheNightSkyFromItsOwnDirectio
         SkyViewTexelDirection(m_Atmo, 0u, row, dir);
         Rgb expected = SkyRadiance(m_Atmo, dir, moon, 4096, true);
         for (int c = 0; c < 3; ++c)
-            expected[c] *= config.moonColor[c];
+            expected[c] *= moonColor[c];
         const Rgb& actual = lut[static_cast<size_t>(row) * kSkyViewSize];
         EXPECT_LT(WorstRatioError(actual, expected), 0.03)
             << "row " << row << ": LUT " << Describe(actual) << ", the moon's integral " << Describe(expected);

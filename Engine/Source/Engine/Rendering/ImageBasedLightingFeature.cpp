@@ -1,6 +1,7 @@
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
 
 #include "Engine/Rendering/IEnvironmentSource.h" // complete type for the owned m_Source unique_ptr
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Logger/Logger.h"
@@ -690,7 +691,7 @@ BufferHandle ImageBasedLightingFeature::UploadEnvData(IDevice* device)
     if (m_Source && m_Source->HasActiveContent())
     {
         d.lowerHemisphereDarkness =
-            std::clamp(m_Source->LowerHemisphereDarkness(), 0.0f, 1.0f);
+            Math::Clamp01(m_Source->LowerHemisphereDarkness());
         float tintSky[3], tintEquator[3], tintGround[3];
         m_Source->AmbientGradientTint(tintSky, tintEquator, tintGround);
         for (int i = 0; i < 3; ++i)
@@ -703,12 +704,12 @@ BufferHandle ImageBasedLightingFeature::UploadEnvData(IDevice* device)
         if (local.BoxProjection)
         {
             d.localBoxProjection = 1.0f;
-            std::memcpy(d.localProbePositionWS, local.ProbePositionWS, sizeof(local.ProbePositionWS));
-            std::memcpy(d.localBoxCenterWS, local.BoxCenterWS, sizeof(local.BoxCenterWS));
-            std::memcpy(d.localBoxHalfExtentsWS, local.BoxHalfExtentsWS, sizeof(local.BoxHalfExtentsWS));
-            std::memcpy(d.localBoxAxisXWS, local.BoxAxisXWS, sizeof(local.BoxAxisXWS));
-            std::memcpy(d.localBoxAxisYWS, local.BoxAxisYWS, sizeof(local.BoxAxisYWS));
-            std::memcpy(d.localBoxAxisZWS, local.BoxAxisZWS, sizeof(local.BoxAxisZWS));
+            std::memcpy(d.localProbePositionWS, local.ProbePositionWS.v, sizeof(local.ProbePositionWS));
+            std::memcpy(d.localBoxCenterWS, local.BoxCenterWS.v, sizeof(local.BoxCenterWS));
+            std::memcpy(d.localBoxHalfExtentsWS, local.BoxHalfExtentsWS.v, sizeof(local.BoxHalfExtentsWS));
+            std::memcpy(d.localBoxAxisXWS, local.BoxAxisXWS.v, sizeof(local.BoxAxisXWS));
+            std::memcpy(d.localBoxAxisYWS, local.BoxAxisYWS.v, sizeof(local.BoxAxisYWS));
+            std::memcpy(d.localBoxAxisZWS, local.BoxAxisZWS.v, sizeof(local.BoxAxisZWS));
         }
     }
     device->UpdateBuffer(buf, 0, sizeof(d), &d);

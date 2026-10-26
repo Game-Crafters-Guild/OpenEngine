@@ -9,7 +9,7 @@
 #include "Image/ImageHeader.h"
 #include "Image/Resample.h"
 #include "Logger/Logger.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 
 #include <algorithm>
 #include <array>
@@ -323,7 +323,7 @@ fs::path ResolveDefaultEditorApplicationIconPath(const fs::path& editorSdkPath, 
     fs::path runtimeRoot = runtimeDepsPath;
     if (sdkRoot.empty() || runtimeRoot.empty())
     {
-        const fs::path exeDir = PathUtils::GetExecutableDirectory();
+        const fs::path exeDir = ApplicationPaths::GetExecutableDirectory();
         if (sdkRoot.empty())
             sdkRoot = exeDir / "SDK";
         if (runtimeRoot.empty())

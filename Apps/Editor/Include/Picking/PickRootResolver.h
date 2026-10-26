@@ -12,9 +12,13 @@ namespace GameEngine::ECS
 class World;
 }
 
-namespace GameEngine::Editor::Picking
+namespace GameEngine::Scene
 {
 struct PickHit;
+}
+
+namespace GameEngine::Editor::Picking
+{
 
 // Generated geometry belongs to an explicitly registered authoring root.
 // Authored children and ordinary runtime entities retain their own selection.
@@ -37,7 +41,7 @@ ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity);
 // exact hit entities nearest-to-farthest. Generated pieces collapse to their owner
 // in root mode, including repeat clicks. Deduplicated, order preserved.
 void BuildPickCandidates(ECS::World& world,
-                         const std::vector<PickHit>& sortedHits,
+                         const std::vector<Scene::PickHit>& sortedHits,
                          bool exactPick,
                          std::vector<ECS::EntityHandle>& outCandidates);
 } // namespace GameEngine::Editor::Picking

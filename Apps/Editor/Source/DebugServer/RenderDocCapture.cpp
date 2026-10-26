@@ -1,6 +1,6 @@
 #include "DebugServer/RenderDocCapture.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
 
 #include <cstdlib>
@@ -102,7 +102,7 @@ void RenderDocCapture::ApplyCaptureFilePathTemplate()
     // Anchor to the executable directory, never the working directory: the
     // editor is launched from varying cwds and the staged tree is what ships.
     const fs::path dir =
-        haveEnvDir ? fs::path(envDir) : PathUtils::GetExecutableDirectory() / kCaptureDirName;
+        haveEnvDir ? fs::path(envDir) : ApplicationPaths::GetExecutableDirectory() / kCaptureDirName;
 
     std::error_code ec;
     fs::create_directories(dir, ec);

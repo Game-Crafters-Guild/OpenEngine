@@ -7,19 +7,20 @@
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Rendering/MorphTargetWeights.h"
 #include "Components/Spline/SplineComponent.h"
+#include "Components/Spline/SplineNetworkOverrides.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
 #include "ECSModules/Rendering/SkeletonStore.h"
-#include "PathfindingECS/Components/NavigationSurface.h"
+#include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/NavigationSurfaceRuntime.h"
 #include "PhysicsECS/Components/CharacterController.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
 #include "SplineECS/SplineService.h"
+#include "TerrainECS/Components/TerrainPageCollider.h"
 #include "TerrainECS/Components/TerrainPlanetFaceCollider.h"
-#include "TerrainECS/Components/TerrainTileCollider.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -118,7 +119,10 @@ class CopiedEntityRuntimeRefs
     void RepairPayloadReferences(ECS::World& world)
     {
         for (const auto& [sourceId, copy] : m_CloneBySource)
+        {
             RepairMarkupRegionMembers(world, copy);
+            RepairSplineNetworkOverrides(world, copy);
+        }
     }
 
   private:
@@ -137,6 +141,29 @@ class CopiedEntityRuntimeRefs
             const ECS::EntityHandle member = updated.Members[i].Entity;
             updated.Members[i].Entity = CloneOf(member, member);
             remapped = remapped || updated.Members[i].Entity != member;
+        }
+        if (remapped)
+            world.AddComponentImmediate(copy, updated);
+    }
+
+    // A junction record names the other member of its junction. A partner duplicated in the same
+    // payload names its copy, so a pair duplicated together describes the copied junction; a
+    // partner outside the payload stays the original, so the copy's record describes its meeting
+    // with that partner, held by the network once the copy is moved away from it.
+    void RepairSplineNetworkOverrides(ECS::World& world, ECS::EntityHandle copy) const
+    {
+        const auto* overrides = world.GetComponent<Components::SplineNetworkOverrides>(copy);
+        if (!overrides)
+            return;
+        Components::SplineNetworkOverrides updated = *overrides;
+        bool remapped = false;
+        for (Components::SplineNetworkOverride& record : updated.Records)
+        {
+            if (record.Rule == Components::SplineNodeRule::None)
+                continue;
+            const ECS::EntityHandle partner = record.Other;
+            record.Other = CloneOf(partner, partner);
+            remapped = remapped || record.Other != partner;
         }
         if (remapped)
             world.AddComponentImmediate(copy, updated);
@@ -437,21 +464,21 @@ class CopiedEntityRuntimeRefs
         world.AddComponentImmediate(copy, updated);
     }
 
-    // Both collider tags name a heightfield physics handle the terrain service
-    // allocated for the source tile/face, so the copy is stripped of its claim:
-    // zero has the service's handle bit clear, and both release paths return on
-    // that bit before touching a slot (TerrainService::ReleaseTilePhysicsHandle).
+    // The collider tags name a heightfield physics handle the terrain service
+    // allocated for the source page/face, so the copy is stripped of its claim:
+    // zero has the service's handle bit clear, and every release path returns on
+    // that bit before touching a slot (TerrainService::ReleasePagePhysicsHandle).
     //
     // Nothing re-links the zeroed tag — a handle is only ever assigned when
-    // TerrainPhysicsSystem creates a collider entity. The copy is simply
-    // redundant, and its remaining tile/face keys are byte-identical to the
-    // source's, so the system's sweep classifies both the same way and destroys
-    // them together the moment that tile stops being resident.
+    // TerrainPhysicsSystem creates a collider entity. The copy is redundant.
+    // A page copy names no slot, so the system's next sweep tears it down. A
+    // face copy keeps the source's face keys, so the sweep destroys it together
+    // with the source's face collider.
     static void RepairTerrainColliders(ECS::World& world, ECS::EntityHandle copy)
     {
-        if (const auto* tile = world.GetComponent<Components::TerrainTileCollider>(copy))
+        if (const auto* page = world.GetComponent<Components::TerrainPageCollider>(copy))
         {
-            Components::TerrainTileCollider updated = *tile;
+            Components::TerrainPageCollider updated = *page;
             updated.PhysicsHandleIndex = 0;
             updated.PhysicsHandleGeneration = 0;
             world.AddComponentImmediate(copy, updated);

@@ -1,5 +1,5 @@
 #include "UI/UITextureRegistry.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Text/FontAtlas.h"
 
@@ -383,7 +383,7 @@ namespace
 bool LoadShapedSlugAtlas(Rendering::Text::FontAtlas& atlas, unsigned pixelSize)
 {
     const std::filesystem::path fontPath =
-        PathUtils::GetExecutableDirectory() / "Assets" / "Fonts" / "Roboto-Regular.ttf";
+        ApplicationPaths::GetExecutableDirectory() / "Assets" / "Fonts" / "Roboto-Regular.ttf";
     std::error_code ec;
     if (!std::filesystem::exists(fontPath, ec))
         return false;

@@ -16,6 +16,7 @@ namespace Components {
 //
 // @ge-no-add        spawned by the HLOD runtime, never added by hand in the editor
 // [DoNotSerialize]  proxies are reconstructed from the baked .gehlod on load
+// @ge-engine-internal the HLOD runtime
 struct HLODProxy
 {
     // Index into the runtime cluster table (HlodRuntime::GetClusters()). All of a

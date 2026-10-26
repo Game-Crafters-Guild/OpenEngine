@@ -3,6 +3,7 @@
 #include "AssetCore/AssetRegistry.h" // AssetReference, AssetType
 #include "AssetCore/GUID.h"
 #include "ECS/Entity.h" // ECS::EntityHandle
+#include "ECS/FieldAccess.h"
 #include "Scene/SceneIO.h" // FormatAssetReferenceForSave, TryResolveAssetReference, entity-ref helpers
 #include "Scene/RenderLayerMaskText.h"
 #include "Scene/SceneIOContext.h"
@@ -10,10 +11,11 @@
 #include "Types/FormatNumber.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <limits>
+#include <span>
 #include <string>
 
 namespace GameEngine::Scene
@@ -54,62 +56,37 @@ std::string_view TrimSpace(std::string_view s)
     return s;
 }
 
-// FieldTypeIdOf collapsed the enum to its underlying integer's type id, so the enum's signedness
-// is its field type's.
-bool EnumFieldIsSigned(const FieldInfo& info)
+// An enum field reflects as its underlying integer kind. A serializer holds only the field's own
+// bytes, so the accessor addresses them as a field at offset 0.
+FieldInfo AtFieldStart(const FieldInfo& info)
 {
-    return info.Type == FieldTypeId::Int8 || info.Type == FieldTypeId::Int16 ||
-           info.Type == FieldTypeId::Int32 || info.Type == FieldTypeId::Int64;
+    FieldInfo local = info;
+    local.Offset = 0;
+    return local;
 }
 
-// Read an enum field's underlying integer, honoring its width (FieldInfo::Size) and signedness.
 std::int64_t ReadEnumValue(const std::byte* f, const FieldInfo& info)
 {
-    const bool isSigned = EnumFieldIsSigned(info);
-    switch (info.Size)
-    {
-    case 1: return isSigned ? static_cast<std::int64_t>(ReadPod<std::int8_t>(f))
-                            : static_cast<std::int64_t>(ReadPod<std::uint8_t>(f));
-    case 2: return isSigned ? static_cast<std::int64_t>(ReadPod<std::int16_t>(f))
-                            : static_cast<std::int64_t>(ReadPod<std::uint16_t>(f));
-    case 4: return isSigned ? static_cast<std::int64_t>(ReadPod<std::int32_t>(f))
-                            : static_cast<std::int64_t>(ReadPod<std::uint32_t>(f));
-    case 8: return ReadPod<std::int64_t>(f);
-    default: return 0;
-    }
+    std::int64_t value = 0;
+    ECS::ReadFieldInteger(AtFieldStart(info), std::span<const std::byte>(f, info.Size), 0, value);
+    return value;
 }
 
-// Whether an enumerator value survives a write into this field's bytes. WriteEnumValue truncates,
-// so an unchecked legacy integer would land as a different enumerator instead of being reported.
-bool EnumValueFitsField(const FieldInfo& info, std::int64_t v)
+void WriteEnumValue(std::byte* f, const FieldInfo& info, std::int64_t value)
 {
-    const bool isSigned = EnumFieldIsSigned(info);
-    auto fits = [&]<class Signed, class Unsigned>(Signed, Unsigned)
-    {
-        if (isSigned)
-            return v >= std::numeric_limits<Signed>::min() && v <= std::numeric_limits<Signed>::max();
-        return v >= 0 && v <= static_cast<std::int64_t>(std::numeric_limits<Unsigned>::max());
-    };
-    switch (info.Size)
-    {
-    case 1: return fits(std::int8_t{}, std::uint8_t{});
-    case 2: return fits(std::int16_t{}, std::uint16_t{});
-    case 4: return fits(std::int32_t{}, std::uint32_t{});
-    case 8: return true;
-    default: return false;
-    }
+    ECS::WriteFieldInteger(AtFieldStart(info), std::span<std::byte>(f, info.Size), 0, value);
 }
 
-void WriteEnumValue(std::byte* f, const FieldInfo& info, std::int64_t v)
+// Whether an enumerator value survives a write into this field's bytes: the write wraps, so an
+// unchecked legacy integer would land as a different enumerator instead of being reported. A
+// value fits when it reads back unchanged at the field's width and signedness.
+bool EnumValueFitsField(const FieldInfo& info, std::int64_t value)
 {
-    switch (info.Size)
-    {
-    case 1: WritePod<std::uint8_t>(f, static_cast<std::uint8_t>(v)); break;
-    case 2: WritePod<std::uint16_t>(f, static_cast<std::uint16_t>(v)); break;
-    case 4: WritePod<std::uint32_t>(f, static_cast<std::uint32_t>(v)); break;
-    case 8: WritePod<std::int64_t>(f, v); break;
-    default: break;
-    }
+    std::array<std::byte, sizeof(std::int64_t)> scratch{};
+    const FieldInfo local = AtFieldStart(info);
+    std::int64_t stored = 0;
+    return ECS::WriteFieldInteger(local, scratch, 0, value) &&
+           ECS::ReadFieldInteger(local, std::span<const std::byte>(scratch), 0, stored) && stored == value;
 }
 
 struct BoolSerializer final : IFieldSerializer
@@ -291,7 +268,8 @@ struct StringSerializer final : IFieldSerializer
 // bytes <-> the scene's [path="..." guid="..."] form. Save heals the path from the GUID via the
 // resolver; load resolves via the [resource]/[embed] tables and accepts the legacy bare-GUID and
 // integer-0 clear forms too. A null GUID writes an empty value so the (caller-skipped) line is
-// omitted, matching the hand-written asset-ref schemas. Category-agnostic — one codec serves every
+// omitted, matching the hand-written asset-ref schemas, or the clear form `0` when the save writes
+// every field (SceneSaveContext::WriteEveryField). Category-agnostic — one codec serves every
 // AssetRef<T>; the asset type is only needed for load validation, which we leave permissive here.
 struct AssetGuidSerializer final : IFieldSerializer
 {
@@ -300,7 +278,7 @@ struct AssetGuidSerializer final : IFieldSerializer
         std::uint8_t raw[GUID::kSize];
         std::memcpy(raw, f, GUID::kSize);
         const GUID guid = GUID::FromBytes(raw);
-        if (guid.IsNull())
+        if (guid.IsNull() && !ctx.WriteEveryField)
             return {}; // omit the line for an unset reference
         return FormatAssetReferenceForSave(ctx, guid, "");
     }
@@ -326,12 +304,16 @@ struct AssetGuidSerializer final : IFieldSerializer
 // a quoted stable entity-id string. Save maps the handle to the referenced entity's scene id via
 // ctx.EntityTagById; load resolves the id back to a live handle via ctx.EntityIdMap. An invalid or
 // unresolved handle writes an empty value (the line is omitted) and reads back invalid, so a dangling
-// link simply unlinks rather than failing the load.
+// link simply unlinks rather than failing the load. When the save writes every field
+// (SceneSaveContext::WriteEveryField), an invalid handle writes "", which reads back invalid.
 struct EntityHandleSerializer final : IFieldSerializer
 {
     std::string Write(const std::byte* f, const FieldInfo&, const SceneSaveContext& ctx) const override
     {
-        return FormatEntityReferenceForSave(ctx, ReadPod<ECS::EntityHandle>(f));
+        const ECS::EntityHandle handle = ReadPod<ECS::EntityHandle>(f);
+        if (!handle.IsValid() && ctx.WriteEveryField)
+            return FormatQuoted({});
+        return FormatEntityReferenceForSave(ctx, handle);
     }
     bool Read(std::string_view t, std::byte* f, const FieldInfo&, const SceneLoadContext& ctx, std::string* e) const override
     {

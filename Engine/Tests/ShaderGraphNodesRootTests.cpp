@@ -1,5 +1,5 @@
 // GameEngineRendering is linked standalone by its own test executables, so the Rendering module
-// cannot call PathUtils and ShaderGraph::GetEngineGraphNodesRoot() carries its own copy of the
+// cannot call ApplicationPaths and ShaderGraph::GetEngineGraphNodesRoot() carries its own copy of the
 // install-assets layout rule. This pins that copy to the owner: both must name the same staged
 // directory. The suite stages the node tree beside itself (ge_stage_shader_graph_nodes), so the
 // comparison is against a directory that exists.
@@ -10,7 +10,7 @@
 // the host deletes the copy and this pin with it.
 #include <gtest/gtest.h>
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Rendering/ShaderGraph/SgGraphFileIO.h"
 
 #include <filesystem>
@@ -18,7 +18,7 @@
 TEST(ShaderGraphNodesRoot, ResolvesToTheInstallAssetsRoot)
 {
     const std::filesystem::path expected =
-        (GameEngine::PathUtils::GetInstallAssetsRoot() / "Shaders" / "Graph" / "Nodes").lexically_normal();
+        (GameEngine::ApplicationPaths::GetInstallAssetsRoot() / "Shaders" / "Graph" / "Nodes").lexically_normal();
     ASSERT_TRUE(std::filesystem::is_directory(expected))
         << "shader-graph node helpers not staged at " << expected.string();
 

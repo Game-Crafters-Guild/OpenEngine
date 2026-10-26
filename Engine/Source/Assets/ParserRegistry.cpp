@@ -26,7 +26,7 @@
 #include "Assets/Parsers/UILayoutAssetParser.h"
 #include "Assets/Parsers/UIStyleAssetParser.h"
 #include "Assets/Parsers/XmlAssetParser.h"
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
 #include <algorithm>
 #include <cctype>
@@ -71,7 +71,7 @@ bool ParserRegistry::Initialize()
 
     // Optional: dynamic parser plugins.
     // Default location: <exe>/Plugins/AssetParsers
-    LoadPluginsFromDirectory(PathUtils::GetExecutableDirectory() / "Plugins" / "AssetParsers");
+    LoadPluginsFromDirectory(ApplicationPaths::GetExecutableDirectory() / "Plugins" / "AssetParsers");
     LoadPluginsFromEnvironment();
 
     m_Initialized = true;
@@ -503,8 +503,9 @@ void ParserRegistry::RegisterDefaultParsers()
     // Register material parser (.material -> Material v2 doc)
     RegisterParser(std::make_shared<MaterialAssetParser>());
 
-    // Register scene parser (.scene / .blueprint -> SceneAsset, INI-style).
-    RegisterParser(std::make_shared<SceneAssetParser>());
+    // Register the scene-text parsers (.scene and .prefab -> SceneAsset, INI-style).
+    RegisterParser(std::make_shared<SceneAssetParser>(AssetType::Scene, ".scene"));
+    RegisterParser(std::make_shared<SceneAssetParser>(AssetType::Prefab, ".prefab"));
 
     // Register lens-flare parsers (.flareatlas / .lensflare JSON).
     RegisterParser(std::make_shared<FlareAtlasParser>());

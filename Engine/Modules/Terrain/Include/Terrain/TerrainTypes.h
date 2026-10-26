@@ -217,8 +217,8 @@ struct TerrainGPUParams
     float32 GrassWindStrength = 1.0f;
     uint32 GrassLayerIndex = 0;
     float32 GrassBrightness = 1.0f;    // material brightness multiplier
-    // master gate over the grounding read: the gust shading and the blade's blend into its
-    // ground. Nothing to do with cast shadows.
+    // how much a blade reads as growing out of its ground: the light and dark waves of the gusts
+    // and the blade's blend into its ground color. Nothing to do with cast shadows.
     float32 GrassGroundingStrength = 1.0f;
     float32 GrassRandomScale = 0.35f;  // random blade scale amount
     float32 GrassRandomBrightness = 0.42f;// per-blade value jitter: the field's tonal separation
@@ -267,9 +267,11 @@ struct TerrainGPUParams
     float32 GrassRootFadeEnd = 0.275f;        // where the tip colour has fully arrived
     uint32 GrassControlBindless = 0;         // optional RG8: height, density; absent means (1,1)
     uint32 ColorMapBindless = 0;             // optional RGBA8 sRGB colour map; absent means identity
+    // height fraction where the ground's share of an automatic root's gradient ends (GroundTintHeight)
+    float32 GrassGroundTintHeight = 0.5f;
 };
 
-static_assert(sizeof(TerrainGPUParams) == 284, "TerrainGPUParams must be 284 bytes");
+static_assert(sizeof(TerrainGPUParams) == 288, "TerrainGPUParams must be 288 bytes");
 
 // Blades per square metre at the camera for this row, in the units the row's mode actually places:
 // cards for a texture-card terrain, blades otherwise. The placement kernels select the same way, so

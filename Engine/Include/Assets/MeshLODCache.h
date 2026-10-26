@@ -127,13 +127,20 @@ inline constexpr uint32 kAuthoredLodImportVersion = 1u;
 // into the same wedge index (within-weld-epsilon slivers share a position
 // group and would otherwise emit an index-degenerate triangle).
 //
+// v13: contact seams. Under SeamPlanes, the free border of a part closed
+// against other parts along all of it (every free border vertex, and points
+// along every free border edge no farther apart than the contact distance,
+// within the smaller of 1% of the mesh extent and 3.7% of the part's own
+// size) locks like a seam-plane vertex (a lid set in its rim), so levels of
+// such meshes may keep more triangles.
+//
 // Bump this on EVERY generator-behavior change, including intra-iteration
 // commits: v8 covered two behaviorally different generators (v8a silhouette
 // fold, v8b corner re-point), so cooks measured across those commits aliased
 // in .Cache/Lod and cross-commit comparisons silently reused the older cook.
 // If a change is meant to be measured, it needs its own version — otherwise
 // purge .Cache/Lod between measurement runs.
-inline constexpr uint32 kLodGeneratorVersion = 9u;
+inline constexpr uint32 kLodGeneratorVersion = 13u;
 
 // Full FNV-1a-64 content hash of a model's source bytes. Portable across machines
 // and fresh git checkouts (unlike the registry's mtime+size fingerprint), at the

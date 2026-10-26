@@ -17,6 +17,7 @@ Screenshots and comparison images, generated `.assetdb` files, build and test lo
 - Documentation pages are Markdown with directives (`.mdx`) in `docs/<area>/`: one canonical file per topic, undated filename, a changelog section. The rules, the directives and the C++ | C# tabs are in `.claude/rules/documentation.md`. The root files (`README.md`, `BUILD.md`, `CodingStyle.md`, `CLAUDE.md`, this file) stay plain Markdown by convention.
 - A change to documented behaviour edits the canonical. A dated sibling file for "the same topic, another iteration" is a defect.
 - No engine names (Unity, Unreal) in user-facing strings, tooltips, enum display names or comments; import features keep their names. User-facing text uses American spelling.
+- Comments are short (one to three lines), in Simplified Technical English, and describe the code as it is now: never a change, a former value, a removed path or a reviewer note.
 
 ## Tests
 
@@ -47,6 +48,7 @@ Before opening a pull request, run the `change-scrutiny` skill (`.claude/skills/
 - Plain commits after review; never force-push a shared branch. No attribution lines or tool signatures in commits or bodies. Impersonal phrasing.
 - No feature code in hubs (`EditorApplication`, `SettingsPanel`, `InspectorPanel`, `RenderServices`, `UIManager`, `core.css`). Extensible surfaces take registrations: settings through `EditorSettingsRegistry`, inspectors, post effects, dockables and search items through their registries.
 - Few settings, high-quality defaults. A dial whose non-default values are all worse is deleted, not shipped.
+- Anything a user sees or operates is understood without explanation. The UI/UX pass in the `change-scrutiny` skill is the checklist, and the pull request body carries its line.
 - Reuse the engine's types: `GUID` or `StringId` for identity, the maths types, `Handle`, the job system, the event module. Every added function has a production caller in the same change; no compatibility shims, no dead code.
 - No legacy by default: there are no users or released projects to preserve. For every API, saved format, and removal, update current callers and committed assets and delete the obsolete path. No backward compatibility, saved-data migrations, deprecated aliases, fallback readers, or legacy-only warnings and checks unless explicitly requested for a concrete consumer. Keep ordinary validation of supported data.
 - Performance claims are measured in Release on a quiet machine against a rule stated before measuring.

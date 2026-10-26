@@ -1,0 +1,5 @@
+[scene name="Done" version=1]
+[resource id="d" path="Prefabs/done.prefab"]
+
+[prefab id="i" source="d"]
+Transform.position = (0, 0, 0)

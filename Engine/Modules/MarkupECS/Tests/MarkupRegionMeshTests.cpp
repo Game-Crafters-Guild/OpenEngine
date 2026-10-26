@@ -54,7 +54,7 @@ std::vector<Vector3> SampleOutline(const std::vector<Vector2>& corners, float (*
 float Flat(float, float) { return 0.0f; }
 float Slope(float x, float) { return 0.2f * x; }
 
-MarkupECS::MarkupGroundSampler SamplerOf(float (*ground)(float, float))
+SplineGeometry::GroundSampler SamplerOf(float (*ground)(float, float))
 {
     return [ground](const Vector2& xz) { return ground(xz.x, xz.y); };
 }
@@ -319,4 +319,13 @@ TEST(MarkupRegionMesh, AnOpenOutlineDrawsItsLineAndLabelsItsMiddle)
     EXPECT_EQ(ground.Outline.size(), line.size());
     EXPECT_NEAR(mesh.Label.x, 50.0f, 1.0e-3f);
     EXPECT_NEAR(mesh.Label.y, Slope(50.0f, 0.0f), 1.0e-3f);
+}
+
+// An open outline (a path) has no area: no point lies in it, not even one its ring would enclose
+// if it were closed.
+TEST(MarkupRegionMesh, AnOpenOutlineContainsNoPoint)
+{
+    const std::vector<Vector3> line{{0.0f, 0.0f, 0.0f}, {10.0f, 0.0f, 0.0f}, {10.0f, 0.0f, 10.0f}};
+    const MarkupRegionGround ground = BuildMarkupRegionGround(line, false, SamplerOf(Slope));
+    EXPECT_FALSE(ground.Contains(Vector2(7.0f, 3.0f)));
 }

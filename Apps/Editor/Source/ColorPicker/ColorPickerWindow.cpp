@@ -12,6 +12,7 @@
 #include "UI/Assets/UIStyleAsset.h"
 #include "UI/UIAccentStyleHelper.h"
 #include "UI/UICursorHelper.h"
+#include "PlayMode/WindowCursorLock.h"
 #include "Core/WindowInputRouter.h"
 #include "Core/WindowPlatformApi.h"
 #include "AssetCore/AssetTypes.h"
@@ -223,7 +224,8 @@ std::unique_ptr<EditorApplication::EditorWindowContext> ColorPickerWindow::Creat
         Editor::ApplySavedHiDpiPlatformSettings(ctx->uiPlatform.get());
 
         // Set cursor callback for color picker window.
-        SetupUICursorCallback(ctx->ui.get(), ctx->window.get());
+        ctx->cursorLock = std::make_unique<Editor::WindowCursorLock>(*ctx->window);
+        SetupUICursorCallback(ctx->ui.get(), ctx->window.get(), ctx->cursorLock.get());
     }
 
     UIManager::RenderRuntimeConfig uiRuntimeConfig = params.uiRenderConfig.has_value()

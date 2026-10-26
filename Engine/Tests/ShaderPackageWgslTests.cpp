@@ -206,7 +206,7 @@ TEST(ShaderPackageWgsl, RejectsChunksThatAliasTheTableOrOtherPayloads)
     std::memcpy(&metaSize, control.data() + 16 + 32, sizeof(metaSize));
     // Repeated aliases can amplify a small file into many separately allocated
     // stage payloads. The container writer gives each chunk its own span.
-    for (const auto [offset, size] : {std::pair<uint64_t, uint64_t>{0, 16},
+    for (const auto& [offset, size] : {std::pair<uint64_t, uint64_t>{0, 16},
                                      std::pair<uint64_t, uint64_t>{metaOffset, metaSize}})
     {
         auto bytes = control;

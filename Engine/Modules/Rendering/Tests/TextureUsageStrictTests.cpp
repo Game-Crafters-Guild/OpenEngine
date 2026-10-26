@@ -129,8 +129,8 @@ TEST(TextureUsageStrict, PoolImportRequiredAheadIsSufficientForItsCapture)
         GTEST_SKIP() << "Device init failed";
     }
 
-    constexpr uint32_t kWidth = 64;
-    constexpr uint32_t kHeight = 64;
+    static constexpr uint32_t kWidth = 64;
+    static constexpr uint32_t kHeight = 64;
     constexpr size_t kRowPitch = static_cast<size_t>(kWidth) * 4u;
     constexpr size_t kReadbackBytes = kRowPitch * kHeight;
     constexpr const char* kPoolName = "Strict.Output";

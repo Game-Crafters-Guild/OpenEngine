@@ -4,6 +4,8 @@
 #ifndef SDF_FUNCTIONS_GLSL
 #define SDF_FUNCTIONS_GLSL
 
+#include "../Includes/error_function.glsl"
+
 // --- Shadow quality tuning ---
 const bool kEnableShadowTwoSampleQuality = true;
 const float kShadowTwoSampleOffsetPx = 0.5;
@@ -109,17 +111,6 @@ float sdfCoverage(float sd, float w)
 
 // --- Gaussian shadow (CSS box-shadow) ---
 
-// Abramowitz & Stegun approximation of erf(x), max error ~1.5e-7.
-float erfApprox(float x)
-{
-    float s = sign(x);
-    float a = abs(x);
-    float t = 1.0 / (1.0 + 0.3275911 * a);
-    float y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
-                      - 0.284496736) * t + 0.254829592) * t * exp(-a * a);
-    return s * y;
-}
-
 // Gaussian shadow falloff (sigma = blurRadius / 2).
 //
 // The pixel term is the fragment's screen footprint expressed in the units sd
@@ -135,7 +126,7 @@ float gaussianShadowAlphaIntegrated(float sd, float blurRadius)
     float pixelSigma = max(0.5 * fwidth(sd), 0.0);
 #endif
     float sigmaEff = sqrt(sigma * sigma + pixelSigma * pixelSigma);
-    return 0.5 + 0.5 * erfApprox(sd / (sigmaEff * 1.4142135));
+    return 0.5 + 0.5 * GE_Erf(sd / (sigmaEff * 1.4142135));
 }
 
 // Symmetric taps around center sample for quality.

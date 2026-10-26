@@ -222,9 +222,13 @@ TEST_F(EntityDestroyAllocation, LaterLifecycleTypePreparationFailureLeavesEntire
     {
         ASSERT_TRUE(world.IsValid(entity));
         if (const auto* value = world.GetComponent<Early>(entity))
+        {
             EXPECT_EQ(value->Value, 73);
+        }
         if (const auto* value = world.GetComponent<Late>(entity))
+        {
             EXPECT_EQ(value->Value, 73);
+        }
     }
     world.SwapLifecycleEvents();
     EXPECT_TRUE(world.GetRemoved<Early>().empty());

@@ -23,6 +23,7 @@
 #include "Mathematics/Vector3.h"
 #include "Rendering/Core/CommandList.h"
 #include "Terrain/Heightfield.h"
+#include "CBTReliefHeightSource.h"
 #include "CBTTestHarness.h"
 
 #include <algorithm> // std::sort/min/max (near-patch scan)
@@ -239,39 +240,6 @@ TextureHandle MakeConstantHeightTexture(IDevice& device, float value)
     std::vector<CommandList*> lists{cl.get()};
     device.ExecuteCommandLists(lists);
     device.WaitForIdle();
-    return tex;
-}
-
-// dim x dim R32_FLOAT texture uploaded from `data` (row-major), settled in ShaderResource.
-// Used to stage a hand-packed resident-window atlas for the Phase E GPU-sample oracles.
-TextureHandle MakeR32TextureFromData(IDevice& device, uint32_t dim, const std::vector<float>& data)
-{
-    TextureDesc td{};
-    td.width = dim;
-    td.height = dim;
-    td.format = static_cast<uint32_t>(TextureFormat::R32_FLOAT);
-    td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) |
-               static_cast<uint32_t>(TextureUsage::TransferDst);
-    td.persistent = true;
-    td.debugName = "CBT.Test.Atlas";
-    TextureHandle tex = device.CreateTexture(td);
-    if (!tex.IsValid())
-        return tex;
-    const size_t bytes = data.size() * sizeof(float);
-    const size_t rowPitch = static_cast<size_t>(dim) * sizeof(float);
-    BufferHandle staging = device.CreateUploadBuffer(bytes, "CBT.Test.AtlasStaging");
-    device.UpdateBuffer(staging, 0, bytes, data.data());
-    auto cl = device.CreateCommandList(IDevice::QueueType::Graphics);
-    cl->Begin();
-    cl->CopyBufferToTextureSubresource(staging, tex, 0, 0, dim, dim, 0, rowPitch, 1, 0, 0, 0,
-                                       ResourceState::Undefined);
-    cl->Barrier(ResourceBarrier::CreateTextureBarrier(tex, ResourceState::CopyDest,
-                                                      ResourceState::ShaderResource));
-    cl->End();
-    std::vector<CommandList*> lists{cl.get()};
-    device.ExecuteCommandLists(lists);
-    device.WaitForIdle();
-    device.DestroyBuffer(staging);
     return tex;
 }
 
@@ -655,7 +623,7 @@ TEST_F(CBTScreenSpaceTest, AtlasResolveSamplesAtlasNotUnifiedHeight)
             tile[z * kTileRes + x] = 0.10f + 0.08f * static_cast<float>(x) + 0.02f * static_cast<float>(z);
 
     const std::vector<float> atlasData = PackSingleSlot(kTileRes, tile);
-    TextureHandle atlasTex = MakeR32TextureFromData(*m_Device, kDim, atlasData);
+    TextureHandle atlasTex = MakeR32Texture(*m_Device, kDim, kDim, atlasData, "CBT.Test.Atlas");
     TextureHandle unifiedTex = MakeConstantHeightTexture(*m_Device, kUnifiedConst);
     ASSERT_TRUE(atlasTex.IsValid() && unifiedTex.IsValid());
 
@@ -731,7 +699,7 @@ TEST_F(CBTScreenSpaceTest, AtlasNonResidentTileReadsCoarseField)
     // A non-zero atlas so "read the coarse field" is distinguishable from "read a resident slot".
     std::vector<float> tile(kTileRes * kTileRes, 0.95f);
     const std::vector<float> atlasData = PackSingleSlot(kTileRes, tile);
-    TextureHandle atlasTex = MakeR32TextureFromData(*m_Device, kDim, atlasData);
+    TextureHandle atlasTex = MakeR32Texture(*m_Device, kDim, kDim, atlasData, "CBT.Test.Atlas");
 
     // Coarse field: a ramp in u. Corner UVs are grid points (0 or 1) -> coarse texel 0 or dim-1
     // (the sample is endpoint-exact), so corners at u=0 read 0.2 and at u=1 read 0.7 — distinct.
@@ -740,7 +708,7 @@ TEST_F(CBTScreenSpaceTest, AtlasNonResidentTileReadsCoarseField)
     for (uint32_t z = 0; z < kCoarseDim; ++z)
         for (uint32_t x = 0; x < kCoarseDim; ++x)
             coarse[static_cast<size_t>(z) * kCoarseDim + x] = coarseVal(x);
-    TextureHandle coarseTex = MakeR32TextureFromData(*m_Device, kCoarseDim, coarse);
+    TextureHandle coarseTex = MakeR32Texture(*m_Device, kCoarseDim, kCoarseDim, coarse, "CBT.Test.CoarseField");
     ASSERT_TRUE(atlasTex.IsValid() && coarseTex.IsValid());
 
     instance.SetAtlasSource(0u, atlasTex);
@@ -846,7 +814,7 @@ TEST_F(CBTScreenSpaceTest, AtlasResolve2x2DistinctSlotsCatchColRowSwap)
     std::vector<float> atlas(static_cast<size_t>(kAtlasDim) * kAtlasDim, 0.0f);
     for (uint32_t s = 0; s < 4u; ++s)
         PackSlotInto(atlas, kAtlasDim, kSlotStride, kSlotsPerRow, s, kTileRes, tileFor(s));
-    TextureHandle atlasTex = MakeR32TextureFromData(*m_Device, kAtlasDim, atlas);
+    TextureHandle atlasTex = MakeR32Texture(*m_Device, kAtlasDim, kAtlasDim, atlas, "CBT.Test.Atlas");
     ASSERT_TRUE(atlasTex.IsValid());
     instance.SetAtlasSource(0u, atlasTex);
 
@@ -999,7 +967,7 @@ TEST_F(CBTScreenSpaceTest, RefinedCornersMatchTheCpuHeightfieldOnTheHeightTextur
 
     const GameEngine::Terrain::HeightfieldData field = MakeCliffAndSlopeHeightfield();
     const std::vector<float> samples(field.GetRawSamples(), field.GetRawSamples() + field.GetSampleCount());
-    TextureHandle height = MakeR32TextureFromData(*m_Device, kLatticeDim, samples);
+    TextureHandle height = MakeR32Texture(*m_Device, kLatticeDim, kLatticeDim, samples, "CBT.Test.Height");
     ASSERT_TRUE(height.IsValid());
     for (uint32_t s = 0; s < kCBTFrameParamsRing; ++s)
         instance.SetHeightSource(s, height);
@@ -1024,7 +992,7 @@ TEST_F(CBTScreenSpaceTest, RefinedCornersMatchTheCpuHeightfieldOnTheAtlas)
     const GameEngine::Terrain::HeightfieldData field = MakeCliffAndSlopeHeightfield();
     const std::vector<float> samples(field.GetRawSamples(), field.GetRawSamples() + field.GetSampleCount());
     constexpr uint32_t kSlotDim = kLatticeDim + 2u; // one-texel apron on each side
-    TextureHandle atlasTex = MakeR32TextureFromData(*m_Device, kSlotDim, PackSingleSlot(kLatticeDim, samples));
+    TextureHandle atlasTex = MakeR32Texture(*m_Device, kSlotDim, kSlotDim, PackSingleSlot(kLatticeDim, samples), "CBT.Test.Atlas");
     ASSERT_TRUE(atlasTex.IsValid());
     const std::vector<uint8_t> row = MakeRow(/*slot*/ 0u, /*gen*/ 1u);
     for (uint32_t s = 0; s < kCBTFrameParamsRing; ++s)
@@ -1188,7 +1156,7 @@ TEST_F(CBTScreenSpaceTest, PagedResolveReadsThisFramesPageTableAndCache)
     ASSERT_TRUE(instance.Initialize(*m_Device, m_KernelSet));
     ASSERT_TRUE(instance.InitializeRoots());
 
-    TextureHandle cacheTex = MakeR32TextureFromData(*m_Device, kPagedCacheDim, MakePagedCache());
+    TextureHandle cacheTex = MakeR32Texture(*m_Device, kPagedCacheDim, kPagedCacheDim, MakePagedCache(), "CBT.Test.PagedCache");
     ASSERT_TRUE(cacheTex.IsValid());
 
     ExpectEachFrameResolvesItsOwnPageTable(*m_Device, instance, cacheTex);
@@ -2397,7 +2365,11 @@ TEST_F(CBTScreenSpaceTest, ViewPriorityNearPatchPlanar)
 // a strict superset of the metric without it.
 TEST_F(CBTScreenSpaceTest, SubmergedSeabedStaysCoarseWhileShorelineRefines)
 {
-    constexpr uint32_t kTexels = 64u;
+    // 4 m samples, and the depth cap at that spacing (a leaf's hypotenuse 4 m x sqrt(2)), as a
+    // terrain resolves its cap from its data. The planar split bounds a facet by the height range of
+    // the samples it covers, so a facet inside one sample's cell reads that cell's whole range: on the
+    // shore's ramp the cap, not the target, stops the facets.
+    constexpr uint32_t kTexels = 256u;
     constexpr float kTerrain = 1024.0f;
     constexpr float kOrigin = -kTerrain * 0.5f;
     constexpr float kHeightScale = 40.0f;
@@ -2416,7 +2388,7 @@ TEST_F(CBTScreenSpaceTest, SubmergedSeabedStaysCoarseWhileShorelineRefines)
     // 64 m legs one sqrt(2) step per ring (~135 m of rings), so the seabed the water is supposed
     // to keep coarse is judged past that: every corner farther than this from the shore (Z = 0).
     constexpr float kInteriorZ = -160.0f;
-    const uint32_t cap = kDefaultBaseDepth + kMaxDecodeSubdiv;
+    constexpr uint32_t cap = 17u; // root hypotenuse 1024 x sqrt(2) m, sqrt(2) shorter per level
 
     struct EdgeScan
     {
@@ -2476,14 +2448,14 @@ TEST_F(CBTScreenSpaceTest, SubmergedSeabedStaysCoarseWhileShorelineRefines)
 
     // One instance converged through one camera height per phase, kFrames each, scanned at the end:
     // a second phase exercises the merge direction from a tree the first phase refined.
-    auto converge = [&](float coarsen, std::initializer_list<float> cameraYs) {
+    auto converge = [&](float coarsen, std::initializer_list<float> cameraYs, uint32_t texels, uint32_t depthCap) {
         CBTInstance instance;
         EXPECT_TRUE(instance.Initialize(*m_Device, m_KernelSet));
         EXPECT_TRUE(instance.InitializeRoots(kDomainPlanar));
-        // Rows [0, 32) stay at texel 0 (seabed), rows [32, 64) become texel 1 (land): the shore
-        // runs along the plane's Z midline, one texel (16 m) of linear ramp wide.
-        TextureHandle height = MakeHeightTextureN(*m_Device, kTexels, 0.0f);
-        PokeHeightBand(*m_Device, height, kTexels, kTexels / 2u, kTexels, 1.0f);
+        // Rows [0, 128) stay at texel 0 (seabed), rows [128, 256) become texel 1 (land): the shore
+        // runs along the plane's Z midline, one texel (4 m) of linear ramp wide.
+        TextureHandle height = MakeHeightTextureN(*m_Device, texels, 0.0f);
+        PokeHeightBand(*m_Device, height, texels, texels / 2u, texels, 1.0f);
 
         float vp[16];
         MakeOrthoTopDown(2.0f / kTerrain, vp); // the whole plane fills the viewport
@@ -2496,7 +2468,7 @@ TEST_F(CBTScreenSpaceTest, SubmergedSeabedStaysCoarseWhileShorelineRefines)
 
         CBTClassifyDesc classify{};
         classify.Mode = kClassifyScreenSpace;
-        classify.TargetDepth = cap;
+        classify.TargetDepth = depthCap;
         uint32_t frame = 0;
         for (float cameraY : cameraYs)
         {
@@ -2513,12 +2485,12 @@ TEST_F(CBTScreenSpaceTest, SubmergedSeabedStaysCoarseWhileShorelineRefines)
         return es;
     };
 
-    const EdgeScan on = converge(kCoarsen, {50.0f});
-    const EdgeScan under = converge(kCoarsen, {kWaterY - 10.0f});
-    const EdgeScan off = converge(0.0f, {50.0f});
+    const EdgeScan on = converge(kCoarsen, {50.0f}, kTexels, cap);
+    const EdgeScan under = converge(kCoarsen, {kWaterY - 10.0f}, kTexels, cap);
+    const EdgeScan off = converge(0.0f, {50.0f}, kTexels, cap);
     // Refined uniformly from under the surface, then the camera climbs out: the merge side has to
     // coarsen the hidden seabed back, which is what the coarsened MERGE threshold is for.
-    const EdgeScan resurfaced = converge(kCoarsen, {kWaterY - 10.0f, 50.0f});
+    const EdgeScan resurfaced = converge(kCoarsen, {kWaterY - 10.0f, 50.0f}, kTexels, cap);
     std::printf("[water-plane] on: submerged=%u (max %.1f px) interior=%u [%.1f..%.1f px] "
                 "straddling=%u (max %.1f px) land=%u (max %.1f px) | under: submerged max %.1f px | "
                 "off: submerged max %.1f px | resurfaced: interior=%u [%.1f..%.1f px] land max %.1f px\n",
@@ -2551,4 +2523,16 @@ TEST_F(CBTScreenSpaceTest, SubmergedSeabedStaysCoarseWhileShorelineRefines)
     EXPECT_GT(resurfaced.InteriorMin, kSplitPx);
     EXPECT_LE(resurfaced.SubmergedMax, kCoarsen * kSplitPx);
     EXPECT_LE(resurfaced.LandMax, kSplitPx);
+
+    // A depth cap far finer than the data (16 m samples, the decode cap), as a paged terrain or an
+    // override sets it: a facet smaller than a cell reads a range that shrinks with it (the steepest
+    // step times its extent), so the shore's facets stop at the target instead of the cap. Reading the
+    // whole cell's range instead drives the ramp's legs down to 2 px.
+    const EdgeScan fineCap = converge(kCoarsen, {50.0f}, 64u, kDefaultBaseDepth + kMaxDecodeSubdiv);
+    std::printf("[water-plane] cap finer than the data: straddling=%u (max %.1f px) land=%u (max %.1f px)\n",
+                fineCap.Straddling, fineCap.StraddlingMax, fineCap.Land, fineCap.LandMax);
+    ASSERT_GT(fineCap.Straddling, 4u);
+    EXPECT_GT(fineCap.StraddlingMax, 2.5f) << "the shore refines to the cap where the cap is finer than the data";
+    EXPECT_LE(fineCap.StraddlingMax, kSplitPx);
+    EXPECT_LE(fineCap.LandMax, kSplitPx);
 }

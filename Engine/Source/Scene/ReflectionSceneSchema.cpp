@@ -3,6 +3,7 @@
 #include "AssetCore/AssetTypes.h"
 #include "AssetCore/GUID.h"
 #include "ECS/ComponentFactory.h"
+#include "ECS/FieldAccess.h"
 #include "Engine/Rendering/PostProcessEffectRegistry.h"
 #include "Scene/FieldSerializerRegistry.h"
 #include "Scene/SceneIOContext.h"
@@ -72,7 +73,8 @@ bool IsAssetGuidArrayField(const ECS::FieldInfo& f)
 // recipe's override list. Each element is written as one "<Name><index>.<SubField> = value" line
 // per sub-field, through that sub-field's own codec; a struct array inside an element nests the
 // same way ("<Name><index>.<Inner><index>.<SubField>"). An element equal to what the owning
-// component's default bytes hold at its place writes no line at all, because that default is
+// component's default bytes hold at its place writes no line at all (unless the save writes every
+// field, SceneSaveContext::WriteEveryField), because that default is
 // what the reader starts from — comparing against the element struct's own default instead would
 // drop an authored value that happens to equal it wherever the owner defaults differently. So an
 // untouched table costs nothing on disk and a filled one round-trips slot-exact, as the AssetGuid
@@ -127,7 +129,8 @@ struct StructArrayLine
 
 // The lines of one struct-array field whose bytes are `field` and whose owner-default bytes are
 // `defaults`, both Size bytes long. Every sub-field of an element that differs from its default
-// is written, not just the ones that differ: an authored element then loads the same whatever
+// (of every element, when the save writes every field) is written, not just the sub-fields that
+// differ: an authored element then loads the same whatever
 // the defaults become later. A struct array nested in an element whose struct has no field table
 // cannot be written, and says so rather than vanishing from the file.
 void WriteStructArrayLines(const ECS::FieldInfo& f, const std::uint8_t* field, const std::uint8_t* defaults,
@@ -146,7 +149,7 @@ void WriteStructArrayLines(const ECS::FieldInfo& f, const std::uint8_t* field, c
     {
         const std::uint8_t* element = field + static_cast<std::size_t>(i) * layout.Stride;
         const std::uint8_t* elementDefault = defaults + static_cast<std::size_t>(i) * layout.Stride;
-        if (std::memcmp(element, elementDefault, layout.Stride) == 0)
+        if (!ctx.WriteEveryField && std::memcmp(element, elementDefault, layout.Stride) == 0)
             continue;
         const std::string index = prefix + std::to_string(i) + ".";
         for (const ECS::FieldInfo& sub : layout.ElementFields)
@@ -197,86 +200,36 @@ double EffectSceneValueAsNumber(const SceneValue& v)
     return 0.0;
 }
 
-// Read/write a field's underlying integer honoring width + signedness (reflection collapses
-// enums to their underlying integer type, so this also serves every reflected enum field).
-std::int64_t ReadFieldInt(const std::uint8_t* fieldBytes, const ECS::FieldInfo& f)
-{
-    const bool isSigned = f.Type == ECS::FieldTypeId::Int8 || f.Type == ECS::FieldTypeId::Int16 ||
-                          f.Type == ECS::FieldTypeId::Int32 || f.Type == ECS::FieldTypeId::Int64;
-    auto read = [&]<class T>(T) {
-        T v{};
-        std::memcpy(&v, fieldBytes, sizeof(T));
-        return static_cast<std::int64_t>(v);
-    };
-    switch (f.Size)
-    {
-    case 1: return isSigned ? read(std::int8_t{}) : read(std::uint8_t{});
-    case 2: return isSigned ? read(std::int16_t{}) : read(std::uint16_t{});
-    case 4: return isSigned ? read(std::int32_t{}) : read(std::uint32_t{});
-    case 8: return read(std::int64_t{});
-    default: return 0;
-    }
-}
-
-void WriteFieldInt(std::uint8_t* fieldBytes, const ECS::FieldInfo& f, std::int64_t v)
-{
-    switch (f.Size)
-    {
-    case 1: { const auto x = static_cast<std::uint8_t>(v); std::memcpy(fieldBytes, &x, 1); break; }
-    case 2: { const auto x = static_cast<std::uint16_t>(v); std::memcpy(fieldBytes, &x, 2); break; }
-    case 4: { const auto x = static_cast<std::uint32_t>(v); std::memcpy(fieldBytes, &x, 4); break; }
-    case 8: std::memcpy(fieldBytes, &v, 8); break;
-    default: break;
-    }
-}
-
-bool IsIntegerField(const ECS::FieldInfo& f)
-{
-    switch (f.Type)
-    {
-    case ECS::FieldTypeId::Int8:
-    case ECS::FieldTypeId::Int16:
-    case ECS::FieldTypeId::Int32:
-    case ECS::FieldTypeId::Int64:
-    case ECS::FieldTypeId::UInt8:
-    case ECS::FieldTypeId::UInt16:
-    case ECS::FieldTypeId::UInt32:
-    case ECS::FieldTypeId::UInt64:
-        return true;
-    default:
-        return false;
-    }
-}
-
 // Apply the descriptor's load clamp to a just-parsed field. Integer/enum fields honor the
 // enum fallback: an out-of-range value snaps to it (a future enum mode) instead of clamping.
-void ApplyLoadClamp(std::uint8_t* fieldBytes, const ECS::FieldInfo& f, const EffectFieldIO& io)
+void ApplyLoadClamp(std::span<std::byte> component, const ECS::FieldInfo& field, const EffectFieldIO& fieldIO)
 {
-    if (!io.HasClamp)
+    if (!fieldIO.HasClamp)
         return;
-    if (f.Type == ECS::FieldTypeId::Float && f.Size == sizeof(float))
+    if (field.Type == ECS::FieldTypeId::Float && field.Size == sizeof(float))
     {
-        float v{};
-        std::memcpy(&v, fieldBytes, sizeof(float));
-        v = std::clamp(v, io.ClampMin, io.ClampMax);
-        std::memcpy(fieldBytes, &v, sizeof(float));
+        float value{};
+        ECS::ReadFieldElement(field, std::span<const std::byte>(component), 0, value);
+        ECS::WriteFieldElement(field, component, 0, std::clamp(value, fieldIO.ClampMin, fieldIO.ClampMax));
         return;
     }
-    if (IsIntegerField(f) && f.Size <= 8)
-    {
-        // Beyond this the float bound is a sentinel (FLT_MAX = unbounded), never a real limit.
-        constexpr float kIntBoundLimit = 9.0e18f;
-        const std::int64_t lo = io.ClampMin <= -kIntBoundLimit ? std::numeric_limits<std::int64_t>::min()
-                                                               : static_cast<std::int64_t>(std::llround(io.ClampMin));
-        const std::int64_t hi = io.ClampMax >= kIntBoundLimit ? std::numeric_limits<std::int64_t>::max()
-                                                              : static_cast<std::int64_t>(std::llround(io.ClampMax));
-        std::int64_t v = ReadFieldInt(fieldBytes, f);
-        if (io.HasEnumFallback && (v < lo || v > hi))
-            v = io.EnumFallbackValue;
-        else
-            v = std::clamp(v, lo, hi);
-        WriteFieldInt(fieldBytes, f, v);
-    }
+    // An integer or enum field; any other kind has no clamp to apply.
+    std::int64_t value = 0;
+    if (!ECS::ReadFieldInteger(field, std::span<const std::byte>(component), 0, value))
+        return;
+    // Beyond this the float bound is a sentinel (FLT_MAX = unbounded), never a real limit.
+    constexpr float kIntBoundLimit = 9.0e18f;
+    const std::int64_t lowest = fieldIO.ClampMin <= -kIntBoundLimit
+                                    ? std::numeric_limits<std::int64_t>::min()
+                                    : static_cast<std::int64_t>(std::llround(fieldIO.ClampMin));
+    const std::int64_t highest = fieldIO.ClampMax >= kIntBoundLimit
+                                     ? std::numeric_limits<std::int64_t>::max()
+                                     : static_cast<std::int64_t>(std::llround(fieldIO.ClampMax));
+    if (fieldIO.HasEnumFallback && (value < lowest || value > highest))
+        value = fieldIO.EnumFallbackValue;
+    else
+        value = std::clamp(value, lowest, highest);
+    ECS::WriteFieldInteger(field, component, 0, value);
 }
 
 // One property key resolved against the reflected field table + descriptor metadata.
@@ -566,7 +519,7 @@ PropertyApply ApplyPropertyToBytes(ECS::ComponentTypeId typeId, const std::strin
         return PropertyApply::Failed;
     }
     if (target.IO)
-        ApplyLoadClamp(fieldBytes, field, *target.IO);
+        ApplyLoadClamp(std::as_writable_bytes(std::span(bytes)), field, *target.IO);
     return PropertyApply::Applied;
 }
 } // namespace
@@ -674,7 +627,9 @@ void ReflectionSceneSchema::Serialize(const ECS::World& world, ECS::EntityHandle
 
         if (io && io->EnumAsInt)
         {
-            emitLine(key, {}, std::to_string(ReadFieldInt(bytes.data() + f.Offset, f)));
+            std::int64_t value = 0;
+            ECS::ReadFieldInteger(f, std::as_bytes(std::span(bytes)), 0, value);
+            emitLine(key, {}, std::to_string(value));
             continue;
         }
 
@@ -707,7 +662,8 @@ void ReflectionSceneSchema::Serialize(const ECS::World& world, ECS::EntityHandle
         {
             // One "<Name><index> = [path=... guid=...]" line per non-null element; null
             // slots omit their line and load back as empty (the codec's null-omission
-            // rule, element-wise), so a pool round-trips its exact slot layout.
+            // rule, element-wise), so a pool round-trips its exact slot layout. A save that writes
+            // every field writes a null slot as its clear form `0`.
             const IFieldSerializer* ser = FieldSerializerRegistry::Resolve(f);
             if (!ser)
                 continue;

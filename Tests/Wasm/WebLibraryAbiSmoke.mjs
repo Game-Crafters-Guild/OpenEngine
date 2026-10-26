@@ -245,13 +245,13 @@ test('ge_reflection_json lists what the scanner emits for the same build', () =>
     const scannedByName = new Map(scanned.components.map((c) => [c.name, c]));
 
     assert.equal(live.engineVersion, fs.readFileSync(path.join(repoRoot, 'VERSION'), 'utf8').trim());
-    // Reflected by hand-written registrations outside the scanner's headers, or scanned but
+    // Reflected by a hand-written registration outside the scanner's headers, or scanned but
     // registered elsewhere: counted so the list cannot grow unnoticed.
     const onlyLive = [...liveByName.keys()].filter((n) => !scannedByName.has(n)).sort();
     const onlyScanned = [...scannedByName.keys()].filter((n) => !liveByName.has(n)).sort();
     report.reflection = { liveComponents: live.components.length, scannedComponents: scanned.components.length, onlyLive, onlyScanned };
     assert.deepEqual(onlyScanned, [], 'components the scanner emits but the module does not reflect');
-    assert.deepEqual(onlyLive, ['CubeLutEffect', 'LensFlareSource', 'UIDocument'], 'hand-registered components outside the scanner');
+    assert.deepEqual(onlyLive, [], 'hand-registered components outside the scanner');
 
     // The scanner writes an extent it cannot evaluate (`kMaxWeights`) as its text; the module
     // reports the number. Those fields compare on everything else.

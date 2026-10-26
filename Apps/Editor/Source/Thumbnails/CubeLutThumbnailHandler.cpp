@@ -4,6 +4,7 @@
 #include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/TextureService.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "Rendering/Passes/HdrColorFxPass.h"
 #include "Rendering/Passes/TonemapPass.h"
@@ -222,7 +223,7 @@ bool CubeLutThumbnailHandler::DeclareRows(Rendering::RenderGraph::RGFrame& frame
     std::memcpy(lutSettings.LutAssetGuidWords, words.data(), sizeof(lutSettings.LutAssetGuidWords));
     Rendering::CubeLutGpuBindingState lut{};
     (void)m_RenderServices->Textures().TryGetCubeLutGpuBinding(lutSettings, lut);
-    const float intensity = std::clamp(request.Intensity, 0.0f, 1.0f);
+    const float intensity = Math::Clamp01(request.Intensity);
 
     // An asset's sheet shows the LUT at the stage it is made for: Finish for a display LUT, Grade
     // for a log or scene LUT. An inspector's band shows the effect's stage.

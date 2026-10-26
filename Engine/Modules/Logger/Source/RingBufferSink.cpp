@@ -36,14 +36,14 @@ RingBufferSink::MessageQueryResult RingBufferSink::GetMessages(const MessageQuer
         return result;
 
     const size_t oldest = (m_Head + m_Capacity - m_Count) % m_Capacity;
-    const uint64 oldestSequence = m_Buffer[oldest].Sequence;
+    const std::uint64_t oldestSequence = m_Buffer[oldest].Sequence;
     if (oldestSequence > query.AfterSequence + 1)
         result.Overwritten = oldestSequence - query.AfterSequence - 1;
 
     // Sequence numbers rise from the oldest entry to the newest, so the entries
     // after the cursor are one contiguous run at the newest end.
-    const uint64 newer = m_LastSequence > query.AfterSequence ? m_LastSequence - query.AfterSequence : 0;
-    const size_t first = m_Count - static_cast<size_t>(std::min<uint64>(newer, m_Count));
+    const std::uint64_t newer = m_LastSequence > query.AfterSequence ? m_LastSequence - query.AfterSequence : 0;
+    const size_t first = m_Count - static_cast<size_t>(std::min<std::uint64_t>(newer, m_Count));
     result.Messages.reserve(m_Count - first);
     for (size_t i = first; i < m_Count; ++i)
     {

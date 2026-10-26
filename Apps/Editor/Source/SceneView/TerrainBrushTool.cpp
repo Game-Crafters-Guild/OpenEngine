@@ -1,9 +1,10 @@
 #include "SceneView/TerrainBrushTool.h"
 
+#include "Mathematics/Interpolation.h"
 #include "SceneView/SphereSculptStrokeCommand.h"
 #include "SceneView/TerrainZoneStrokeCommand.h"
 #include "SceneViewController.h"
-#include "Picking/TerrainPicking.h"
+#include "Scene/TerrainPicking.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "EditorChangeNotifications.h"
 
@@ -24,7 +25,6 @@
 #include "TerrainECS/TerrainZoneAuthoring.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -195,8 +195,8 @@ bool TerrainBrushTool::RaycastTerrain(const GizmoRay& ray, Mathematics::Vector3&
         && std::abs(ray.direction.z) < kRayDirEpsilon)
         return false;
 
-    Picking::TerrainPickHit hit{};
-    if (!Picking::RaycastTerrain(ray, *world, kMaxPickDistance, hit))
+    Scene::TerrainPickHit hit{};
+    if (!Scene::RaycastTerrain(ray, *world, kMaxPickDistance, hit))
         return false;
     outHit = hit.WorldPosition;
     outNormal = hit.WorldNormal;
@@ -248,12 +248,10 @@ bool TerrainBrushTool::RaycastPlanet(const GizmoRay& ray, float radius, Mathemat
     {
         if (auto* feature = rs->GetFeature<CBTTerrainECS::CBTRenderFeature>())
         {
-            const std::array<float, 3> ao{o.x, o.y, o.z};
-            const std::array<float, 3> ad{d.x, d.y, d.z};
             auto heightFn = [feature](float dx, float dy, float dz) {
                 return feature->SampleSphereSurfaceHeight(dx, dy, dz);
             };
-            CBTTerrain::RefinePlanetHit(ao, ad, radius, heightFn, t);
+            CBTTerrain::RefinePlanetHit(o, d, radius, heightFn, t);
         }
     }
 
@@ -769,7 +767,7 @@ void TerrainBrushTool::ApplyDab(const Mathematics::Vector3& hit)
             const float dist = std::sqrt(dx * dx + dz * dz);
             if (dist > m_Radius)
                 continue;
-            const float t = std::clamp(1.0f - dist * invRadius, 0.0f, 1.0f);
+            const float t = Math::Clamp01(1.0f - dist * invRadius);
             const float falloff = t * t * (3.0f - 2.0f * t); // smoothstep
             const size_t idx = static_cast<size_t>(tz) * payload->Width + tx;
             if (paint)

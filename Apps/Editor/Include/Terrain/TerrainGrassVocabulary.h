@@ -32,6 +32,11 @@ std::string RenderModeTooltip(bool needsAlpha);
 // control, because a disabled control would claim the opposite.
 std::string RenderModeInactiveNote(bool needsAlpha);
 
+// Why the Ground Tint Height row changes nothing, or empty when it does: the ground's share it ends is
+// only in the blade's gradient while Root Color is Auto and Splat Root Color is on. State, then the
+// fix. The row stays editable, so a value set ahead of switching those on is kept.
+std::string GroundTintHeightInactiveNote(bool automaticRootColor, bool splatRootColor);
+
 // Tooltip for the Range row. Range is a CEILING, not a promise: the per-view instance budget
 // shortens it when the authored density cannot be carried that far, so the word "hard" has to go.
 std::string RangeTooltip();

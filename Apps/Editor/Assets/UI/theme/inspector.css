@@ -1507,8 +1507,10 @@ button.flare-element-header-menu:focus,
 	color: var(--ui_color_text_secondary);
 }
 
-.inspector-field.inspector-slider-with-value > .inspector-slider-value-field .float-field-input,
-.inspector-field.inspector-slider-with-value > .inspector-slider-value-field .int-field-input {
+/* A value field with a suffix is the padded box itself and sizes its text input beside the suffix
+   (theme/core.css, .has-suffix), so only a field without one fills and pads its text input. */
+.inspector-field.inspector-slider-with-value > .inspector-slider-value-field:not(.has-suffix) .float-field-input,
+.inspector-field.inspector-slider-with-value > .inspector-slider-value-field:not(.has-suffix) .int-field-input {
 	box-sizing: border-box;
 	width: 100%;
 	min-width: 0;

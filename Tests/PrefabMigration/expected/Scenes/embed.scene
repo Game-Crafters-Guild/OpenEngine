@@ -1,0 +1,4 @@
+[scene name="Collide" version=1]
+[resource id="x" path="something.prefab"]
+[embed id="x" type="Material"]
+color = (1, 0, 0)

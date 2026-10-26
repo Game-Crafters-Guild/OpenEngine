@@ -417,7 +417,7 @@ struct OceanParamsGPU
     uint32 PlanarReflectionAvailable = 0;
     float32 ShallowRefractionReflectionSuppression = 1.0f;
 
-    // --- Displacement combine cascade (OceanRenderer.CombineDisplacementCascade) ---
+    // --- Displacement combine cascade (OceanRenderer.CombineCascade) ---
     // CombineWavesAvailable = 1 when the combine cascade was baked + bound this
     // frame (the toggle is on AND the cascade is ready), so OceanSampleDisplacement
     // samples ~2 combined slices instead of summing all 16 FFT cascades. 0 = the

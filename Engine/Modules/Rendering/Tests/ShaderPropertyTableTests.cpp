@@ -144,11 +144,15 @@ TEST(ShaderPropertyGrammar, DisplayNameDerivesFromCamelCaseWhenAbsent)
     const auto t = ParseDeclaredProperties(Surface(
         "// @property float fresnelRimCap\n"
         "// @property float roughness\n"
-        "// @property float ao\n"));
+        "// @property float ao\n"
+        "// @property float detailUVScale\n"
+        "// @property color sRGBTint\n"));
     ASSERT_FALSE(t.Rejected()) << Errors(t);
     EXPECT_EQ(Prop(t, "fresnelRimCap").DisplayName, "Fresnel Rim Cap");
     EXPECT_EQ(Prop(t, "roughness").DisplayName, "Roughness");
     EXPECT_EQ(Prop(t, "ao").DisplayName, "AO");
+    EXPECT_EQ(Prop(t, "detailUVScale").DisplayName, "Detail UV Scale");
+    EXPECT_EQ(Prop(t, "sRGBTint").DisplayName, "sRGB Tint");
 }
 
 TEST(ShaderPropertyGrammar, DefaultsWithSpacesAfterCommasParse)
@@ -203,6 +207,13 @@ TEST(ShaderPropertyGrammar, MalformedRangeUnknownAttributeAndBadTokenAreErrors)
     EXPECT_TRUE(ParseDeclaredProperties(Surface("// @property float 9lives\n")).Rejected());
     EXPECT_TRUE(ParseDeclaredProperties(Surface("// @property enum e default=A\n")).Rejected());
     EXPECT_TRUE(ParseDeclaredProperties(Surface("// @property float a hdr\n")).Rejected());
+}
+
+TEST(ShaderPropertyGrammar, AnEmptyDefaultIsOneComponentThatIsNotANumber)
+{
+    const auto t = ParseDeclaredProperties(Surface("// @property float a default=\"\"\n"));
+    ASSERT_TRUE(t.Rejected());
+    EXPECT_NE(Errors(t).find("default component '' is not a number"), std::string::npos) << Errors(t);
 }
 
 TEST(ShaderPropertyGrammar, NonFiniteNumbersAreErrors)

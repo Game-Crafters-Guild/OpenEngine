@@ -40,7 +40,7 @@ class CapturingLogSink final : public Logger::LogSink
     }
     void Flush() override {}
     bool ShouldLog(Logger::LogLevel) const override { return true; }
-    Logger::String GetName() const override { return "TestCapturingLogSink"; }
+    std::string GetName() const override { return "TestCapturingLogSink"; }
 
   private:
     std::vector<std::string>* m_Out;

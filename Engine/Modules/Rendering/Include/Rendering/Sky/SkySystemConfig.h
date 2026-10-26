@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Types/Color.h"
+
 namespace GameEngine {
 namespace Rendering {
 
@@ -24,7 +26,7 @@ struct SkySystemConfig
     // rising as lambda^1.1, sampled at the 680, 550 and 440 nm the sky's coefficients use. The
     // atmosphere reddens it further at moonrise through the same transmittance as the sun.
     // Includes/moon_disc.glsl carries the same values as GE_MOON_TINT for the sky-view LUT and the disc.
-    float moonColor[3] = { 1.2142f, 0.9614f, 0.7521f };
+    ColorLinear moonColor{1.2142f, 0.9614f, 0.7521f};
 };
 
 } // namespace Rendering

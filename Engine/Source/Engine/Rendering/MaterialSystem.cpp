@@ -21,6 +21,7 @@
 #include "Engine/Rendering/ProjectMaterialPrewarmService.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Engine/Rendering/TextureService.h"
+#include "Mathematics/Interpolation.h"
 #include "SceneDrawWarm.h"
 
 #include "AssetCore/AssetEvents.h"
@@ -38,8 +39,9 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/GPUDrawStreamBuilder.h"
-#include "Rendering/Core/HashUtils.h"
+#include "Rendering/Core/HotReloadIntegration.h"
 #include "Rendering/Core/PipelineTypes.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialBlendDerive.h"
 #include "Rendering/Materials/MaterialBuildService.h"
@@ -51,6 +53,8 @@
 #include "Rendering/Materials/ShaderComposer.h"
 #include "Rendering/Materials/ShaderPropertyTableCache.h"
 #include "Rendering/ShaderCache/ShaderProgramIndex.h"
+#include "Types/FlatSet.h"
+#include "Types/Fnv1a.h"
 #include "Types/StringId.h"
 #include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
@@ -210,7 +214,7 @@ Rendering::GraphicsPipelineId InternBaseMaterialPipeline(
     gd.Rasterization.cullMode  = cullMode;
     gd.Rasterization.frontFace = frontFace;
     gd.DepthStencil.depthTestEnable  = blend.DepthTestEnable;
-    gd.DepthStencil.depthCompareOp   = Rendering::CompareOp::GreaterOrEqual;
+    gd.DepthStencil.depthCompareOp   = Rendering::ReverseZ::kNearerOrEqual;
     gd.DepthStencil.depthWriteEnable = blend.DepthWriteEnable;
     gd.ColorBlend.attachments = {blend.Attachment};
     if (!blend.BlendEnable)
@@ -528,6 +532,9 @@ void MaterialSystem::OnProjectSwitched()
     m_MaterialBuildContext = Rendering::MaterialBuildContext{};
     m_AdapterShaderDirVerified = false;
     m_MaterialBuildContextSourceVersion = 0;
+    // Held shader sources: the new project's files may sit at the old ones' paths
+    // and may have been edited while no watcher reported them.
+    Rendering::NotifyShaderSourcesChanged();
 
     // Compiled SPIR-V: entries are keyed by PATH, not by content. An identity
     // with a material asset path cannot collide across projects, so for those
@@ -617,6 +624,12 @@ void MaterialSystem::InstallReloadInvalidator(AssetEventDispatcher& dispatcher)
         dispatcher, AssetType::Shader,
         [this](const GUID& guid)
         {
+            // Here on the watcher thread, before the frame's drain: a prewarm job
+            // or a shader-program reload that runs in between must already read the
+            // edited bytes. Every content event empties the whole source cache --
+            // a create or delete can change where any directive resolves, and a
+            // deleted file's GUID no longer names a path.
+            Rendering::NotifyShaderSourcesChanged();
             std::lock_guard<std::mutex> lk(m_PendingShaderEditsMutex);
             m_PendingShaderEditGuids.push_back(guid);
         },
@@ -625,8 +638,10 @@ void MaterialSystem::InstallReloadInvalidator(AssetEventDispatcher& dispatcher)
 
 void MaterialSystem::NotifyShaderSourceEdited(const std::filesystem::path& sourcePath)
 {
-    if (sourcePath.empty())
-        return;
+    // The editor's Recompile button names the material's surface, which is empty for
+    // the default surface, but the edit it recovers may be in any include the watcher
+    // did not report: re-read every source, whatever the path.
+    Rendering::NotifyShaderSourcesChanged();
     std::lock_guard<std::mutex> lk(m_PendingShaderEditsMutex);
     m_PendingShaderEditPaths.push_back(sourcePath);
 }
@@ -691,7 +706,10 @@ void MaterialSystem::DrainPendingShaderSourceEdits()
     std::vector<std::string> fileNames;
     for (const auto& p : paths)
     {
-        std::string name = toLower(p.filename().string());
+        // An empty path is the Recompile button of a material that authors no
+        // surface: it names the default surface that material composes with.
+        const std::filesystem::path named = p.empty() ? ResolveSurfacePath(MaterialDocument{}, {}) : p;
+        std::string name = toLower(named.filename().string());
         if (!name.empty()
             && std::find(fileNames.begin(), fileNames.end(), name) == fileNames.end())
             fileNames.push_back(std::move(name));
@@ -1002,12 +1020,12 @@ void MaterialSystem::PackMaterialSSBO()
     // (bumped by every MarkDirty — properties, bindless indices, UV transforms,
     // sampler preset) is kept beside it: it says whether any row can differ, and
     // each row's material revision says which.
-    // Seeded with the FNV-1a offset basis, the chain HashUtils::HashValue continues.
-    uint64_t stamp = Rendering::HashUtils::HashValue(Hashing::kFnv1a64OffsetBasis, m_MaterialSSBOGeneration);
-    stamp = Rendering::HashUtils::HashValue(stamp, materialCount);
-    stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultWhiteBindlessIndex());
-    stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultFlatNormalBindlessIndex());
-    stamp = Rendering::HashUtils::HashValue(stamp, m_Textures->DefaultBlackBindlessIndex());
+    // Seeded with the FNV-1a offset basis, the chain Hashing::Fnv1a64Value continues.
+    uint64_t stamp = Hashing::Fnv1a64Value(Hashing::kFnv1a64OffsetBasis, m_MaterialSSBOGeneration);
+    stamp = Hashing::Fnv1a64Value(stamp, materialCount);
+    stamp = Hashing::Fnv1a64Value(stamp, m_Textures->DefaultWhiteBindlessIndex());
+    stamp = Hashing::Fnv1a64Value(stamp, m_Textures->DefaultFlatNormalBindlessIndex());
+    stamp = Hashing::Fnv1a64Value(stamp, m_Textures->DefaultBlackBindlessIndex());
     const uint64_t contentEpoch = Material::GetGlobalContentEpoch();
 
     // Publish the SSBO binding every frame — buffer/offset differ per slot.
@@ -1369,8 +1387,8 @@ Material* MaterialSystem::RegisterMaterialFromDocument(
         // A texGuidStr of "" or one that fails to parse counts as "removed"
         // — same handling as UpdateMaterialTextures (line ~3777).
         {
-            std::unordered_set<StringId> liveSlots;
-            liveSlots.reserve(resolved.textures.size());
+            FlatSet<StringId> liveSlots;
+            liveSlots.Reserve(resolved.textures.size());
             for (const auto& [texName, texGuidStr] : resolved.textures)
             {
                 if (texGuidStr.empty())
@@ -1385,13 +1403,13 @@ Material* MaterialSystem::RegisterMaterialFromDocument(
                 // Treat embedded refs (non-empty texGuidStr that doesn't
                 // parse as a GUID) as live — ResolveEmbeddedTextures binds
                 // them after this function returns.
-                liveSlots.insert(nameId);
+                liveSlots.Insert(nameId);
             }
 
             std::vector<StringId> slotsToClear;
             for (const auto& [slotName, _] : mat->GetTextureBindings())
             {
-                if (liveSlots.find(slotName) == liveSlots.end())
+                if (!liveSlots.Contains(slotName))
                     slotsToClear.push_back(slotName);
             }
 
@@ -1652,7 +1670,7 @@ ProvenAlwaysDiscardingMask(const MaterialDocument& doc)
     if (!std::isfinite(*baseAlpha) || !std::isfinite(*authoredCutoff))
         return std::nullopt;
 
-    const float cutoff = std::clamp(*authoredCutoff, 0.0f, 1.0f);
+    const float cutoff = Math::Clamp01(*authoredCutoff);
     if (*baseAlpha >= cutoff)
         return std::nullopt;
     return AlwaysDiscardingMask{*baseAlpha, cutoff};
@@ -1983,6 +2001,7 @@ bool MaterialSystem::EnsureMaterialBuildContextReady()
                 m_MaterialBuildContext.AdapterShaderDir = std::move(adapterDir);
                 m_AdapterShaderDirVerified = false;
                 m_ShaderCompilationCache.Clear();
+                Rendering::NotifyShaderSourcesChanged();
             }
 
             // After the re-derive, never before: the staged module roots hang off

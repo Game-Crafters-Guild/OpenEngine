@@ -4,7 +4,6 @@ project(PathfindingECS LANGUAGES CXX)
 
 add_library(PathfindingECS OBJECT
     Source/Navigation.cpp
-    Source/NavigationAgentReflection.cpp
     Source/NavigationAgentRequests.cpp
     Source/NavigationBakedData.cpp
     Source/NavigationComponentInstantiations.cpp
@@ -12,8 +11,6 @@ add_library(PathfindingECS OBJECT
     Source/NavigationMeshBake.cpp
     Source/NavigationService.cpp
     Source/NavigationSourceCollector.cpp
-    Source/NavigationSourceReflection.cpp
-    Source/NavigationSurfaceReflection.cpp
     Source/NavigationSurfaceRuntime.cpp
     Source/Systems/NavigationSurfaceSystem.cpp
     Source/Systems/NavigationPathfindingSystem.cpp
@@ -35,6 +32,9 @@ target_include_directories(PathfindingECS
         $<TARGET_PROPERTY:FileWatcher,INTERFACE_INCLUDE_DIRECTORIES>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        # The bake waits for the spline recipes (SplineRecipesScriptApi.h). Headers only: the
+        # SplineRecipes objects reach the binary through the Engine module splice.
+        $<TARGET_PROPERTY:SplineRecipes,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
 target_link_libraries(PathfindingECS
@@ -51,8 +51,10 @@ target_link_libraries(PathfindingECS
         # link would create a SHARED↔STATIC cycle, which CMake forbids. Engine's
         # symbols get resolved when Engine.dll links PathfindingECS.lib. The
         # Engine/Include headers the sources use arrive through ECSComponents.
+        # AssetManager.h includes Events/Event.h (header-only).
+        Events
         PhysicsECS
-        # The surface bake reads the terrain's heightfield (PlanarHeightQuery).
+        # The surface bake reads the terrain's height (SurfaceHeightQuery).
         TerrainECS
         JobSystem
 )
@@ -75,6 +77,7 @@ if(BUILD_TESTING)
         Tests/NavigationSurfaceGatingTests.cpp
         Tests/NavigationSurfaceOwnershipTests.cpp
         Tests/NavigationSurfaceTests.cpp
+        Tests/NavigationSurfacePagedTerrainTests.cpp
         Tests/NavigationSurfaceBakedDataTests.cpp
         Tests/NavigationSurfaceDirtyTileTests.cpp
         ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp

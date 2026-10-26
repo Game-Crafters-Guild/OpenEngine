@@ -33,21 +33,21 @@ namespace
 // On Linux they look like:
 //   "./Editor(_ZN9GameEngine3BarEv+0x24) [0x100001234]"
 // We best-effort parse a human-friendly {module, symbol} pair and demangle.
-String DemangleIfCxx(const char* mangled)
+std::string DemangleIfCxx(const char* mangled)
 {
     if (!mangled || !*mangled)
         return {};
     int status = 0;
-    char* buf = abi::__cxa_demangle(mangled, nullptr, nullptr, &status);
-    if (status == 0 && buf)
+    char* demangled = abi::__cxa_demangle(mangled, nullptr, nullptr, &status);
+    if (status == 0 && demangled)
     {
-        String out(buf);
-        std::free(buf);
+        std::string out(demangled);
+        std::free(demangled);
         return out;
     }
-    if (buf)
-        std::free(buf);
-    return String(mangled);
+    if (demangled)
+        std::free(demangled);
+    return std::string(mangled);
 }
 
 void ParseSymbolLineApple(const char* line, BacktraceFrame& out)
@@ -76,7 +76,7 @@ void ParseSymbolLineApple(const char* line, BacktraceFrame& out)
     // symbol up to " + offset"
     const char* symStart = p;
     const char* plus = std::strstr(p, " + ");
-    String mangled;
+    std::string mangled;
     if (plus)
         mangled.assign(symStart, plus - symStart);
     else
@@ -95,9 +95,9 @@ std::mutex& DbgHelpMutex()
     return s_Mutex;
 }
 
-Vector<BacktraceFrame> CaptureBacktrace(int maxFrames, int skipFrames)
+std::vector<BacktraceFrame> CaptureBacktrace(int maxFrames, int skipFrames)
 {
-    Vector<BacktraceFrame> out;
+    std::vector<BacktraceFrame> out;
     if (maxFrames <= 0)
         return out;
     if (skipFrames < 0)
@@ -142,7 +142,7 @@ Vector<BacktraceFrame> CaptureBacktrace(int maxFrames, int skipFrames)
             if (dladdr(addrs[start + i], &info) && info.dli_fname)
             {
                 const char* base = std::strrchr(info.dli_fname, '/');
-                f.Module = base ? String(base + 1) : String(info.dli_fname);
+                f.Module = base ? std::string(base + 1) : std::string(info.dli_fname);
             }
         }
 
@@ -203,7 +203,7 @@ Vector<BacktraceFrame> CaptureBacktrace(int maxFrames, int skipFrames)
             if (GetModuleFileNameA(mod, modName, MAX_PATH))
             {
                 const char* base = std::strrchr(modName, '\\');
-                f.Module = base ? String(base + 1) : String(modName);
+                f.Module = base ? std::string(base + 1) : std::string(modName);
             }
         }
 

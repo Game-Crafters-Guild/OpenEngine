@@ -37,7 +37,7 @@
 #include "Components/Rendering/Skybox.h"
 #include "Components/Rendering/WindVolume.h"
 #include "Components/RuntimeOnlyEntity.h"
-#include "Components/SceneBlueprintInstance.h"
+#include "Components/PrefabInstance.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/Terrain.h"
@@ -45,7 +45,6 @@
 #include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/Transform.h"
 #include "Core/Engine.h"
-#include "Editor/Assets/AssetRelativePath.h"
 #include "ECS/Components.h"   // Disabled marker component
 #include "ECS/ComponentRegistry.h"
 #include "ECS/ECSTemplates.h" // ensure template implementations are visible
@@ -81,7 +80,6 @@
 #include "Logger/Logger.h"
 #include "Mathematics/Types.h"
 #include "Editor/Shortcuts/EditorShortcuts.h"
-#include "Panels/SettingsPanel.h"
 #include "Platform/ContextMenu.h"
 #include "Platform/Window.h"
 #include "PlayMode/PlayModeManager.h"
@@ -122,6 +120,7 @@
 #include "PhysicsECS/Components/PhysicsCollider.h"
 #include "PhysicsECS/Components/PhysicsWorldSettingsComponent.h"
 #include "PhysicsECS/Components/SphereColliderShape.h"
+#include "Types/StringUtils.h"
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -665,8 +664,8 @@ class HierarchyPanel::HierarchyDataProvider final : public TreeChangeTrackingPro
                 anyParent = true;
 
                 // Key children by the same packed representation we expose via TreeId
-                TreeId parentKey = Encode(p->parent);
-                if (p->parent.IsValid() && alive.count(static_cast<uint32_t>(parentKey)))
+                TreeId parentKey = Encode(p->Entity);
+                if (p->Entity.IsValid() && alive.count(static_cast<uint32_t>(parentKey)))
                 {
                     m_Children[static_cast<uint32_t>(parentKey)].push_back(e);
                 }
@@ -1236,9 +1235,9 @@ class HierarchyPanel::HierarchyDataProvider final : public TreeChangeTrackingPro
     // Rebuild's alive-check semantics.
     TreeId DesiredParentKey(const EntityHandle& e) const
     {
-        if (auto* p = m_World->GetComponent<Components::Parent>(e); p && p->parent.IsValid())
+        if (auto* p = m_World->GetComponent<Components::Parent>(e); p && p->Entity.IsValid())
         {
-            const uint32_t pk = static_cast<uint32_t>(Encode(p->parent));
+            const uint32_t pk = static_cast<uint32_t>(Encode(p->Entity));
             if (m_EntityParentKey.find(pk) != m_EntityParentKey.end())
                 return static_cast<TreeId>(pk);
         }
@@ -1846,7 +1845,7 @@ HierarchyPanel::HierarchyPanel()
                 }
             } });
 
-    // Accept asset drags (e.g. blueprint scene files) to instantiate entities.
+    // Accept asset drags (e.g. prefab scene files) to instantiate entities.
     // Accept bookmark drags from Bookmarks panel to navigate (open scene, select entity).
     m_Tree->SetAcceptsPayload([](UI::Interaction::PayloadTypeId tid)
                               { return tid == UI::Interaction::GetPayloadTypeId<Editor::AssetPathsDragPayload>() ||
@@ -2389,11 +2388,9 @@ HierarchyPanel::HierarchyPanel()
             m_OnTreeIconSizeWheelCommit(px);
     });
 
-    // Search bar placement and visibility are controlled via Settings.
+    // Search bar placement is controlled via Settings.
     auto built = BuildPanelSearchBar(
         "hierarchy-search-field",
-        []()
-        { return SettingsPanel::GetSearchBarsVisible(); },
         {},
         [this](const std::string& text)
         { ApplySearchFilter(text); },
@@ -2408,10 +2405,10 @@ HierarchyPanel::HierarchyPanel()
     m_SearchField = built.FieldPtr;
     if (m_SearchField)
         m_SearchField->SetTooltip("Search names, or combine filters: t:Light path:\"/World/Root\" name:Key id:42");
-    navigationBar->SetSearchBar(std::move(built.Root));
+    navigationBar->PlaceSearchAbove(m_SearchBar);
+    AddChild(std::move(built.Root));
     AddChild(std::move(navigationBar));
-    // The row, not the search inside it, is what the top/bottom setting moves.
-    EditorSearchBars::RegisterHosted(m_SearchBar, m_NavigationBar);
+    EditorSearchBars::Register(m_SearchBar);
 }
 
 void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
@@ -2619,7 +2616,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                         if (parent.IsValid())
                         {
                             Parent p{};
-                            p.parent = parent;
+                            p.Entity = parent;
                             m_World->AddComponentImmediate(flareEntity, p);
                         }
 
@@ -2670,7 +2667,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                             if (parent.IsValid() && world->IsValid(parent))
                             {
                                 Parent p{};
-                                p.parent = parent;
+                                p.Entity = parent;
                                 world->AddComponentImmediate(result.rootEntity, p);
                                 if (auto* lt = world->GetComponentForWrite<Components::Transform>(result.rootEntity))
                                 {
@@ -2685,11 +2682,11 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                                 ctx->OnSceneDirty();
                         },
                         absPath.filename().string());
-                    continue; // Skip SceneBlueprintInstance fallback.
+                    continue; // Skip PrefabInstance fallback.
                 }
             }
 
-            // Fallback: create entity with SceneBlueprintInstance for non-model files.
+            // Fallback: create an entity marked with PrefabInstance for non-model files.
             ECS::EntityHandle e = m_World->CreateEntity();
             if (!e.IsValid())
                 continue;
@@ -2703,25 +2700,15 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             std::strncpy(nm.value, stem.c_str(), sizeof(nm.value) - 1);
             m_World->AddComponentImmediate(e, nm);
 
-            // Store canonical relative path when possible.
-            Components::SceneBlueprintInstance inst{};
-            std::memset(inst.sourcePath, 0, sizeof(inst.sourcePath));
-            std::memset(inst.sourceGuid, 0, sizeof(inst.sourceGuid));
-            // Drop payloads carry registry paths, which are folded on
-            // case-insensitive platforms while the root carries its own
-            // spelling; a lexical subtraction compares case and would
-            // persist an absolute path into the scene file.
-            std::string relStr = Editor::TryMakeAssetRelativePathString(
-                EngineCore::GetInstance().GetAssetManager(), absPath);
-            if (relStr.empty())
-                relStr = absPath.generic_string();
-            std::strncpy(inst.sourcePath, relStr.c_str(), sizeof(inst.sourcePath) - 1);
+            // The marker names the source by GUID; the next load fills the instance from it.
+            Components::PrefabInstance inst{};
+            inst.Source = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(absPath);
             m_World->AddComponentImmediate(e, inst);
 
             if (parent.IsValid())
             {
                 Parent p{};
-                p.parent = parent;
+                p.Entity = parent;
                 m_World->AddComponentImmediate(e, p);
             }
         }
@@ -2852,7 +2839,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                                 if (dropParent.IsValid())
                                 {
                                     Parent p{};
-                                    p.parent = dropParent;
+                                    p.Entity = dropParent;
                                     m_World->AddComponentImmediate(createdEntity, p);
                                     if (auto* lt = m_World->GetComponentForWrite<Components::Transform>(createdEntity))
                                     {
@@ -3336,7 +3323,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         const bool hasParent = m_ContextTargetEntity.IsValid() && world->IsValid(m_ContextTargetEntity);
         Parent parentComp{};
         if (hasParent)
-            parentComp.parent = m_ContextTargetEntity;
+            parentComp.Entity = m_ContextTargetEntity;
 
         ECS::EntityHandle h = world->CreateEntity();
         if (!h.IsValid())
@@ -3579,9 +3566,6 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         pluginCtx.Undo = m_Undo;
         pluginCtx.SelectEntity = [this](ECS::EntityHandle entity)
         {
-            // Selection belongs to the plugin command, including when it is replayed.
-            // Recording it separately would discard the remaining redo commands.
-            ScopedFlag suppress(m_SuppressSelectionUndo);
             if (m_OnSelectEntity)
                 m_OnSelectEntity(entity);
         };
@@ -3652,7 +3636,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         const bool hasParent = m_ContextTargetEntity.IsValid() && world->IsValid(m_ContextTargetEntity);
         Parent parentComp{};
         if (hasParent)
-            parentComp.parent = m_ContextTargetEntity;
+            parentComp.Entity = m_ContextTargetEntity;
 
         ECS::EntityHandle h = world->CreateEntity();
         if (!h.IsValid())
@@ -3704,7 +3688,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         const bool hasParent = m_ContextTargetEntity.IsValid() && world->IsValid(m_ContextTargetEntity);
         Parent parentComp{};
         if (hasParent)
-            parentComp.parent = m_ContextTargetEntity;
+            parentComp.Entity = m_ContextTargetEntity;
 
         ECS::EntityHandle h = world->CreateEntity();
         if (!h.IsValid())
@@ -4060,7 +4044,7 @@ HierarchyPanel::~HierarchyPanel()
     m_RefreshQueued = false;
     ClearSearchHighlights();
     if (m_SearchBar)
-        SettingsPanel::UnregisterSearchBar(m_SearchBar);
+        EditorSearchBars::Unregister(m_SearchBar);
 
     if (m_ChangeNotifications && m_StructureSub)
     {
@@ -4997,8 +4981,8 @@ void HierarchyPanel::ApplyRenderLayerVisibility()
     m_Tree->RefreshFromProvider();
 }
 
-// has-* follows whether a bar is really on screen, so the navigation row only
-// rides up when there is a bar to make room for.
+// has-* follows whether a bar is really on screen, so the size bar and a bottom search only
+// ride up when there is a bar to make room for.
 void HierarchyPanel::SetHorizontalBarPresent(bool present)
 {
     if (m_Tree)
@@ -5233,8 +5217,7 @@ void HierarchyPanel::ApplySearchFilter(const std::string& searchText)
         type.FullName = registeredName;
         std::transform(type.FullName.begin(), type.FullName.end(), type.FullName.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        const size_t namespaceEnd = type.FullName.rfind("::");
-        type.LeafName = namespaceEnd == std::string::npos ? type.FullName : type.FullName.substr(namespaceEnd + 2);
+        type.LeafName = std::string(UnqualifiedName(type.FullName));
         componentTypes.push_back(std::move(type));
     }
 
@@ -5364,7 +5347,7 @@ bool HierarchyPanel::FinishTreeTextureDrop(const std::filesystem::path& textureP
     if (parent.IsValid() && m_World->IsValid(parent))
     {
         Parent p{};
-        p.parent = parent;
+        p.Entity = parent;
         m_World->AddComponentImmediate(sprite, p);
     }
     NotifyWorldStructure(m_ChangeNotifications, m_World);
@@ -5848,12 +5831,12 @@ void HierarchyPanel::ExpandAncestors(ECS::EntityHandle entity)
     while (cur.IsValid() && m_World->IsValid(cur))
     {
         auto* p = m_World->GetComponent<Parent>(cur);
-        if (!p || !p->parent.IsValid() || !m_World->IsValid(p->parent))
+        if (!p || !p->Entity.IsValid() || !m_World->IsValid(p->Entity))
             break;
-        const TreeId parentTid = HierarchyDataProvider::Encode(p->parent);
+        const TreeId parentTid = HierarchyDataProvider::Encode(p->Entity);
         if (parentTid != 0 && parentTid != kRootId)
             m_Tree->SetExpanded(parentTid, true);
-        cur = p->parent;
+        cur = p->Entity;
     }
 }
 

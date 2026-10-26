@@ -13,7 +13,7 @@
 
 #include "IsolatedUIFixture.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/TextField.h"
@@ -29,7 +29,7 @@
 
 using GameEngine::FloatField;
 using GameEngine::Label;
-using GameEngine::PathUtils;
+using GameEngine::ApplicationPaths;
 using GameEngine::SuffixAlignment;
 using GameEngine::SuffixRole;
 using GameEngine::UIElement;
@@ -46,7 +46,7 @@ constexpr float kLayoutTolerance = 0.5f;
 
 std::string ReadShippedCss(const char* relative)
 {
-    std::ifstream in(PathUtils::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
+    std::ifstream in(ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
     if (!in)
         return {};
     std::ostringstream ss;

@@ -27,6 +27,7 @@
 #include "UIAttributeAccess.h"
 
 #include "Types/ColorUtils.h"
+#include "Types/Fnv1a.h"
 #include "UI/Controls/Mount.h"
 
 #include "Input/InputSystem.h"
@@ -76,7 +77,7 @@
 #include "UI/Assets/UIStyleAsset.h"
 #include "UI/StyleOverrides.h"
 
-#include "Core/Application.h" // PathUtils::GetInstallAssetsRoot
+#include "Core/ApplicationPaths.h"
 
 #if defined(GE_HAVE_YOGA) && GE_HAVE_YOGA
 #include <yoga/Yoga.h>
@@ -273,7 +274,7 @@ void UIManager::Update(float deltaTime, bool interactive)
 
         {
             const std::string stagedFont =
-                (PathUtils::GetInstallAssetsRoot() / "Fonts" / "Roboto-Regular.ttf").string();
+                (ApplicationPaths::GetInstallAssetsRoot() / "Fonts" / "Roboto-Regular.ttf").string();
             tryLoad(stagedFont.c_str());
         }
 #if !defined(__APPLE__)
@@ -827,7 +828,7 @@ void UIManager::Update(float deltaTime, bool interactive)
         if (styleHandle)
         {
             if (analysisSheets.insert(styleHandle.get()).second)
-                analysisSheetHash ^= HashPtr64(styleHandle.get());
+                analysisSheetHash ^= Hashing::HashPointer(styleHandle.get());
             rootSheets.push_back(styleHandle);
         }
     }
@@ -847,7 +848,7 @@ void UIManager::Update(float deltaTime, bool interactive)
         for (const StylesheetHandle& sheetHandle : sheetEl->GetStylesheets())
         {
             if (sheetHandle && analysisSheets.insert(sheetHandle.get()).second)
-                analysisSheetHash ^= HashPtr64(sheetHandle.get());
+                analysisSheetHash ^= Hashing::HashPointer(sheetHandle.get());
         }
     }
     const bool forceGlobalStyle =
@@ -1393,10 +1394,7 @@ void UIManager::Update(float deltaTime, bool interactive)
             findById(findById, rootEl);
             if (restored)
             {
-                m_MouseCaptured = true;
-                m_CaptureElement = restored;
-                m_CaptureInstanceId = restored ? restored->GetInstanceId() : 0;
-                m_CaptureId = captureIdRebuild;
+                CaptureMouse(restored);
             }
             else
             {
@@ -2090,6 +2088,8 @@ void UIManager::UpdateTooltipAndCursor(bool interactive)
             m_CursorCallback(desiredCursor);
         }
     }
+
+    SyncPointerLock();
 }
 
 void UIManager::PublishUpdateProfile(UpdateProfileFrame& prof, bool profEnabled,

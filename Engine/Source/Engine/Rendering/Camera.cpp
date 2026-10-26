@@ -3,6 +3,7 @@
 #include "Components/Transform.h"
 #include "Engine/Rendering/ViewRegistry.h"
 #include "ECS/ECSTemplates.h"
+#include "Mathematics/Angle.h"
 #include "Mathematics/MatrixOps.h"
 #include "Rendering/Common/Math.h"
 
@@ -25,7 +26,7 @@ Mathematics::Matrix4x4 Camera::ComputeProjectionMatrix(float aspectRatio,
     const float safeAspect = std::max(aspectRatio, 0.0001f);
     if (params.Perspective)
     {
-        const float fovRad = Rendering::Math::ToRadians(params.FovY);
+        const float fovRad = Mathematics::ToRadians(params.FovY);
         const float squeeze = std::clamp(params.AnamorphicSqueeze, 1.0f, 4.0f);
         return Mathematics::MakePerspectiveLH_ZO_ReverseZ(fovRad, safeAspect * squeeze, params.NearZ, params.FarZ);
     }

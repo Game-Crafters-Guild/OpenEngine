@@ -3,6 +3,13 @@
 
 #include "Includes/view_params.glsl"
 
+// Interleaved gradient noise (Jimenez 2014): a value in [0, 1) per pixel whose
+// neighbors differ by a large, well-spread step.
+float GE_GtaoInterleavedGradientNoise(vec2 p)
+{
+    return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y));
+}
+
 bool GE_GtaoInside(vec2 uv)
 {
     return all(greaterThanEqual(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)));
@@ -34,7 +41,7 @@ vec2 GE_GtaoDepthUV(sampler2D depth, vec2 uv)
 
 // The guide stores exact raw depth and a 0..3 index within a 2x2 source
 // footprint. Full resolution uses index zero. Retaining the index avoids
-// reconstructing a foreground depth at a different (background) pixel centre.
+// reconstructing a foreground depth at a different (background) pixel center.
 vec3 GE_GtaoGuide(sampler2D guide, ivec2 pix, ivec2 fullSize)
 {
     ivec2 size = textureSize(guide, 0);
@@ -67,7 +74,7 @@ vec3 GE_GtaoDerivative(sampler2D depth, ivec2 pix, ivec2 axis, vec3 center)
     if (va && vb) return abs(da.z) < abs(db.z) ? da : db;
     if (va) return da;
     if (vb) return db;
-    // A one-pixel surface/extent has no usable neighbour on this axis.
+    // A one-pixel surface/extent has no usable neighbor on this axis.
     float raw = texelFetch(depth, pix, 0).r;
     return GE_GtaoPosition((vec2(pix + axis) + 0.5) / vec2(size), raw) - center;
 }

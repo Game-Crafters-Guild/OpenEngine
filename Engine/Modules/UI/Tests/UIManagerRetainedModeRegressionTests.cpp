@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Rendering/Core/Device.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Button.h"
@@ -854,7 +854,7 @@ TEST(UIRegressions, ScrollViewHorizontalScrollbarDoesNotOverlapViewport)
     // The theme is read from the copy the build stages next to the test exe, at
     // the same relative path the editor reads it from under its own exe; its
     // @imports resolve relative to that staged file.
-    const auto theme = PathUtils::GetExecutableDirectory() / "Assets" / "UI" / "theme.css";
+    const auto theme = ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI" / "theme.css";
     ASSERT_TRUE(std::filesystem::exists(theme)) << "Editor theme not staged at " << theme.string();
     ASSERT_TRUE(ui.AttachStyleFromFile(theme.string()));
 

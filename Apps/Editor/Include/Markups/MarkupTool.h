@@ -75,7 +75,7 @@ std::vector<Mathematics::Vector2> SimplifyLassoStroke(std::span<const Mathematic
 // Region: a drag paints a lasso, closed where it is released; clicks place knots instead, closed by
 // Enter or a click on the first knot; Escape cancels. An outline that crosses itself is refused
 // with a notice. The new region is selected and the spline tool shows its knots. One undo step
-// per mark-up; a mark-up is always placed at the scene root, never inside a blueprint instance.
+// per mark-up; a mark-up is always placed at the scene root, never inside a prefab instance.
 class MarkupTool final : public SceneTools::ISceneTool, public SceneTools::IGizmo
 {
 public:

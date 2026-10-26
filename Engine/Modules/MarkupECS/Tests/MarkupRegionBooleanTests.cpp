@@ -14,7 +14,7 @@
 
 using namespace GameEngine;
 using MarkupECS::CombineRegionArea;
-using MarkupECS::MarkupAreaPiece;
+using SplineGeometry::AreaPiece;
 using MarkupECS::MarkupFootprint;
 using Mathematics::Vector2;
 
@@ -42,7 +42,7 @@ TEST(MarkupRegionBoolean, AnExcludeInsideTheBaseIsAHole)
     std::vector<Vector2> base = Square(0.0f, 0.0f, 40.0f);
     std::reverse(base.begin(), base.end());
     const std::vector<MarkupFootprint> excludes{RingFootprint(Square(10.0f, 10.0f, 10.0f))};
-    const std::vector<MarkupAreaPiece> pieces = CombineRegionArea(base, {}, excludes);
+    const std::vector<AreaPiece> pieces = CombineRegionArea(base, {}, excludes);
     ASSERT_EQ(pieces.size(), 1u);
     EXPECT_NEAR(Mathematics::PolygonDoubledSignedArea(pieces[0].Outer), 2.0f * 1600.0f, 0.1f);
     ASSERT_EQ(pieces[0].Holes.size(), 1u);
@@ -59,10 +59,10 @@ TEST(MarkupRegionBoolean, IncludesJoinOrStandApartAndACircleCutsAPolygonHole)
     pond.Center = Vector2(15.0f, 20.0f);
     pond.Radius = 5.0f;
     const std::vector<MarkupFootprint> excludes{pond};
-    const std::vector<MarkupAreaPiece> pieces = CombineRegionArea(Square(0.0f, 0.0f, 40.0f), includes, excludes);
+    const std::vector<AreaPiece> pieces = CombineRegionArea(Square(0.0f, 0.0f, 40.0f), includes, excludes);
     ASSERT_EQ(pieces.size(), 2u);
-    const MarkupAreaPiece& joined = pieces[0].Outer.size() > 4 ? pieces[0] : pieces[1];
-    const MarkupAreaPiece& apart = pieces[0].Outer.size() > 4 ? pieces[1] : pieces[0];
+    const AreaPiece& joined = pieces[0].Outer.size() > 4 ? pieces[0] : pieces[1];
+    const AreaPiece& apart = pieces[0].Outer.size() > 4 ? pieces[1] : pieces[0];
     EXPECT_NEAR(MarkupECS::RegionOutlineArea(joined.Outer), 1600.0f + 200.0f, 0.1f) << "the overlap counted twice";
     ASSERT_EQ(joined.Holes.size(), 1u);
     EXPECT_EQ(joined.Holes[0].size(), MarkupECS::kFootprintCircleCorners);

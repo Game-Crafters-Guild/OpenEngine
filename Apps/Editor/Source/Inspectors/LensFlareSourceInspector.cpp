@@ -9,6 +9,7 @@
 #include "Assets/LensFlareDefinitionAsset.h"
 #include "Components/Rendering/LensFlareSource.h"
 #include "Core/Engine.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/EditorIcons.h"
 #include "Editor/Assets/AsyncAssetHelpers.h"
 #include "ECS/Entity.h"
@@ -16,6 +17,7 @@
 #include "Inspectors/InspectorColorSwatchRow.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Panels/ColorPicker.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/CurveField.h"
 #include "UI/Controls/CurvePresetPicker.h"
@@ -183,7 +185,6 @@ void AddFlareToggle(UIElement* parent,
         }, tooltip);
 }
 
-constexpr float kFlareColorPickerMaxIntensity = 8.0f;
 constexpr float kFlareElementPreviewSize = 24.0f;
 constexpr float kFlareElementHeaderSwatchSize = 10.0f;
 using FlareColorAccess = std::function<LensFlare::Color*(FlareAsset&)>;
@@ -487,14 +488,14 @@ private:
 void FlareColorToPickerState(const LensFlare::Color& color, uint32_t& outArgb, float& outIntensity)
 {
     const auto state =
-        InspectorUI::HdrColorToPickerState({color.R, color.G, color.B, color.A}, kFlareColorPickerMaxIntensity);
+        InspectorUI::HdrColorToPickerState({color.R, color.G, color.B, color.A}, kColorPickerMaxIntensity);
     outArgb = state.Argb;
     outIntensity = state.Intensity;
 }
 
 LensFlare::Color PickerStateToFlareColor(uint32_t argb, float intensity)
 {
-    const ColorLinear linear = InspectorUI::PickerStateToHdrColor(argb, intensity, kFlareColorPickerMaxIntensity);
+    const ColorLinear linear = InspectorUI::PickerStateToHdrColor(argb, intensity, kColorPickerMaxIntensity);
     LensFlare::Color color;
     color.R = linear.r;
     color.G = linear.g;
@@ -796,7 +797,7 @@ std::vector<Math::CurveKey> NormalizeFlareEditorKeys(std::vector<Math::CurveKey>
                 outTangent = Math::ResolveKeySlope(source.data(), static_cast<uint32_t>(source.size()),
                                                    static_cast<uint32_t>(i), false);
         }
-        keys[i].Time = std::clamp(keys[i].Time, 0.0f, 1.0f);
+        keys[i].Time = Math::Clamp01(keys[i].Time);
         keys[i].InTangent = inTangent;
         keys[i].OutTangent = outTangent;
         keys[i].Interp = Math::CurveInterp::Smooth;
@@ -1052,8 +1053,8 @@ void BuildCurveEditor(UIElement* parent,
         curve.Keys = graphRaw->GetKeys();
         for (Math::CurveKey& key : curve.Keys)
         {
-            key.Time = std::clamp(key.Time, 0.0f, 1.0f);
-            key.Value = std::clamp(key.Value, 0.0f, 1.0f);
+            key.Time = Math::Clamp01(key.Time);
+            key.Value = Math::Clamp01(key.Value);
         }
         CurvePresets::UserPresetLibrary::Get().Add(CurvePresets::NextUserPresetName(), curve);
         pickerRaw->Refresh();

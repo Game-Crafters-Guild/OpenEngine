@@ -1,4 +1,5 @@
 #include "EngineShaderPath.h"
+#include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
 
 #include "EngineShaderHookState.h"
@@ -67,8 +68,10 @@
 #include "TerrainGrass/RegisterTerrainGrass.h"
 #include "Ocean/Systems/RegisterOceanSystems.h"
 #include "MarkupECS/MarkupService.h"
+#include "SplineECS/SplineNetwork.h"
 #include "SplineECS/SplineService.h"
 #include "SplineECS/Systems/RegisterSplineSystems.h"
+#include "SplineRecipes/SplineRecipeSystem.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Systems/RegisterPathfindingSystems.h"
 // ECS integration
@@ -82,6 +85,7 @@
 #include "ECS/Entity.h"
 #include "ECS/SystemScheduling.h"
 #include "ECS/World.h"
+#include "Scene/PrefabLibrary.h"
 #include "Scene/SceneSchemaRegistry.h" // built-in schema registration, C12 load-abort purge
 #include "Engine/Rendering/FrameOrchestrator.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -167,7 +171,7 @@ void DiagnoseAssetRootBeforeCreation(const std::filesystem::path& workspaceRoot,
 // relative directory is interpreted against the executable directory.
 std::filesystem::path ResolveWorkspaceRoot(const std::filesystem::path& directory)
 {
-    const std::filesystem::path exeDir = PathUtils::GetExecutableDirectory();
+    const std::filesystem::path exeDir = ApplicationPaths::GetExecutableDirectory();
     std::filesystem::path root = directory.empty() ? exeDir : directory;
     if (!root.is_absolute())
         root = exeDir / root;
@@ -217,7 +221,7 @@ static std::filesystem::path ResolveEngineShaderPath(const std::filesystem::path
 
 static std::string ShaderPackageRebuildAction(const std::string& packageName)
 {
-    return Detail::ShaderPackageRebuildAction(packageName, PathUtils::GetExecutableDirectory());
+    return Detail::ShaderPackageRebuildAction(packageName, ApplicationPaths::GetExecutableDirectory());
 }
 
 static std::vector<uint8_t> EngineShaderBytecodeLoaderFromAssets(const char* name)
@@ -273,6 +277,8 @@ const WorldServiceLifecycle kWorldServices[] = {
      &TerrainECS::TerrainService::Shutdown},
     {&SplineECS::SplineService::IsInitialized, &SplineECS::SplineService::Initialize,
      &SplineECS::SplineService::Shutdown},
+    {&SplineECS::SplineNetwork::IsInitialized, &SplineECS::SplineNetwork::Initialize,
+     &SplineECS::SplineNetwork::Shutdown},
     {&MarkupECS::MarkupService::IsInitialized, &MarkupECS::MarkupService::Initialize,
      &MarkupECS::MarkupService::Shutdown},
     {&PathfindingECS::NavigationService::IsInitialized, &PathfindingECS::NavigationService::Initialize,
@@ -505,7 +511,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     {
         // The shader-graph node library ships with the engine assets; the
         // Rendering module cannot locate the executable itself on every host.
-        const std::filesystem::path installAssets = PathUtils::GetInstallAssetsRoot();
+        const std::filesystem::path installAssets = ApplicationPaths::GetInstallAssetsRoot();
         if (!installAssets.empty())
             ShaderGraph::SetEngineGraphNodesRoot(installAssets / "Shaders" / "Graph" / "Nodes");
     }
@@ -528,7 +534,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
 
     // Ensure process working directory matches the resolved workspace root.
     // This keeps relative path usage project-centric and avoids accidental writes into app bundles.
-    GameEngine::PathUtils::EnsureWorkingDirectoryMatches(resolvedWorkspaceRoot);
+    GameEngine::ApplicationPaths::EnsureWorkingDirectoryMatches(resolvedWorkspaceRoot);
 
     // Resolve the configured asset directory and asset database locations against the
     // workspace root, and publish them for consumers (Editor, tools).
@@ -611,6 +617,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         return false;
     }
     Logger::Log::Info("[Startup] AssetManager: {:.1f}ms", MsSince(tPhase));
+    m_PrefabLibrary = MakeUnique<Scene::PrefabLibrary>(*m_AssetManager);
 
     // Native C++ user-script manager (watches sources; build/load pipeline lands in C10+).
     // After AssetManager + FileWatchingService so its watch subscriptions are valid.
@@ -755,7 +762,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         // The cooked cache a runtime ships is probed before the workspace's own, so a persisted
         // workspace cache never shadows it; a program it lacks compiles into the workspace.
         ShaderCacheRoots shaderCacheRoots;
-        if (const auto bundleCache = PathUtils::GetBundledShaderCacheRoot(); !bundleCache.empty())
+        if (const auto bundleCache = ApplicationPaths::GetBundledShaderCacheRoot(); !bundleCache.empty())
             shaderCacheRoots.ReadOnly.push_back(bundleCache);
         shaderCacheRoots.Writable = resolvedWorkspaceRoot / ".Cache" / "Shaders";
         ShaderProgramAsset::SetShaderCacheRoots(std::move(shaderCacheRoots));
@@ -767,7 +774,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     ScriptsConfig scriptsConfig;
     std::filesystem::path scriptsNativeDllPath;
     {
-        using GameEngine::PathUtils;
+        using GameEngine::ApplicationPaths;
 
         const std::filesystem::path& workspaceRoot = resolvedWorkspaceRoot;
 
@@ -806,7 +813,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         if (scriptsNativeDllPath.empty())
         {
             // Fallback for unusual dev layouts; prefer the platform-specific resolver above.
-            scriptsNativeDllPath = PathUtils::GetExecutableDirectory() / "GameEngine.Native.dll";
+            scriptsNativeDllPath = ApplicationPaths::GetExecutableDirectory() / "GameEngine.Native.dll";
         }
     }
 
@@ -1139,6 +1146,7 @@ void EngineCore::Shutdown()
         Logger::Log::Info("Audio system shutdown");
     }
 
+    m_PrefabLibrary.reset();
     if (m_AssetManager)
     {
         // If we registered the rendering hot-reload bridge, unregister it before tearing down assets
@@ -1268,6 +1276,9 @@ void EngineCore::Update(float64 deltaTime)
     {
         m_AssetManager->Update();
     }
+    // The library's frame boundary, after the reloads the update completed.
+    if (m_PrefabLibrary)
+        m_PrefabLibrary->CollectAtFrameBoundary();
 
     // Update audio system once per frame on the main thread.
     if (m_AudioSystem)
@@ -1498,6 +1509,7 @@ bool EngineCore::EnableRenderingLoop(Engine::Renderer::RenderServices* renderSer
             {"RenderExtraction", "TerrainExtraction"},
             renderServices ? renderServices->GetDevice() : nullptr, renderServices);
         SplineECS::AddSplineSystemsToSchedule(schedule);
+        SplineRecipes::AddSplineRecipeSystemsToSchedule(schedule, renderServices);
         PathfindingECS::AddPathfindingSystemsToSchedule(schedule);
         // Associate contributions with their plugin so reload reconciliation
         // can replace or retire that plugin's systems.

@@ -47,6 +47,7 @@
 #include "CBTTestHarness.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/VectorPrinting.h"
 #include "Rendering/Core/CommandList.h"
 
 using namespace GameEngine::CBTTerrain;

@@ -14,6 +14,7 @@
 #include "Rendering/Core/RenderGraph/RGResourcePool.h"
 #include "Rendering/Core/RenderGraph/RGTransientPool.h"
 #include "Rendering/Core/RenderGraph/RGUploadRing.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Engine/Rendering/Pipeline/PipelineFrameResources.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
 #include <span>
@@ -181,7 +182,7 @@ static GroundEntities CreateGround(GameEngine::ECS::World& world)
         auto c = world.CreateEntity();
         out.post = c;
         GameEngine::Components::Parent parent{};
-        parent.parent = e;
+        parent.Entity = e;
         world.AddComponentImmediate(c, parent);
 
         // IMPORTANT:
@@ -535,7 +536,7 @@ int main()
         clear.clearColorValue[1] = 0.08f;
         clear.clearColorValue[2] = 0.10f;
         clear.clearColorValue[3] = 1.0f;
-        clear.clearDepthValue = 0.0f;
+        clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
         rs->Views().SetViewTargets(viewId, 0, 0, 0, clear);
 
         // Update camera matrices.

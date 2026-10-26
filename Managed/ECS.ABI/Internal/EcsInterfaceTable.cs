@@ -69,6 +69,16 @@ namespace GameEngine.ECS.Internal
 
         // v2.3 fields (1 function pointer): the entity switch (World::SetEntityEnabledImmediate)
         public nint SetEntityEnabled;
+
+        // v2.4 fields (2 function pointers): a script's write of an engine component, and the
+        // engine's component defaults
+        public nint SetComponentBytesFromScript;
+        public nint GetComponentDefaults;
+
+        // v2.5 fields (2 function pointers): an instance of a resident prefab (Scene::SpawnPrefab), and its
+        // removal (Scene::DespawnPrefab)
+        public nint SpawnPrefab;
+        public nint DespawnPrefab;
     }
 
     /// <summary>
@@ -78,7 +88,7 @@ namespace GameEngine.ECS.Internal
     internal static class EcsInterfaceTable
     {
         private const uint kAbiMajor = 2;
-        private const uint kAbiMinor = 3;
+        private const uint kAbiMinor = 5;
         private static readonly uint kAbi = (kAbiMajor << 16) | kAbiMinor;
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

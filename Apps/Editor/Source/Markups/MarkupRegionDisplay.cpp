@@ -17,9 +17,9 @@
 #include "Mathematics/Ray.h"
 #include "Ocean/OceanSeaLevel.h"
 #include "Markups/MarkupEditorBridge.h"
-#include "Picking/MeshPickingService.h"
+#include "Picking/ScenePick.h"
 #include "Placement/CenterlineSampling.h"
-#include "Placement/SplineSurfaceConform.h"
+#include "SplineRecipes/SplineSurfaceConform.h"
 #include "Placement/TileLayout.h"
 #include "SceneView/SplineDrapePolylines.h"
 #include "Spline/SplineData.h"
@@ -58,12 +58,11 @@ std::optional<float32> ProbeTerrainHeight(ECS::World& world, const Vector2& xz)
     Mathematics::Ray3D ray;
     ray.origin = Vector3(xz.x, kTerrainProbeTop, xz.y);
     ray.direction = Vector3(0.0f, -1.0f, 0.0f);
-    Picking::PickOptions options;
+    Scene::PickOptions options;
     options.IncludeMeshes = false;
     options.IncludePrimitives = false;
-    options.IncludeBoundsFallback = false;
     options.MaxDistance = kTerrainProbeReach;
-    const Picking::PickResult result = Picking::RaycastScene(ray, world, options);
+    const Scene::PickResult result = Picking::PickScene(ray, world, options);
     if (!result.Hit)
         return std::nullopt;
     return result.Best.WorldPosition.y;
@@ -153,7 +152,7 @@ MarkupECS::MarkupRegionGround BuildRegionGround(ECS::World& world, ECS::EntityHa
     }
     mean = outline.empty() ? 0.0f : mean / static_cast<float32>(outline.size());
     // A lid point off the terrain takes the outline's mean height.
-    const MarkupECS::MarkupGroundSampler groundAt = [&world, &frameGround, hasTerrain, mean,
+    const SplineGeometry::GroundSampler groundAt = [&world, &frameGround, hasTerrain, mean,
                                                      surfaceLift](const Vector2& xz) {
         const std::optional<float32> ground = hasTerrain ? ProbeTerrainHeight(world, xz) : std::nullopt;
         const float32 height = ground ? *ground + surfaceLift : mean;
@@ -166,7 +165,7 @@ MarkupECS::MarkupRegionGround BuildRegionGround(ECS::World& world, ECS::EntityHa
     base.reserve(outline.size());
     for (const Vector3& point : outline)
         base.emplace_back(point.x, point.z);
-    const std::vector<MarkupECS::MarkupAreaPiece> area =
+    const std::vector<SplineGeometry::AreaPiece> area =
         MarkupECS::CombineRegionArea(base, members.Includes, members.Excludes);
     return MarkupECS::BuildMarkupRegionAreaGround(outline, area, SceneTools::kDrapeSampleStepMetres, groundAt);
 }
@@ -202,7 +201,7 @@ MarkupRegionFrameGround ReadMarkupRegionFrameGround(ECS::World& world)
     frameGround.SeaLevel = ResolveMarkupSeaLevel(world);
     // The regions stand on the terrain by raycast, which reads the resident tiles only
     // (ConformSurfaceRevision).
-    frameGround.GroundRevision = ConformSurfaceRevision(world, nullptr);
+    frameGround.GroundRevision = SplineRecipes::ConformSurfaceRevision(world, nullptr);
     return frameGround;
 }
 

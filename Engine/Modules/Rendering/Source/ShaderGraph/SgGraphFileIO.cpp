@@ -1,5 +1,6 @@
 #include "Rendering/ShaderGraph/SgGraphFileIO.h"
 
+#include "Rendering/Core/HotReloadIntegration.h"
 #include "Rendering/ShaderGraph/SgGraphCompiler.h"
 #include "Rendering/ShaderGraph/SgNodeReflector.h"
 #include "Rendering/ShaderGraph/SgPseudoNodes.h"
@@ -86,8 +87,13 @@ bool WriteGraphFileTextIfChanged(const std::filesystem::path& path, const std::s
                 return true;
         }
 
-        std::ofstream out(path);
-        out << text;
+        {
+            std::ofstream out(path);
+            out << text;
+        }
+        // Generated surfaces live under the shader cache root, which no file watcher
+        // reports, so the writer announces its own edit to the compile path's source cache.
+        Rendering::NotifyShaderSourcesChanged();
         return true;
     }
     catch (...)
@@ -134,10 +140,10 @@ std::filesystem::path GetExecutableDirectoryForGraphNodes()
 #endif
 }
 
-// The install-assets layout rule, as PathUtils::InstallAssetsRootFor states it: inside a macOS
+// The install-assets layout rule, as ApplicationPaths::InstallAssetsRootFor states it: inside a macOS
 // app bundle (<App>.app/Contents/MacOS) the root is Contents/Resources/Assets, and <exe>/Assets
 // everywhere else. This is a copy, not the owner: GameEngineRendering is linked standalone by its
-// own test executables and cannot call PathUtils. A host that can registers the owner's answer
+// own test executables and cannot call ApplicationPaths. A host that can registers the owner's answer
 // through SetEngineGraphNodesRoot, and this copy is then never asked. ShaderGraphNodesRootTests
 // pins it to the owner's answer.
 std::filesystem::path InstallAssetsRootForGraphNodes(const std::filesystem::path& exeDir)

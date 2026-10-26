@@ -235,7 +235,7 @@ protected:
         // Engine is a SHARED library: the loaders log through Engine's Logger state.
         Logger::Log::RedirectToSharedState(GameEngine::GetEngineLoggerState());
         Logger::Log::Initialize({});
-        auto sink = Logger::MakeUnique<Logger::CallbackSink>();
+        auto sink = std::make_unique<Logger::CallbackSink>();
         sink->RegisterCallback([errors](const Logger::LogMessage& message) {
             if (message.Level != Logger::LogLevel::Error)
                 return;

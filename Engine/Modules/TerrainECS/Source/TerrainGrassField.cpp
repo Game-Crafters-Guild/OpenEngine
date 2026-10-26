@@ -1,8 +1,13 @@
 #include "TerrainECS/TerrainGrassField.h"
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "TerrainRowBands.h"
+
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <vector>
 
 namespace GameEngine::TerrainECS
 {
@@ -30,12 +35,117 @@ float32 GrassRegionEase(float32 weight)
 {
     return weight * weight * (3.0f - 2.0f * weight);
 }
+
+// What composing a band of rows did to the field: the change in its counts of nonneutral texels and
+// whether any texel changed.
+struct ComposedRows
+{
+    int64 NonNeutralDelta = 0;
+    int64 NonNeutralDarkeningDelta = 0;
+    bool Changed = false;
+};
+
+// What the bands of one composition did in all; the bands add theirs concurrently.
+struct ComposedTotals
+{
+    std::atomic<int64> NonNeutralDelta{0};
+    std::atomic<int64> NonNeutralDarkeningDelta{0};
+    std::atomic<bool> Changed{false};
+
+    void Add(const ComposedRows& band)
+    {
+        NonNeutralDelta.fetch_add(band.NonNeutralDelta, std::memory_order_relaxed);
+        NonNeutralDarkeningDelta.fetch_add(band.NonNeutralDarkeningDelta, std::memory_order_relaxed);
+        if (band.Changed)
+            Changed.store(true, std::memory_order_relaxed);
+    }
+};
+
+// True when a region of the stack can darken the ground. Without one every texel's Darken Ground
+// scale stays 1, so a field without a darkening channel needs none.
+bool AnyRegionDarkensGround(std::span<const ResolvedModifier> modifiers)
+{
+    for (const ResolvedModifier& mod : modifiers)
+        for (const auto& fx : mod.Effects)
+            if (fx.EffectKind == ResolvedEffect::Kind::Grass
+                && Components::ClampTerrainGrassEffectScale(fx.Grass.GroundDarkeningScale) < 1)
+                return true;
+    return false;
+}
+
+// Compose rows z0..z1 (inclusive) of columns minX..maxX into the field's allocated pixels, and into its
+// darkening channel when that is allocated. Every texel is a pure function of its world position and
+// the ordered stack, and a band writes only its own rows, so bands may run concurrently and in any
+// order with byte-identical results.
+ComposedRows ComposeGrassRows(TerrainGrassField& field, uint32 width, uint32 height, float32 sizeX,
+                              float32 sizeZ, float32 originX, float32 originZ,
+                              std::span<const ResolvedModifier> modifiers, int32 minX, int32 maxX, int32 z0,
+                              int32 z1)
+{
+    ComposedRows result;
+    const bool darkening = !field.GroundDarkening.empty();
+    // The modifiers whose Z extent holds the current row, in stack order. A scene can hold hundreds
+    // of regions while a row crosses a few, so each texel tests only these for its X extent.
+    std::vector<const ResolvedModifier*> rowModifiers;
+    rowModifiers.reserve(modifiers.size());
+    for (int32 z = z0; z <= z1; ++z)
+    {
+        const float32 worldZ = originZ + sizeZ * (static_cast<float32>(z) / (height - 1));
+        rowModifiers.clear();
+        for (const auto& mod : modifiers)
+            if (mod.Enabled && !(worldZ < mod.BoundsMinZ || worldZ > mod.BoundsMaxZ)) rowModifiers.push_back(&mod);
+        for (int32 x = minX; x <= maxX; ++x)
+        {
+            const float32 worldX = originX + sizeX * (static_cast<float32>(x) / (width - 1));
+            float32 heightScale = 1.0f, densityScale = 1.0f, darkeningScale = 1.0f;
+            for (const ResolvedModifier* row : rowModifiers)
+            {
+                const ResolvedModifier& mod = *row;
+                if (worldX < mod.BoundsMinX || worldX > mod.BoundsMaxX) continue;
+                const float32 rawWeight = ComputeWeight(mod, worldX, worldZ);
+                const float32 linearWeight = std::isfinite(rawWeight) ? Math::Clamp01(rawWeight) : 0.0f;
+                if (linearWeight <= 0) continue;
+                const float32 weight = GrassRegionEase(linearWeight);
+                for (const auto& fx : mod.Effects)
+                {
+                    if (fx.EffectKind != ResolvedEffect::Kind::Grass) continue;
+                    heightScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.HeightScale) - heightScale) * weight;
+                    densityScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.DensityScale) - densityScale) * weight;
+                    darkeningScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.GroundDarkeningScale)
+                                       - darkeningScale) * weight;
+                }
+            }
+            const uint8 h = static_cast<uint8>(std::lround(Math::Clamp01(heightScale) * 255.0f));
+            const uint8 d = static_cast<uint8>(std::lround(Math::Clamp01(densityScale) * 255.0f));
+            if (darkening)
+            {
+                const uint8 g = static_cast<uint8>(std::lround(Math::Clamp01(darkeningScale) * 255.0f));
+                uint8& stored = field.GroundDarkening[static_cast<size_t>(z) * width + x];
+                if (stored != g)
+                {
+                    if (stored != 255) --result.NonNeutralDarkeningDelta;
+                    if (g != 255) ++result.NonNeutralDarkeningDelta;
+                    stored = g;
+                    result.Changed = true;
+                }
+            }
+            const size_t offset = (static_cast<size_t>(z) * width + x) * kTerrainGrassFieldChannels;
+            if (field.Pixels[offset] == h && field.Pixels[offset + 1] == d) continue;
+            if (field.Pixels[offset] != 255 || field.Pixels[offset + 1] != 255) --result.NonNeutralDelta;
+            if (h != 255 || d != 255) ++result.NonNeutralDelta;
+            field.Pixels[offset] = h; field.Pixels[offset + 1] = d;
+            result.Changed = true;
+        }
+    }
+    return result;
+}
 }
 
 void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 height,
                               float32 sizeX, float32 sizeZ, float32 originX, float32 originZ,
                               std::span<const ResolvedModifier> modifiers,
-                              int32 minX, int32 minZ, int32 maxX, int32 maxZ)
+                              int32 minX, int32 minZ, int32 maxX, int32 maxZ,
+                              JobSystem::WorkStealingThreadPool* jobs)
 {
     if (width < 2 || height < 2 || !std::isfinite(sizeX) || !std::isfinite(sizeZ)
         || !std::isfinite(originX) || !std::isfinite(originZ)
@@ -77,14 +187,10 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
                         || Components::ClampTerrainGrassEffectScale(fx.Grass.GroundDarkeningScale) < 1);
             });
             if (!lowers) continue;
-            auto index = [](float32 value, float32 origin, float32 size, uint32 count, bool upper) {
-                const float32 sample = std::clamp((value-origin)/size, 0.0f, 1.0f) * (count-1);
-                return static_cast<int32>(upper ? std::ceil(sample) : std::floor(sample));
-            };
-            loX = std::min(loX, index(mod.BoundsMinX, originX, sizeX, width, false));
-            loZ = std::min(loZ, index(mod.BoundsMinZ, originZ, sizeZ, height, false));
-            hiX = std::max(hiX, index(mod.BoundsMaxX, originX, sizeX, width, true));
-            hiZ = std::max(hiZ, index(mod.BoundsMaxZ, originZ, sizeZ, height, true));
+            loX = std::min(loX, AxisSample(mod.BoundsMinX, originX, sizeX, width, false));
+            loZ = std::min(loZ, AxisSample(mod.BoundsMinZ, originZ, sizeZ, height, false));
+            hiX = std::max(hiX, AxisSample(mod.BoundsMaxX, originX, sizeX, width, true));
+            hiZ = std::max(hiZ, AxisSample(mod.BoundsMaxZ, originZ, sizeZ, height, true));
         }
         minX = std::max(minX, loX); minZ = std::max(minZ, loZ);
         maxX = std::min(maxX, hiX); maxZ = std::min(maxZ, hiZ);
@@ -106,56 +212,30 @@ void ComposeTerrainGrassField(TerrainGrassField& field, uint32 width, uint32 hei
         field.NonNeutralDarkeningTexels = 0;
         minX = minZ = 0; maxX = width - 1; maxZ = height - 1;
     }
-    else for (int32 z = minZ; z <= maxZ; ++z)
+    else
     {
-        const float32 worldZ = originZ + sizeZ * (static_cast<float32>(z) / (height - 1));
-        for (int32 x = minX; x <= maxX; ++x)
-        {
-            const float32 worldX = originX + sizeX * (static_cast<float32>(x) / (width - 1));
-            float32 heightScale = 1.0f, densityScale = 1.0f, darkeningScale = 1.0f;
-            for (const auto& mod : modifiers)
-            {
-                if (!mod.Enabled || worldX < mod.BoundsMinX || worldX > mod.BoundsMaxX
-                    || worldZ < mod.BoundsMinZ || worldZ > mod.BoundsMaxZ) continue;
-                const float32 rawWeight = ComputeWeight(mod, worldX, worldZ);
-                const float32 linearWeight = std::isfinite(rawWeight) ? std::clamp(rawWeight, 0.0f, 1.0f) : 0.0f;
-                if (linearWeight <= 0) continue;
-                const float32 weight = GrassRegionEase(linearWeight);
-                for (const auto& fx : mod.Effects)
-                {
-                    if (fx.EffectKind != ResolvedEffect::Kind::Grass) continue;
-                    heightScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.HeightScale) - heightScale) * weight;
-                    densityScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.DensityScale) - densityScale) * weight;
-                    darkeningScale += (Components::ClampTerrainGrassEffectScale(fx.Grass.GroundDarkeningScale)
-                                       - darkeningScale) * weight;
-                }
-            }
-            const uint8 h = static_cast<uint8>(std::lround(std::clamp(heightScale, 0.0f, 1.0f) * 255.0f));
-            const uint8 d = static_cast<uint8>(std::lround(std::clamp(densityScale, 0.0f, 1.0f) * 255.0f));
-            const uint8 g = static_cast<uint8>(std::lround(std::clamp(darkeningScale, 0.0f, 1.0f) * 255.0f));
-            if (!field.GroundDarkening.empty() || g != 255)
-            {
-                if (field.GroundDarkening.empty())
-                    field.GroundDarkening.assign(static_cast<size_t>(width) * height, 255);
-                uint8& stored = field.GroundDarkening[static_cast<size_t>(z) * width + x];
-                if (stored != g)
-                {
-                    if (stored != 255) --field.NonNeutralDarkeningTexels;
-                    if (g != 255) ++field.NonNeutralDarkeningTexels;
-                    stored = g;
-                    changed = true;
-                }
-            }
-            if (field.Pixels.empty() && h == 255 && d == 255) continue;
-            if (field.Pixels.empty())
-                field.Pixels.assign(static_cast<size_t>(width) * height * kTerrainGrassFieldChannels, 255);
-            const size_t offset = (static_cast<size_t>(z) * width + x) * kTerrainGrassFieldChannels;
-            if (field.Pixels[offset] == h && field.Pixels[offset + 1] == d) continue;
-            if (field.Pixels[offset] != 255 || field.Pixels[offset + 1] != 255) --field.NonNeutralTexels;
-            if (h != 255 || d != 255) ++field.NonNeutralTexels;
-            field.Pixels[offset] = h; field.Pixels[offset + 1] = d;
-            changed = true;
-        }
+        // A neutral field is allocated white for the bands to write into, and released again below
+        // when nothing in it is nonneutral. The darkening channel likewise, when the field holds one
+        // or a region darkens the ground.
+        if (field.Pixels.empty())
+            field.Pixels.assign(static_cast<size_t>(width) * height * kTerrainGrassFieldChannels, 255);
+        if (field.GroundDarkening.empty() && AnyRegionDarkensGround(modifiers))
+            field.GroundDarkening.assign(static_cast<size_t>(width) * height, 255);
+        // Row bands across the pool for a large rectangle (RunRowBands); a band split is the serial
+        // walk in another order. Each band adds its own totals once.
+        ComposedTotals totals;
+        const BakeBandRegion rect{minX, minZ, maxX, maxZ};
+        RunRowBands(jobs, {&rect, 1},
+                    [&field, &totals, width, height, sizeX, sizeZ, originX, originZ, modifiers](
+                        std::size_t, int32 x0, int32 x1, int32 z0, int32 z1) {
+                        totals.Add(ComposeGrassRows(field, width, height, sizeX, sizeZ, originX, originZ, modifiers,
+                                                    x0, x1, z0, z1));
+                    });
+        field.NonNeutralTexels =
+            static_cast<uint64>(static_cast<int64>(field.NonNeutralTexels) + totals.NonNeutralDelta.load());
+        field.NonNeutralDarkeningTexels = static_cast<uint64>(static_cast<int64>(field.NonNeutralDarkeningTexels)
+                                                              + totals.NonNeutralDarkeningDelta.load());
+        changed |= totals.Changed.load();
     }
     if (!field.NonNeutralTexels) std::vector<uint8>{}.swap(field.Pixels);
     if (!field.NonNeutralDarkeningTexels) std::vector<uint8>{}.swap(field.GroundDarkening);

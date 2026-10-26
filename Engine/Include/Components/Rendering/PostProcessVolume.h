@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Types/Color.h"
 #include "Types/Types.h"
 #include "Rendering/RenderLayerMask.h"
 #include "Components/Rendering/Look.h"
@@ -88,7 +89,7 @@ struct PostProcessVolume {
     // NightTintColor: the hue the dark field takes, linear Rec.709, each channel 0 to 1 (what a color
     // picker shows); its brightness is not used, the renderer keeps the image's luminance.
     float32 NightTintStrength {1.0f};
-    float32 NightTintColor[3] {0.155f, 0.249f, 1.0f};
+    ColorLinear NightTintColor{0.155f, 0.249f, 1.0f};
 
 };
 

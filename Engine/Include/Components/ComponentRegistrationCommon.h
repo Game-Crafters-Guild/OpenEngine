@@ -63,6 +63,15 @@ inline bool SetReflectedFieldTooltip(std::string_view fieldName, std::string_vie
     return true;
 }
 
+// Bind the editor's row label to a reflected field. Non-owning, like the tooltip. Must run
+// after registration.
+template <class T>
+inline bool SetReflectedFieldLabel(std::string_view fieldName, std::string_view label)
+{
+    ECS::ComponentFieldRegistry::SetFieldLabel(ECS::GetComponentTypeId<T>(), fieldName, label);
+    return true;
+}
+
 // Mark a reflected component as non-serializable (scene save/load skips it — it's runtime/derived
 // state rebuilt at runtime). Must run after the component is registered. Returns true to seed a
 // file-scope static. Emitted by the scanner for "// [DoNotSerialize]"-marked components.
@@ -80,6 +89,17 @@ template <class T>
 inline bool MarkComponentEditorOnly()
 {
     ECS::ComponentFieldRegistry::SetComponentEditorOnly(ECS::GetComponentTypeId<T>());
+    return true;
+}
+
+// Mark a reflected component as one a script may not write (engine-owned or engine-internal);
+// `writer` is the system that writes it, a string literal. Must run after the component is
+// registered. Returns true to seed a file-scope static. Emitted by the scanner for components
+// carrying a struct-level "// @ge-readonly" or "// @ge-engine-internal" marker.
+template <class T>
+inline bool MarkComponentScriptWrite(ECS::ScriptWrite access, std::string_view writer)
+{
+    ECS::ComponentFieldRegistry::SetComponentScriptWrite(ECS::GetComponentTypeId<T>(), access, writer);
     return true;
 }
 
@@ -137,6 +157,14 @@ inline bool RegisterReflectedFieldEnum(std::string_view fieldName,
         ::GameEngine::Components::SetReflectedFieldTooltip<TypeName>(#FieldName, (TooltipText)); \
     }
 
+// GE_REFLECT_FIELD_LABEL(Type, Field, LabelText) — the words the editor's row shows for one
+// reflected field instead of its identifier as words. The scanner emits it for "// @ge-label".
+#define GE_REFLECT_FIELD_LABEL(TypeName, FieldName, LabelText)                     \
+    namespace {                                                                    \
+    [[maybe_unused]] const bool GE_PP_CONCAT(ge_field_label_, __LINE__) =          \
+        ::GameEngine::Components::SetReflectedFieldLabel<TypeName>(#FieldName, (LabelText)); \
+    }
+
 // GE_REFLECT_FIELD_RANGE(Type, Field, Min, Max) — bind inspector bounds to one
 // reflected float field; the float row clamps edits to [Min, Max]. Pass
 // std::numeric_limits<float>::infinity() as Max for an open maximum. The scanner
@@ -166,6 +194,24 @@ inline bool RegisterReflectedFieldEnum(std::string_view fieldName,
         ::GameEngine::Components::MarkComponentEditorOnly<TypeName>();             \
     }
 
+// GE_REFLECT_COMPONENT_ENGINE_OWNED(Type, "writer") / GE_REFLECT_COMPONENT_ENGINE_INTERNAL(Type,
+// "writer") — a script may not write the component (the scripting ABI's SetComponentBytesFromScript
+// refuses it and names the writer). Place AFTER the type's GE_REGISTER_COMPONENT line. The scanner
+// emits these for a struct-level "// @ge-readonly <writer>" or "// @ge-engine-internal <writer>".
+#define GE_REFLECT_COMPONENT_ENGINE_OWNED(TypeName, Writer)                        \
+    namespace {                                                                    \
+    [[maybe_unused]] const bool GE_PP_CONCAT(ge_engineowned_, __LINE__) =          \
+        ::GameEngine::Components::MarkComponentScriptWrite<TypeName>(              \
+            ::GameEngine::ECS::ScriptWrite::EngineOwned, (Writer));                \
+    }
+
+#define GE_REFLECT_COMPONENT_ENGINE_INTERNAL(TypeName, Writer)                     \
+    namespace {                                                                    \
+    [[maybe_unused]] const bool GE_PP_CONCAT(ge_engineinternal_, __LINE__) =       \
+        ::GameEngine::Components::MarkComponentScriptWrite<TypeName>(              \
+            ::GameEngine::ECS::ScriptWrite::EngineInternal, (Writer));             \
+    }
+
 // Enum value-name tables. C++ can't reflect enumerator names before C++26, so the build-time
 // ComponentScanner — which sees the enum declaration — emits one constexpr table per enum used by a
 // reflected field, then binds it to that field with GE_REFLECT_ENUM_FIELD (placed after the
@@ -186,6 +232,10 @@ inline bool RegisterReflectedFieldEnum(std::string_view fieldName,
 
 #define GE_REFLECT_ENUM_TABLE_VALUE(NameStr, Value)                                \
     ::GameEngine::ECS::EnumNameValue{ (NameStr), static_cast<::std::int64_t>(Value) },
+
+// An enumerator with the editor's words for it ("// @ge-label Text" on the enumerator's line).
+#define GE_REFLECT_ENUM_TABLE_LABELED_VALUE(NameStr, Value, LabelStr)              \
+    ::GameEngine::ECS::EnumNameValue{ (NameStr), static_cast<::std::int64_t>(Value), (LabelStr) },
 
 #define GE_REFLECT_ENUM_TABLE_END() }; }
 

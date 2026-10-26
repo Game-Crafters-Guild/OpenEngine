@@ -1,6 +1,6 @@
 #include "Engine/Rendering/RetargetRenderFeature.h"
 
-#include "Core/Application.h"
+#include "Core/ApplicationPaths.h"
 #include "Engine/Rendering/RetargetFullPass.h"
 #include "Logger/Logger.h"
 #include "Rendering/Common/Utils.h"
@@ -29,7 +29,7 @@ std::atomic<uint8_t> g_GpuEnabledState{0};
 // the open project root — never a directory containing engine shaders.
 std::vector<uint8_t> LoadRetargetSpv(const char* name)
 {
-    const std::filesystem::path installRoot = PathUtils::GetInstallAssetsRoot();
+    const std::filesystem::path installRoot = ApplicationPaths::GetInstallAssetsRoot();
     if (installRoot.empty())
         return {};
 

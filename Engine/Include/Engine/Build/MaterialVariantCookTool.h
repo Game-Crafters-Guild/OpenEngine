@@ -57,7 +57,7 @@ std::vector<std::string> FailedCookMaterials(std::string_view cookOutput);
 
 /// Copies each of `packages`, which lie under `cookCache`, to the same path under `bundleCache`
 /// (its content-key directory included), the read-only cache a packaged game probes
-/// (PathUtils::GetBundledShaderCacheRoot), and the cook's program index (ShaderProgramIndex) beside
+/// (ApplicationPaths::GetBundledShaderCacheRoot), and the cook's program index (ShaderProgramIndex) beside
 /// them when it wrote one. Returns false with `error` naming the file that could not be copied, or a
 /// package outside `cookCache`.
 bool StageCookedShaderPackages(const std::vector<std::filesystem::path>& packages,

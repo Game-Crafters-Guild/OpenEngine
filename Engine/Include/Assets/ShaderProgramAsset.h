@@ -33,7 +33,7 @@ struct ShaderProgramDocument
 /// written to a read-only one.
 struct ShaderCacheRoots
 {
-    /// Cooked caches that ship with the runtime (PathUtils::GetBundledShaderCacheRoot), or the
+    /// Cooked caches that ship with the runtime (ApplicationPaths::GetBundledShaderCacheRoot), or the
     /// editor cache an offline cook reuses; empty unless that folder exists.
     std::vector<std::filesystem::path> ReadOnly;
     /// <workspace>/.Cache/Shaders; empty until the engine resolves the workspace.

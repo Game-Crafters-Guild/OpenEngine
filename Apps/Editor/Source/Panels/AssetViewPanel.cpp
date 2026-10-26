@@ -6,6 +6,7 @@
 #include "Image/Decode.h"
 #include "Image/Encode.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 #include "Thumbnails/IThumbnailProvider.h"
 #include "Thumbnails/ModelThumbnailHandler.h"
@@ -228,7 +229,7 @@ bool GenerateHdriExposurePreview(const std::filesystem::path& assetPath,
                 const float b = sample(x0, y1, c) * (1.0f - fx) + sample(x1, y1, c) * fx;
                 const float linear = std::max(0.0f, (a * (1.0f - fy) + b * fy) * exposure);
                 const float tonemapped = 1.0f - std::exp(-linear);
-                const float srgb = std::pow(std::clamp(tonemapped, 0.0f, 1.0f), 1.0f / 2.2f);
+                const float srgb = std::pow(Math::Clamp01(tonemapped), 1.0f / 2.2f);
                 out[dst + static_cast<size_t>(c)] = static_cast<unsigned char>(std::lround(srgb * 255.0f));
             }
         }

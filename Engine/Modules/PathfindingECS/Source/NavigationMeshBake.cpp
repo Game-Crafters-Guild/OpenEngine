@@ -205,7 +205,7 @@ void NavigationMeshBake::UseBakedTiles(std::shared_ptr<const Pathfinding::NavSur
 }
 
 bool NavigationMeshBake::SubmitTiles(const NavigationTerrainSource& terrain, JobSystem::WorkStealingThreadPool* pool,
-                                     uint32 maxTiles, int32& outTerrainTileX, int32& outTerrainTileZ)
+                                     uint32 maxTiles, Mathematics::Vector3& outWaitPoint)
 {
     for (uint32 submitted = 0; submitted < maxTiles && m_NextTile < GetTileCount(); ++submitted)
     {
@@ -225,8 +225,7 @@ bool NavigationMeshBake::SubmitTiles(const NavigationTerrainSource& terrain, Job
 
         float32 minX = 0.0f, minZ = 0.0f, maxX = 0.0f, maxZ = 0.0f;
         ReadTileRectangle(m_Settings, m_Chart, job->Key, minX, minZ, maxX, maxZ);
-        if (!AppendTerrainLattice(terrain, minX, minZ, maxX, maxZ, m_TerrainStride, job->Input, outTerrainTileX,
-                                  outTerrainTileZ))
+        if (!AppendTerrainLattice(terrain, minX, minZ, maxX, maxZ, m_TerrainStride, job->Input, outWaitPoint))
             return false;
 
         ++m_NextTile;

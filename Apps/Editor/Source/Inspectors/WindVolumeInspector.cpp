@@ -6,6 +6,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "SceneView/WindVolumeGizmo.h"
 
 #include <algorithm>
@@ -80,7 +81,7 @@ void RegisterWindVolumeInspector()
 
             AddComponentFloatRowWithDrag<Wind>(ctx.Parent, "Weight", wind->Weight, w, e, n, undo,
                 "Change Wind Volume Weight",
-                [](Wind& u, float v) { u.Weight = std::clamp(v, 0.0f, 1.0f); },
+                [](Wind& u, float v) { u.Weight = Math::Clamp01(v); },
                 1.0f, "Volume influence [0..1].");
 
             InspectorUI::AddTextBlock(ctx.Parent, "Bounds", "inspector-section-subheader");

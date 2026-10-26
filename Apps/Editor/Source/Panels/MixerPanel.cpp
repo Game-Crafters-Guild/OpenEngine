@@ -6,6 +6,7 @@
 #include "Core/Engine.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Audio/AudioSystem.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Assets/UIStyleAsset.h"
 #include "UI/UIElement.h"
 #include "UI/Controls/Label.h"
@@ -136,8 +137,8 @@ void MixerPanel::SyncFadersFromAudio()
     for (size_t i = 0; i < m_VuMeterFills.size() && i < m_FaderBusIds.size(); ++i)
     {
         const Audio::AudioBusId bus = m_FaderBusIds[i];
-        const float meter = std::clamp(audio->GetBusMeterLevel(bus), 0.0f, 1.0f);
-        const float volume = std::clamp(audio->GetBusVolume(bus), 0.0f, 1.0f);
+        const float meter = Math::Clamp01(audio->GetBusMeterLevel(bus));
+        const float volume = Math::Clamp01(audio->GetBusVolume(bus));
 
         // Use actual track height so VU and thumb scale when panel is resized vertically
         UIElement* fill = m_VuMeterFills[i];
@@ -387,7 +388,7 @@ void MixerPanel::BuildUI()
         const int capturedStripIndex = i;
         auto applyLevel = [capturedBus, capturedStripIndex, vuThumbPtr, vuContainerRaw](UIElement*, float level)
         {
-            float clamped = std::clamp(level, 0.0f, 1.0f);
+            float clamped = Math::Clamp01(level);
             Audio::AudioSystem* sys = EngineCore::GetInstance().GetAudioSystem();
             if (sys && sys->IsInitialized())
                 sys->SetBusVolume(capturedBus, clamped);
@@ -414,7 +415,7 @@ void MixerPanel::BuildUI()
             float H = vuContainerRaw->GetLayoutHeight();
             if (H <= 0.0f) return;
             float localY = e.Y - y;
-            float level = 1.0f - std::clamp(localY / H, 0.0f, 1.0f);
+            float level = 1.0f - Math::Clamp01(localY / H);
             applyLevel(vuContainerRaw, level);
             e.Capture(vuContainerRaw);
             e.Stop();
@@ -427,7 +428,7 @@ void MixerPanel::BuildUI()
             float H = vuContainerRaw->GetLayoutHeight();
             if (H <= 0.0f) return;
             float localY = e.Y - y;
-            float level = 1.0f - std::clamp(localY / H, 0.0f, 1.0f);
+            float level = 1.0f - Math::Clamp01(localY / H);
             applyLevel(vuContainerRaw, level);
             e.Stop();
         });
@@ -440,7 +441,7 @@ void MixerPanel::BuildUI()
             float current = sys->GetBusVolume(capturedBus);
             // scrollY is negative when scrolling up (content direction), so negate for volume
             float delta = (e.ScrollY < 0.0f) ? kScrollStep : -kScrollStep;
-            float level = std::clamp(current + delta, 0.0f, 1.0f);
+            float level = Math::Clamp01(current + delta);
             applyLevel(vuContainerRaw, level);
             e.Stop();
         });
