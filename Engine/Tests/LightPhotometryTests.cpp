@@ -3,6 +3,7 @@
 #include "Components/Rendering/Light.h"
 #include "Components/Rendering/LightPhotometry.h"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace GameEngine::Components;
@@ -11,6 +12,16 @@ namespace
 {
 constexpr float kPaperWhiteNits = 203.0f; // GE_EMISSION_PAPERWHITE_NITS (surface_io.glsl)
 constexpr float kFourPi = 12.56637061f;
+
+// The color's sRGB encoding in bytes against the expected bytes, within half a byte.
+void ExpectSrgbBytes(const GameEngine::ColorLinear& linear, float red, float green, float blue)
+{
+    constexpr float kHalfByte = 0.5f;
+    const GameEngine::ColorSRGB srgb = linear.ToSRGB();
+    EXPECT_NEAR(srgb.r * 255.0f, red, kHalfByte);
+    EXPECT_NEAR(srgb.g * 255.0f, green, kHalfByte);
+    EXPECT_NEAR(srgb.b * 255.0f, blue, kHalfByte);
+}
 }
 
 // The lux/candela anchors must equal 1/203 so a physical light reads coherently with a 203-nit
@@ -70,8 +81,31 @@ TEST(LightPhotometry, MigrationRatioMatchesGuide)
     EXPECT_NEAR(kUnitlessPerCandela / kOldPerCandela, 127.0f / 203.0f, 1e-3f); // ~0.626x
 }
 
+// The Tanner Helland blackbody fit at a warm and a cool temperature, in sRGB bytes: 2000 K is
+// (255, 136.87, 13.90) and 10000 K is (201.70, 218.07, 255). The brightest channel is 1 in both.
+TEST(LightPhotometry, KelvinToLinearRgbFollowsTheBlackbodyFit)
+{
+    ExpectSrgbBytes(KelvinToLinearRGB(2000.0f), 255.0f, 136.87f, 13.90f);
+    ExpectSrgbBytes(KelvinToLinearRGB(10000.0f), 201.70f, 218.07f, 255.0f);
+}
+
+// The tint never changes brightness: across the whole clamped range and past both ends, the
+// brightest channel is exactly 1 and no channel leaves [0, 1].
+TEST(LightPhotometry, KelvinToLinearRgbBrightestChannelIsOneAcrossTheRange)
+{
+    constexpr int kFirstKelvin = 900;
+    constexpr int kLastKelvin = 41000;
+    constexpr int kStepKelvin = 50;
+    for (int kelvin = kFirstKelvin; kelvin <= kLastKelvin; kelvin += kStepKelvin)
+    {
+        const GameEngine::ColorLinear tint = KelvinToLinearRGB(static_cast<float>(kelvin));
+        EXPECT_EQ(std::max(tint.r, std::max(tint.g, tint.b)), 1.0f) << kelvin << " K";
+        EXPECT_GE(std::min(tint.r, std::min(tint.g, tint.b)), 0.0f) << kelvin << " K";
+    }
+}
+
 // End-to-end resolve: a default light is Unitless intensity 1 -> 1; Kelvin tint is brightness-
-// preserving (brightest channel normalized to 1).
+// preserving (the brightest channel is 1).
 TEST(LightPhotometry, ResolveColorIntensityEndToEnd)
 {
     Light l{};

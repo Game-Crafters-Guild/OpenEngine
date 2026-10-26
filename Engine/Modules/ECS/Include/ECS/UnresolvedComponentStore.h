@@ -175,12 +175,30 @@ class UnresolvedComponentStore
         return erased;
     }
 
-    // Drop every override belonging to an entity that no longer exists. The overrides describe
-    // component instances the destroy just took with it.
-    //
-    // Only for a destroy that RELEASES the handle. The preserve-handle destroy is editor undo/redo
-    // parking the same EntityHandle for revival, and dropping the overrides there would lose the
-    // authored text across a delete-then-undo — the very loss this table prevents.
+    // Appends `from`'s preserved components and fields of `source` to `to` in this store.
+    void CopyEntity(const UnresolvedComponentStore& source, EntityHandle from, EntityHandle to)
+    {
+        if (const auto it = source.m_ByEntity.find(from); it != source.m_ByEntity.end())
+        {
+            std::vector<PreservedComponent>& components = m_ByEntity[to];
+            components.insert(components.end(), it->second.begin(), it->second.end());
+        }
+        if (const auto it = source.m_FieldsByEntity.find(from); it != source.m_FieldsByEntity.end())
+        {
+            std::vector<PreservedField>& fields = m_FieldsByEntity[to];
+            fields.insert(fields.end(), it->second.begin(), it->second.end());
+        }
+    }
+
+    // Adds every unresolved reference path of `source` that this store does not hold.
+    void CopyReferences(const UnresolvedComponentStore& source)
+    {
+        for (const auto& [guid, path] : source.m_ReferencePathsByGuid)
+            m_ReferencePathsByGuid.try_emplace(guid, path);
+    }
+
+    // Drops the overrides of an entity whose destroy released its handle. Not for the destroy that
+    // keeps the handle (editor undo parks it): the overrides must survive a delete and an undo.
     void EraseEntity(EntityHandle entity)
     {
         m_ByEntity.erase(entity);

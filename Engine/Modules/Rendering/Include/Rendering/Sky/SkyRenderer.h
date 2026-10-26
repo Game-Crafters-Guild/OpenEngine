@@ -83,7 +83,7 @@ static_assert(offsetof(AtmosphereParametersGPU, ozoneAbsorption) == 224, "Atmosp
 static_assert(offsetof(AtmosphereParametersGPU, ozoneHalfWidth) == 236, "AtmosphereUBO ozoneHalfWidth offset mismatch");
 
 // Camera + celestial + star upload block. Hand-padded so C++ tight-packing
-// matches the GLSL SkyUBO std140 layout byte-for-byte (288 B). Shared by the
+// matches the GLSL SkyUBO std140 layout byte-for-byte (272 B). Shared by the
 // sky-view, render and star-billboard passes; the capture pass uses the smaller
 // CaptureSkyUbo prefix instead. Keep in lock-step with the SkyUBO block in
 // sky_render.frag / sky_stars_billboard.{vert,frag}.
@@ -109,8 +109,9 @@ struct SkyUBOGPU
     // x = HDRI rotation in radians; y = HDRI intensity, or kSkyHdriProceduralSentinel (< 0) for
     // the procedural sky; z = the stars' artistic glow (0 = none); w = 1 when faint stars fade to white.
     float skyboxParams[4];
+    // x = the falling stars' slot count, the first instances of the star billboard's draw (0 = off);
+    // y = the mean interval between two falling stars in seconds; zw unused.
     float fallingStarParams[4];
-    float fallingStarShapeParams[4];
     // Gradient sky: .rgb = scene-linear premultiplied color, gradientSkyTop.w = mode sentinel
     // (>= 0.5 -> render the gradient instead of the atmosphere). Blended by view-dir.y.
     float gradientSkyTop[4];
@@ -121,16 +122,15 @@ struct SkyUBOGPU
     float starShape[4];
 };
 
-static_assert(sizeof(SkyUBOGPU) == 288, "SkyUBOGPU must match GLSL SkyUBO std140 layout");
+static_assert(sizeof(SkyUBOGPU) == 272, "SkyUBOGPU must match GLSL SkyUBO std140 layout");
 static_assert(offsetof(SkyUBOGPU, sunColor) == 112, "SkyUBO sunColor offset mismatch");
 static_assert(offsetof(SkyUBOGPU, starModel) == 160, "SkyUBO starModel offset mismatch");
 static_assert(offsetof(SkyUBOGPU, skyboxParams) == 176, "SkyUBO skyboxParams offset mismatch");
 static_assert(offsetof(SkyUBOGPU, fallingStarParams) == 192, "SkyUBO fallingStarParams offset mismatch");
-static_assert(offsetof(SkyUBOGPU, fallingStarShapeParams) == 208, "SkyUBO fallingStarShapeParams offset mismatch");
-static_assert(offsetof(SkyUBOGPU, gradientSkyTop) == 224, "SkyUBO gradientSkyTop offset mismatch");
-static_assert(offsetof(SkyUBOGPU, gradientSkyHorizon) == 240, "SkyUBO gradientSkyHorizon offset mismatch");
-static_assert(offsetof(SkyUBOGPU, gradientSkyBottom) == 256, "SkyUBO gradientSkyBottom offset mismatch");
-static_assert(offsetof(SkyUBOGPU, starShape) == 272, "SkyUBO starShape offset mismatch");
+static_assert(offsetof(SkyUBOGPU, gradientSkyTop) == 208, "SkyUBO gradientSkyTop offset mismatch");
+static_assert(offsetof(SkyUBOGPU, gradientSkyHorizon) == 224, "SkyUBO gradientSkyHorizon offset mismatch");
+static_assert(offsetof(SkyUBOGPU, gradientSkyBottom) == 240, "SkyUBO gradientSkyBottom offset mismatch");
+static_assert(offsetof(SkyUBOGPU, starShape) == 256, "SkyUBO starShape offset mismatch");
 
 // Engine-owned moon art, relative to the install assets root. The Editor's and Player's
 // asset staging copy the repo's Engine/Assets/Textures tree next to the executable, so this is a

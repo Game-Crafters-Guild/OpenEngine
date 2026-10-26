@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Rendering/IRenderFeature.h"
+#include "Mathematics/Vector4.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
 
@@ -14,38 +15,47 @@ namespace GameEngine::Engine::Renderer
 // std140/push-constant mirror of GlarePC in sun_glare.vert / sun_glare.frag.
 struct SunGlarePushConstants
 {
-    float SunDirRadius[4]{0.0f, 1.0f, 0.0f, 0.0f};       // xyz toward-sun dir, w angular radius
-    float SunColorIrradiance[4]{1.0f, 1.0f, 1.0f, 0.0f}; // rgb sun colour, w irradiance E
-    float Probe[4]{0.5f, 0.5f, 0.0f, 0.0f};              // xy sun UV, zw probe radius UV per axis
-    float Params[4]{1.0f, 1.0f, 0.0f, 0.0f};             // x sky scale, y sun mu, z altitude,
-                                                         // w scene-depth sample count, 0 = the
-                                                         // screen probe is off this frame
-    float CameraShadow[4]{0.0f, 0.0f, 0.0f, 0.0f};       // xyz camera position, w cascades ready
+    ::GameEngine::Mathematics::Vector4 SunDirRadius{0.0f, 1.0f, 0.0f, 0.0f};       // xyz toward-sun dir, w angular radius
+    ::GameEngine::Mathematics::Vector4 SunColorIrradiance{1.0f, 1.0f, 1.0f, 0.0f}; // rgb sun color, w irradiance E
+    ::GameEngine::Mathematics::Vector4 Probe{0.5f, 0.5f, 0.0f, 0.0f};              // xy sun UV, zw probe radius UV per axis
+    ::GameEngine::Mathematics::Vector4 Params{1.0f, 1.0f, 0.0f, 0.0f};             // x sky scale, y sun mu, z altitude,
+                                                                                   // w scene-depth sample count, 0 = the
+                                                                                   // screen probe is off this frame
     // x = terrain-skyline visibility in [0, 1], computed on the CPU from the heightfield so it
     // holds whether or not the sun is on screen. y = planet radius, z = atmosphere radius (the
-    // transmittance LUT's shell, metres). w is std140 padding.
-    float Horizon[4]{1.0f, 0.0f, 0.0f, 0.0f};
+    // transmittance LUT's shell, meters). w = 1 when the cascade term's buffer holds this
+    // frame's value, 0 when the view has no cascades.
+    ::GameEngine::Mathematics::Vector4 Horizon{1.0f, 0.0f, 0.0f, 0.0f};
 };
 // The GPU ABI is the member OFFSETS, so those are what is asserted. The struct carries no
-// alignment specifier: four-float arrays already land on the 16-byte boundaries a std140 vec4
-// needs, and an alignas here only pads the render-pass lambda that captures it by value.
-static_assert(sizeof(SunGlarePushConstants) == 96,
+// alignment specifier: each Vector4 is four floats, so the members already land on the 16-byte
+// boundaries a std140 vec4 needs, and an alignas here only pads the render-pass lambda that
+// captures it by value.
+static_assert(sizeof(SunGlarePushConstants) == 80,
               "SunGlarePushConstants must match the shaders' GlarePC block");
 static_assert(offsetof(SunGlarePushConstants, SunDirRadius) == 0);
 static_assert(offsetof(SunGlarePushConstants, SunColorIrradiance) == 16);
 static_assert(offsetof(SunGlarePushConstants, Probe) == 32);
 static_assert(offsetof(SunGlarePushConstants, Params) == 48);
-static_assert(offsetof(SunGlarePushConstants, CameraShadow) == 64);
-static_assert(offsetof(SunGlarePushConstants, Horizon) == 80);
+static_assert(offsetof(SunGlarePushConstants, Horizon) == 64);
 // The packager sums the PER-STAGE ranges against a 128-byte limit. The vertex stage declares
-// all 96 and the fragment stage a 32-byte prefix, which is exactly 128 -- the Vulkan-guaranteed
-// minimum. Anything added here has to come out of the fragment prefix or out of this block.
+// all 80 and the fragment stage a 32-byte prefix: 112 of the Vulkan-guaranteed 128.
 static_assert(sizeof(SunGlarePushConstants) + 32u <= 128u,
               "vertex block + fragment prefix must fit the guaranteed push-constant limit");
 
-// Owns the GPU resources for the analytic sun glare: the additive fullscreen pipeline and
-// the sampler its two hoisted vertex-stage lookups use. SunGlareRenderNode declares the
-// pass and fills the push constants per view.
+// Push-constant mirror of CastersPC in sun_glare_casters.comp.
+struct SunGlareCastersPushConstants
+{
+    ::GameEngine::Mathematics::Vector4 Eye{0.0f, 0.0f, 0.0f, 0.0f};          // xyz camera, w unused
+    ::GameEngine::Mathematics::Vector4 SunDirRadius{0.0f, 1.0f, 0.0f, 0.0f}; // xyz toward sun, w disc radius (rad)
+};
+static_assert(sizeof(SunGlareCastersPushConstants) == 32,
+              "SunGlareCastersPushConstants must match sun_glare_casters.comp's CastersPC");
+
+// Owns the GPU resources for the analytic sun glare: the additive fullscreen pipeline, the
+// samplers its hoisted vertex-stage lookups use, and the one-workgroup compute pipeline that
+// evaluates the cascade term (sun_glare_casters.comp) into a float the vertex stage reads.
+// SunGlareRenderNode declares both passes and fills the push constants per view.
 //
 // TWO pipelines, differing only in the vertex stage's depth uniform. The glare's occlusion
 // probe texel-fetches the scene depth ATTACHMENT the world pass wrote, and that attachment is
@@ -108,11 +118,26 @@ class SunGlareRenderFeature : public IRenderFeature
     uint32_t GetTransmittanceBinding() const { return m_TransmittanceBinding; }
     uint32_t GetDepthBinding() const { return m_DepthBinding; }
     uint32_t GetViewParamsBinding() const { return m_ViewParamsBinding; }
-    uint32_t GetShadowArrayBinding() const { return m_ShadowArrayBinding; }
-    uint32_t GetShadowDataBinding() const { return m_ShadowDataBinding; }
+    uint32_t GetCastersBinding() const { return m_CastersBinding; }
     uint32_t GetExposureBinding() const { return m_ExposureBinding; }
 
+    // The cascade term's pass. An invalid id (the package failed to load) leaves the glare to
+    // the screen probe and the skyline, which the node signals through Horizon[3] = 0.
+    ::GameEngine::Rendering::ComputePipelineId GetCastersPipelineId() const
+    {
+        return m_CastersPipelineId;
+    }
+    const ::GameEngine::Rendering::DescriptorSetLayoutDesc& GetCastersLayout() const
+    {
+        return m_CastersLayout;
+    }
+    uint32_t GetCastersShadowArrayBinding() const { return m_CastersShadowArrayBinding; }
+    uint32_t GetCastersShadowDataBinding() const { return m_CastersShadowDataBinding; }
+    uint32_t GetCastersOutputBinding() const { return m_CastersOutputBinding; }
+
   private:
+    void InitializeCastersPipeline(::GameEngine::Rendering::IDevice& device);
+
     ::GameEngine::Rendering::IDevice* m_Device = nullptr;
     bool m_Initialized = false;
     // A failed Initialize is final for this device: the node asks every frame.
@@ -127,9 +152,13 @@ class SunGlareRenderFeature : public IRenderFeature
     uint32_t m_TransmittanceBinding = 0;
     uint32_t m_DepthBinding = 1;
     uint32_t m_ViewParamsBinding = 2;
-    uint32_t m_ShadowArrayBinding = 3;
-    uint32_t m_ShadowDataBinding = 4;
+    uint32_t m_CastersBinding = 3;
     uint32_t m_ExposureBinding = 5;
+    ::GameEngine::Rendering::ComputePipelineId m_CastersPipelineId{};
+    ::GameEngine::Rendering::DescriptorSetLayoutDesc m_CastersLayout{};
+    uint32_t m_CastersShadowArrayBinding = 0;
+    uint32_t m_CastersShadowDataBinding = 1;
+    uint32_t m_CastersOutputBinding = 2;
     // Flat rather than a map: a frame has a handful of views, this is written once and read
     // once per view per frame, and a linear scan beats a hash at that size. Reused across
     // frames so the per-frame refill does not allocate.

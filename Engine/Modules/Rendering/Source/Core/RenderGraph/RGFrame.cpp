@@ -141,6 +141,9 @@ constexpr const char* kStoreNoneOnWrittenAttachment =
 constexpr const char* kStoreDontCareOnReadOnlyAttachment =
     "RenderGraph: a read-only depth attach preserves the contents — RGStoreOp::DontCare "
     "there asks to discard depth the pass is only reading";
+constexpr const char* kWritesEveryPixelLoads =
+    "RenderGraph: an attach that writes every pixel loads nothing; set RGLoadOp::Clear or DontCare, or "
+    "clear WritesEveryPixel";
 } // namespace
 
 void RGPassBuilder::AttachColor(uint32_t slot, RGTexture t, const RGAttachmentOps& ops, RGRange range)
@@ -154,7 +157,11 @@ void RGPassBuilder::AttachColor(uint32_t slot, RGTexture t, const RGAttachmentOp
     // carries ColorRead (visibility — not just availability — of the write).
     if (ops.Load == RGLoadOp::Load)
         m_Frame->m_Graph.Read(m_Pass, t.Id, RGAccess::ColorLoad, range);
-    m_Frame->m_Graph.Write(m_Pass, t.Id, RGAccess::ColorAttachment, range);
+    assert((!ops.WritesEveryPixel || ops.Load != RGLoadOp::Load) && kWritesEveryPixelLoads);
+    if (ops.WritesEveryPixel)
+        m_Frame->m_Graph.WriteEveryPixel(m_Pass, t.Id);
+    else
+        m_Frame->m_Graph.Write(m_Pass, t.Id, RGAccess::ColorAttachment, range);
     m_Frame->m_Attachments.push_back(
         RGAttachmentRec{m_Pass, slot, t.Id, kInvalidId, ops, /*IsDepth=*/false, /*ReadOnly=*/false, range});
 }
@@ -492,6 +499,7 @@ void RGFrame::BeginFrame(uint64_t frameIndex)
             m_TimelineCreated[q] = false;
             m_LastSignaled[q] = 0;
         }
+        m_Graph.ResetCrossFrameAccesses();
         m_DeviceRebuildGen = rebuildGen;
     }
 
@@ -805,6 +813,17 @@ void RGFrame::WaitForPendingWork()
             m_Device->WaitTimelineSemaphoreValue(m_QueueTimelines[q], m_LastSignaled[q]);
 }
 
+void RGFrame::ReadCompletedTimelineValues(uint64_t (&outValues)[kQueueCount]) const
+{
+    for (uint32_t q = 0; q < kQueueCount; ++q)
+    {
+        outValues[q] = 0;
+        // A failed query leaves 0, which keeps every wait on that queue.
+        if (m_Device && m_TimelineCreated[q] && !m_Device->GetTimelineSemaphoreValue(m_QueueTimelines[q], outValues[q]))
+            outValues[q] = 0;
+    }
+}
+
 void RGFrame::Execute()
 {
     const size_t passCount = m_Graph.PassCount();
@@ -879,6 +898,13 @@ void RGFrame::Execute()
         m_Stats.GenerateBarriersMs = elapsedMs(barriersBegin);
 
         const auto planBegin = RGClock::now();
+        // An imported physical is the same resource from frame to frame: the plan orders this
+        // frame's accesses to it after earlier frames' accesses on other queues.
+        for (const ImportRec& imp : m_Imports)
+            m_Graph.SetCrossFramePhysical(imp.Id, m_Physical[imp.Id]);
+        uint64_t completedValues[kQueueCount];
+        ReadCompletedTimelineValues(completedValues);
+        m_Graph.SetCompletedTimelineValues(completedValues);
         m_Graph.BuildSubmissionPlan(m_PhysicalQueueOf);
         m_Stats.BuildSubmissionPlanMs = elapsedMs(planBegin);
 

@@ -1558,9 +1558,8 @@ struct DepthStencilState
 {
     bool depthTestEnable = false;
     bool depthWriteEnable = false;
-    // Reverse-Z: GreaterOrEqual so enabling a depth prepass doesn't accidentally
-    // cause base passes (that didn't explicitly set compare op) to reject all
-    // fragments due to equal-depth (prepass wrote the same depth).
+    // Reverse-Z nearer-or-equal (ReverseZ::kNearerOrEqual): a pass that redraws the
+    // prepass depth keeps its fragments.
     CompareOp depthCompareOp = CompareOp::GreaterOrEqual;
     bool depthBoundsTestEnable = false;
     bool stencilTestEnable = false;
@@ -1670,7 +1669,7 @@ struct PipelineDesc
         rasterizationState.frontFace = frontFace;
     }
 
-    void EnableDepthTest(bool enable = true, CompareOp compareOp = CompareOp::Greater)
+    void EnableDepthTest(bool enable, CompareOp compareOp = DepthStencilState{}.depthCompareOp)
     {
         depthStencilState.depthTestEnable = enable;
         depthStencilState.depthWriteEnable = enable;

@@ -1,0 +1,5 @@
+[prefab name="Cart" version=1]
+
+[entity id="cart"]
+Markup.status = "Requested"
+Transform.position = (1, 0, 0)

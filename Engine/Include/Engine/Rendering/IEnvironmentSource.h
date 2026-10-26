@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Mathematics/Vector3.h"
+
 #include <cstdint>
 
 namespace GameEngine
@@ -21,12 +23,12 @@ struct FeatureCullingContext;
 struct EnvironmentLocalReflectionData
 {
     bool BoxProjection = false;
-    float ProbePositionWS[3] = {0.0f, 0.0f, 0.0f};
-    float BoxCenterWS[3] = {0.0f, 0.0f, 0.0f};
-    float BoxHalfExtentsWS[3] = {0.0f, 0.0f, 0.0f};
-    float BoxAxisXWS[3] = {1.0f, 0.0f, 0.0f};
-    float BoxAxisYWS[3] = {0.0f, 1.0f, 0.0f};
-    float BoxAxisZWS[3] = {0.0f, 0.0f, 1.0f};
+    Mathematics::Vector3 ProbePositionWS;
+    Mathematics::Vector3 BoxCenterWS;
+    Mathematics::Vector3 BoxHalfExtentsWS;
+    Mathematics::Vector3 BoxAxisXWS{1.0f, 0.0f, 0.0f};
+    Mathematics::Vector3 BoxAxisYWS{0.0f, 1.0f, 0.0f};
+    Mathematics::Vector3 BoxAxisZWS{0.0f, 0.0f, 1.0f};
 };
 
 // Context handed to an environment source when the IBL generation node asks it

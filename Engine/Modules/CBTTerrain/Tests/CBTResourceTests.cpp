@@ -8,6 +8,7 @@
 #include "CBTTerrain/CBTKernelSet.h"
 #include "CBTTerrain/CBTResources.h"
 #include "CBTTerrain/SphereSculptLayer.h"
+#include "CBTReliefHeightSource.h"
 #include "CBTTestHarness.h"
 
 #include <array>
@@ -208,21 +209,6 @@ TEST(CBTInstance, ReprovisionAfterDeviceRebuildIsDeviceFreeAndLeavesNotReady)
         << "rewinding the monotonic terrain-source generation could mask a rebind";
 }
 
-namespace
-{
-TextureHandle MakeHeightTexture(IDevice& device, const char* name)
-{
-    TextureDesc td{};
-    td.width = 4;
-    td.height = 4;
-    td.format = static_cast<uint32_t>(TextureFormat::R32_FLOAT);
-    td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) |
-               static_cast<uint32_t>(TextureUsage::TransferDst);
-    td.debugName = name;
-    return device.CreateTexture(td);
-}
-} // namespace
-
 // In-place re-provision safety oracle. A retired terrain heightmap must be dropped from EVERY
 // height/atlas/coarse ring element in one shot (RebindTerrainSourcesToDefault), and the terrain
 // source generation must advance — the deterministic replacement for the one-frame-margin per-slot
@@ -236,7 +222,7 @@ TEST(CBTResources, ReprovisionDropEvictsRetiredTextureFromWholeRing)
     CBTResources resources;
     ASSERT_TRUE(resources.Initialize(*device, kernels));
 
-    const TextureHandle retired = MakeHeightTexture(*device, "ReproHeightmap");
+    const TextureHandle retired = MakeR32Texture(*device, 4, 4, {}, "ReproHeightmap");
     ASSERT_TRUE(retired.IsValid());
 
     // Bind the (soon-to-be-retired) heightmap into EVERY height ring element, as steady-state
@@ -266,7 +252,7 @@ TEST(CBTResources, ReprovisionDropEvictsRetiredTextureFromWholeRing)
     // Path equivalence: the re-provision recreates the heightmap at the new resolution. Binding the
     // NEW texture converges the ring onto it — the same end state the recreate path (leak old, lazily
     // bind new) reaches, so both paths end with CBT sampling the new texture, never the retired one.
-    const TextureHandle recreated = MakeHeightTexture(*device, "ReproHeightmapRecreated");
+    const TextureHandle recreated = MakeR32Texture(*device, 4, 4, {}, "ReproHeightmapRecreated");
     ASSERT_TRUE(recreated.IsValid());
     EXPECT_NE(recreated, retired);
     for (uint32_t slot = 0; slot < kCBTFrameParamsRing; ++slot)
@@ -291,8 +277,8 @@ TEST(CBTResources, ReprovisionDropEvictsAtlasAndCoarseRings)
     CBTResources resources;
     ASSERT_TRUE(resources.Initialize(*device, kernels));
 
-    const TextureHandle atlas = MakeHeightTexture(*device, "ReproAtlas");
-    const TextureHandle coarse = MakeHeightTexture(*device, "ReproCoarse");
+    const TextureHandle atlas = MakeR32Texture(*device, 4, 4, {}, "ReproAtlas");
+    const TextureHandle coarse = MakeR32Texture(*device, 4, 4, {}, "ReproCoarse");
     ASSERT_TRUE(atlas.IsValid());
     ASSERT_TRUE(coarse.IsValid());
 
@@ -360,9 +346,9 @@ TEST(CBTResources, FrameRingsRotateThroughEveryElementUnderTheDeviceIndexDomain)
     CBTResources resources;
     ASSERT_TRUE(resources.Initialize(*device, kernels));
 
-    const TextureHandle height = MakeHeightTexture(*device, "RingRotationHeight");
-    const TextureHandle atlas = MakeHeightTexture(*device, "RingRotationAtlas");
-    const TextureHandle coarse = MakeHeightTexture(*device, "RingRotationCoarse");
+    const TextureHandle height = MakeR32Texture(*device, 4, 4, {}, "RingRotationHeight");
+    const TextureHandle atlas = MakeR32Texture(*device, 4, 4, {}, "RingRotationAtlas");
+    const TextureHandle coarse = MakeR32Texture(*device, 4, 4, {}, "RingRotationCoarse");
     ASSERT_TRUE(height.IsValid() && atlas.IsValid() && coarse.IsValid());
 
     // Exactly what CBTRenderNode does: one AdvanceFrameCounter per device frame, and

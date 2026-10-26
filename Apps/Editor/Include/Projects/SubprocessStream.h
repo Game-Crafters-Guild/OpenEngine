@@ -1,10 +1,5 @@
 #pragma once
 
-// PathArgUtf8 — the UTF-8 path-to-arg helper this runner's consumers pair
-// with — lives in the std-only converter seam header so package modules
-// (which cannot link Editor.exe-resident code) share the one definition.
-#include "Editor/Assets/UnityImportHostedConverter.h"
-
 #include <filesystem>
 #include <functional>
 #include <string>

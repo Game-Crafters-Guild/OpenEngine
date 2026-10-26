@@ -123,7 +123,7 @@ void main()
     bool inBounds = (shadowUV.x >= 0.0 && shadowUV.x <= 1.0 && shadowUV.y >= 0.0 && shadowUV.y <= 1.0) && (shadowDepth >= 0.0 && shadowDepth <= 1.0);
     float ndotl = clamp(dot(N, L), 0.0, 1.0);
     // Receiver bias from UBO (f1.z = base, f1.w = slope), defaulted in CPU to sensible values.
-    // Reverse-Z: ADD bias to push the receiver away from the light (toward 0.0).
+    // Reverse-Z: ADD bias to move the receiver toward the light (toward 1.0), so it reads as lit.
     float receiverBias = f1.z + f1.w * (1.0 - ndotl);
     float ref = shadowDepth + receiverBias;
     // Hardware compare (with linear filtering = 2x2 PCF) + optional Poisson PCF taps or PCSS

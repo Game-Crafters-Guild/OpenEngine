@@ -54,6 +54,8 @@ target_link_libraries(Scripting
         JobSystem
         Types
     PRIVATE
+        # AssetManager.h includes Events/Event.h (header-only).
+        Events
         FileWatcher
         nlohmann_json::nlohmann_json
 )

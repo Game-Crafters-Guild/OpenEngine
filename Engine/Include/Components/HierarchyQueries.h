@@ -143,6 +143,26 @@ inline void DescendantsOf(ECS::World& world, ECS::EntityHandle ancestor,
     }
 }
 
+// Destroys `root` and every entity under it in the Parent hierarchy, each one queued as World::DestroyEntity
+// queues it. It checks no marker: any live entity can be the root. A root that is not alive destroys nothing.
+inline void DestroySubtree(ECS::World& world, ECS::EntityHandle root) {
+    if (!world.IsValid(root)) return;
+    std::vector<ECS::EntityHandle> tree;
+    DescendantsOf(world, root, tree);
+    for (const ECS::EntityHandle entity : tree) world.DestroyEntity(entity);
+    world.DestroyEntity(root);
+}
+
+// Destroys `root` and every entity under it at once, in one World::DestroyEntitiesImmediate batch.
+// The batch prepares every entity before any OnRemove hook runs, so a failure leaves the whole tree alive.
+inline void DestroySubtreeImmediate(ECS::World& world, ECS::EntityHandle root) {
+    if (!world.IsValid(root)) return;
+    std::vector<ECS::EntityHandle> tree;
+    DescendantsOf(world, root, tree);
+    tree.push_back(root);
+    world.DestroyEntitiesImmediate(tree);
+}
+
 // Practical cap on hierarchy depth. Any real scene deeper than this is a
 // design smell — UI panels nest ~10 deep, scene-graph rigs top out around 30.
 // The cap bounds IsDescendantOf so a broken chain on a million-entity world

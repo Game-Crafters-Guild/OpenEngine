@@ -6,7 +6,7 @@
 // the detail the screen can show there. The chain holds levels 1..top of the unified height texture
 // (CBTLayout.h kCBTHeightChain*): level L + 1 has S / 2 + 1 samples along an axis where level L has
 // S, and its sample j is the [1 2 1] / 4 tent of level L around sample 2j, edges clamped. These are
-// the shapes and the filter of a paged terrain's store (PageStoreFormat, HeightPyramidBuilder), and
+// the shapes and the filter of a paged terrain's store (PageStoreFormat, PagePyramidBuilder), and
 // the level rule is the page rule's (TerrainECS PageLevelRule): lambda = log2(d x t / (f x s0)).
 //
 // A vertex shared by several facets has the same UV and the same cached position in each of them

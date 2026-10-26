@@ -151,6 +151,23 @@ TEST(UserProjectGenerator, MsvcUserModulesCompileWithBigObj)
     EXPECT_LT(bigObj, content.find("else()", msvcArm));
 }
 
+// GCC rejects the SDK's UI headers without -Wno-changes-meaning, so the
+// generated project carries the flag the engine builds with, in the non-MSVC arm.
+TEST(UserProjectGenerator, GccArmDisablesChangesMeaning)
+{
+    const auto config = MakeSdkConfig("/geproj", "/editor/SDK");
+    const std::string content = ns::UserProjectGenerator::BuildCMakeListsContent(config);
+
+    const std::size_t otherArm = content.find("else()", content.find("if(MSVC)"));
+    const std::size_t flag = content.find(
+        "target_compile_options(UserScripts PRIVATE "
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-changes-meaning>)");
+    ASSERT_NE(otherArm, std::string::npos);
+    ASSERT_NE(flag, std::string::npos);
+    EXPECT_GT(flag, otherArm);
+    EXPECT_LT(flag, content.find("endif()", otherArm));
+}
+
 // EditorSDK phase 1: an Editor-kind module config links the EditorSDK import
 // lib and sees the staged editor headers; a runtime config emits neither.
 TEST(UserProjectGenerator, EditorModuleConfigLinksEditorSdk)

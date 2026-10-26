@@ -68,8 +68,10 @@ target_include_directories(AssetRuntime
 # - AssetCore (core asset types/interfaces)
 # - JobSystem (async tasks/dependencies)
 # - FileWatcher (file change notifications)
+# - Events (AssetManager.h exposes Event<std::span<const GUID>>)
 target_link_libraries(AssetRuntime
     PUBLIC
+        Events
         Logger
         AssetCore
         AssetDatabase

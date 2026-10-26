@@ -121,6 +121,46 @@ void RunTrivialFrame(RGFrame& frame)
     frame.MarkOutput(color);
     frame.Execute();
 }
+
+// The ray-traced shadow mask's shape: a graphics pass writes the TLAS, a compute pass reads it.
+void RunTlasFrame(RGFrame& frame, TlasSlotHandle slot)
+{
+    RGAccelerationStructure tlas = frame.ImportAccelerationStructure("RebuildTest.Tlas", slot);
+    RGTexture color = frame.CreateTexture("RebuildTest.Color", TinyColorDesc());
+    BufferDesc maskDesc;
+    maskDesc.size = 16;
+    maskDesc.usage = static_cast<uint32_t>(BufferUsage::Storage);
+    RGBuffer mask = frame.CreateBuffer("RebuildTest.Mask", maskDesc);
+    frame.AddPass(
+        "RebuildTest.TlasWrite", 0,
+        [&](RGPassBuilder& p)
+        {
+            p.Write(tlas);
+            p.AttachColor(0, color, {.Load = RGLoadOp::Clear});
+        },
+        [](RGContext&) {});
+    frame.AddComputePass(
+        "RebuildTest.TlasRead", 0,
+        [&](RGPassBuilder& p)
+        {
+            p.Read(tlas);
+            p.Write(mask);
+        },
+        [](RGContext&) {});
+    frame.MarkOutput(color);
+    frame.MarkOutput(mask);
+    frame.Execute();
+}
+
+// Whether the cross-frame tracking orders a compute read of the TLAS after a graphics write.
+bool TracksTlasWrite(const RGFrame& frame, TlasSlotHandle slot)
+{
+    uint64_t waits[kQueueCount];
+    frame.Graph().CrossFrameAccesses().CollectWaits({slot.id, RGResourceKind::AccelerationStructure},
+                                                    static_cast<uint8_t>(RGQueue::Compute),
+                                                    /*writes=*/false, waits);
+    return waits[static_cast<uint32_t>(RGQueue::Graphics)] != 0;
+}
 } // namespace
 
 TEST(RGFrameDeviceRebuild, SubmissionTokenSignalableAfterRebuild)
@@ -192,7 +232,53 @@ TEST(RGFrameDeviceRebuild, SubmissionTokenSignalableAfterRebuild)
     dev->Shutdown();
 }
 
-// Declared after SubmissionTokenSignalableAfterRebuild, and gtest runs a suite's
+// A TLAS slot keeps its id through a device rebuild, and the cross-frame tracking is keyed by it. The
+// tracking holds no record from before the rebuild: those values belong to timelines that died with
+// the device, and the first frame after it would wait for them.
+TEST(RGFrameDeviceRebuild, CrossFrameTrackingForgetsTheTlasAfterRebuild)
+{
+    ScopedEnvVar forcedLoss("GE_VK_FORCE_DEVICE_LOST", "3");
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        FramePools pools(dev.get());
+        RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.SetPhysicalQueueMap(RGFrame::kIdentityQueueMap);
+        const TlasSlotHandle slot(7);
+
+        dev->TickDeviceRecovery();
+        ASSERT_TRUE(dev->BeginFrame());
+        frame.BeginFrame(0);
+        RunTlasFrame(frame, slot);
+        dev->Present();
+        dev->WaitForIdle();
+        ASSERT_TRUE(TracksTlasWrite(frame, slot)) << "control arm: the frame must record the TLAS write";
+
+        bool reachedAwaiting = false;
+        for (int i = 0; i < 12 && !reachedAwaiting; ++i)
+        {
+            RunOneDeviceFrame(*dev);
+            reachedAwaiting = (dev->GetDeviceHealth() == DeviceHealth::AwaitingReprovision);
+        }
+        ASSERT_TRUE(reachedAwaiting) << "injected loss should rebuild to AwaitingReprovision";
+        frame.DiscardRecordedPasses();
+        dev->NotifyReprovisionComplete();
+        ASSERT_EQ(dev->GetDeviceHealth(), DeviceHealth::Healthy);
+
+        dev->TickDeviceRecovery();
+        ASSERT_TRUE(dev->BeginFrame());
+        frame.BeginFrame(1);
+        EXPECT_FALSE(TracksTlasWrite(frame, slot))
+            << "the first frame after the rebuild would wait for a value of a destroyed timeline";
+        RunTrivialFrame(frame);
+        dev->Present();
+        dev->WaitForIdle();
+    }
+    dev->Shutdown();
+}
+
+// Declared after the forced-loss tests, and gtest runs a suite's
 // tests in declaration order: the injection above must not outlive its test on
 // ANY exit path, or every later device-creating test in this process silently
 // runs under injected device loss.

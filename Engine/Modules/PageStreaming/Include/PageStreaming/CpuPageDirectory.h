@@ -22,7 +22,7 @@ enum class CpuPageState : uint8
 /// One page's entry in a stream's CPU page directory.
 struct CpuPageEntry
 {
-    const float32* Samples = nullptr; ///< its kPageSampleCount samples while Resident, else null
+    const uint8* Bytes = nullptr; ///< its CpuPageDirectory::PageBytes bytes while Resident, else null
     CpuPageState State = CpuPageState::Missing;
 };
 
@@ -47,6 +47,7 @@ struct CpuPageDirectory
     uint64 Epoch = 0; ///< the stream's configuration; 0 when the directory is empty
     std::span<const PageAddress> Changes; ///< the ring: change number n at Changes[n % Changes.size()]
     const uint64* ChangeCount = nullptr;  ///< the stream's changes so far; null when the directory is empty
+    uint32 PageBytes = 0;                 ///< every page's bytes: its source's PageSource::PayloadBytes
 
     /// The number of the next change: a reader's place in the record.
     uint64 ChangesEnd() const { return ChangeCount ? *ChangeCount : 0u; }
@@ -70,16 +71,16 @@ struct CpuPageDirectory
         return std::min(index, Entries.size());
     }
 
-    /// Where page `address` stands on the CPU; its samples go to `outSamples` when it is Resident.
-    /// An address outside the pyramid is Missing.
-    CpuPageState Page(const PageAddress& address, std::span<const float32>& outSamples) const
+    /// Where page `address` stands on the CPU; its bytes go to `outBytes` when it is Resident (a
+    /// height page's heights through HeightSamples). An address outside the pyramid is Missing.
+    CpuPageState Page(const PageAddress& address, std::span<const uint8>& outBytes) const
     {
         const std::size_t index = Index(address);
         if (index == Entries.size())
             return CpuPageState::Missing;
         const CpuPageEntry& entry = Entries[index];
         if (entry.State == CpuPageState::Resident)
-            outSamples = std::span<const float32>(entry.Samples, kPageSampleCount);
+            outBytes = std::span<const uint8>(entry.Bytes, PageBytes);
         return entry.State;
     }
 };

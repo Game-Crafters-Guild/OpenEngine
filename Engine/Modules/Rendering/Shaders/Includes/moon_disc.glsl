@@ -121,16 +121,11 @@ vec3 GE_MoonDiscRadiance(vec4 albedo, vec2 moonUv, float t, vec3 sunInDisc, floa
 }
 
 // How much of what lies behind the moon the disc hides at `t` drawn radii from its centre, from the
-// art's alpha: the stars and the falling stars, which are beyond it.
+// art's alpha: the stars, which are beyond it. A falling star is in front of the moon and draws over
+// the disk (GE_StarMoonCover).
 float GE_MoonDiscCover(float t, float albedoAlpha)
 {
     return GE_MoonDiscProfile(t) * albedoAlpha;
-}
-
-// Light from beyond the moon (a falling star) where the disc covers `cover` of it.
-vec3 GE_MoonHidesBehind(vec3 radiance, float cover)
-{
-    return radiance * (1.0 - cover);
 }
 
 // One of the four directions on the drawn disc's rim, `k` in 0..3: right, up, left, down of the

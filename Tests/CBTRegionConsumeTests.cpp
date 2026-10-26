@@ -18,16 +18,20 @@
 #include "CBTTerrainECS/Systems/CBTUpdateSystem.h"
 #include "CBTTerrainECS/Systems/RegisterCBTSystems.h"
 #include "Components/Terrain/Terrain.h"
+#include "PageStreaming/HeightPageOverlay.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/SystemScheduling.h"
 #include "ECS/World.h"
 #include "Rendering/Core/Device.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "SplineECS/Systems/RegisterSplineSystems.h"
+#include "TerrainECS/PageLevelRule.h"
+#include "TerrainECS/TerrainHeightPages.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/Systems/RegisterTerrainSystems.h"
 #include "TerrainECS/Systems/TerrainWorldHooks.h"
+#include "TerrainPagedField.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -764,6 +768,72 @@ TEST(CBTRegionConsume, UnifiedTiledDirtyRoutingResolvesGlobalHandleAndLandsRect)
         feature.ReleaseTerrainResources(globalHandle);
     }
     device->Shutdown();
+}
+
+// A paged terrain's edit reaches the classify as the rect its pages publish: an edit of level-0
+// samples 100 to 110 on a flat 257-sample tile reaches samples 96 to 116 at its coarsest level
+// (TerrainHeightPagesTests), not the whole terrain its coarsest page covers. The pages' rects go
+// into the accumulator as the height-page driver publishes them (UpdateHeightPages). Deviceless:
+// the accumulator and the drain need no texture.
+TEST(CBTRegionConsume, APagedTerrainEditReachesTheClassifyAsTheRectItsPagesPublish)
+{
+    ScopedTerrainService svc;
+    TerrainRenderFeature feature;
+    TiledTerrainConfig cfg{};
+    cfg.WorldSizeX = 4096.0f;
+    cfg.WorldSizeZ = 4096.0f;
+    cfg.HeightScale = 200.0f;
+    cfg.SamplesPerMeter = 1.0f;
+    cfg.PatchGridSize = 32;
+    const TiledTerrainHandle tiled = TerrainService::Get().CreateTiledTerrain(cfg);
+    TiledTerrainData* tiledData = TerrainService::Get().GetTiledTerrainData(tiled);
+    ASSERT_NE(tiledData, nullptr);
+    const TerrainHandle globalHandle{tiled.Index + 3u, 1u};
+    tiledData->GlobalGpuHandleIndex = globalHandle.Index;
+    tiledData->GlobalGpuHandleGeneration = globalHandle.Generation;
+
+    PagedTerrainRequest request = TerrainECS::Test::FlatTileRequest(257);
+    request.Terrain = globalHandle.Index;
+    request.TerrainGeneration = globalHandle.Generation;
+
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
+    const Mathematics::Vector3 camera{128.0f, 10.0f, 128.0f};
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    uint64 frame = 2;
+    for (; frame < 62; ++frame)
+    {
+        pages.Request(request, {&camera, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    pages.DirtyRects().clear();
+
+    const PageStreaming::PageSampleRect edit{100, 100, 110, 110};
+    request.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
+        PageStreaming::BuildPageStoreLevels(257, 257), edit, std::vector<float32>(edit.Width() * edit.Height(), 5.0f));
+    request.OverlayVersion = 1;
+    request.OverlayChangedSince = 0;
+    request.OverlayChanged = edit;
+    for (; frame < 72; ++frame)
+    {
+        pages.Request(request, {&camera, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+        for (const HeightPageDirtyRect& rect : pages.DirtyRects())
+            feature.AccumulateAtlasHeightDirtyUV(TerrainHandle{rect.Terrain, rect.TerrainGeneration}, rect.MinU,
+                                                 rect.MinV, rect.MaxU, rect.MaxV);
+        pages.DirtyRects().clear();
+    }
+
+    Components::Terrain tuning{};
+    tuning.TiledTerrainHandle = tiled.Index;
+    tuning.TiledTerrainGeneration = tiled.Generation;
+    CBTUpdateSystem system(nullptr);
+    CBTTerrain::CBTClassifyDesc classify{};
+    system.ConsumeUnifiedTiledDirtyRegion(&feature, /*updateRecordCount=*/0u, tuning, classify);
+    EXPECT_FLOAT_EQ(classify.DirtyMinU, 96.0f / 256.0f);
+    EXPECT_FLOAT_EQ(classify.DirtyMinV, 96.0f / 256.0f);
+    EXPECT_FLOAT_EQ(classify.DirtyMaxU, 116.0f / 256.0f);
+    EXPECT_FLOAT_EQ(classify.DirtyMaxV, 116.0f / 256.0f);
 }
 
 // Defensive routing: a null feature or a tiled handle with no live TiledTerrainData drains

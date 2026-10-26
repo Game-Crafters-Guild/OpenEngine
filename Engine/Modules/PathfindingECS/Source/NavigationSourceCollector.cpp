@@ -280,7 +280,7 @@ bool MovesOnItsOwn(const ECS::World& world, ECS::EntityHandle entity)
 // The policy that admits a mesh renderer into the bake (Auto or Include), or none when the bake
 // leaves it out. The one rule the gathered geometry, its fitted bounds and the models a bake waits
 // for all read. The policy is the NavigationSource on the mesh's entity, else on its nearest
-// ancestor that has one, else Auto: blueprint children and the submesh entities a model makes hang
+// ancestor that has one, else Auto: prefab children and the submesh entities a model makes hang
 // under the entity that authored it. Exclude leaves the mesh out. Include admits it unless an
 // entity between the mesh and the Include's entity moves on its own. Auto admits it unless any
 // entity from the mesh to the root moves on its own.
@@ -458,10 +458,12 @@ bool NavigationTerrainSource::OverlapsXZ(float32 minX, float32 minZ, float32 max
            originZ + Query.FootprintSizeZ() >= minZ;
 }
 
-NavigationTerrainSource ResolveNavigationTerrainSource(ECS::World& world)
+NavigationTerrainSource ResolveNavigationTerrainSource(ECS::World& world,
+                                                       const Components::WorldTransform* surfaceTransform)
 {
     NavigationTerrainSource source;
-    source.Query = TerrainECS::ResolveSurfaceHeightQuery(world);
+    source.Query = TerrainECS::ResolveSurfaceHeightQuery(
+        world, surfaceTransform ? surfaceTransform->GetPosition() : Mathematics::Vector3{});
     if (!source.Query.IsValid())
     {
         bool first = true;

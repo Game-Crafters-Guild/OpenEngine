@@ -797,9 +797,9 @@ TEST_F(TerrainGrassRegions, ColorEffectSchemaRoundtripClampsAndRefusesNonfinite)
     loaded.Query<ECS::Read<Components::TerrainColorEffect>>()
         .Each([&](const Components::TerrainColorEffect& effect) {
             ++found;
-            EXPECT_FLOAT_EQ(effect.Color[0], .3f);
-            EXPECT_FLOAT_EQ(effect.Color[1], 1);
-            EXPECT_FLOAT_EQ(effect.Color[2], 0);
+            EXPECT_FLOAT_EQ(effect.Color.r, .3f);
+            EXPECT_FLOAT_EQ(effect.Color.g, 1);
+            EXPECT_FLOAT_EQ(effect.Color.b, 0);
             EXPECT_FLOAT_EQ(effect.Strength, .6f);
         });
     EXPECT_EQ(found, 1u);

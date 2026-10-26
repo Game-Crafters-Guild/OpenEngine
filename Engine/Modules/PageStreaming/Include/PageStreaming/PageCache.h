@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PageStreaming/PageAddress.h"
+#include "PageStreaming/PageSampleRect.h"
 #include "PageStreaming/ResidentSlotPool.h"
 
 #include <cstddef>
@@ -37,6 +38,13 @@ struct CachedPage
 struct CachedPageHash
 {
     std::size_t operator()(const CachedPage& page) const noexcept;
+};
+
+/// A resident page whose content changed in place (PageCache::Rewrite), and where it changed.
+struct PageRewrite
+{
+    CachedPage Page;
+    PageSampleRect Level0Rect; ///< the level-0 samples whose change rewrote the page
 };
 
 /// A page the residency wants this frame: the level rule's request, the residency manager's load
@@ -107,15 +115,17 @@ public:
     float32 FadeOf(const CachedPage& page) const;
     uint32 SlotCount() const { return m_Pool.SlotCount(); }
 
-    /// Writes resident page `page`'s slot again this frame because its content changed (a modifier
-    /// edit under it): it is listed in Uploads() and Rewrites() after this frame's Update, its slot,
-    /// fade and children unchanged. Returns false when the page is not resident.
-    bool Rewrite(const CachedPage& page);
+    /// Writes resident page `page`'s slot again this frame because its content changed over
+    /// level-0 samples `level0Rect` (a modifier edit under it): it is listed in Uploads() and
+    /// Rewrites() after this frame's Update, its slot, fade and children unchanged. Returns false
+    /// when the page is not resident.
+    bool Rewrite(const CachedPage& page, const PageSampleRect& level0Rect);
 
     /// Pages assigned or rewritten this frame, whose slot texels must be written.
     const std::vector<PageUploadRequest>& Uploads() const { return m_Uploads; }
-    /// Resident pages rewritten this frame (Rewrite): the height under them changed in place.
-    const std::vector<CachedPage>& Rewrites() const { return m_Rewrites; }
+    /// Resident pages rewritten this frame (Rewrite): the height under them changed in place, over
+    /// each one's level-0 rect.
+    const std::vector<PageRewrite>& Rewrites() const { return m_Rewrites; }
     /// Pages whose residency changed this frame (assigned or released): the height under them
     /// changed source, so the CBT re-evaluates their footprint.
     const std::vector<CachedPage>& Transitions() const { return m_Transitions; }
@@ -158,7 +168,7 @@ private:
     std::vector<uint32> m_Order;        // indices of the want set, coarsest level then nearest first
     std::vector<PageUploadRequest> m_Uploads;
     std::vector<CachedPage> m_Transitions;
-    std::vector<CachedPage> m_Rewrites;
+    std::vector<PageRewrite> m_Rewrites;
     std::vector<CachedPage> m_FadeChanges;
     float32 m_FadeSeconds = 0.0f;
     uint32 m_Releases = 0;

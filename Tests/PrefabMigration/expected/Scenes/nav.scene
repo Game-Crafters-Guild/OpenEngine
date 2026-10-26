@@ -1,0 +1,10 @@
+[scene name="S" version=1]
+[resource id="tree" path="Blueprints/nav_source_tree.prefab"]
+
+[prefab id="tree1" source="tree"]
+
+[entity id="stairs"]
+NavigationSource.Policy = Include
+
+[entity id="step" parent="stairs"]
+NavigationSource.Policy = Auto

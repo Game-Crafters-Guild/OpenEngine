@@ -68,6 +68,13 @@ GE_Result RefuseNoEntity(const char* function, const char* parameter)
                                             "whose events you want");
 }
 
+GE_Result RefuseDeadParent(const char* function)
+{
+    return Report(GE_Result_InvalidArg, std::string(function) +
+                                            ": `parent` names no live entity. Pass 0 for no parent, or an entity "
+                                            "that is alive");
+}
+
 GE_Result RefuseThread(const char* function, ThreadRule rule)
 {
     const std::string text =

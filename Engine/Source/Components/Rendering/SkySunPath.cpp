@@ -88,7 +88,7 @@ float PhysicalSunIlluminanceLux(const SkyEnvironment& sky, float sunElevationDeg
     float ground[3];
     Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), sunTint,
                                            std::sin(sunElevationDegrees * kDegreesToRadians), ground);
-    return sunLux * ColorUtils::LinearRec709Luminance(ground);
+    return sunLux * ColorUtils::LinearRec709Luminance({ground[0], ground[1], ground[2]});
 }
 
 float DrivenMoonBlend(const SkyEnvironment& sky, float sunElevationDegrees)

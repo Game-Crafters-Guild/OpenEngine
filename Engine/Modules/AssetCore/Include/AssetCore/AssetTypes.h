@@ -107,7 +107,9 @@ namespace GameEngine {
     X(NavigationSurfaceData) \
     /* A Day Cycle profile (.daycycle.json): tracks keyed over the sun's elevation, \
        edited in the Day Cycle window. */ \
-    X(DayCycleProfile)
+    X(DayCycleProfile) \
+    /* Reusable entity hierarchy placed in scenes (.prefab, scene text with one root) */ \
+    X(Prefab)
 
 /**
  * @brief Asset types supported by the engine

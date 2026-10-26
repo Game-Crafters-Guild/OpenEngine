@@ -20,8 +20,8 @@
 namespace GameEngine::TerrainECS
 {
 
-/// Every level whose texel is at least this many meters stays resident whatever the camera does
-/// (design D5: a texel size, not a level number), so a fallback walk always ends on a page.
+/// No level finer than this texel (meters) is pinned on a terrain that streams (design D5: a texel
+/// size, not a level number; FirstPinnedPageLevel).
 inline constexpr float32 kPinnedPageTexelMeters = 16.0f;
 
 /// A pyramid of at most 1 / this of its height cache's slots is pinned whole (the owner's card 93,
@@ -29,7 +29,8 @@ inline constexpr float32 kPinnedPageTexelMeters = 16.0f;
 /// fraction of the profile's per-field slot budget (design D5), so it follows the profile: what one
 /// small terrain may pin is bounded the same way whether the field's cache is the terrain's own or,
 /// as D5's per-profile budgets allow, shared by several terrains; a quarter keeps three quarters of
-/// that budget for streamed working sets.
+/// that budget for streamed working sets. A terrain that streams pins its coarsest levels within the
+/// same quarter (FirstPinnedPageLevel).
 inline constexpr uint32 kPinWholePyramidCacheFraction = 4;
 
 /// The rows TargetPixelError is stated at. The level rule depends on a view's rows only through
@@ -72,8 +73,10 @@ struct PageRequestTerrain
 };
 
 /// The first pinned level of a pyramid (whose levels are `levels`): 0, the whole pyramid, when its
-/// page count is at most CacheSlots / kPinWholePyramidCacheFraction; else the finest level whose
-/// texel is at least kPinnedPageTexelMeters, or the coarsest level when none is.
+/// page count is at most CacheSlots / kPinWholePyramidCacheFraction. Else the coarsest levels,
+/// coarsest first, while their pages stay within that count and their texel is at least
+/// kPinnedPageTexelMeters (design page-streaming-planets 3.5), and at least the top level. The
+/// pinned levels serve the frames after a teleport; the level rule requests the far field.
 uint32 FirstPinnedPageLevel(const PageRequestTerrain& terrain, std::span<const PageStreaming::PageStoreLevel> levels);
 
 /// The pages a terrain's geometry needs for its cameras, each frame. Holds the terrain's pyramid and
@@ -84,10 +87,11 @@ public:
     /// (Re)configure for `terrain`: its pyramid and pinned levels.
     void Configure(const PageRequestTerrain& terrain);
 
-    /// Every page of the pinned levels, then down the quadtree the children of each page some point
-    /// of whose footprint needs a finer level than its own (lambda at the footprint's nearest point
-    /// below the page's level). Each request's parent is requested too, so the set is closed under
-    /// parents (the parent-first rule). Distance is to the footprint box (its rectangle and the
+    /// Every page of the pinned levels, then down the quadtree from each page some point of whose
+    /// footprint needs a finer level than its own (lambda at the footprint's nearest point below the
+    /// page's level), the children whose own nearest point needs the child's level (lambda below the
+    /// child's level + 1). Each request's parent is requested too, so the set is closed under parents
+    /// (the parent-first rule). Distance is to the footprint box (its rectangle and the
     /// field's height range), so every point of a page is at least that far away and the rule is
     /// conservative.
     void Build(std::span<const Mathematics::Vector3> cameras, const PageLevelView& view,

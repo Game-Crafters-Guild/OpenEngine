@@ -29,6 +29,7 @@
 #include "CBTTerrain/CBTLayout.h"
 #include "CBTTerrain/CBTSphereRoots.h"
 #include "Rendering/Core/CommandList.h"
+#include "CBTReliefHeightSource.h"
 #include "CBTTestHarness.h"
 #include "../../Rendering/Source/Vulkan/VulkanCommandList.h"
 #include "../../Rendering/Source/Vulkan/VulkanDevice.h"
@@ -287,14 +288,7 @@ TEST_F(CBTBringUpTest, RefreshTerrainSourcesPerformsNoDeviceDrain)
     ASSERT_TRUE(instance.Initialize(*m_Device, m_KernelSet));
     ASSERT_TRUE(instance.InitializeRoots());
 
-    TextureDesc td{};
-    td.width = 4;
-    td.height = 4;
-    td.format = static_cast<uint32_t>(TextureFormat::R32_FLOAT);
-    td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) |
-               static_cast<uint32_t>(TextureUsage::TransferDst);
-    td.debugName = "DrainOracleHeightmap";
-    const TextureHandle retired = m_Device->CreateTexture(td);
+    const TextureHandle retired = MakeR32Texture(*m_Device, 4, 4, {}, "DrainOracleHeightmap");
     ASSERT_TRUE(retired.IsValid());
     for (uint32_t slot = 0; slot < kCBTFrameParamsRing; ++slot)
         instance.SetHeightSource(slot, retired);

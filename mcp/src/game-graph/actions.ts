@@ -68,6 +68,7 @@ export const kGameGraphActions: GameGraphAction[] = [
   { typeId: "StopAllSounds", displayName: "Stop All Sounds", category: "Audio", pins: flowPins(), defaults: {} },
   { typeId: "SetBusVolume", displayName: "Set Bus Volume", category: "Audio", pins: flowPins([pin("bus", "in", "int", "Bus"), pin("volume", "in", "float", "Volume")]), defaults: { bus: "0", volume: "1" } },
   { typeId: "CreateEntity", displayName: "Create Entity", category: "Game Object", pins: flowPins([pin("name", "in", "string", "Name")]), defaults: { name: "Entity" } },
+  { typeId: "SpawnPrefab", displayName: "Spawn Prefab", category: "Game Object", pins: flowPins([pin("prefab", "in", "string", "Prefab"), pin("position", "in", "float3", "Position"), pin("rotation", "in", "float3", "Rotation")]), defaults: { prefab: "", position: "0, 0, 0", rotation: "0, 0, 0" } },
   { typeId: "DestroyEntity", displayName: "Destroy Entity", category: "Game Object", pins: flowPins([pin("entity", "in", "entity", "Entity")]), defaults: { entity: "self" } },
   { typeId: "SetEntityEnabled", displayName: "Set Entity Enabled", category: "Game Object", pins: flowPins([pin("entity", "in", "entity", "Entity"), pin("enabled", "in", "bool", "Enabled")]), defaults: { entity: "self", enabled: "true" } },
   { typeId: "FindEntityByName", displayName: "Find Entity By Name", category: "Game Object", pins: [pin("name", "in", "string", "Name"), pin("entity", "out", "entity", "Entity")], defaults: { name: "Player" } },

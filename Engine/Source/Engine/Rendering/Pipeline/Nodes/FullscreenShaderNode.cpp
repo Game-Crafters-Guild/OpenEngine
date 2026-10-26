@@ -16,6 +16,7 @@
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/Passes/FinalizeContract.h"
+#include "Rendering/Passes/MsaaColorResolvePass.h"
 #include "Rendering/Passes/TonemapPass.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "Rendering/Materials/ShaderMetaValidation.h"
@@ -1246,7 +1247,8 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
         customization.Output.IsValid() ? customization.Output : out;
 
     // MSAA resolve pair: only when targeting the multisampled View.Color
-    // with a single-sample, format-matched, distinct resolve (VUID-06865).
+    // with a single-sample, format-matched, distinct resolve. The resolve pass
+    // is declared after the chain's final segment.
     RenderGraph::RGTexture resolvePair{};
     if (out.Id == d.ViewColor.Id && d.ViewResolve.IsValid() && d.ViewResolve.Id != out.Id &&
         od.SampleCount > 1)
@@ -1416,10 +1418,7 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
                 ops.Load = (blendEnabled && finalSeg) ? RenderGraph::RGLoadOp::Load
                                                       : RenderGraph::RGLoadOp::DontCare;
                 ops.Store = RenderGraph::RGStoreOp::Store;
-                if (finalSeg && resolvePair.IsValid())
-                    p.AttachColorResolve(0, segOut, resolvePair, ops);
-                else
-                    p.AttachColor(0, segOut, ops);
+                p.AttachColor(0, segOut, ops);
             },
             [&node, texBinds = std::move(segTexBinds), bufBinds, settings, cubeLut, bloomLensDirt,
              shaderAnimationTime, floatPushConstants = customization.FloatPushConstants,
@@ -1615,6 +1614,9 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
                 cl->Draw(3, 1);
             });
     }
+    if (resolvePair.IsValid())
+        Rendering::Passes::AddMsaaColorResolvePassRG(d.Frame, passOutput, resolvePair,
+                                                     d.PassName("ColorResolve").c_str());
 
     // The chain variable: downstream resolvers of the output ref see THIS
     // stage's output from here on.

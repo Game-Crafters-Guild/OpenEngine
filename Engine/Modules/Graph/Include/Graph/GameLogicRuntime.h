@@ -72,6 +72,15 @@ public:
     virtual void SetBusVolume(int bus, float volume) { (void)bus; (void)volume; }
 
     virtual GameLogicEntityId CreateEntity(std::string_view name) { (void)name; return 0; }
+    /// Spawns the prefab with the GUID text `prefabGuid` with its root at `position`, turned by `rotation` (Euler
+    /// degrees), through Scene::SpawnPrefab. Returns the root, or 0 when the prefab is not loaded.
+    virtual GameLogicEntityId SpawnPrefab(std::string_view prefabGuid, GameLogicVec3 position, GameLogicVec3 rotation)
+    {
+        (void)prefabGuid;
+        (void)position;
+        (void)rotation;
+        return 0;
+    }
     virtual void DestroyEntity(GameLogicEntityId entity) { (void)entity; }
     virtual void SetEntityEnabled(GameLogicEntityId entity, bool enabled) { (void)entity; (void)enabled; }
     virtual GameLogicEntityId FindEntityByName(std::string_view name) { (void)name; return 0; }

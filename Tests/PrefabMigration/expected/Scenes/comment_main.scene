@@ -1,0 +1,11 @@
+; Header comment
+[scene name="Main" version=1]
+[resource id="bp" path="Blueprints/bp_comment.prefab"]
+[resource id="chunk" path="Scenes/chunk_comment.scene"]
+
+; Comment before blueprint
+[prefab id="inst" source="bp"]
+
+; Comment before subscene
+[subscene id="area" source="chunk"]
+enabled = true

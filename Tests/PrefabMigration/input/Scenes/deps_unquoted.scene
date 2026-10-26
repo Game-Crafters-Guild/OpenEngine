@@ -1,0 +1,6 @@
+[scene name="Deps" version=1]
+[include path=common.scene]
+[resource id="bp" path=enemy.blueprint]
+
+[entity id="e"]
+Foo.path = @"meshes/cube.fbx"

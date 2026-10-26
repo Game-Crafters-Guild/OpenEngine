@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Components/Rendering/Light.h" // LightType, LightUnit
+#include "Types/Color.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,43 +12,35 @@
 namespace GameEngine::Components
 {
 
-// Correlated color temperature (Kelvin) -> LINEAR RGB tint, normalized so the brightest channel
-// is 1.0 (it tints hue, it does not change overall brightness). Tanner-Helland blackbody
-// approximation (valid ~1000-40000K) producing sRGB, then converted to linear. 6500K -> ~white.
-inline void KelvinToLinearRGB(float kelvin, float outLinear[3])
+/// Returns the linear tint of a correlated color temperature in kelvin. The brightest channel is 1,
+/// so the tint changes the hue and not the brightness. The fit is the Tanner-Helland blackbody
+/// approximation, valid from 1000 K to 40000 K; it gives sRGB values, which are then decoded to
+/// linear. 6500 K is close to white.
+inline ColorLinear KelvinToLinearRGB(float kelvin)
 {
     const float t = std::clamp(kelvin, 1000.0f, 40000.0f) / 100.0f;
 
-    auto saturate255 = [](float v) { return std::clamp(v, 0.0f, 255.0f); };
+    constexpr float kByteMax = 255.0f;
     float r, g, b;
     if (t <= 66.0f)
     {
-        r = 255.0f;
-        g = saturate255(99.4708025861f * std::log(t) - 161.1195681661f);
+        r = kByteMax;
+        g = std::clamp(99.4708025861f * std::log(t) - 161.1195681661f, 0.0f, kByteMax);
     }
     else
     {
-        r = saturate255(329.698727446f * std::pow(t - 60.0f, -0.1332047592f));
-        g = saturate255(288.1221695283f * std::pow(t - 60.0f, -0.0755148492f));
+        r = std::clamp(329.698727446f * std::pow(t - 60.0f, -0.1332047592f), 0.0f, kByteMax);
+        g = std::clamp(288.1221695283f * std::pow(t - 60.0f, -0.0755148492f), 0.0f, kByteMax);
     }
     if (t >= 66.0f)
-        b = 255.0f;
+        b = kByteMax;
     else if (t <= 19.0f)
         b = 0.0f;
     else
-        b = saturate255(138.5177312231f * std::log(t - 10.0f) - 305.0447927307f);
+        b = std::clamp(138.5177312231f * std::log(t - 10.0f) - 305.0447927307f, 0.0f, kByteMax);
 
-    auto srgbToLinear = [](float c)
-    {
-        c /= 255.0f;
-        return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
-    };
-    float lr = srgbToLinear(r), lg = srgbToLinear(g), lb = srgbToLinear(b);
-    const float maxc = std::max(lr, std::max(lg, lb));
-    const float inv = maxc > 1e-5f ? 1.0f / maxc : 1.0f; // normalize -> brightest channel == 1 (pure tint)
-    outLinear[0] = lr * inv;
-    outLinear[1] = lg * inv;
-    outLinear[2] = lb * inv;
+    // Every branch of the fit sets one channel to 255, so the brightest linear channel is exactly 1.
+    return ColorSRGB(r / kByteMax, g / kByteMax, b / kByteMax).ToLinear();
 }
 
 // Physical-intensity unit calibration anchor, shared by the forward + inverse conversions so they
@@ -105,12 +98,11 @@ inline float UnitlessToLightIntensity(float unitless, LightUnit unit)
 // light consumer (world meshes, ocean, terrain) so they all render the same resolved light.
 inline void ResolveLightColorIntensity(const Light& light, float outColor[3], float& outIntensity)
 {
-    float tint[3] = {1.0f, 1.0f, 1.0f};
-    if (light.UseColorTemperature)
-        KelvinToLinearRGB(light.ColorTemperature, tint);
-    outColor[0] = light.Color[0] * tint[0];
-    outColor[1] = light.Color[1] * tint[1];
-    outColor[2] = light.Color[2] * tint[2];
+    const ColorLinear tint =
+        light.UseColorTemperature ? KelvinToLinearRGB(light.ColorTemperature) : ColorLinear(1.0f, 1.0f, 1.0f);
+    outColor[0] = light.Color[0] * tint.r;
+    outColor[1] = light.Color[1] * tint.g;
+    outColor[2] = light.Color[2] * tint.b;
     outIntensity = LightIntensityToUnitless(light.Intensity, light.IntensityUnit);
 }
 

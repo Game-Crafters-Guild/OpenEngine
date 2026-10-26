@@ -1,0 +1,5 @@
+[scene name="S" version=1]
+[resource id="bp" path="Blueprints/bp.prefab"]
+
+[prefab id="inst" source="bp"]
+Transform.position = (5, 0, 0)

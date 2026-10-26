@@ -195,24 +195,26 @@ private:
     SurfaceHeightEdits m_Edits;
 };
 
-/// The terrain ResolveSurfaceHeightQuery answers for: the first entity in `world` with a Terrain and
-/// a WorldTransform, planar or spherical. Both are null when there is none; they point into the
-/// world's storage until its next structural change.
+/// The terrain ResolveSurfaceHeightQuery answers for at a point, planar or spherical. Both are null
+/// when no terrain covers the point; they point into the world's storage until its next structural
+/// change.
 struct SurfaceHeightTerrain
 {
     const Components::Terrain* Terrain = nullptr;
     const Components::WorldTransform* Transform = nullptr;
 };
 
-/// Finds the terrain ResolveSurfaceHeightQuery answers for. A reader that takes more of that terrain
-/// than its heights (its tiles, its modifier stack) finds it here, so it reads the same terrain.
-SurfaceHeightTerrain FindSurfaceHeightTerrain(ECS::World& world);
+/// Finds the terrain under `point`: a planar terrain covers the points inside its footprint, a
+/// spherical terrain the points inside its outer radius. When several cover the point, the one
+/// whose surface is nearest to it wins, so the answer does not depend on the order of the world's
+/// storage. A reader that takes more of that terrain than its heights (its tiles, its modifier
+/// stack) finds it here, so it reads the same terrain.
+SurfaceHeightTerrain FindSurfaceHeightTerrain(ECS::World& world, const Mathematics::Vector3& point);
 
-/// The query of the terrain FindSurfaceHeightTerrain finds in `world`, matching the
-/// single-active-terrain scope CBTTerrainECS::FindActiveTerrain and the gizmo use
-/// (TerrainService::SurfaceQuery). Invalid when that terrain is spherical, absent, or has no height
+/// The query of the terrain FindSurfaceHeightTerrain finds under `point` (TerrainService::SurfaceQuery).
+/// Invalid when that terrain is spherical, when no terrain covers the point, or when it has no height
 /// data yet.
-SurfaceHeightQuery ResolveSurfaceHeightQuery(ECS::World& world);
+SurfaceHeightQuery ResolveSurfaceHeightQuery(ECS::World& world, const Mathematics::Vector3& point);
 
 /// Keeps a CPU window of finest height pages around `center` at the next height-page Update, for
 /// every paged terrain (TerrainHeightPages::RequestReaderWindow): a reader that needs the finest

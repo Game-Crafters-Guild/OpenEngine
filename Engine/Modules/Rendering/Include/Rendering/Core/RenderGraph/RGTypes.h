@@ -113,6 +113,7 @@ enum class RGCullReason : uint8_t
     NotCulled,
     NoConsumer,     // its outputs reach no sink (present/export/external) and have no reader
     ProducerCulled, // its outputs have readers, but every reader was itself culled
+    Overwritten,    // a later pass writes every pixel of its output before any pass reads it
     Cycle           // part of a dependency cycle; dropped to keep the schedule valid
 };
 

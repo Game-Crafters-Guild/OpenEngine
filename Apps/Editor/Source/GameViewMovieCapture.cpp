@@ -108,6 +108,7 @@ bool GameViewMovieCapture::StartRecording(Video::VideoWriterOptions options, uin
     {
         std::lock_guard<std::mutex> lock(m_MovieRecorderMutex);
         m_MovieRecorder = std::make_shared<Video::AsyncVideoRecorder>();
+        m_LastRecordingFailure.clear();
         m_MovieQueueExhausted = false;
 
         Video::AsyncVideoRecorderOptions recorderOpts;
@@ -138,7 +139,7 @@ bool GameViewMovieCapture::StartRecording(Video::VideoWriterOptions options, uin
     }
     const bool bitrateCodec = options.codec == Video::VideoCodec::H264 || options.codec == Video::VideoCodec::HEVC;
     const std::string bitrateText = bitrateCodec
-                                        ? (options.bitrateKbps > 0 ? std::to_string(options.bitrateKbps) + " Kbps" : "encoder-default")
+                                        ? (options.bitrateKbps > 0 ? std::to_string(options.bitrateKbps) + " Kbps" : "constant-quality")
                                         : "profile-driven";
     Logger::Log::Info(
         "GameView: started play-mode movie capture '{}' ({}x{} @ {} fps, codec={}, bitrate={}, audio={}, hardware={})",
@@ -168,7 +169,7 @@ void GameViewMovieCapture::StopRecording(const std::string& message, bool waitFo
             std::lock_guard<std::mutex> lock(m_MovieRecorderMutex);
             if (m_MovieRecorder == recorder && recorder->IsFinalized())
             {
-                m_MovieRecorder.reset();
+                ReleaseFinalizedRecorderLocked();
             }
         }
         else if (recorder && recorder->IsFinalized())
@@ -176,7 +177,7 @@ void GameViewMovieCapture::StopRecording(const std::string& message, bool waitFo
             std::lock_guard<std::mutex> lock(m_MovieRecorderMutex);
             if (m_MovieRecorder == recorder)
             {
-                m_MovieRecorder.reset();
+                ReleaseFinalizedRecorderLocked();
             }
         }
         return;
@@ -192,6 +193,38 @@ void GameViewMovieCapture::StopRecording(const std::string& message, bool waitFo
     {
         Poll();
     }
+}
+
+GameViewMovieCapture::RecordingStatus GameViewMovieCapture::GetRecordingStatus() const
+{
+    // The session closes before the encoder does: a stop or the frame limit
+    // clears the options at once, while the encoder thread is still writing the
+    // container. The recorder stays held until it reports finalized.
+    const bool sessionOpen = m_MovieOptions.has_value();
+    std::lock_guard<std::mutex> lock(m_MovieRecorderMutex);
+    const bool encoderOpen = m_MovieRecorder && !m_MovieRecorder->IsFinalized();
+    RecordingStatus status{.Recording = sessionOpen || encoderOpen, .Finalizing = !sessionOpen && encoderOpen};
+    if (status.Recording)
+    {
+        return status;
+    }
+    if (m_MovieRecorder)
+    {
+        const Video::AsyncVideoRecorderStats stats = m_MovieRecorder->GetStats();
+        status.Failure = stats.Failed ? stats.LastError : std::string{};
+    }
+    else
+    {
+        status.Failure = m_LastRecordingFailure;
+    }
+    return status;
+}
+
+void GameViewMovieCapture::ReleaseFinalizedRecorderLocked()
+{
+    const Video::AsyncVideoRecorderStats stats = m_MovieRecorder->GetStats();
+    m_LastRecordingFailure = stats.Failed ? stats.LastError : std::string{};
+    m_MovieRecorder.reset();
 }
 
 void GameViewMovieCapture::StopForShutdown()
@@ -272,7 +305,7 @@ void GameViewMovieCapture::Poll()
         std::lock_guard<std::mutex> lock(m_MovieRecorderMutex);
         if (m_MovieRecorder && m_MovieRecorder->IsFinalized())
         {
-            m_MovieRecorder.reset();
+            ReleaseFinalizedRecorderLocked();
         }
         return;
     }
@@ -868,7 +901,7 @@ void GameViewMovieCapture::FinishMovieRecording(std::string message)
             std::lock_guard<std::mutex> lock(m_MovieRecorderMutex);
             if (m_MovieRecorder == recorder)
             {
-                m_MovieRecorder.reset();
+                ReleaseFinalizedRecorderLocked();
             }
         }
     }

@@ -1,6 +1,7 @@
 #include "Scripting/ECSABI.h"
 
 #include "AbiHandles.h"
+#include "AbiMainThread.h"
 #include "Core/Engine.h"
 #include "DllEngineBootstrap.h"
 #include "Logger/Logger.h"
@@ -19,6 +20,7 @@
 #include "Components/Name.h"
 #include "Components/Transform.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Scene/PrefabSpawn.h"
 
 #include "Engine/Rendering/MeshGPURegistry.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
@@ -91,7 +93,8 @@ static GameEngine::Components::Name MakeNameFromUtf8(const char* utf8, uint32_t 
     return n;
 }
 
-static bool ResolveParent(GameEngine::ECS::World* w, GE_ECS_Entity parentEntity, GameEngine::ECS::EntityHandle& outParent)
+static bool ResolveParent(GameEngine::ECS::World* w, GE_ECS_Entity parentEntity, const char* function,
+                          GameEngine::ECS::EntityHandle& outParent)
 {
     outParent = GameEngine::ECS::EntityHandle::Invalid();
     if (parentEntity == 0)
@@ -102,6 +105,7 @@ static bool ResolveParent(GameEngine::ECS::World* w, GE_ECS_Entity parentEntity,
     const GameEngine::ECS::EntityHandle h = EntityFromId(parentEntity);
     if (!w || !w->IsValid(h))
     {
+        GameEngine::ScriptingAbi::RefuseDeadParent(function);
         return false;
     }
     outParent = h;
@@ -184,7 +188,7 @@ GE_API GE_Result GE_CDECL GE_ECSABI_CreateEmptyEntity(GE_Handle world,
             return GE_Result_Fail;
 
         GameEngine::ECS::EntityHandle parentHandle{};
-        if (!ResolveParent(w, parentEntity, parentHandle))
+        if (!ResolveParent(w, parentEntity, "WorldHandle.CreateEmptyEntity", parentHandle))
             return GE_Result_InvalidArg;
 
         GameEngine::ECS::EntityHandle created = w->CreateEntity();
@@ -232,7 +236,7 @@ GE_API GE_Result GE_CDECL GE_ECSABI_CreatePrimitive(GE_Handle world,
             return GE_Result_Fail;
 
         GameEngine::ECS::EntityHandle parentHandle{};
-        if (!ResolveParent(w, parentEntity, parentHandle))
+        if (!ResolveParent(w, parentEntity, "WorldHandle.CreatePrimitive", parentHandle))
             return GE_Result_InvalidArg;
 
         GameEngine::GUID meshGuid = ResolvePrimitiveMeshGuid(primitive);
@@ -598,13 +602,15 @@ GE_API GE_Result GE_CDECL GE_ECSABI_RegisterBlobComponentWithSchema(
             const bool spanValid = d.size != 0 &&
                                    static_cast<uint64_t>(d.offset) + d.size <= sizeBytes &&
                                    (elem == 0 || (d.size % elem) == 0);
-            if (d.nameUtf8 == nullptr || d.nameLen == 0 || !typeKnown || !spanValid)
+            const bool categoryValid =
+                d.assetCategory == 0 || d.fieldType == static_cast<uint16_t>(FieldTypeId::AssetGuid);
+            if (d.nameUtf8 == nullptr || d.nameLen == 0 || !typeKnown || !spanValid || !categoryValid)
             {
                 Logger::Log::Error("[ECSABI] blob component '{}' field schema REJECTED: field {} ('{}') "
-                                "type {} offset {} size {} invalid for component size {}",
+                                "type {} offset {} size {} asset category {} invalid for component size {}",
                                 name, i,
                                 d.nameUtf8 ? std::string(d.nameUtf8, d.nameLen) : std::string(),
-                                d.fieldType, d.offset, d.size, sizeBytes);
+                                d.fieldType, d.offset, d.size, d.assetCategory, sizeBytes);
                 return GE_Result_InvalidArg;
             }
             FieldInfo f{};
@@ -612,6 +618,7 @@ GE_API GE_Result GE_CDECL GE_ECSABI_RegisterBlobComponentWithSchema(
             f.Offset = d.offset;
             f.Size = d.size;
             f.Type = static_cast<FieldTypeId>(d.fieldType);
+            f.AssetCategory = d.assetCategory;
             newFields.push_back(f);
         }
 
@@ -1362,6 +1369,75 @@ GE_API GE_Result GE_CDECL GE_ECSABI_CreateEntityRaw(GE_Handle world, GE_ECS_Enti
     GE_ECSABI_CATCH_ALL_FAIL
 }
 
+static_assert(GE_ECS_ASSET_CATEGORY_PREFAB == static_cast<uint16_t>(GameEngine::AssetType::Prefab),
+              "GE_ECS_ASSET_CATEGORY_PREFAB and the generator's kAssetCategoryPrefab name AssetType::Prefab");
+
+GE_API GE_Result GE_CDECL GE_ECSABI_SpawnPrefab(GE_Handle world, const uint8_t* prefabGuid, const GE_ECS_Transform* at,
+                                                GE_ECS_Entity parent, GE_ECS_Entity* outRoot)
+{
+    constexpr const char* kFunction = "EntityCommands.Spawn";
+    try
+    {
+        if (!outRoot)
+            return GameEngine::ScriptingAbi::RefuseNull(kFunction, "outRoot");
+        *outRoot = 0;
+        if (!prefabGuid)
+            return GameEngine::ScriptingAbi::RefuseNull(kFunction, "prefab");
+        if (!at)
+            return GameEngine::ScriptingAbi::RefuseNull(kFunction, "at");
+        if (world == 0)
+            return GE_Result_InvalidArg;
+        auto& engine = GameEngine::EngineCore::GetInstance();
+        if (!engine.IsInitialized())
+            return GameEngine::ScriptingAbi::EngineNotRunning();
+        if (!GameEngine::ScriptingAbi::IsMainThreadOutsideJobFor(engine))
+            return GameEngine::ScriptingAbi::RefuseThread(kFunction, GameEngine::ScriptingAbi::ThreadRule::Main);
+
+        auto* w = WorldFromHandle(world);
+        if (!w)
+            return GE_Result_Fail;
+        const GameEngine::ECS::EntityHandle parentHandle =
+            parent == 0 ? GameEngine::ECS::EntityHandle{} : EntityFromId(parent);
+        if (parent != 0 && !w->IsValid(parentHandle))
+            return GameEngine::ScriptingAbi::RefuseDeadParent(kFunction);
+
+        GameEngine::Components::Transform transform{};
+        std::memcpy(transform.matrix, at->matrix, sizeof(at->matrix));
+        const GameEngine::ECS::EntityHandle root = GameEngine::Scene::SpawnPrefab(
+            *w, GameEngine::ScriptingAbi::GuidFromAbiBytes(prefabGuid), transform, parentHandle);
+        if (!root.IsValid())
+            return GE_Result_NotFound;
+        *outRoot = static_cast<GE_ECS_Entity>(root.id);
+        return GE_Result_Ok;
+    }
+    GE_ECSABI_CATCH_ALL_FAIL
+}
+
+GE_API GE_Result GE_CDECL GE_ECSABI_DespawnPrefab(GE_Handle world, GE_ECS_Entity root)
+{
+    constexpr const char* kFunction = "EntityCommands.Despawn";
+    try
+    {
+        if (world == 0)
+            return GE_Result_InvalidArg;
+        auto& engine = GameEngine::EngineCore::GetInstance();
+        if (!engine.IsInitialized())
+            return GameEngine::ScriptingAbi::EngineNotRunning();
+        if (!GameEngine::ScriptingAbi::IsMainThreadOutsideJobFor(engine))
+            return GameEngine::ScriptingAbi::RefuseThread(kFunction, GameEngine::ScriptingAbi::ThreadRule::Main);
+
+        auto* w = WorldFromHandle(world);
+        if (!w)
+            return GE_Result_Fail;
+        const GameEngine::ECS::EntityHandle rootHandle = EntityFromId(root);
+        if (root == 0 || !w->IsValid(rootHandle))
+            return GE_Result_NotFound;
+        GameEngine::Scene::DespawnPrefab(*w, rootHandle);
+        return GE_Result_Ok;
+    }
+    GE_ECSABI_CATCH_ALL_FAIL
+}
+
 GE_API GE_Result GE_CDECL GE_ECSABI_DeferCommand(GE_Handle world, uint32_t commandType,
                                                    GE_ECS_Entity entity, GE_ECS_ComponentTypeId componentTypeId,
                                                    const void* data, uint32_t dataLen)
@@ -1606,6 +1682,10 @@ GE_API GE_Result GE_CDECL GE_ECS_GetInterface(uint32_t abiVersion, const void** 
         // v2.4: a script's component write, and the component defaults
         s_Iface.SetComponentBytesFromScript = reinterpret_cast<GE_ECSABI_SetComponentBytesFromScript_Fn>(&GE_ECSABI_SetComponentBytesFromScript);
         s_Iface.GetComponentDefaults = reinterpret_cast<GE_ECSABI_GetComponentDefaults_Fn>(&GE_ECSABI_GetComponentDefaults);
+
+        // v2.5: an instance of a resident prefab, and its removal
+        s_Iface.SpawnPrefab = reinterpret_cast<GE_ECSABI_SpawnPrefab_Fn>(&GE_ECSABI_SpawnPrefab);
+        s_Iface.DespawnPrefab = reinterpret_cast<GE_ECSABI_DespawnPrefab_Fn>(&GE_ECSABI_DespawnPrefab);
 
         *outTable = &s_Iface;
         *outSizeBytes = sizeof(GE_ECS_Interface_v2);

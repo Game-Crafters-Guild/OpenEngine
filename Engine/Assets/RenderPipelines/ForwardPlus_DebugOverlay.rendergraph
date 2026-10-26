@@ -8,7 +8,7 @@
       "usage": ["Storage", "CopySrc"],
       "memoryUsage": "DeviceLocal",
       "size": { "bytes": 16 },
-      "zeroOnCreate": true
+      "perFrameCopies": true
     },
     "ClusterParams": {
       "kind": "Buffer",

@@ -62,10 +62,10 @@ float AxialDepthWeight()
     ivec2 depthSize = textureSize(uDepth, 0);
     ivec2 pixel = ivec2(clamp(gl_FragCoord.xy, vec2(0.0), vec2(depthSize) - vec2(1.0)));
     float rawDepth = texelFetch(uDepth, pixel, 0).r;
-    if (rawDepth <= 1e-6)
+    if (IsBackgroundDepth(rawDepth))
         return 0.0;
 
-    float linearDepth = LinearizeReverseZ(rawDepth);
+    float linearDepth = LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
     float focusDistance = max(pc.dofFocusDistance, 0.01);
     float relativeDefocus = abs(linearDepth - focusDistance) /
                             max(max(linearDepth, focusDistance), 0.01);

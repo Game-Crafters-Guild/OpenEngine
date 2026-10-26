@@ -8,6 +8,7 @@
 // the components instead of a byte dump.
 
 #include "Mathematics/Vector2.h"
+#include "Mathematics/Vector3Int.h"
 
 #include <ostream>
 
@@ -17,6 +18,11 @@ namespace Mathematics {
 inline void PrintTo(const Vector2& value, std::ostream* out)
 {
     *out << "(" << value.x << ", " << value.y << ")";
+}
+
+inline void PrintTo(const Vector3Int& value, std::ostream* out)
+{
+    *out << "(" << value.x << ", " << value.y << ", " << value.z << ")";
 }
 
 } // namespace Mathematics

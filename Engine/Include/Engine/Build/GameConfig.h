@@ -43,6 +43,9 @@ struct GameConfig
     std::string gameName = "My Game";
     std::string startupScene;       // asset-relative, e.g. "Scenes/Main.scene"
     std::string renderPipeline;     // asset-relative, e.g. "RenderPipelines/ForwardPlus.rendergraph"
+    // True: the Player writes its startup line and its --screenshot capture after the startup
+    // scene's spline recipes have built. False: after the scene's assets have resolved.
+    bool waitForSplineRecipes = true;
 
     LodImportConfig lod;
 

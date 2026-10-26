@@ -1,7 +1,6 @@
 #include "Engine/Hosting/RuntimeHost.h"
 
 #include "Assets/AssetManager.h"
-#include "Assets/AssetRegistry.h"
 #include "Components/Rendering/Camera.h"
 #include "Components/Transform.h"
 #include "Core/Application.h"
@@ -29,10 +28,12 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/HzbCullingStrategy.h"
+#include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
 #include "Rendering/Passes/TemporalDither.h"
-#include "Scene/SceneAssetResolver.h"
+#include "Scene/AssetManagerSceneResolver.h"
 #include "Scene/SceneIO.h"
+#include "SplineRecipes/SplineRecipeSystem.h"
 #include "UI/UIManager.h"
 #include "UI/UITextureSpace.h"
 
@@ -47,53 +48,6 @@ namespace GameEngine {
 
 namespace
 {
-class RuntimeSceneAssetResolver final : public Scene::ISceneAssetResolver
-{
-public:
-    explicit RuntimeSceneAssetResolver(AssetManager& assetManager, std::filesystem::path assetRoot)
-        : m_AssetManager(assetManager)
-        , m_Registry(assetManager.GetRegistry())
-        , m_AssetRoot(std::move(assetRoot))
-    {
-    }
-
-    std::filesystem::path GetAssetRoot() const override { return m_AssetRoot; }
-    std::filesystem::path ResolveAssetPath(const std::filesystem::path& authoredPath) const override
-    {
-        return m_AssetManager.ResolveAssetPath(authoredPath);
-    }
-    GUID ResolveGuid(const GUID& guid) const override { return m_Registry.ResolveGuid(guid); }
-    GUID GetOrCreateAssetGuid(const std::filesystem::path& absolutePath) override
-    {
-        return m_Registry.GetOrCreateAssetGUID(absolutePath);
-    }
-
-    bool TryGetPathAndType(const GUID& guid, std::filesystem::path& outPath, AssetType& outType) const override
-    {
-        AssetMetadata metadata{};
-        if (!m_Registry.TryGetAssetMetadata(guid, metadata))
-            return false;
-        outPath = metadata.Path;
-        outType = metadata.Type;
-        return true;
-    }
-
-    bool TryGetGuidAndType(const std::filesystem::path& absolutePath, GUID& outGuid, AssetType& outType) const override
-    {
-        AssetMetadata metadata{};
-        if (!m_Registry.TryGetAssetMetadata(absolutePath, metadata))
-            return false;
-        outGuid = metadata.Guid;
-        outType = metadata.Type;
-        return true;
-    }
-
-private:
-    AssetManager& m_AssetManager;
-    AssetRegistry& m_Registry;
-    std::filesystem::path m_AssetRoot;
-};
-
 // Applies a fullscreen window mode; the windowed mode is the window as created.
 void ApplyFullscreenMode(Platform::Window& window, WindowMode mode)
 {
@@ -373,7 +327,15 @@ bool RuntimeHost::OpenScene(const std::filesystem::path& scenePath)
     const auto& assetRoot = engine.GetResolvedAssetRoot();
     const auto sceneFile = assetRoot / scenePath;
 
-    RuntimeSceneAssetResolver assetResolver(engine.GetAssetManager(), assetRoot);
+    // What the spline recipes generated belongs to the outgoing scene: release it
+    // against the outgoing world, before the load clears it (SplineRecipeSystem).
+    auto* loop = engine.GetRenderingLoop();
+    auto* systems = loop ? loop->GetSystemManager() : nullptr;
+    if (auto* recipes = systems ? systems->GetSystem<SplineRecipes::SplineRecipeSystem>() : nullptr)
+        recipes->ReleaseSceneScoped(*world);
+
+    Scene::AssetManagerSceneResolver assetResolver(engine.GetAssetManager(), assetRoot,
+                                                   Scene::AssetManagerSceneResolver::UnknownFile::AssignGuid);
 
     Scene::LoadOptions opts{};
     opts.mode = Scene::LoadMode::Replace;
@@ -394,7 +356,7 @@ bool RuntimeHost::OpenScene(const std::filesystem::path& scenePath)
     // has landed, so no frame waits for a load. Skeletons bind as entities complete.
     m_SceneResolve = Engine::Renderer::SceneResolveBatch::None;
     auto* rs = m_RenderCtx ? m_RenderCtx->GetRenderServices() : nullptr;
-    if (auto* loop = engine.GetRenderingLoop(); rs && loop)
+    if (rs && loop)
         m_SceneResolve = loop->GetSceneResolveService().EnqueueWorld(*world, *rs);
 
     Logger::Log::Info("Runtime: Loaded scene '{}'", sceneFile.string());
@@ -611,7 +573,7 @@ void RuntimeHost::RenderFrameRG(Engine::Renderer::RenderServices& rs,
         clear.clearColorValue[3] = 1.0f;
     }
     clear.clearDepth = true;
-    clear.clearDepthValue = 0.0f;
+    clear.clearDepthValue = Rendering::ReverseZ::kClearFar;
     rs.Views().SetViewClearConfig(m_ViewId, clear);
 
     // Forward+ directional/ambient lighting reads the per-view LightUBO —

@@ -1,6 +1,7 @@
 // The night sky's star model (sky_star_model.glsl), evaluated on the device by
 // sky_star_model_probe.comp: the flux of a magnitude, the extinction, the contrast visibility,
-// the scintillation's growth with airmass and the glare's energy, taken from the core.
+// the scintillation's growth with airmass and the glare's energy, taken from the core; and the
+// falling stars (sky_meteor.glsl): their brightness, their paths and the light of their streaks.
 //
 // Skips ONLY without a Vulkan device. A missing staged probe FAILS: the same target builds it.
 
@@ -12,6 +13,8 @@
 #include "Rendering/Core/PipelineTypes.h"
 
 #include "Mathematics/Vector2.h"
+#include "Mathematics/Vector3.h"
+#include "Mathematics/VectorOps.h"
 #include "Platform/Shell.h"
 
 #include "TestDeviceHelper.h"
@@ -21,6 +24,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -546,4 +550,267 @@ TEST_F(StarModelTest, ACoresLightOnThePixelsIsTheSameWhereverTheStarSits)
                 Run({{{14.0f, 2.0f, at.x, at.y}, {8.0f, 1.0f, 0.0f, kPixelSolidAngle1080}, Vec4{core, 0.0f, 2.0f, 0.0f}}})[0];
             EXPECT_NEAR(a.Out0[0], 1.0f, 5e-3f) << "Star core " << core << ", star at (" << at.x << ", " << at.y << ")";
         }
+}
+
+namespace
+{
+
+// The falling stars' probe queries (sky_meteor.glsl): the flight of a slot at a time, and the light of
+// a streak on the pixel grid.
+constexpr float kFlightOp = 15.0f;
+constexpr float kStreakOp = 16.0f;
+constexpr float kStreakProfileOp = 17.0f;
+constexpr uint32_t kMeteorSlots = 4u;
+constexpr float kDefaultInterval = 5.0f;
+constexpr float kMeteorWindow = kMeteorSlots * kDefaultInterval;
+constexpr uint32_t kMeteorWindows = 1000u;
+// tanHalfFovY of a 60 degree view.
+constexpr float kTanHalf60 = 0.57735027f;
+
+// The flight of every slot at the middle of each of the first kMeteorWindows windows.
+std::vector<Query> EveryFlight()
+{
+    std::vector<Query> queries;
+    for (uint32_t window = 0; window < kMeteorWindows; ++window)
+        for (uint32_t slot = 0; slot < kMeteorSlots; ++slot)
+            queries.push_back({{kFlightOp, static_cast<float>(slot), (window + 0.5f) * kMeteorWindow, kDefaultInterval},
+                               {kTanHalf60, 1080.0f, 1.0f, 0.0f}});
+    return queries;
+}
+
+// Each of the bins holds an equal share of the samples, within four binomial standard deviations.
+void ExpectEvenShares(std::span<const size_t> counts, size_t samples, const char* what)
+{
+    const double share = 1.0 / static_cast<double>(counts.size());
+    const double tolerance = 4.0 * std::sqrt(share * (1.0 - share) / static_cast<double>(samples));
+    for (size_t i = 0; i < counts.size(); ++i)
+        EXPECT_NEAR(static_cast<double>(counts[i]) / static_cast<double>(samples), share, tolerance) << what << " " << i;
+}
+
+} // namespace
+
+// A falling star is a star of the star model: its peak follows the meteors' population law, each
+// magnitude brighter 2.5 times rarer, from magnitude +1 to -3. The faint end is cut at +1, so at its
+// peak every flight is as bright as the brighter stars; the brightest outshines Sirius (-1.46) and about
+// two in five are brighter than magnitude 0.
+TEST_F(StarModelTest, AFallingStarIsAtMostMagnitudeMinusThreeAndBrightOnesAreRare)
+{
+    const std::vector<Answer> flights = Run(EveryFlight());
+    float brightest = 100.0f;
+    float faintest = -100.0f;
+    size_t brighterThanZero = 0;
+    for (const Answer& f : flights)
+    {
+        brightest = std::min(brightest, f.Out0[3]);
+        faintest = std::max(faintest, f.Out0[3]);
+        brighterThanZero += f.Out0[3] < 0.0f ? 1u : 0u;
+    }
+    EXPECT_GE(brightest, -3.0f - 1e-4f) << "no falling star is brighter than magnitude -3";
+    EXPECT_LE(faintest, 1.0f + 1e-4f) << "no falling star is fainter than magnitude +1";
+    // (2.5^0 - 2.5^-3) / (2.5^1 - 2.5^-3) of them are brighter than magnitude 0.
+    const double expected = (1.0 - std::pow(2.5, -3.0)) / (std::pow(2.5, 1.0) - std::pow(2.5, -3.0));
+    // Four binomial standard deviations of the share over the sampled flights.
+    const double tolerance = 4.0 * std::sqrt(expected * (1.0 - expected) / static_cast<double>(flights.size()));
+    EXPECT_NEAR(static_cast<double>(brighterThanZero) / flights.size(), expected, tolerance);
+}
+
+// A falling star starts anywhere in the sky above 15 degrees with every direction as likely: the sine of
+// its altitude is uniform from sin(15 degrees) to 1, which spreads the starts evenly over the sky's area,
+// and its azimuth is uniform around the horizon. The first 4,000 flights fill five equal altitude-sine
+// bands and eight equal azimuth sectors, each within four binomial standard deviations of its share.
+TEST_F(StarModelTest, AFallingStarStartsAnywhereAboveFifteenDegreesWithEveryDirectionAsLikely)
+{
+    constexpr float kMinAltitudeSine = 0.25881905f; // sin(15 degrees)
+    constexpr size_t kAltitudeBands = 5;
+    constexpr size_t kAzimuthSectors = 8;
+    const std::vector<Answer> flights = Run(EveryFlight());
+    std::array<size_t, kAltitudeBands> bands{};
+    std::array<size_t, kAzimuthSectors> sectors{};
+    float lowest = 1.0f;
+    for (const Answer& f : flights)
+    {
+        const float sinAltitude = f.Out0[1];
+        lowest = std::min(lowest, sinAltitude);
+        const float band = (sinAltitude - kMinAltitudeSine) / (1.0f - kMinAltitudeSine);
+        bands[std::min(static_cast<size_t>(std::max(band, 0.0f) * kAltitudeBands), kAltitudeBands - 1)] += 1;
+        const float turn = std::atan2(f.Out0[2], f.Out0[0]) / (2.0f * Mathematics::Pi) + 0.5f;
+        sectors[std::min(static_cast<size_t>(turn * kAzimuthSectors), kAzimuthSectors - 1)] += 1;
+    }
+    EXPECT_GE(lowest, kMinAltitudeSine - 1e-5f) << "no falling star starts below 15 degrees";
+    ExpectEvenShares(bands, flights.size(), "altitude-sine band");
+    ExpectEvenShares(sectors, flights.size(), "azimuth sector");
+}
+
+// Every flight draws its own path from its slot and its window: no two of the first 4,000, over all four
+// slots, share a start (within 0.03 degrees), a speed and a duration. Two starts are the same when the
+// chord between them is under 0.03 degrees (5.2e-4 rad): a squared distance holds an exact repeat at 0,
+// but the dot product of a float unit vector with itself can fall 1.2e-7 below 1.
+TEST_F(StarModelTest, NoTwoFallingStarsShareAPath)
+{
+    constexpr float kSameStartChordSquared = 2.7e-7f;
+    const std::vector<Answer> flights = Run(EveryFlight());
+    size_t repeats = 0;
+    for (size_t first = 0; first < flights.size(); ++first)
+        for (size_t second = first + 1; second < flights.size(); ++second)
+        {
+            const Answer& a = flights[first];
+            const Answer& b = flights[second];
+            const Mathematics::Vector3 startA(a.Out0[0], a.Out0[1], a.Out0[2]);
+            const Mathematics::Vector3 startB(b.Out0[0], b.Out0[1], b.Out0[2]);
+            const bool sameStart = (startA - startB).LengthSquared() < kSameStartChordSquared;
+            const bool sameSpeed = std::abs(a.Out2[0] - b.Out2[0]) < 1e-4f;
+            const bool sameDuration = std::abs(a.Out2[1] - b.Out2[1]) < 1e-5f;
+            repeats += sameStart && sameSpeed && sameDuration ? 1u : 0u;
+        }
+    EXPECT_EQ(repeats, 0u) << "pairs of flights with the same start, speed and duration";
+}
+
+// The head is the star model's core, sized in pixels: the same at a 40 and a 90 degree view.
+TEST_F(StarModelTest, AFallingStarsHeadIsTheSameSizeInPixelsAtAnyFieldOfView)
+{
+    const float coreScale = 0.75f;
+    const std::vector<Answer> a = Run({{{kFlightOp, 0.0f, 10.0f, kDefaultInterval}, {0.36397023f, 1080.0f, coreScale, 0.0f}},
+                                       {{kFlightOp, 0.0f, 10.0f, kDefaultInterval}, {1.0f, 1080.0f, coreScale, 0.0f}}});
+    EXPECT_NEAR(a[0].Out2[2], coreScale, 1e-5f) << "40 degrees";
+    EXPECT_NEAR(a[1].Out2[2], coreScale, 1e-5f) << "90 degrees";
+}
+
+// Each slot flies exactly one falling star in each window of four intervals, at 8 to 30 degrees a
+// second for 0.3 to 1 s, and the streak behind the head is where the head was a tenth of a second ago.
+TEST_F(StarModelTest, EachSlotFliesOneFallingStarPerWindowAndItsStreakIsATenthOfASecond)
+{
+    constexpr float kStep = 0.01f;
+    const uint32_t samples = static_cast<uint32_t>(kMeteorWindow / kStep);
+    for (uint32_t slot = 0; slot < kMeteorSlots; ++slot)
+        for (uint32_t window = 0; window < 3u; ++window)
+        {
+            std::vector<Query> queries;
+            for (uint32_t s = 0; s < samples; ++s)
+                queries.push_back({{kFlightOp, static_cast<float>(slot), (window * samples + s + 0.5f) * kStep,
+                                    kDefaultInterval},
+                                   {kTanHalf60, 1080.0f, 1.0f, 0.0f}});
+            const std::vector<Answer> a = Run(queries);
+            uint32_t flights = 0;
+            uint32_t activeSamples = 0;
+            float longestStreak = 0.0f;
+            for (uint32_t s = 0; s < samples; ++s)
+            {
+                const bool active = a[s].Out1[3] > 0.5f;
+                flights += active && (s == 0 || a[s - 1].Out1[3] < 0.5f) ? 1u : 0u;
+                activeSamples += active ? 1u : 0u;
+                if (active)
+                    longestStreak = std::max(longestStreak, a[s].Out2[3]);
+            }
+            const float speed = a[0].Out2[0];
+            const float duration = a[0].Out2[1];
+            const std::string where = "slot " + std::to_string(slot) + ", window " + std::to_string(window);
+            EXPECT_EQ(flights, 1u) << where;
+            EXPECT_GE(speed, 8.0f - 1e-3f) << where;
+            EXPECT_LE(speed, 30.0f + 1e-3f) << where;
+            EXPECT_GE(duration, 0.3f - 1e-5f) << where;
+            EXPECT_LE(duration, 1.0f + 1e-5f) << where;
+            EXPECT_NEAR(activeSamples * kStep, duration, 2.0f * kStep) << where;
+            EXPECT_NEAR(longestStreak, speed * 0.1f, 0.01f * speed * 0.1f) << where;
+        }
+}
+
+// The streak spreads the head's core over the pixels it crossed: the pixels' sum is the star's light
+// at every length, direction and sub-pixel position, and with the eye's glare and the glow the drawn
+// light is the total.
+TEST_F(StarModelTest, AFallingStarsStreakCarriesTheStarsLight)
+{
+    const Mathematics::Vector2 positions[] = {{0.0f, 0.0f}, {0.37f, 0.81f}};
+    for (const float core : {0.5f, 0.75f, 1.0f})
+        for (const float length : {0.0f, 0.5f, 3.0f, 25.0f})
+            for (const float angle : {0.0f, 0.7f})
+                for (const Mathematics::Vector2 at : positions)
+                {
+                    const Answer a = Run({{{kStreakOp, 1.0f, length, angle}, {at.x, at.y, 0.0f, 0.0f},
+                                           Vec4{core, 0.0f, 2.0f, 0.0f}}})[0];
+                    EXPECT_NEAR(a.Out0[1] / a.Out0[0], 1.0f, 5e-3f)
+                        << "Star core " << core << ", streak " << length << " px at " << angle << " rad, head at ("
+                        << at.x << ", " << at.y << ")";
+                }
+    const Answer eye = Run({{{kStreakOp, -2.0f, 10.0f, 0.3f}, {0.0f, 0.0f, 1.0f, 1.0f}, kPhysicalShape}})[0];
+    EXPECT_NEAR(eye.Out0[2] / eye.Out0[0], 1.0f, 5e-3f) << "the eye's glare and the glow: the drawn light is the total";
+    for (const Mathematics::Vector2 at : positions)
+    {
+        const Answer trail = Run({{{kStreakOp, -2.0f, 25.0f, 0.7f}, {at.x, at.y, 1.0f, 1.0f}, kPhysicalShape}})[0];
+        EXPECT_NEAR(trail.Out0[2] / trail.Out0[0], 1.0f, 5e-3f)
+            << "the eye's head-weighted trail with its glare and glow, head at (" << at.x << ", " << at.y << ")";
+    }
+}
+
+// A falling star that has barely moved lights its brightest pixel as the same star standing still: the
+// streak's core is the star's core widened by the pixel's own spread, the Gaussian that a pixel's mean
+// of the star's core comes to.
+TEST_F(StarModelTest, ABarelyMovingFallingStarsBrightestPixelIsTheStars)
+{
+    for (const float core : {0.85f, 1.0f})
+        for (const float length : {0.1f, 0.4f})
+        {
+            // The star sits on a pixel's center; the streak's midpoint does too.
+            constexpr float kAngle = 0.3f;
+            const Vec4 shape{core, 0.0f, 2.0f, 0.0f};
+            const float headX = 0.5f - 0.5f * length * std::cos(kAngle);
+            const float headY = 0.5f - 0.5f * length * std::sin(kAngle);
+            const std::vector<Answer> a = Run({{{14.0f, 2.0f, 0.0f, 0.0f}, {8.0f, 1.0f, 0.0f, kPixelSolidAngle1080}, shape},
+                                               {{kStreakOp, 2.0f, length, kAngle}, {headX, headY, 0.0f, 0.0f}, shape}});
+            const float star = a[0].Out0[1];
+            const float fallingStar = a[1].Out1[0] / a[1].Out0[0];
+            EXPECT_NEAR(fallingStar / star, 1.0f, 0.03f)
+                << "Star core " << core << ", streak " << length << " px: the brightest pixel's share " << fallingStar
+                << " against the star's " << star;
+        }
+}
+
+// Seen by Eye or by Camera, a falling star's head is brightest and its trail fades behind it: the light
+// it left decays as exp(-s / tau) along the streak, tau a third of the streak, so the light three
+// quarters of the way to the tail is exp(-1.5) of the light a quarter of the way.
+TEST_F(StarModelTest, AFallingStarsTrailFadesBehindItsHeadSeenByEyeOrCamera)
+{
+    constexpr float kLength = 30.0f;
+    for (const float eye : {1.0f, 0.0f})
+    {
+        const Answer a = Run({{{kStreakProfileOp, 1.0f, kLength, 0.3f}, {0.0f, 0.0f, eye, 0.0f},
+                               Vec4{1.0f, 0.0f, 2.0f, 0.0f}}})[0];
+        const char* seenBy = eye > 0.5f ? "Eye" : "Camera";
+        EXPECT_NEAR(a.Out0[2], kLength / 3.0f, 1e-3f) << "Seen by " << seenBy << ": the decay length is a third of the streak";
+        EXPECT_NEAR(a.Out0[1] / a.Out0[0], std::exp(-1.5f), 0.15f * std::exp(-1.5f))
+            << "Seen by " << seenBy << ": a quarter of the way " << a.Out0[0] << ", three quarters " << a.Out0[1];
+    }
+}
+
+// Seen by Eye or by Camera, a falling star's head is a small still point brighter than its trail, so a
+// still frame shows which end is the head: the light at the head is at least three times the light a
+// quarter of the way to the tail, on a short and a long streak, with and without the glow.
+TEST_F(StarModelTest, AFallingStarsHeadIsBrighterThanItsTrailSeenByEyeOrCamera)
+{
+    for (const float eye : {1.0f, 0.0f})
+        for (const float length : {30.0f, 100.0f})
+            for (const float glow : {0.0f, 0.9f})
+            {
+                const Answer a = Run({{{kStreakProfileOp, 1.0f, length, 0.3f}, {0.0f, 0.0f, eye, glow},
+                                       Vec4{0.75f, 0.0f, 0.6f, 0.0f}}})[0];
+                EXPECT_GE(a.Out0[3] / a.Out0[0], 3.0f)
+                    << "Seen by " << (eye > 0.5f ? "Eye" : "Camera") << ", streak " << length << " px, glow " << glow
+                    << ": at the head " << a.Out0[3] << ", a quarter of the way " << a.Out0[0];
+            }
+}
+
+// A falling star draws no spikes: summed along its streak they would draw a faint box with hard edges
+// around the flight. Their share of the glow stays in the glow, so the Spikes dial changes nothing
+// on a falling star and its light is the star's total.
+TEST_F(StarModelTest, AFallingStarDrawsNoSpikes)
+{
+    const std::vector<Answer> answers = Run({{{kStreakOp, -2.0f, 25.0f, 0.7f}, {0.0f, 0.0f, 1.0f, 1.0f},
+                                              Vec4{1.0f, 0.0f, 2.0f, 0.0f}},
+                                             {{kStreakOp, -2.0f, 25.0f, 0.7f}, {0.0f, 0.0f, 1.0f, 1.0f},
+                                              Vec4{1.0f, 1.0f, 2.0f, 0.0f}}});
+    const Answer& none = answers[0];
+    const Answer& full = answers[1];
+    for (int i = 0; i < 4; ++i)
+        EXPECT_NEAR(full.Out0[i], none.Out0[i], 1e-4f * std::abs(none.Out0[i]))
+            << "output " << i << " with Spikes 1 against 0";
+    EXPECT_NEAR(full.Out0[2] / full.Out0[0], 1.0f, 5e-3f) << "Spikes 1: the drawn light is the total";
 }

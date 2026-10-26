@@ -29,6 +29,8 @@ The terrain's height data is a grid of samples. Its spacing follows **Size** and
 
 While the camera holds still, splits and merges use that one threshold, so a still camera settles to the same mesh for its pose whichever way it arrived. This holds while the mesh fills less than half of its capacity. Above that, distant ground is coarsened by how full the mesh is, and the mesh can depend on the path.
 
+Terrains streamed through the tile atlas, and every terrain in the web build, which has no 64-bit shader integers, refine on the projected edge length instead (below). They keep the gap between the split and the merge thresholds while the camera holds still too, so a still camera's mesh stops changing soon after the camera stops, and it can depend on the path.
+
 ### It follows the view's height
 
 The target is relative to resolution. In a view *H* rows tall, the size limit is `target × H / 1080` pixels. A 2160-row view uses a 22-pixel limit at the default, so it draws the same triangles as a 1080-row view of the same aspect ratio, and the terrain's memory does not grow with the display. The same holds for a reduced render scale: the triangle count follows the camera and the ground, not the pixel count.

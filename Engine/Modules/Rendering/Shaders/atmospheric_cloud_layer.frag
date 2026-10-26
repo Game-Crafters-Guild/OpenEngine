@@ -35,6 +35,7 @@ layout(set = 0, binding = 4, std140) uniform HeightFogParamsBlock
 layout(set = 0, binding = 5) uniform sampler2D uSkyBackdrop;
 #define GE_HEIGHT_FOG_BACKDROP uSkyBackdrop
 #include "Includes/height_fog_pixel.glsl"
+#include "Includes/reverse_z.glsl"
 
 layout(push_constant) uniform AtmosLayerPC
 {
@@ -178,7 +179,7 @@ void main()
     vec2 driftDir = vec2(cos(angle), sin(angle));
     vec3 drift = vec3(driftDir.x, 0.0, driftDir.y) * pc.atmosDriftRate;
 
-    bool sky = rawDepth <= 0.000001;
+    bool sky = IsBackgroundDepth(rawDepth);
     float depthForRay = sky ? 0.0 : rawDepth;
     vec2 ndc = ViewportUvToNdc(vUV);
     vec4 pV = ViewParams.ge_invProj * vec4(ndc, depthForRay, 1.0);

@@ -213,13 +213,13 @@ void PageCache::Update(uint64 frameIndex, float32 deltaSeconds, std::span<const 
     }
 }
 
-bool PageCache::Rewrite(const CachedPage& page)
+bool PageCache::Rewrite(const CachedPage& page, const PageSampleRect& level0Rect)
 {
     const uint32 slot = m_Pool.SlotOf(page);
     if (slot == kNoResidentSlot)
         return false;
     m_Uploads.push_back(PageUploadRequest{page, slot});
-    m_Rewrites.push_back(page);
+    m_Rewrites.push_back(PageRewrite{page, level0Rect});
     return true;
 }
 

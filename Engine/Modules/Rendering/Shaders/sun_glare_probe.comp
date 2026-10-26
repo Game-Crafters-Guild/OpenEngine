@@ -21,14 +21,14 @@
 // angles, so the CPU can solve the 2x2 system for the 1/theta^3 and 1/theta^2 coefficients
 // and compare them with the published pair instead of with a second copy of them.
 //
-// Mode 3 (cascade lookup): invocation 0 evaluates GE_SunGlareCascadeSunlit against a bound
-// comparison-sampled shadow array and a light view-projection handed in through the push
-// constants. That term had no behavioural test at all -- only source text -- so a cascade whose
-// stored depth says "occluded" could have returned lit and nothing would have caught it.
+// Mode 3 (cascade visibility): the first workgroup evaluates GE_SunGlareCastersVisibility, the
+// cascade term the glare pass computes, against a bound comparison-sampled shadow array as one
+// cascade, with the light view-projection, the eye, the direction toward the sun and the disc's
+// angular radius handed in through the push constants. Invocation 0 reports it.
 
-#include "Includes/sun_glare.glsl"
+#include "Includes/sun_glare_casters.glsl"
 
-layout(local_size_x = 64) in;
+layout(local_size_x = GE_SUN_GLARE_CASTERS_LANES) in;
 
 layout(set = 0, binding = 0) buffer ProbeOut { vec4 result[]; } uOut;
 layout(set = 0, binding = 1) uniform sampler2D uProbeDepth;
@@ -40,6 +40,8 @@ layout(push_constant) uniform ProbePC
     vec4 kernelParams;
     // Mode 0: x = smallest polar angle swept (rad), y = largest.
     // Mode 2: x, y = the two angles to report the kernel at (DEGREES).
+    // Mode 3: xyz = world-space direction toward the sun (unit), w = the angular radius of the
+    // disc the term samples (rad).
     vec4 sweepParams;
     // xy = probe position in UV, zw = probe ring radius in UV, per axis.
     vec4 visParams;
@@ -81,11 +83,12 @@ void main()
 
     if (mode == 3)
     {
-        if (i != 0u)
-            return;
-        uOut.result[0] = vec4(GE_SunGlareCascadeSunlit(uProbeShadow, pc.cascadeVP, 0,
-                                                       pc.cascadeProbe.xyz, pc.cascadeProbe.w),
-                              0.0, 0.0, 0.0);
+        // Every lane of the workgroup takes part: the evaluation holds a barrier.
+        float visibility = GE_SunGlareCastersVisibility(uProbeShadow, pc.cascadeVP, 1,
+                                                        pc.cascadeProbe.xyz, pc.sweepParams.xyz,
+                                                        pc.sweepParams.w, pc.cascadeProbe.w);
+        if (i == 0u)
+            uOut.result[0] = vec4(visibility, 0.0, 0.0, 0.0);
         return;
     }
 

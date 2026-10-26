@@ -12,6 +12,7 @@ add_executable(MathematicsTests
     TriangulationTests.cpp
     Matrix3x3AffineTests.cpp
     Matrix4x4Tests.cpp
+    Vector3IntTests.cpp
     Vector3Tests.cpp
     VectorComponentTests.cpp
 )

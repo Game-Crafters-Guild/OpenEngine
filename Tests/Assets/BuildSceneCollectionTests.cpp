@@ -1,7 +1,7 @@
 // What a build ships for a scene. The export walks the dependency graph from each
 // built scene, so an asset the scene loads but the walk never reaches is missing from
 // the package, and the packaged Player fails to load the scene (#2652). A scene names
-// the blueprints its [blueprint ...] instances spawn in [resource] headers.
+// the prefabs its [prefab ...] instances spawn in [resource] headers.
 
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
@@ -49,9 +49,9 @@ class BuildSceneCollection : public ::testing::Test
     AssetManager m_AssetManager;
 };
 
-std::string Blueprint(const std::string& name, const std::string& texturePath)
+std::string Prefab(const std::string& name, const std::string& texturePath)
 {
-    return "[blueprint name=\"" + name + "\" version=1]\n"
+    return "[prefab name=\"" + name + "\" version=1]\n"
            "[entity id=\"root\"]\n"
            "Name.value = \"" + name + "\"\n"
            "MeshRenderer.material = [path=\"" + texturePath + "\"]\n";
@@ -59,18 +59,18 @@ std::string Blueprint(const std::string& name, const std::string& texturePath)
 
 } // namespace
 
-TEST_F(BuildSceneCollection, BlueprintsAScenesInstancesSpawnShipWithWhatTheyReference)
+TEST_F(BuildSceneCollection, PrefabsAScenesInstancesSpawnShipWithWhatTheyReference)
 {
-    // A path-only reference: the resource names its blueprint by path only, and the blueprint
+    // A path-only reference: the resource names its prefab by path only, and the prefab
     // names its own content. A second resource carries the GUID the editor's save heals in.
     WriteTextFile(m_ProjectAssets / "Textures" / "Well.png", "PNGDATA");
     WriteTextFile(m_ProjectAssets / "Textures" / "Rock.png", "PNGDATA");
-    WriteTextFile(m_ProjectAssets / "Blueprints" / "Env" / "Well.blueprint", Blueprint("Well", "Textures/Well.png"));
-    WriteTextFile(m_ProjectAssets / "Blueprints" / "Rock.blueprint", Blueprint("Rock", "Textures/Rock.png"));
+    WriteTextFile(m_ProjectAssets / "Prefabs" / "Env" / "Well.prefab", Prefab("Well", "Textures/Well.png"));
+    WriteTextFile(m_ProjectAssets / "Prefabs" / "Rock.prefab", Prefab("Rock", "Textures/Rock.png"));
     WriteTextFile(m_ProjectAssets / "Scenes" / "Lake.scene", "[scene name=\"Lake\" version=1]\n");
     Mount();
-    const GUID wellGuid = GuidOf(m_ProjectAssets / "Blueprints" / "Env" / "Well.blueprint");
-    const GUID rockGuid = GuidOf(m_ProjectAssets / "Blueprints" / "Rock.blueprint");
+    const GUID wellGuid = GuidOf(m_ProjectAssets / "Prefabs" / "Env" / "Well.prefab");
+    const GUID rockGuid = GuidOf(m_ProjectAssets / "Prefabs" / "Rock.prefab");
     const GUID wellTextureGuid = GuidOf(m_ProjectAssets / "Textures" / "Well.png");
     const GUID rockTextureGuid = GuidOf(m_ProjectAssets / "Textures" / "Rock.png");
     ASSERT_FALSE(wellGuid.IsNull());
@@ -79,26 +79,26 @@ TEST_F(BuildSceneCollection, BlueprintsAScenesInstancesSpawnShipWithWhatTheyRefe
     ASSERT_FALSE(rockTextureGuid.IsNull());
     WriteTextFile(m_ProjectAssets / "Scenes" / "Lake.scene",
                   "[scene name=\"Lake\" version=1]\n"
-                  "[resource id=\"well\" path=\"Blueprints/Env/Well.blueprint\"]\n"
-                  "[resource id=\"rock\" path=\"Blueprints/Rock.blueprint\" guid=\"" + rockGuid.ToString() + "\"]\n"
+                  "[resource id=\"well\" path=\"Prefabs/Env/Well.prefab\"]\n"
+                  "[resource id=\"rock\" path=\"Prefabs/Rock.prefab\" guid=\"" + rockGuid.ToString() + "\"]\n"
                   "\n"
-                  "[blueprint id=\"well_0\" source=\"well\"]\n"
+                  "[prefab id=\"well_0\" source=\"well\"]\n"
                   "Transform.position = (0, 0, 0)\n"
                   "\n"
-                  "[blueprint id=\"rock_0\" source=\"rock\"]\n"
+                  "[prefab id=\"rock_0\" source=\"rock\"]\n"
                   "Transform.position = (4, 0, 0)\n");
 
     AssetCollector collector(m_AssetManager);
     const AssetManifest manifest = collector.CollectFromScenes({"Scenes/Lake.scene"});
 
     const AssetManifestEntry* well = manifest.FindByGuid(wellGuid);
-    ASSERT_NE(well, nullptr) << "the blueprint a resource names by path did not ship";
-    EXPECT_EQ(well->outputPath.generic_string(), "Assets/Blueprints/Env/Well.blueprint");
+    ASSERT_NE(well, nullptr) << "the prefab a resource names by path did not ship";
+    EXPECT_EQ(well->outputPath.generic_string(), "Assets/Prefabs/Env/Well.prefab");
     const AssetManifestEntry* rock = manifest.FindByGuid(rockGuid);
-    ASSERT_NE(rock, nullptr) << "the blueprint a resource names by GUID did not ship";
-    EXPECT_EQ(rock->outputPath.generic_string(), "Assets/Blueprints/Rock.blueprint");
-    EXPECT_NE(manifest.FindByGuid(wellTextureGuid), nullptr) << "what the spawned blueprint names did not ship";
-    EXPECT_NE(manifest.FindByGuid(rockTextureGuid), nullptr) << "what the spawned blueprint names did not ship";
+    ASSERT_NE(rock, nullptr) << "the prefab a resource names by GUID did not ship";
+    EXPECT_EQ(rock->outputPath.generic_string(), "Assets/Prefabs/Rock.prefab");
+    EXPECT_NE(manifest.FindByGuid(wellTextureGuid), nullptr) << "what the spawned prefab names did not ship";
+    EXPECT_NE(manifest.FindByGuid(rockTextureGuid), nullptr) << "what the spawned prefab names did not ship";
     EXPECT_TRUE(manifest.unresolvedDependencies.empty());
 }
 
@@ -126,12 +126,12 @@ TEST_F(BuildSceneCollection, ResourceWithAStaleGuidShipsByItsPath)
 {
     // The load tries a resource's GUID first and its path when the registry does not
     // know the GUID (the asset was deleted and recreated, or the database rebuilt), so
-    // the editor and the packaged Player load the blueprint by its path. It has to ship.
+    // the editor and the packaged Player load the prefab by its path. It has to ship.
     WriteTextFile(m_ProjectAssets / "Textures" / "Well.png", "PNGDATA");
-    WriteTextFile(m_ProjectAssets / "Blueprints" / "Well.blueprint", Blueprint("Well", "Textures/Well.png"));
+    WriteTextFile(m_ProjectAssets / "Prefabs" / "Well.prefab", Prefab("Well", "Textures/Well.png"));
     WriteTextFile(m_ProjectAssets / "Scenes" / "Lake.scene", "[scene name=\"Lake\" version=1]\n");
     Mount();
-    const GUID wellGuid = GuidOf(m_ProjectAssets / "Blueprints" / "Well.blueprint");
+    const GUID wellGuid = GuidOf(m_ProjectAssets / "Prefabs" / "Well.prefab");
     const GUID wellTextureGuid = GuidOf(m_ProjectAssets / "Textures" / "Well.png");
     ASSERT_FALSE(wellGuid.IsNull());
     ASSERT_FALSE(wellTextureGuid.IsNull());
@@ -139,16 +139,16 @@ TEST_F(BuildSceneCollection, ResourceWithAStaleGuidShipsByItsPath)
     ASSERT_NE(staleGuid, wellGuid);
     WriteTextFile(m_ProjectAssets / "Scenes" / "Lake.scene",
                   "[scene name=\"Lake\" version=1]\n"
-                  "[resource id=\"well\" path=\"Blueprints/Well.blueprint\" guid=\"" + staleGuid.ToString() + "\"]\n"
+                  "[resource id=\"well\" path=\"Prefabs/Well.prefab\" guid=\"" + staleGuid.ToString() + "\"]\n"
                   "\n"
-                  "[blueprint id=\"well_0\" source=\"well\"]\n"
+                  "[prefab id=\"well_0\" source=\"well\"]\n"
                   "Transform.position = (0, 0, 0)\n");
 
     AssetCollector collector(m_AssetManager);
     const AssetManifest manifest = collector.CollectFromScenes({"Scenes/Lake.scene"});
 
-    EXPECT_NE(manifest.FindByGuid(wellGuid), nullptr) << "the blueprint the load finds by path did not ship";
-    EXPECT_NE(manifest.FindByGuid(wellTextureGuid), nullptr) << "what the spawned blueprint names did not ship";
+    EXPECT_NE(manifest.FindByGuid(wellGuid), nullptr) << "the prefab the load finds by path did not ship";
+    EXPECT_NE(manifest.FindByGuid(wellTextureGuid), nullptr) << "what the spawned prefab names did not ship";
     // The stale GUID itself names nothing, and the build still reports it.
     ASSERT_EQ(manifest.unresolvedDependencies.size(), 1u);
     EXPECT_EQ(manifest.unresolvedDependencies[0], staleGuid);
@@ -175,16 +175,16 @@ TEST_F(BuildSceneCollection, FieldWithAStaleGuidShipsByItsPath)
 
 TEST_F(BuildSceneCollection, InstanceOverridesBeforeAnyEntityShip)
 {
-    // A scene made only of blueprint instances: an override on an instance's root names
-    // an asset the blueprint does not, and nothing else in the scene names it.
+    // A scene made only of prefab instances: an override on an instance's root names
+    // an asset the prefab does not, and nothing else in the scene names it.
     WriteTextFile(m_ProjectAssets / "Textures" / "Well.png", "PNGDATA");
     WriteTextFile(m_ProjectAssets / "Textures" / "Override.png", "PNGDATA");
-    WriteTextFile(m_ProjectAssets / "Blueprints" / "Well.blueprint", Blueprint("Well", "Textures/Well.png"));
+    WriteTextFile(m_ProjectAssets / "Prefabs" / "Well.prefab", Prefab("Well", "Textures/Well.png"));
     WriteTextFile(m_ProjectAssets / "Scenes" / "Lake.scene",
                   "[scene name=\"Lake\" version=1]\n"
-                  "[resource id=\"well\" path=\"Blueprints/Well.blueprint\"]\n"
+                  "[resource id=\"well\" path=\"Prefabs/Well.prefab\"]\n"
                   "\n"
-                  "[blueprint id=\"well_0\" source=\"well\"]\n"
+                  "[prefab id=\"well_0\" source=\"well\"]\n"
                   "MeshRenderer.material = [path=\"Textures/Override.png\"]\n");
     Mount();
     const GUID overrideGuid = GuidOf(m_ProjectAssets / "Textures" / "Override.png");

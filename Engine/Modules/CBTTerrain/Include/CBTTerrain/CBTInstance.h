@@ -387,20 +387,21 @@ class CBTInstance
     void RecordDataBarrier(Rendering::CommandList& cl);
     void RecordReduce(Rendering::CommandList& cl, const CBTPushConstants& pc);
     // The planar split: rebuilds the height-range pyramid from this frame's height texture, with the
-    // ranges of the chain levels when the chain holds the texture's lattice, level by level, when the
-    // heights may have changed since the last build (`heightsChanged`: a forced corner refresh, an edit
-    // rect or a chain rebuild), another texture is bound or the chain's ranges came or went. No-op for
-    // the atlas source, a spherical domain, the narrow-heap arm and a lattice too large for the buffer.
+    // ranges of the chain levels when the chain holds the texture's lattice, level by level: every block
+    // when another texture is bound, the chain's ranges came or went, or any height may have changed
+    // (`forced`: a forced corner refresh or a whole chain rebuild); only the blocks that read the edit
+    // rect, and the blocks above them, when `edited`. No-op for the atlas source, a spherical domain, the
+    // narrow-heap arm and a lattice too large for the buffer.
     void RecordHeightRangeBuild(Rendering::CommandList& cl, const CBTClassifyDesc& classify,
                                 const CBTFrameParams& params, CBTPushConstants pc,
-                                uint32_t frameCounter, bool heightsChanged);
+                                uint32_t frameCounter, bool forced, bool edited);
     // The draw's prefiltered height chain (CBTLayout.h kCBTHeightChain*), level by level beside the
     // pyramid: every level when another texture or lattice is bound, the buffer was regrown or the
     // corners are force-refreshed (`forced`); only the samples whose tents read the edit rect when
     // `edited`. No-op when the frame turns the chain off (HeightChain.x 0: the sphere, the atlas
     // and paged arms, the narrow heap) or the buffer is not provisioned for the lattice. The far-field
     // normal chain follows, over the texels whose normals read the rebuilt samples, when its texture
-    // is provisioned for the lattice. Returns whether it rebuilt any of the height chain.
+    // is provisioned for the lattice. Returns whether it rebuilt the whole height chain.
     bool RecordHeightChainBuild(Rendering::CommandList& cl, const CBTClassifyDesc& classify,
                                 const CBTFrameParams& params, CBTPushConstants pc, uint32_t frameCounter,
                                 bool forced, bool edited);

@@ -47,6 +47,12 @@ SharedPtr<Asset> CreateAssetAtPath(const AssetMetadata& metadata)
     return std::make_shared<TAsset>(metadata.Guid, metadata.Path);
 }
 
+// A scene or a prefab: one text asset class, typed by the file's registered type.
+SharedPtr<Asset> CreateSceneTextAsset(const AssetMetadata& metadata)
+{
+    return std::make_shared<SceneAsset>(metadata.Guid, metadata.Path, metadata.Type);
+}
+
 // BinaryAsset keeps the typed category with generic storage/path handling, for
 // payloads their owning systems decode themselves.
 SharedPtr<Asset> CreateBinaryAsset(const AssetMetadata& metadata)
@@ -131,7 +137,8 @@ void RegisterCoreAssetTypes(AssetTypeRegistry& typeRegistry)
                      kScriptAssetTypePriority);
 
     // Text content for inspector and tooling (runtime loads via SceneIO).
-    RegisterCoreType(typeRegistry, AssetType::Scene, &CreateAssetAtPath<SceneAsset>, "Scene Asset");
+    RegisterCoreType(typeRegistry, AssetType::Scene, &CreateSceneTextAsset, "Scene Asset");
+    RegisterCoreType(typeRegistry, AssetType::Prefab, &CreateSceneTextAsset, "Prefab Asset");
 
     RegisterCoreType(typeRegistry, AssetType::NavigationGrid, &CreateAssetAtPath<NavGridAsset>,
                      "Navigation Grid Asset");

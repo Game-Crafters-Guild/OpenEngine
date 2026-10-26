@@ -145,6 +145,43 @@ uint32_t BuildAndExecuteFrame(RGFrame& frame, uint64_t frameIndex)
     frame.Execute();
     return sawCmd;
 }
+
+// The exposure history's shape: a compute pass rewrites a persistent buffer that a graphics pass of
+// the same frame reads. The next frame's rewrite must be ordered after this frame's read.
+void ExecuteHistoryFrame(RGFrame& frame, uint64_t frameIndex)
+{
+    frame.BeginFrame(frameIndex);
+    BufferDesc historyDesc;
+    historyDesc.size = 16;
+    historyDesc.usage = static_cast<uint32_t>(BufferUsage::Storage);
+    RGBuffer history = frame.ImportPersistentBuffer("CrossFrame.History", historyDesc);
+    RGTexture color = frame.CreateTexture("CrossFrame.Color", ColorDesc());
+    frame.AddComputePass(
+        "CrossFrame.Write", 0, [&](RGPassBuilder& p) { p.Write(history); }, [](RGContext&) {});
+    frame.AddPass(
+        "CrossFrame.Read", 0,
+        [&](RGPassBuilder& p)
+        {
+            p.Read(history);
+            p.AttachColor(0, color, {.Load = RGLoadOp::Clear});
+        },
+        [](RGContext&) {});
+    frame.MarkOutput(color);
+    frame.Execute();
+}
+
+bool ComputeWaitsOnGraphics(const RGFrame& frame)
+{
+    for (const RGSubmission& s : frame.Graph().Submissions())
+    {
+        if (s.Queue != RGQueue::Compute)
+            continue;
+        for (uint32_t i = 0; i < s.WaitCount; ++i)
+            if (s.Waits[i].Queue == static_cast<uint32_t>(RGQueue::Graphics))
+                return true;
+    }
+    return false;
+}
 } // namespace
 
 TEST(RGRecord, RecordsSubmitsAndSignalsAcrossQueues)
@@ -565,6 +602,71 @@ TEST(RGRecord, SubmissionTokenTracksPerQueueCompletion)
     const auto gfx1 = frame.SubmissionToken(RGQueue::Graphics);
     EXPECT_GT(gfx1.value, gfx0.value) << "tokens advance monotonically across frames";
     dev->WaitForIdle();
+}
+
+// A frame's cross-frame waits come from the timeline values the device has completed, read when
+// the frame is planned: once the previous frame's work has finished, its accesses order nothing, so
+// the compute work does not wait for the previous frame's graphics work.
+TEST(RGRecord, CrossFrameWaitOnCompletedWorkIsDropped)
+{
+    auto dev = MakeDevice(false);
+    if (!dev)
+        GTEST_SKIP() << "no headless device available";
+    FramePools pools(dev.get());
+    RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.SetPhysicalQueueMap(RGFrame::kIdentityQueueMap);
+
+    ExecuteHistoryFrame(frame, 0);
+    dev->WaitForIdle();
+    ExecuteHistoryFrame(frame, 1);
+    EXPECT_FALSE(ComputeWaitsOnGraphics(frame))
+        << "the rewrite waits for a graphics read the device has already completed";
+    dev->WaitForIdle();
+}
+
+// The completed values are the device's, never the submitted ones: while the graphics queue is held
+// on an external semaphore, the previous frame's graphics read has not finished, so the compute
+// rewrite keeps its wait. The hold is released on the transfer queue, which no frame here uses.
+TEST(RGRecord, CrossFrameWaitOnUnfinishedWorkIsKept)
+{
+    auto dev = MakeDevice(false);
+    if (!dev)
+        GTEST_SKIP() << "no headless device available";
+    const uint32_t transferFamily = dev->GetTransferQueueFamilyIndex();
+    if (transferFamily == dev->GetGraphicsQueueFamilyIndex() || transferFamily == dev->GetComputeQueueFamilyIndex())
+        GTEST_SKIP() << "the release needs a transfer queue apart from the graphics and compute queues";
+    const SemaphoreHandle hold = dev->CreateTimelineSemaphore(0);
+    ASSERT_TRUE(hold.IsValid());
+    BufferDesc fillDesc;
+    fillDesc.size = 16;
+    fillDesc.usage = static_cast<uint32_t>(BufferUsage::TransferDst);
+    const BufferHandle fillTarget = dev->CreateBuffer(fillDesc);
+    ASSERT_TRUE(fillTarget.IsValid());
+    auto holdList = dev->CreateCommandList(IDevice::QueueType::Graphics);
+    auto releaseList = dev->CreateCommandList(IDevice::QueueType::Transfer);
+    ASSERT_TRUE(holdList && releaseList);
+    // The fill is a command behind the wait: every later graphics signal is ordered after it.
+    holdList->Begin();
+    holdList->FillBuffer(fillTarget, 0, fillDesc.size, 0);
+    holdList->End();
+    releaseList->Begin();
+    releaseList->End();
+    {
+        FramePools pools(dev.get());
+        RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.SetPhysicalQueueMap(RGFrame::kIdentityQueueMap);
+
+        ASSERT_TRUE(dev->QueueSubmit(IDevice::QueueType::Graphics, {holdList.get()}, {{hold, 1}}, {}));
+        // The graphics queue now waits for the release below: nothing may return before it.
+        ExecuteHistoryFrame(frame, 0);
+        ExecuteHistoryFrame(frame, 1);
+        EXPECT_TRUE(ComputeWaitsOnGraphics(frame))
+            << "the rewrite does not wait for a graphics read the device has not finished";
+        EXPECT_TRUE(dev->QueueSubmit(IDevice::QueueType::Transfer, {releaseList.get()}, {}, {{hold, 1}}));
+        dev->WaitForIdle();
+    }
+    dev->DestroyBuffer(fillTarget);
+    dev->DestroySemaphore(hold);
 }
 
 // Class pin (instance 1 of "absence of a sync token reads as completion"): a queue

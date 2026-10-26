@@ -13,6 +13,7 @@
 #include "ECS/Entity.h"
 #include "ECSModules/Rendering/Systems/ReflectionProbeSystem.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Mathematics/Vector3.h"
 
 #include "Logger/CallbackSink.h"
 #include "Logger/Logger.h"
@@ -27,6 +28,7 @@
 using namespace GameEngine;
 using GameEngine::Engine::Renderer::ReflectionProbeSystem;
 using GameEngine::Engine::Renderer::RenderServices;
+using GameEngine::Mathematics::Vector3;
 
 namespace
 {
@@ -78,15 +80,15 @@ class ProbeWarningCapture
     std::vector<std::string> m_Messages;
 };
 
-Components::WorldTransform MakeTransform(float x, float y, float z, float scale)
+Components::WorldTransform MakeTransform(const Vector3& position, const Vector3& scale)
 {
     Components::WorldTransform xf{};
-    xf.matrix[0] = scale;
-    xf.matrix[5] = scale;
-    xf.matrix[10] = scale;
-    xf.matrix[12] = x;
-    xf.matrix[13] = y;
-    xf.matrix[14] = z;
+    xf.matrix[0] = scale.x;
+    xf.matrix[5] = scale.y;
+    xf.matrix[10] = scale.z;
+    xf.matrix[12] = position.x;
+    xf.matrix[13] = position.y;
+    xf.matrix[14] = position.z;
     return xf;
 }
 
@@ -98,7 +100,7 @@ ECS::EntityHandle AddProbe(ECS::World& world, float x, float scale, bool boxProj
     probe.BoxProjection = boxProjection;
     probe.BlendDistance = 0.0f; // hard edge: accept/reject only, no blend-zone weighting
     world.AddComponentImmediate(e, probe);
-    world.AddComponentImmediate(e, MakeTransform(x, 0.0f, 0.0f, scale));
+    world.AddComponentImmediate(e, MakeTransform(Vector3(x, 0.0f, 0.0f), Vector3(scale, scale, scale)));
     return e;
 }
 
@@ -106,7 +108,7 @@ ECS::EntityHandle AddCamera(ECS::World& world, float x)
 {
     ECS::EntityHandle e = world.CreateEntity();
     world.AddComponentImmediate(e, Components::Camera{});
-    world.AddComponentImmediate(e, MakeTransform(x, 0.0f, 0.0f, 1.0f));
+    world.AddComponentImmediate(e, MakeTransform(Vector3(x, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f)));
     return e;
 }
 
@@ -121,6 +123,22 @@ void Drive(ReflectionProbeSystem& system, ECS::World& world, int frames)
 {
     for (int i = 0; i < frames; ++i)
         system.Update(world, 0.016f);
+}
+
+// A box probe at the origin with the given scale (half-extents = scale / 2) and a camera at
+// cameraPosition.
+void AddBoxProbeAndCamera(ECS::World& world, const Vector3& scale, const Vector3& cameraPosition)
+{
+    ECS::EntityHandle probeEntity = world.CreateEntity();
+    Components::ReflectionProbe probe{};
+    probe.BoxProjection = true;
+    probe.BlendDistance = 0.0f;
+    world.AddComponentImmediate(probeEntity, probe);
+    world.AddComponentImmediate(probeEntity, MakeTransform(Vector3(), scale));
+
+    ECS::EntityHandle cameraEntity = world.CreateEntity();
+    world.AddComponentImmediate(cameraEntity, Components::Camera{});
+    world.AddComponentImmediate(cameraEntity, MakeTransform(cameraPosition, Vector3(1.0f, 1.0f, 1.0f)));
 }
 
 } // namespace
@@ -212,4 +230,31 @@ TEST(ReflectionProbeSystem, EllipsoidRejection_FeedsTheSelectionOutcomeWarning)
     const std::string message = capture.Last();
     EXPECT_NE(message.find("ellipsoid probe"), std::string::npos) << message;
     EXPECT_NE(message.find("radially"), std::string::npos) << message;
+}
+
+// A box probe tests the camera on each of its own local axes against that axis's half-extent.
+// The box is 4 x 2 x 8 (half-extents 2, 1, 4): a camera 3 up its long Z axis is inside, and a
+// camera 1.5 up its short Y axis is outside on Y, which the warning names.
+TEST(ReflectionProbeSystem, BoxProbe_TestsEachLocalAxisAgainstItsOwnHalfExtent)
+{
+    ProbeWarningCapture capture;
+    const Vector3 boxScale(4.0f, 2.0f, 8.0f);
+    {
+        ECS::World world;
+        AddBoxProbeAndCamera(world, boxScale, Vector3(0.0f, 0.0f, 3.0f));
+        RenderServices rs;
+        ReflectionProbeSystem system(&rs);
+        Drive(system, world, 5);
+        EXPECT_EQ(capture.Count(), 0) << "a camera 3 along Z is inside a half-extent of 4: " << capture.Last();
+    }
+    {
+        ECS::World world;
+        AddBoxProbeAndCamera(world, boxScale, Vector3(0.0f, 1.5f, 0.0f));
+        RenderServices rs;
+        ReflectionProbeSystem system(&rs);
+        Drive(system, world, 5);
+        ASSERT_EQ(capture.Count(), 1) << "a camera 1.5 along Y is outside a half-extent of 1";
+        const std::string message = capture.Last();
+        EXPECT_NE(message.find("on its local Y axis"), std::string::npos) << message;
+    }
 }

@@ -333,8 +333,8 @@ DDGISceneService::PlanHashes DDGISceneService::SweepScene()
             if (identity != identityByGpuIndex.end())
             {
                 resolved.ContentHash = identity->second.ContentHash;
-                // Two-tier CPU geometry resolve, matching the editor picking
-                // path (MeshPickingService::ResolveCpuMesh): the registry's own
+                // Two-tier CPU geometry resolve, matching the scene raycast
+                // (SceneRaycast.cpp ResolveCpuMesh): the registry's own
                 // copy covers generated/procedural meshes that no ModelAsset
                 // backs, otherwise go through the asset. Never force-load — a
                 // mesh that is not resident yet simply sits this rebuild out,

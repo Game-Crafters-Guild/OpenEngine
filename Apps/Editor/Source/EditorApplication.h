@@ -23,6 +23,7 @@
 #include "Assets/PolyhavenDownloadManager.h"
 #include "Panels/PlayModeChangeReviewModal.h"
 #include "Editor/RenderGraphTickRegistry.h"
+#include "Editor/Registries/EditorServiceRegistry.h"
 #include "Editor/Registries/StatusBarItemRegistry.h"
 #include "EditorVideoPlayerController.h"
 #include "Startup/EditorSessionDescriptor.h"
@@ -84,7 +85,7 @@ class PackageManagerController;
 class MovieRecorderController;
 class PlayModeManager;
 class GameViewPointerLock;
-class RecipeControllers;
+class WindowCursorLock;
 class ScriptStatusIndicator;
 class UniversalSearchController;
 class DiagnosticShortcuts;
@@ -218,6 +219,8 @@ class EditorApplication : public Application
         WindowRole role = WindowRole::Tool;
         WindowCapabilities capabilities{};
         std::unique_ptr<Platform::Window> window; // platform window wrapper
+        // The one owner of the window's cursor lock; it dies before the window.
+        std::unique_ptr<Editor::WindowCursorLock> cursorLock;
         int width = 0;
         int height = 0;
         std::string title;
@@ -342,7 +345,7 @@ class EditorApplication : public Application
     // Shows m_PlayMode's entry gate.
     class PlayModeEntryModal* m_PlayEntryModal = nullptr; // owned by UI tree
     std::unique_ptr<Editor::MovieRecorderController> m_MovieRecorder;
-    std::unique_ptr<Editor::RecipeControllers> m_RecipeControllers;
+    Editor::EditorServiceRegistry m_EditorServices;
     std::unique_ptr<MissingAssetTracker> m_MissingAssetTracker;
 
     // Separate InputSystem for gameplay code — only receives events when

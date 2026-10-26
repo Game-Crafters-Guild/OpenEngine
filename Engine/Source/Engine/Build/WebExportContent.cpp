@@ -32,7 +32,7 @@ bool StageStrippedScenes(const AssetManifest& manifest, const std::filesystem::p
     AssetManifest scenes;
     for (const AssetManifestEntry& entry : manifest.entries)
     {
-        if (entry.type != AssetType::Scene || entry.sourcePath.empty())
+        if ((entry.type != AssetType::Scene && entry.type != AssetType::Prefab) || entry.sourcePath.empty())
             continue;
         const std::filesystem::path staged = scenesRoot / entry.outputPath;
         std::error_code ec;
@@ -77,7 +77,7 @@ bool StageWebExportContent(AssetManager& assets, const BuildSettings& settings,
     {
         if (entry.sourcePath.empty())
             continue;
-        const std::filesystem::path source = entry.type == AssetType::Scene
+        const std::filesystem::path source = entry.type == AssetType::Scene || entry.type == AssetType::Prefab
                                                  ? scenesRoot / entry.outputPath
                                                  : AbsoluteSource(entry, projectAssetRoot);
         files.push_back({{"source", GenericUtf8(source)}, {"path", GenericUtf8(entry.outputPath)}});

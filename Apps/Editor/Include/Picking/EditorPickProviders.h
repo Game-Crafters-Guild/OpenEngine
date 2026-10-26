@@ -3,8 +3,9 @@
 // EditorPickProviders — scene-view picking for plugin-owned entities whose
 // rendered mesh is runtime-generated (no MeshRenderer). A provider describes
 // WHAT to pick as data (a synthetic mesh identity); every raycast mechanism
-// (BVH cache, TLAS sectors, layer masks, ignore lists) stays inside
-// Editor.exe's MeshPickingService — nothing from the MeshPicking module
+// (BVH cache, TLAS sectors, layer masks, ignore lists) stays inside the
+// engine's Scene::RaycastScene, which Picking::PickScene hands these meshes
+// to as Scene::RaycastMesh data — nothing from the MeshPicking module
 // crosses the DLL boundary.
 //
 // Lives in EditorSDK.dll (one registry instance across Editor.exe and

@@ -153,9 +153,9 @@ TEST(SceneExportStrip, ExportKeepsAPropAndItsChildWithoutTheMeasureOnIt)
 
 // On an entity that carries a mark-up, its title and its spline are conversation and shape:
 // they go with it, and its transform stays; the reader matches component tokens ignoring case,
-// and so does the strip. The same components on scene content ship. A blueprint instance's
-// removal (`-C`), addition (`+C`) and bare addition (`C`) of an editor-only component go as its
-// field lines do.
+// and so does the strip. The same components on scene content ship. A prefab instance's
+// removal (`-C`) and addition (`+C`) of an editor-only component go as its field lines do, at the
+// root and at an address under it; a removed child (`-entity address`) stays.
 TEST(SceneExportStrip, AMarkupEntityLosesItsTitleAndSplineAndSceneContentKeepsThem)
 {
     const std::string authored =
@@ -173,14 +173,17 @@ TEST(SceneExportStrip, AMarkupEntityLosesItsTitleAndSplineAndSceneContentKeepsTh
         "Name.value = \"Road\"\n"
         "Spline.pointCount = 5\n"
         "\n"
-        "[blueprint id=\"cart\" source=\"r_cart\"]\n"
+        "[prefab id=\"cart\" source=\"r_cart\"]\n"
         "-Measure\n"
         "Measure.start = (0, 0, 0)\n"
         "Transform.position = (3, 0, 3)\n"
         "\n"
-        "[blueprint id=\"barrow\" source=\"r_barrow\"]\n"
+        "[prefab id=\"barrow\" source=\"r_barrow\"]\n"
         "+Measure\n"
-        "Measure\n"
+        "+lid/Measure\n"
+        "lid/Measure.start = (0, 0, 0)\n"
+        "-wheel.hub/Measure\n"
+        "-entity handle\n"
         "Transform.position = (5, 0, 5)\n";
 
     const std::string exported = SceneAssetParser::StripEditorOnlyComponents(
@@ -198,10 +201,11 @@ TEST(SceneExportStrip, AMarkupEntityLosesItsTitleAndSplineAndSceneContentKeepsTh
               "Name.value = \"Road\"\n"
               "Spline.pointCount = 5\n"
               "\n"
-              "[blueprint id=\"cart\" source=\"r_cart\"]\n"
+              "[prefab id=\"cart\" source=\"r_cart\"]\n"
               "Transform.position = (3, 0, 3)\n"
               "\n"
-              "[blueprint id=\"barrow\" source=\"r_barrow\"]\n"
+              "[prefab id=\"barrow\" source=\"r_barrow\"]\n"
+              "-entity handle\n"
               "Transform.position = (5, 0, 5)\n");
 }
 

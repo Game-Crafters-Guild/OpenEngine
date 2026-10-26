@@ -66,6 +66,7 @@ set(ECS_CORE_TEST_SOURCES
     ChangeFilterP1Test.cpp
     DirtyFeedTest.cpp
     LifecycleEventsTest.cpp
+    CreateBatchFromWorldTest.cpp
     SwapGenerationGuardTest.cpp
     ParallelPerfTest.cpp
     ParallelBatchEachTest.cpp

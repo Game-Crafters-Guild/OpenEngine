@@ -49,12 +49,17 @@ namespace GameEngine.ECS
         public readonly uint Size;
         public readonly ComponentFieldType Type;
 
-        public ComponentFieldDesc(string name, uint offset, uint size, ComponentFieldType type)
+        /// <summary>The engine's AssetType value that an AssetGuid field names, such as a PrefabRef's prefab; 0 for any
+        /// asset and for every other field type.</summary>
+        public readonly ushort AssetCategory;
+
+        public ComponentFieldDesc(string name, uint offset, uint size, ComponentFieldType type, ushort assetCategory = 0)
         {
             Name = name;
             Offset = offset;
             Size = size;
             Type = type;
+            AssetCategory = assetCategory;
         }
     }
 

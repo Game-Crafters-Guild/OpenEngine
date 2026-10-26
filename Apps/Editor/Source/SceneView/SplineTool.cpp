@@ -19,7 +19,7 @@
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector2.h"
 #include "Mathematics/VectorOps.h"
-#include "Picking/MeshPickingService.h"
+#include "Picking/ScenePick.h"
 #include "Spline/SplineData.h"
 #include "Spline/SplineEvaluator.h"
 #include "Spline/SplineUtility.h"
@@ -470,20 +470,21 @@ bool SplineTool::RaycastScene(const GizmoRay& ray, Vector3& outHit, uint32* hitE
 
     const bool snapToMeshes = Editor::SplineEditorSettings::Get().GetSnapToMeshes();
 
-    Editor::Picking::PickOptions options;
+    Scene::PickOptions options;
     options.IncludeMeshes     = snapToMeshes;
     options.IncludePrimitives = snapToMeshes;
     options.IncludeTerrain    = true;
+    options.IncludeBoundsFallback = true; // a stroke over a renderer with no CPU mesh lands on its box
 
-    const auto pick = Editor::Picking::RaycastScene(mathRay, *world, options);
+    const auto pick = Editor::Picking::PickScene(mathRay, *world, options);
     if (pick.Hit)
     {
         outHit = pick.Best.WorldPosition;
         if (hitEntityId)
         {
             const bool canStickToHit =
-                pick.Best.Kind == Editor::Picking::PickableKind::Mesh ||
-                pick.Best.Kind == Editor::Picking::PickableKind::Primitive;
+                pick.Best.Kind == Scene::PickableKind::Mesh ||
+                pick.Best.Kind == Scene::PickableKind::Primitive;
             *hitEntityId = (canStickToHit && pick.Best.Entity.IsValid()) ? pick.Best.Entity.id : 0u;
         }
         return true;
@@ -505,10 +506,11 @@ bool SplineTool::RaycastEntityMesh(const GizmoRay& ray, uint32 entityId, Vector3
     mathRay.origin    = {ray.origin.x,    ray.origin.y,    ray.origin.z};
     mathRay.direction = {ray.direction.x, ray.direction.y, ray.direction.z};
 
-    Editor::Picking::PickOptions options;
+    Scene::PickOptions options;
     options.RestrictToEntity = ECS::EntityHandle(entityId);
+    options.IncludeBoundsFallback = true;
 
-    const auto pick = Editor::Picking::RaycastScene(mathRay, *world, options);
+    const auto pick = Editor::Picking::PickScene(mathRay, *world, options);
     if (!pick.Hit)
         return false;
 

@@ -28,12 +28,13 @@ layout(set = 0, binding = 3) uniform sampler2D uDepth;      // internal extent
 layout(set = 0, binding = 4) uniform sampler2D uMV;         // internal extent
 layout(set = 0, binding = 5) uniform sampler2D uHistory;    // display extent
 
-// The view's exposure state (ExposureHistory). The scene colour is stored at this frame's
-// pre-exposure P and the history at the previous frame's: every history colour read is rescaled
+// The view's exposure state (ExposureHistory). The scene color is stored at this frame's
+// pre-exposure P and the history at the previous frame's: every history color read is rescaled
 // by P / previousPreExposure. The Karis weights are written against absolute scene-linear luma,
 // so luma is divided by P where it feeds them.
 #define GE_EXPOSURE_HISTORY_BINDING 7
 #include "Includes/exposure_history.glsl"
+#include "Includes/karis_weight.glsl"
 
 layout(std140, set = 0, binding = 6) uniform TaaResolveParams
 {
@@ -77,15 +78,10 @@ vec3 YCoCgToRGB(vec3 c)
     return max(vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z), vec3(0.0));
 }
 
-float Luma(vec3 rgb)
-{
-    return dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-}
-
 vec3 ClipToAABB(vec3 q, vec3 aabbMin, vec3 aabbMax)
 {
     vec3 center = 0.5 * (aabbMax + aabbMin);
-    // The floor is a colour, stored at the frame's pre-exposure.
+    // The floor is a color, stored at the frame's pre-exposure.
     vec3 extents = max(0.5 * (aabbMax - aabbMin), vec3(1e-5 * GE_PreExposure()));
     vec3 v = q - center;
     vec3 unitV = abs(v / extents);
@@ -334,8 +330,8 @@ void main()
     // weighting here would give an old dark sample nearly all the weight when
     // an HDR emitter appears, preserving a dark sun ring despite fresh input.
     float invPreExposure = 1.0 / GE_PreExposure();
-    float wCurr = stationaryFootprint ? 1.0 : 1.0 / (1.0 + Luma(current) * invPreExposure);
-    float wHist = stationaryFootprint ? 1.0 : 1.0 / (1.0 + Luma(history) * invPreExposure);
+    float wCurr = stationaryFootprint ? 1.0 : GE_KarisWeight(current, invPreExposure);
+    float wHist = stationaryFootprint ? 1.0 : GE_KarisWeight(history, invPreExposure);
     vec3 blended = (current * wCurr * (1.0 - weight) + history * wHist * weight) /
                    max(wCurr * (1.0 - weight) + wHist * weight, 1e-5);
 

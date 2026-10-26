@@ -14,7 +14,7 @@ frame is simply not declared.
 |---|---|
 | Public API (declare/import/execute) | `Include/Rendering/Core/RenderGraph/RGFrame.h` |
 | Core IR (cull, schedule, barriers) | `Include/Rendering/Core/RenderGraph/RGGraph.h` |
-| Pools, upload ring, rotation | `RGResourcePool.h`, `RGTransientPool.h`, `RGUploadRing.h`, `RGRotatingImport.h` |
+| Pools and upload ring | `RGResourcePool.h`, `RGTransientPool.h`, `RGUploadRing.h` |
 | Design rationale + field comparison | "Render Graph Redesign — Immediate-Mode, Arena-Backed, Queue-Aware", in the support repository |
 | Living usage examples | `Engine/Source/Engine/Rendering/Pipeline/Nodes/`, `Engine/Modules/Rendering/Tests/RenderGraph/` |
 | Architecture overview | [Rendering architecture](rendering-architecture.mdx) ([The render graph](rendering-architecture.mdx#the-render-graph), [Writing a render pass](rendering-architecture.mdx#writing-a-render-pass-recipes)) |
@@ -30,8 +30,8 @@ frame is simply not declared.
 - **Recording order is hazard order.** Declare producers before consumers within a frame
   (read-before-write derives WAR by design).
 - **Imports are per-frame.** `ImportPersistent*` = pool-owned with cross-frame layout carry;
-  `ImportExternal*` = engine-owned, no write-back; `RGRotatingTexture/Buffer` = the only N-buffer
-  rotation (history, CPU readback: readback rings need count ≥ framesInFlight + 1).
+  `ImportExternal*` = engine-owned, no write-back. A small history one queue writes and another
+  reads is one copy per frame in flight (`perFrameCopies` on a render pipeline resource).
 - **CPU per-frame data → `AllocUpload<T>()`.** One upload ring; there is no `perFrame` flag.
 - **Consume-only passes need `PreventCulling()`** (readbacks, queries). Everything else survives by
   transitively feeding a sink (`MarkOutput` / present / export).

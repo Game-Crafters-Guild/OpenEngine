@@ -180,16 +180,20 @@ bool AcquireGitPackage(const std::string& gitExe,
         ~TempCleanup() { RemoveTreeForce(Dir); }
     } cleanup{workDir};
 
-    const std::string workDirText = workDir.generic_string();
+    // The clone and the staged entry are siblings: a package at the repository
+    // root copies the whole checkout, so staging inside it would copy into itself.
+    const fs::path checkoutDir = workDir / "checkout";
+    const fs::path stagingDir = workDir / "entry";
+    const std::string checkoutDirText = checkoutDir.generic_string();
     std::string output;
 
     // init + fetch <ref> handles tags, branches, AND commit shas uniformly —
     // `clone --branch` cannot take a sha. Shallow: exactly one commit's tree.
-    if (!RunGit(gitExe, {"init", "-q", workDirText}, output, outError))
+    if (!RunGit(gitExe, {"init", "-q", checkoutDirText}, output, outError))
         return false;
-    if (!RunGit(gitExe, {"-C", workDirText, "remote", "add", "origin", spec.Url}, output, outError))
+    if (!RunGit(gitExe, {"-C", checkoutDirText, "remote", "add", "origin", spec.Url}, output, outError))
         return false;
-    if (!RunGit(gitExe, {"-C", workDirText, "fetch", "-q", "--depth", "1", "origin", spec.Ref},
+    if (!RunGit(gitExe, {"-C", checkoutDirText, "fetch", "-q", "--depth", "1", "origin", spec.Ref},
                 output, outError))
     {
         outError = "package '" + packageName + "': cannot fetch ref '" + spec.Ref + "' from '" +
@@ -197,11 +201,11 @@ bool AcquireGitPackage(const std::string& gitExe,
         return false;
     }
     if (!RunGit(gitExe,
-                {"-C", workDirText, "-c", "advice.detachedHead=false", "checkout", "-q",
+                {"-C", checkoutDirText, "-c", "advice.detachedHead=false", "checkout", "-q",
                  "--detach", "FETCH_HEAD"},
                 output, outError))
         return false;
-    if (!RunGit(gitExe, {"-C", workDirText, "rev-parse", "HEAD"}, output, outError))
+    if (!RunGit(gitExe, {"-C", checkoutDirText, "rev-parse", "HEAD"}, output, outError))
         return false;
     const std::string commit = Trimmed(output);
     if (commit.size() < 12)
@@ -211,7 +215,7 @@ bool AcquireGitPackage(const std::string& gitExe,
     }
 
     // Read the package manifest out of the checkout (monorepo subdir or root).
-    fs::path payloadDir = workDir;
+    fs::path payloadDir = checkoutDir;
     if (!spec.Subdir.empty())
         payloadDir /= fs::path(spec.Subdir);
     const fs::path manifestFile = payloadDir / "package.json";
@@ -244,7 +248,6 @@ bool AcquireGitPackage(const std::string& gitExe,
     std::error_code ec;
     if (!fs::exists(entryDir, ec))
     {
-        const fs::path stagingDir = workDir / ".entry-staging";
         if (!CopyPackagePayload(payloadDir, stagingDir, outError))
             return false;
         fs::rename(stagingDir, entryDir, ec);

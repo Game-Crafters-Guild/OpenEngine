@@ -14,19 +14,6 @@
 
 namespace GameEngine {
 
-// Render a path for use in an args list. Converter argv strings are treated
-// as UTF-8 end to end ('\0'-separated block decoded by the managed side);
-// path::string() would narrow through the ANSI code page on Windows and
-// mangle non-ASCII path components (usernames, project names). Generic
-// (forward-slash) form — the converter accepts it on every platform. Inline
-// and header-only so package modules linking only Engine + EditorSDK get the
-// definition without an Editor.exe-resident symbol.
-inline std::string PathArgUtf8(const std::filesystem::path& path)
-{
-    const std::u8string utf8 = path.generic_u8string();
-    return std::string(utf8.begin(), utf8.end());
-}
-
 // Result of a hosted converter run.
 struct ConverterRunResult {
     bool Spawned = false;   // false if the hosted entry could not be invoked

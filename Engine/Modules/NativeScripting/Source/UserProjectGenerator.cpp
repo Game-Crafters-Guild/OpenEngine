@@ -301,6 +301,10 @@ std::string UserProjectGenerator::BuildCMakeListsContent(const NativeBuildConfig
     out << "else()\n";
     out << "    target_compile_options(" << config.ModuleName
         << " PRIVATE $<$<NOT:$<CONFIG:Debug>>:-g>)\n";
+    // GCC reports -Wchanges-meaning as an error by default, and the SDK's UI headers
+    // reuse type names as member names. The engine builds with the same flag.
+    out << "    target_compile_options(" << config.ModuleName
+        << " PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-changes-meaning>)\n";
     out << "endif()\n\n";
 
     out << "target_include_directories(" << config.ModuleName << " PRIVATE\n";

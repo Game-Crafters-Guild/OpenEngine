@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -22,6 +23,8 @@
 #include "Components/Rendering/MorphTargetWeights.h"
 #include "Components/RuntimeOnlyEntity.h"
 #include "Components/Spline/SplineComponent.h"
+#include "Components/Spline/SplineNetworkMember.h"
+#include "Components/Spline/SplineNetworkOverrides.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
@@ -56,6 +59,7 @@
 #include "PhysicsECS/Systems/PhysicsWritebackSystem.h"
 #include "Scene/SceneIO.h"
 #include "Spline/SplineData.h"
+#include "SplineECS/SplineNetwork.h"
 #include "SplineECS/SplineService.h"
 #include "Terrain/TerrainTypes.h"
 #include "TerrainECS/Components/TerrainPageCollider.h"
@@ -2432,3 +2436,177 @@ TEST_F(ModelBackedSkinnedDuplicateTests, DuplicateOwnsItsOwnGroupThroughTheShare
             << "the repaired runtime is orphaned: resident forever, named by nobody";
     }
 }
+
+namespace
+{
+using GameEngine::Components::SplineNetworkOverride;
+using GameEngine::Components::SplineNetworkOverrides;
+using GameEngine::Components::SplineNodeRule;
+using GameEngine::SplineECS::SplineNetwork;
+using GameEngine::SplineECS::SplineNode;
+
+// A junction record names the other member of its junction: a duplicate, a delete and its undo
+// keep every rule on its meeting (CopiedEntityRuntimeRefs::RepairSplineNetworkOverrides).
+class SplineNetworkDuplicateTests : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        m_OwnsSplines = !GameEngine::SplineECS::SplineService::IsInitialized();
+        if (m_OwnsSplines)
+            GameEngine::SplineECS::SplineService::Initialize();
+        m_OwnsNetwork = !SplineNetwork::IsInitialized();
+        if (m_OwnsNetwork)
+            SplineNetwork::Initialize();
+        m_World = std::make_unique<World>();
+    }
+
+    void TearDown() override
+    {
+        m_World.reset();
+        if (m_OwnsNetwork)
+            SplineNetwork::Shutdown();
+        if (m_OwnsSplines)
+            GameEngine::SplineECS::SplineService::Shutdown();
+    }
+
+    EntityHandle AddRoad(const std::vector<Vector3>& points)
+    {
+        auto& splines = GameEngine::SplineECS::SplineService::Get();
+        const auto handle = splines.CreateSpline(GameEngine::Spline::SplineType::Linear, false);
+        auto* data = splines.GetSplineData(handle);
+        for (const Vector3& point : points)
+            data->AddPoint(point, 3.0f);
+        splines.RebuildCache(handle);
+        const EntityHandle entity = m_World->CreateEntity();
+        SplineComponent spline{};
+        spline.SplineDataIndex = handle.Index();
+        spline.SplineDataGeneration = handle.Generation();
+        m_World->AddComponentImmediate(entity, spline);
+        m_World->AddComponentImmediate(entity, Transform{});
+        m_World->AddComponentImmediate(entity, WorldTransform{});
+        m_World->AddComponentImmediate(
+            entity, GameEngine::Components::SplineNetworkMember{GameEngine::Components::SplineNetworkMemberKind::Road});
+        return entity;
+    }
+
+    void SetPoints(EntityHandle entity, const std::vector<Vector3>& points)
+    {
+        auto& splines = GameEngine::SplineECS::SplineService::Get();
+        const auto* spline = m_World->GetComponent<SplineComponent>(entity);
+        const GameEngine::SplineECS::SplineHandle handle(spline->SplineDataIndex, spline->SplineDataGeneration);
+        auto* data = splines.GetSplineData(handle);
+        data->Points.clear();
+        for (const Vector3& point : points)
+            data->AddPoint(point, 3.0f);
+        splines.RebuildCache(handle);
+    }
+
+    void WriteAtGrade(EntityHandle holder, EntityHandle other, float arc, float otherArc)
+    {
+        SplineNetworkOverrides overrides{};
+        overrides.Records[0] = {other, arc, otherArc, SplineNodeRule::AtGrade, {}};
+        m_World->AddComponentImmediate(holder, overrides);
+    }
+
+    void Derive() { SplineNetwork::Get().Update(*m_World); }
+
+    // The node of the pair within 1 m of (x, z), or null.
+    const SplineNode* NodeAt(EntityHandle a, EntityHandle b, float x, float z) const
+    {
+        for (const SplineNode& node : SplineNetwork::Get().GetNodes(*m_World))
+        {
+            const bool pair = (node.Members[0] == a && node.Members[1] == b) || (node.Members[0] == b && node.Members[1] == a);
+            if (pair && std::hypot(node.Position.x - x, node.Position.z - z) <= 1.0f)
+                return &node;
+        }
+        return nullptr;
+    }
+
+    std::unique_ptr<World> m_World;
+
+private:
+    bool m_OwnsSplines = false;
+    bool m_OwnsNetwork = false;
+};
+
+TEST_F(SplineNetworkDuplicateTests, ARoadDuplicatedAloneKeepsItsRuleAgainstTheOriginalPartnerUntilMovedAway)
+{
+    const EntityHandle high = AddRoad({{-50.0f, 0.0f, 0.0f}, {50.0f, 0.0f, 0.0f}});
+    const EntityHandle ford = AddRoad({{10.0f, 0.0f, -50.0f}, {10.0f, 0.0f, 50.0f}});
+    WriteAtGrade(high, ford, 60.0f, 50.0f);
+    Derive();
+    ASSERT_NE(NodeAt(high, ford, 10.0f, 0.0f), nullptr);
+    ASSERT_EQ(NodeAt(high, ford, 10.0f, 0.0f)->Rule, SplineNodeRule::AtGrade);
+
+    const auto duplicate = GameEngine::Editor::DuplicateEntitySubtreeRoots(*m_World, {high});
+    ASSERT_EQ(duplicate.NewRoots.size(), 1u);
+    const EntityHandle copy = duplicate.NewRoots.front();
+    EXPECT_EQ(m_World->GetComponent<SplineNetworkOverrides>(copy)->Records[0].Other, ford);
+    Derive();
+    ASSERT_NE(NodeAt(copy, ford, 10.0f, 0.0f), nullptr);
+    EXPECT_EQ(NodeAt(copy, ford, 10.0f, 0.0f)->Rule, SplineNodeRule::AtGrade);
+    EXPECT_EQ(NodeAt(copy, ford, 10.0f, 0.0f)->RuleHolder, copy);
+    EXPECT_EQ(NodeAt(high, ford, 10.0f, 0.0f)->RuleHolder, high);
+
+    SetPoints(copy, {{-50.0f, 0.0f, 80.0f}, {50.0f, 0.0f, 80.0f}});
+    Derive();
+    EXPECT_EQ(NodeAt(copy, ford, 10.0f, 80.0f), nullptr);
+    ASSERT_EQ(SplineNetwork::Get().GetHeldRecords(*m_World).size(), 1u);
+    EXPECT_EQ(SplineNetwork::Get().GetHeldRecords(*m_World)[0].Holder, copy);
+    EXPECT_EQ(NodeAt(high, ford, 10.0f, 0.0f)->Rule, SplineNodeRule::AtGrade);
+    EXPECT_EQ(NodeAt(high, ford, 10.0f, 0.0f)->RuleHolder, high);
+}
+
+TEST_F(SplineNetworkDuplicateTests, APairDuplicatedTogetherAndMovedCarriesItsRuleOnTheCopiedJunction)
+{
+    const EntityHandle high = AddRoad({{-50.0f, 0.0f, 0.0f}, {50.0f, 0.0f, 0.0f}});
+    const EntityHandle ford = AddRoad({{10.0f, 0.0f, -50.0f}, {10.0f, 0.0f, 50.0f}});
+    WriteAtGrade(high, ford, 60.0f, 50.0f);
+    Derive();
+
+    const auto duplicate = GameEngine::Editor::DuplicateEntitySubtreeRoots(*m_World, {high, ford});
+    ASSERT_EQ(duplicate.NewRoots.size(), 2u);
+    EntityHandle highCopy{};
+    EntityHandle fordCopy{};
+    for (const EntityHandle root : duplicate.NewRoots)
+        (m_World->GetComponent<SplineNetworkOverrides>(root) ? highCopy : fordCopy) = root;
+    ASSERT_TRUE(highCopy.IsValid());
+    ASSERT_TRUE(fordCopy.IsValid());
+    EXPECT_EQ(m_World->GetComponent<SplineNetworkOverrides>(highCopy)->Records[0].Other, fordCopy);
+
+    SetPoints(highCopy, {{50.0f, 0.0f, 100.0f}, {150.0f, 0.0f, 100.0f}});
+    SetPoints(fordCopy, {{110.0f, 0.0f, 50.0f}, {110.0f, 0.0f, 150.0f}});
+    Derive();
+    ASSERT_NE(NodeAt(highCopy, fordCopy, 110.0f, 100.0f), nullptr);
+    EXPECT_EQ(NodeAt(highCopy, fordCopy, 110.0f, 100.0f)->Rule, SplineNodeRule::AtGrade);
+    EXPECT_EQ(NodeAt(highCopy, fordCopy, 110.0f, 100.0f)->RuleHolder, highCopy);
+    ASSERT_NE(NodeAt(high, ford, 10.0f, 0.0f), nullptr);
+    EXPECT_EQ(NodeAt(high, ford, 10.0f, 0.0f)->Rule, SplineNodeRule::AtGrade);
+    EXPECT_EQ(NodeAt(high, ford, 10.0f, 0.0f)->RuleHolder, high);
+    EXPECT_TRUE(SplineNetwork::Get().GetHeldRecords(*m_World).empty());
+}
+
+TEST_F(SplineNetworkDuplicateTests, AMemberDeletedThenRestoredKeepsItsRecords)
+{
+    const EntityHandle high = AddRoad({{-50.0f, 0.0f, 0.0f}, {50.0f, 0.0f, 0.0f}});
+    const EntityHandle ford = AddRoad({{10.0f, 0.0f, -50.0f}, {10.0f, 0.0f, 50.0f}});
+    WriteAtGrade(high, ford, 60.0f, 50.0f);
+    Derive();
+    const SplineNetworkOverride before = m_World->GetComponent<SplineNetworkOverrides>(high)->Records[0];
+
+    UndoRedoService svc;
+    svc.Execute(std::make_unique<DeleteEntitiesCommand>("Delete Entity", m_World.get(), nullptr,
+                                                        DeleteEntitiesCommand::CollectSubtree(*m_World, high)));
+    Derive();
+    EXPECT_TRUE(SplineNetwork::Get().GetNodes(*m_World).empty());
+
+    svc.Undo();
+    Derive();
+    ASSERT_TRUE(m_World->IsValid(high));
+    EXPECT_EQ(m_World->GetComponent<SplineNetworkOverrides>(high)->Records[0], before);
+    ASSERT_NE(NodeAt(high, ford, 10.0f, 0.0f), nullptr);
+    EXPECT_EQ(NodeAt(high, ford, 10.0f, 0.0f)->Rule, SplineNodeRule::AtGrade);
+    EXPECT_EQ(NodeAt(high, ford, 10.0f, 0.0f)->RuleHolder, high);
+}
+} // namespace

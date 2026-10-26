@@ -14,6 +14,10 @@ class Slider;
 class TextField;
 class UIElement;
 
+/// The top of the picker's HDR intensity dial; an inspector row that edits an HDR color uses it as its
+/// maximum intensity.
+inline constexpr float kColorPickerMaxIntensity = 8.0f;
+
 // HSV (0-360, 0-1, 0-1) + HDR intensity (>= 1 for emissive).
 // Note: For simple HSV/RGB conversion without intensity, use `ColorHSV` from Types/Color.h.
 struct ColorPickerValue

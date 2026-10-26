@@ -61,6 +61,12 @@ namespace GameEngine.ECS.Internal
         private delegate int SetEntityEnabled_Delegate(ulong world, uint entity, int enabled);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SpawnPrefab_Delegate(ulong world, byte* prefabGuid, float* at, uint parent, out uint root);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int DespawnPrefab_Delegate(ulong world, uint root);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int CachedQueryGetComponentSlice_Delegate(
             ulong query, uint archetypeIndex, ulong componentTypeId,
             uint entityOffset, out void* outData, out uint outCount, out uint outStride);
@@ -96,6 +102,8 @@ namespace GameEngine.ECS.Internal
         private static CreateEntityRaw_Delegate? s_createEntityRaw;
         private static DeferCommand_Delegate? s_deferCommand;
         private static SetEntityEnabled_Delegate? s_setEntityEnabled;
+        private static SpawnPrefab_Delegate? s_spawnPrefab;
+        private static DespawnPrefab_Delegate? s_despawnPrefab;
         private static CachedQueryGetComponentSlice_Delegate? s_cachedQueryGetComponentSlice;
         private static CachedQueryGetEntityIdSlice_Delegate? s_cachedQueryGetEntityIdSlice;
         private static CachedQueryGetChunkDataV2_Delegate? s_cachedQueryGetChunkDataV2;
@@ -137,6 +145,10 @@ namespace GameEngine.ECS.Internal
                     ? Marshal.GetDelegateForFunctionPointer<DeferCommand_Delegate>(iface.DeferCommand) : null;
                 s_setEntityEnabled = iface.SetEntityEnabled != 0
                     ? Marshal.GetDelegateForFunctionPointer<SetEntityEnabled_Delegate>(iface.SetEntityEnabled) : null;
+                s_spawnPrefab = iface.SpawnPrefab != 0
+                    ? Marshal.GetDelegateForFunctionPointer<SpawnPrefab_Delegate>(iface.SpawnPrefab) : null;
+                s_despawnPrefab = iface.DespawnPrefab != 0
+                    ? Marshal.GetDelegateForFunctionPointer<DespawnPrefab_Delegate>(iface.DespawnPrefab) : null;
                 s_cachedQueryGetComponentSlice = iface.CachedQueryGetComponentSlice != 0
                     ? Marshal.GetDelegateForFunctionPointer<CachedQueryGetComponentSlice_Delegate>(iface.CachedQueryGetComponentSlice) : null;
                 s_cachedQueryGetEntityIdSlice = iface.CachedQueryGetEntityIdSlice != 0
@@ -424,6 +436,42 @@ namespace GameEngine.ECS.Internal
             int rc = s_setEntityEnabled(worldHandle, entity, enabled ? 1 : 0);
             if (rc != 0)
                 throw new InvalidOperationException($"SetEntityEnabled failed rc={rc}");
+        }
+
+        private const int kResultNotFound = -3;
+
+        /// <summary>
+        /// Spawns an instance of the prefab <paramref name="prefabGuid"/> (16 bytes, the engine's GUID byte order) with
+        /// its root at the 16 floats of <paramref name="at"/> under <paramref name="parent"/> (0 for none), and returns
+        /// the root. Returns 0 when the prefab is not resident; the engine then logs the fix once per prefab.
+        /// </summary>
+        public static uint SpawnPrefab(ulong worldHandle, byte* prefabGuid, float* at, uint parent)
+        {
+            EnsureLoaded();
+            if (s_spawnPrefab == null)
+                throw new MissingMethodException("ECS ABI SpawnPrefab not available");
+
+            int rc = s_spawnPrefab(worldHandle, prefabGuid, at, parent, out uint root);
+            if (rc == kResultNotFound)
+                return 0;
+            if (rc != 0)
+                throw new InvalidOperationException($"SpawnPrefab failed rc={rc}: {ScriptLastError.Read()}");
+            return root;
+        }
+
+        /// <summary>
+        /// Destroys <paramref name="root"/> and every entity under it in the hierarchy, each one as DestroyEntity
+        /// destroys it. A root that is not alive destroys nothing.
+        /// </summary>
+        public static void DespawnPrefab(ulong worldHandle, uint root)
+        {
+            EnsureLoaded();
+            if (s_despawnPrefab == null)
+                throw new MissingMethodException("ECS ABI DespawnPrefab not available");
+
+            int rc = s_despawnPrefab(worldHandle, root);
+            if (rc != 0 && rc != kResultNotFound)
+                throw new InvalidOperationException($"DespawnPrefab failed rc={rc}: {ScriptLastError.Read()}");
         }
 
         // ---- v1.6: Slice-based iteration ----

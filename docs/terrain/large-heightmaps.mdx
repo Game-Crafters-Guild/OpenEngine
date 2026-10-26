@@ -106,10 +106,10 @@ The Terrain inspector states the plan for the current values (tiles, resident wi
 
 A raw heightmap (`.r16` or `.r32`) is also cooked into a **page store**: the heightmap as a pyramid of small pages, each level half the resolution of the one below, which the terrain will stream a page at a time instead of decoding the whole file.
 
-- Cooked stores live in the project's `.Cache/TerrainPages` folder, one per heightmap, named for the asset and its content. Two terrains on the same heightmap share one store. After an edit of the heightmap, or of its Samples X and Samples Z, the next export cooks it again. An edit that keeps the height range rewrites only the pages that changed.
+- Cooked stores live in the project's `.Cache/TerrainPages` folder, one per heightmap, named for the asset and its content. Two terrains on the same heightmap share one store. After an edit of the heightmap, or of its Samples X and Samples Z, the next export cooks it again. A page stores its heights as 16-bit steps above its own lowest height, in a step each level chooses from the heightmap (the finest at which nearly every page of the level fits 16 bits), so a store holds about 2 bytes a sample. An edit that keeps every level's step rewrites only the pages that changed.
 - The folder is derived data: deleting it is safe, and it is rebuilt on the next cook. Keep it out of version control, like the rest of `.Cache`.
 - Exporting the game packs each shipped heightmap's store into one file, `Assets/Cooked/Terrain/<asset id>.geterrain`, cooking it first if it changed. A heightmap whose grid cannot be resolved is reported in the export's warnings, with the fix.
-- A cook reads the heightmap a band of rows at a time, so its memory does not grow with the file. Measured on a 60 × 15 km heightmap at 0.25 m (57.6 GB of `.r32`): about a minute to read the file once and a few minutes to cook a 79 GB store, on a fast NVMe drive.
+- A cook reads the heightmap a band of rows at a time, so its memory does not grow with the file. Measured on a 60 × 15 km heightmap at 0.25 m (57.6 GB of `.r32`): about a minute to read the file once and a few minutes to cook its store, on a fast NVMe drive.
 - 16-bit PNG heightmaps are not cooked into pages. They keep the limit stated below.
 
 ### What streams at runtime
@@ -117,6 +117,7 @@ A raw heightmap (`.r16` or `.r32`) is also cooked into a **page store**: the hei
 - A streamed terrain (tiles, above 1025 samples along the longer side) on a raw heightmap draws its height from its pages: the pages under and near the camera at full detail, coarser levels further out, a page loaded when it comes into view and released 30 frames after it leaves it. The splat and normal maps still stream as tiles.
 - Height modifiers (stamps, flattens, corridors, zones, brush strokes) reach the pages: the terrain shows them from its first frame, and an edit rewrites only the pages it touched. The modifiers are baked on the terrain's tile grid, so this needs a heightmap of the same size. Tiles share their edge samples, and their size follows Samples Per Meter (usually 1025 samples, fewer on a terrain whose shorter side is under 1024 / Samples Per Meter meters), so the grid has one sample more than a whole number of tiles: a 4 × 1 km terrain at 4 samples per meter is 16 × 4 tiles of 1025 samples, 16385 × 4097. A heightmap of another size, such as a power-of-two 16384 × 4096, streams while no height modifier reaches it and draws from its height texture once one does. The log names the size to import it at.
 - While a store is cooking, the Scene View shows **Preparing terrain pages 42%: *terrain name*** at the top of the view (with "and N more" when several cook at once), and the terrain draws from its height texture as before. When the cook finishes, the terrain switches to its pages within a few frames. A scene that loads while a large store cooks keeps the editor busy, so the banner advances in steps.
+- The engine reads only stores of its own format. When a scene opens, the editor cooks a heightmap again if its store has another format. An exported game whose terrain container has another format logs "the terrain container *path* is format 1 and this engine reads format 2: export the game again", and its terrain draws from its height texture until the game is exported again.
 - The game's Player opens the store packed into the exported game and never cooks. A heightmap shipped without a store draws from its height texture, and the Player's log says so.
 - The web build and GPUs without 64-bit shader integers keep drawing from the height texture.
 
@@ -125,12 +126,13 @@ What a platform spends on height pages:
 |  | Desktop | Steam Deck |
 |---|---|---|
 | Page cache (GPU) | 512 pages, 33 MiB | 256 pages, 16.5 MiB |
-| Largest terrain that streams | a page table of 2,097,152 entries (8 MiB): a 60 × 15 km terrain at 0.25 m streams | 524,288 entries (2 MiB): about 24 × 6 km at 0.5 m, or 60 × 15 km at 1 m |
+| Largest terrain that streams | 4,194,304 samples a side: about 1,000 km at 0.25 m | the same |
+| Page table (GPU) | whole up to 8 MiB, which holds every terrain up to 60 × 15 km at 0.25 m; a larger terrain keeps its coarse levels whole and its fine levels only where pages are resident: at most about 6 MiB | whole up to 2 MiB (about 24 × 6 km at 0.5 m); a larger terrain at most about 2.5 MiB |
 | Height modifiers (system memory) | 512 MiB of modified area per terrain: about 6 km² at 0.25 m | 128 MiB: about 1.5 km² at 0.25 m |
 
 A terrain over one of these limits draws from its height texture, and the log states why, once, with the fix:
 
-- Too large: *"`<terrain>` (X x Z samples) does not stream its height on this platform: its page table needs ... words, over the platform's cap of ... words. It draws from its height texture. Lower its samples per meter or its size to stream it."*
+- Too large: *"`<terrain>` (X x Z samples) does not stream its height: pages stream for heightmaps of at most 4194304 samples along an axis. Split it into terrains of at most 4194304 samples a side."*
 - Modifiers reach too much of it: *"`<terrain>` does not stream its height on this platform: its height modifiers reach so much of it that their page overlay needs ... bytes, over the platform's cap of ... bytes. It draws from its height texture. Shrink the modifiers' bounds (a terrain-wide modifier reaches every sample) or lower the terrain's samples per meter to stream it."* A modifier with no bounds reaches the whole terrain: on an 8 × 2 km terrain at 0.25 m that is 1366 MiB, over the desktop's 512 MiB.
 - Modifiers on a heightmap of another size: *"`<terrain>` does not stream its height while height modifiers reach it: its heightmap's grid (X x Z samples) is not the terrain's tile lattice (X' x Z' samples), on which the modifiers are baked. It draws from its height texture. Import the heightmap at X' x Z' samples to stream it with its modifiers."*
 

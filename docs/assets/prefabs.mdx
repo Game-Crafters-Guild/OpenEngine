@@ -1,0 +1,120 @@
+---
+title: Prefabs
+description: A saved tree of entities you place many times, the .prefab file form, and how a scene saves an instance as the prefab plus its overrides.
+---
+
+A prefab is a saved tree of entities with their components that you place many times: a crate, a house, a lamp post. Every instance follows its prefab. An instance may differ from its prefab in a few places; those differences are its overrides, and the scene saves the instance as a reference to the prefab plus its overrides. A prefab may hold instances of other prefabs, and a prefab may be a variant of another prefab that stores only its differences.
+
+A prefab is not a scene. A scene is a place with its own sky, terrain and lighting; a prefab is a thing, with exactly one root and no environment.
+
+:::note
+
+In this version you write a prefab file by hand and place it with a `[prefab]` section in a scene. The editor loads, shows and saves the instances, and an edit you make to an instance's entity in the editor is saved as an override.
+
+:::
+
+## The prefab file
+
+A prefab is a text file, `Name.prefab`, in the scene file's form: a `[prefab version=1]` header, then `[resource]`, `[embed]`, `[entity]` and `[prefab]` sections. The file name is the prefab's name.
+
+```ini title="Props/Crate.prefab"
+[prefab version=1]
+[resource id="oak" path="Materials/Oak.material"]
+[resource id="wheel" path="Props/Wheel.prefab"]
+
+[entity id="root"]
+Name.value = "Crate"
+MeshRenderer.material = #oak
+BoxCollider.size = (1, 1, 1)
+
+[entity id="lid" parent="root"]
+Name.value = "Lid"
+MeshRenderer.material = #oak
+
+[entity id="handle" parent="lid"]
+Name.value = "Handle"
+
+[prefab id="wheel_l" source="wheel" parent="root"]
+Transform.position = (-0.5, 0, 0)
+```
+
+The rules a load checks, each refused with the line and the fix:
+
+- **One root.** Exactly one section has no `parent`, and its id is `root`: an `[entity id="root"]`, or a `[prefab id="root" source=...]` for a variant.
+- **Ids.** Every entity has an id, unique in its file. An id never holds `.`, `/` or `~` (in a scene or a prefab): `.` joins ids into a path, `/` separates an address from its component line, and `~` marks a long scene identity. An id in a prefab file is at most 46 characters.
+- **No subscene.** A prefab holds entities and prefab instances; a subscene goes in a scene. A mark-up goes in a scene too.
+- **No cycle.** A prefab that holds itself through other prefabs is refused, with the chain in the message.
+
+## An instance in a scene
+
+A scene places an instance with a `[prefab]` section. Its `source` names the `[resource]` of the prefab file and its `parent` names the scene entity it sits under. The body holds the instance's placement and its overrides.
+
+```ini title="Scenes/Village.scene"
+[resource id="crate" path="Props/Crate.prefab" guid="..."]
+
+[prefab id="crate2" source="crate" parent="village"]
+Transform.position = (12.5, 0, -3.2)
+Name.value = "Crate (2)"
+MeshRenderer.material = [path="Materials/Pine.material" guid="..."]
+lid/MeshRenderer.material = [path="Materials/Pine.material" guid="..."]
+wheel_l.hub/Transform.scale = (1.2, 1.2, 1.2)
++RigidBody
+RigidBody.mass = 12
++lid/AudioSource
+-BoxCollider
+-lid/BoxCollider
+-entity lid.handle
+
+[entity id="rope" parent="crate2.lid"]
+Name.value = "Rope"
+```
+
+An override line starts with an address, then `/`, then a component line. The address is the ids from the instance's root down to the entity, joined by `.`; it crosses a nested instance the same way (`wheel_l.hub`). A line with no address is the root's. The root's `Transform`, `Name` and `HierarchyOrder` lines place the instance in the scene and are written on every instance.
+
+| Line | What it says |
+|---|---|
+| `lid/MeshRenderer.material = ...` | A field of the entity `lid` differs from the prefab's. |
+| `+lid/AudioSource` | The instance adds a component to `lid`; its field lines follow. |
+| `-lid/BoxCollider` | The instance removes a component from `lid`. |
+| `-entity lid.handle` | The instance removes the entity `handle` under `lid`, and everything under it. |
+| `[entity id="rope" parent="crate2.lid"]` | An entity added on the instance: a scene entity whose `parent` is the instance id, `.`, and the address. |
+
+Each kind has one spelling. A component name on a line of its own is refused (write `+Component`), and so is a section that adds and removes the same component at one address.
+
+The scene saves only differences. A save compares each entity of an instance with the prefab, field by field as the file writes them, and writes a line only where they differ, so a diff of a scene shows what each instance changes. A field set back to the prefab's value writes no line, and from then on it follows the prefab. A reference the instance clears writes its clear form, as in `lid/MeshRenderer.material = 0`. A child's order under its parent is the prefab's; it is never an override.
+
+An override whose address names nothing in the prefab (the prefab no longer has that entity) does not stop the load: it is a row in the load report, with the line and the fix. A save does not keep it. The removal of a component no loaded module registers, or of one the entity does not have, is a row too.
+
+## Nesting and variants
+
+A prefab holds an instance of another prefab with a `[prefab]` section, as a scene does, and that section may carry override lines for it. Layers apply in order, a later one winning per field: the inner prefab's entities, the outer prefab's lines for its instance, then the scene's lines for the whole instance.
+
+A variant is a prefab whose root is an instance of another prefab, its base. Its root section's lines are overrides of the base, and its entities are added under the base's (their `parent` is `root`, `.`, and the address). A variant of a variant applies both layers.
+
+```ini title="Props/MossyCrate.prefab"
+[prefab version=1]
+[resource id="base" path="Props/Crate.prefab"]
+
+[prefab id="root" source="base"]
+lid/MeshRenderer.material = #moss
+
+[entity id="moss" parent="root.lid"]
+Name.value = "Moss"
+```
+
+## Scene identity
+
+Each entity of an instance has a scene identity: the instance id and the entity's address, joined by `.` (`crate2.lid`, `house_01.porch.lamp`). It is unique in the scene, so two instances of one prefab give their entities two identities, and what keys on an identity (the navigation bake's files, the level of detail bake's members) tells them apart. An identity longer than 63 characters is written as 16 hex digits of its hash, `~` and the entity's own id (`3f9a1c77e02b5d41~lamp`); two that hash alike are refused, and the fix is to shorten an id in one of the chains.
+
+An entity dragged out of an instance, or from one instance into another, is saved as an entity added on the instance it is under, with a scene id of its own from its name.
+
+## Converting scene blueprints
+
+A project with `.blueprint` files or `[blueprint]` sections converts with one script; the scene loader refuses such a file with a message that names it. The script renames every `.blueprint` to `.prefab`, rewrites the headers, the `[blueprint]` sections and the `.blueprint` paths of every scene and prefab, and gives each entry of `AssetDatabase.assetdb` the new path and the prefab type, so each prefab keeps its GUID. Close the editor on the project first: an open editor writes `AssetDatabase.assetdb` and can write the old entries back.
+
+```sh title="Convert a project, after a dry run"
+python Tools/Scripts/migrate_blueprints_to_prefabs.py --dry-run MyGame
+python Tools/Scripts/migrate_blueprints_to_prefabs.py MyGame
+```
+
+It refuses a project folder with uncommitted changes, so the conversion is one change you review and can revert, and it prints each file it changes. Files it does not edit that still mention `.blueprint` (your own scripts and documents) are listed at the end. Running it twice changes nothing.

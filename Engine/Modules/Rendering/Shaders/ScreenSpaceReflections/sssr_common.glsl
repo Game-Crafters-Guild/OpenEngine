@@ -3,6 +3,7 @@
 
 #include "Includes/view_params.glsl"
 #include "Includes/octahedral_normal.glsl"
+#include "Includes/reverse_z.glsl"
 
 layout(push_constant) uniform SssrParams
 {
@@ -48,17 +49,6 @@ vec2 GE_NdcToUv(vec2 ndc)
 {
     vec2 v = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     return sssr.viewportRect.xy + v * sssr.viewportRect.zw;
-}
-
-// Reverse-Z raw depth (near=1, far=0) -> linear view-space meters. Same formula
-// as Includes/reverse_z.glsl, using the anonymous-block ge_nearFar accessor the
-// SSR passes declare. Edge-stopping on linear Z is uniform with distance, unlike
-// weighting raw depth (which compresses toward the far plane).
-float GE_LinearZ(float rawDepth)
-{
-    float zNear = max(ge_nearFar.x, 1e-5);
-    float zFar = max(ge_nearFar.y, zNear + 1.0);
-    return (zNear * zFar) / max(rawDepth * (zFar - zNear) + zNear, 1e-6);
 }
 
 vec3 GE_ViewPosition(vec2 uv, float rawDepth)

@@ -30,6 +30,7 @@ extern "C"
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,21 @@ constexpr uint32_t kRedBarHeight = 16;
 constexpr int kRedPatchTolerance = 15;
 
 constexpr float kFirstFrameTimeoutSeconds = 10.0f;
+
+constexpr uint32_t kNoiseSeed = 4916;
+// Mean luma error budget for gray noise recorded with no bitrate given. The
+// software Media Foundation encoder measures ~2.7 at the writer's quality 70.
+// Its own default quality measures ~3.4, quality 50 ~5.4 and a 0.12 bit-per-pixel
+// rate target ~33; quality 50 and the rate target step at keyframes on a soft sky.
+constexpr double kNoiseMaxMeanLumaError = 3.0;
+// BT.709 limited-range luma: black is code 16 and the range spans 219 codes (16 to 235).
+constexpr double kLimitedRangeLumaBlack = 16.0;
+constexpr double kLimitedRangeLumaSpan = 219.0;
+constexpr double kFullRangeMax = 255.0;
+
+// The writer's keyframe interval.
+constexpr double kKeyframeIntervalSeconds = 2.0;
+constexpr int kKeyframeIntervalFrames = static_cast<int>(kKeyframeIntervalSeconds * kFps);
 
 std::filesystem::path MakeOutputPath(const char* extension)
 {
@@ -412,6 +428,135 @@ double DecodedAudioRms(const std::filesystem::path& path, int64_t* outChannelSam
     return std::sqrt(sumSquares / static_cast<double>(count));
 }
 
+// Gray noise frames: every pixel independent, the content a fixed bitrate
+// target starves first. Gray keeps the signal in luma, so 4:2:0 chroma
+// subsampling does not hide what the rate control did.
+std::vector<std::vector<uint8_t>> MakeGrayNoiseFrames(uint32_t frameCount)
+{
+    std::mt19937 generator(kNoiseSeed);
+    std::uniform_int_distribution<int> gray(0, 255);
+    std::vector<std::vector<uint8_t>> frames(frameCount);
+    for (auto& frame : frames)
+    {
+        frame.resize(static_cast<size_t>(kWidth) * kHeight);
+        for (uint8_t& value : frame)
+            value = static_cast<uint8_t>(gray(generator));
+    }
+    return frames;
+}
+
+std::vector<uint8_t> GrayToBGRA(const std::vector<uint8_t>& gray)
+{
+    std::vector<uint8_t> pixels(gray.size() * 4u);
+    for (size_t i = 0; i < gray.size(); ++i)
+    {
+        pixels[i * 4u + 0] = gray[i];
+        pixels[i * 4u + 1] = gray[i];
+        pixels[i * 4u + 2] = gray[i];
+        pixels[i * 4u + 3] = 255;
+    }
+    return pixels;
+}
+
+// Receives every frame the decoder has ready and adds each one's mean absolute
+// luma error against its gray source frame, in limited-range code values.
+void AccumulateLumaError(AVCodecContext* decoderContext, AVFrame* frame, const std::vector<std::vector<uint8_t>>& sources,
+                         size_t& decodedFrames, double& totalError)
+{
+    while (avcodec_receive_frame(decoderContext, frame) == 0)
+    {
+        if (decodedFrames < sources.size() && frame->width == static_cast<int>(kWidth) &&
+            frame->height == static_cast<int>(kHeight))
+        {
+            const std::vector<uint8_t>& source = sources[decodedFrames];
+            double frameError = 0.0;
+            for (uint32_t y = 0; y < kHeight; ++y)
+            {
+                const uint8_t* row = frame->data[0] + static_cast<size_t>(y) * frame->linesize[0];
+                for (uint32_t x = 0; x < kWidth; ++x)
+                {
+                    const double expected = kLimitedRangeLumaBlack +
+                                            source[static_cast<size_t>(y) * kWidth + x] *
+                                                (kLimitedRangeLumaSpan / kFullRangeMax);
+                    frameError += std::abs(static_cast<double>(row[x]) - expected);
+                }
+            }
+            totalError += frameError / (static_cast<double>(kWidth) * kHeight);
+        }
+        ++decodedFrames;
+    }
+}
+
+// Decodes every frame and returns the mean absolute luma error against the
+// gray source frames. -1 when the file does not decode to exactly one frame
+// per source frame.
+double MeanLumaErrorAgainst(const std::filesystem::path& path, const std::vector<std::vector<uint8_t>>& sources)
+{
+    AVFormatContext* formatContext = nullptr;
+    if (avformat_open_input(&formatContext, path.string().c_str(), nullptr, nullptr) < 0)
+        return -1.0;
+    AVCodecContext* decoderContext = nullptr;
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    double totalError = 0.0;
+    size_t decodedFrames = 0;
+    bool valid = false;
+    do
+    {
+        if (avformat_find_stream_info(formatContext, nullptr) < 0)
+            break;
+        const AVCodec* decoder = nullptr;
+        const int videoIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_VIDEO, -1, -1, &decoder, 0);
+        if (videoIndex < 0 || !decoder)
+            break;
+        decoderContext = avcodec_alloc_context3(decoder);
+        if (!decoderContext || avcodec_parameters_to_context(decoderContext, formatContext->streams[videoIndex]->codecpar) < 0 ||
+            avcodec_open2(decoderContext, decoder, nullptr) < 0)
+            break;
+        while (av_read_frame(formatContext, packet) >= 0)
+        {
+            if (packet->stream_index == videoIndex && avcodec_send_packet(decoderContext, packet) == 0)
+                AccumulateLumaError(decoderContext, frame, sources, decodedFrames, totalError);
+            av_packet_unref(packet);
+        }
+        avcodec_send_packet(decoderContext, nullptr);
+        AccumulateLumaError(decoderContext, frame, sources, decodedFrames, totalError);
+        valid = decodedFrames == sources.size();
+    } while (false);
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    if (decoderContext)
+        avcodec_free_context(&decoderContext);
+    avformat_close_input(&formatContext);
+    return valid ? totalError / static_cast<double>(sources.size()) : -1.0;
+}
+
+// The frame index of each key packet in the movie's video stream, in file order.
+std::vector<int> KeyframeIndices(const std::filesystem::path& path)
+{
+    std::vector<int> indices;
+    AVFormatContext* formatContext = nullptr;
+    if (avformat_open_input(&formatContext, path.string().c_str(), nullptr, nullptr) < 0)
+        return indices;
+    AVPacket* packet = av_packet_alloc();
+    const int videoIndex = avformat_find_stream_info(formatContext, nullptr) < 0
+                               ? -1
+                               : av_find_best_stream(formatContext, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (videoIndex >= 0)
+    {
+        const double timeBase = av_q2d(formatContext->streams[videoIndex]->time_base);
+        while (av_read_frame(formatContext, packet) >= 0)
+        {
+            if (packet->stream_index == videoIndex && (packet->flags & AV_PKT_FLAG_KEY) != 0)
+                indices.push_back(static_cast<int>(std::lround(static_cast<double>(packet->pts) * timeBase * kFps)));
+            av_packet_unref(packet);
+        }
+    }
+    av_packet_free(&packet);
+    avformat_close_input(&formatContext);
+    return indices;
+}
+
 bool EncoderExists(const char* name)
 {
     return avcodec_find_encoder_by_name(name) != nullptr;
@@ -547,6 +692,52 @@ TEST_F(VideoWriterFFmpegTest, RecordedMovieRoundTripsThroughTheEnginePlayer)
     }
     EXPECT_LT(worstGradientError, kGradientRowMaxMeanError)
         << "decoded gradient deviates from the source — wrong color range or broken conversion";
+}
+
+// A recording with no bitrate given holds its quality on hard content. A fixed
+// bitrate target spends the same bits on noise as on a flat frame, so noise
+// decodes to a blur and each keyframe interval starts sharp and softens.
+TEST_F(VideoWriterFFmpegTest, NoBitrateGivenHoldsQualityOnDetailedContent)
+{
+    m_OutputPath = MakeOutputPath(".mp4");
+    VideoWriterOptions options = MakeVideoOnlyOptions(m_OutputPath);
+    options.bitrateKbps = 0;
+    VideoWriter writer;
+    ASSERT_TRUE(writer.Open(options)) << writer.GetLastError();
+
+    const std::vector<std::vector<uint8_t>> sources = MakeGrayNoiseFrames(kFrameCount);
+    for (const std::vector<uint8_t>& source : sources)
+    {
+        const std::vector<uint8_t> pixels = GrayToBGRA(source);
+        ASSERT_TRUE(writer.WriteFrame(ViewOf(pixels))) << writer.GetLastError();
+    }
+    ASSERT_TRUE(writer.Close()) << writer.GetLastError();
+
+    const double meanError = MeanLumaErrorAgainst(m_OutputPath, sources);
+    RecordProperty("meanLumaError", std::to_string(meanError));
+    RecordProperty("fileBytes", std::to_string(std::filesystem::file_size(m_OutputPath)));
+    ASSERT_GE(meanError, 0.0) << "the movie does not decode to one frame per source frame";
+    EXPECT_LT(meanError, kNoiseMaxMeanLumaError)
+        << "detailed content lost its detail: the default rate is a fixed target, not constant quality";
+}
+
+// At constant quality the writer keeps its 2 s keyframe interval, so a seek or
+// a lost packet recovers within two seconds.
+TEST_F(VideoWriterFFmpegTest, KeyframesComeEveryTwoSeconds)
+{
+    m_OutputPath = MakeOutputPath(".mp4");
+    VideoWriterOptions options = MakeVideoOnlyOptions(m_OutputPath);
+    options.bitrateKbps = 0;
+    VideoWriter writer;
+    ASSERT_TRUE(writer.Open(options)) << writer.GetLastError();
+
+    // A still frame, so no scene change asks the encoder for a keyframe of its own.
+    const std::vector<uint8_t> pixels = MakePatternFrameBGRA(0);
+    for (int i = 0; i <= 2 * kKeyframeIntervalFrames; ++i)
+        ASSERT_TRUE(writer.WriteFrame(ViewOf(pixels))) << writer.GetLastError();
+    ASSERT_TRUE(writer.Close()) << writer.GetLastError();
+
+    EXPECT_EQ(KeyframeIndices(m_OutputPath), (std::vector<int>{0, kKeyframeIntervalFrames, 2 * kKeyframeIntervalFrames}));
 }
 
 TEST_F(VideoWriterFFmpegTest, AudioTrackRoundTrips)

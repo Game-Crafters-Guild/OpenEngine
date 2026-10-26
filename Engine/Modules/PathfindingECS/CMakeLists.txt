@@ -32,6 +32,9 @@ target_include_directories(PathfindingECS
         $<TARGET_PROPERTY:FileWatcher,INTERFACE_INCLUDE_DIRECTORIES>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        # The bake waits for the spline recipes (SplineRecipesScriptApi.h). Headers only: the
+        # SplineRecipes objects reach the binary through the Engine module splice.
+        $<TARGET_PROPERTY:SplineRecipes,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
 target_link_libraries(PathfindingECS
@@ -48,6 +51,8 @@ target_link_libraries(PathfindingECS
         # link would create a SHARED↔STATIC cycle, which CMake forbids. Engine's
         # symbols get resolved when Engine.dll links PathfindingECS.lib. The
         # Engine/Include headers the sources use arrive through ECSComponents.
+        # AssetManager.h includes Events/Event.h (header-only).
+        Events
         PhysicsECS
         # The surface bake reads the terrain's height (SurfaceHeightQuery).
         TerrainECS

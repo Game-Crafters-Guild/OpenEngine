@@ -608,7 +608,7 @@ frame.AddPass("LightCull", PassPhase::kEarlySetup,
     [=](RenderGraph::RGContext& ctx) { ctx.Dispatch(gx, gy, 1); });
 ```
 
-Cross-frame resources are imported per frame: `ImportPersistentTexture/Buffer` (pool-owned, layout carried across frames), `ImportExternalTexture/Buffer` (engine-owned, no write-back), `RGRotatingTexture/Buffer` (the only N-buffer rotation: history and CPU readbacks). Per-frame CPU constants come from `AllocUpload<T>()` (one upload ring; there is no `perFrame` flag). A consume-only pass (queries, readback) uses `PreventCulling()`. Everything else survives by feeding a sink (`MarkOutput`/present/export).
+Cross-frame resources are imported per frame: `ImportPersistentTexture/Buffer` (pool-owned, layout carried across frames), `ImportExternalTexture/Buffer` (engine-owned, no write-back). A small history one queue writes and another reads is one copy per frame in flight (`perFrameCopies` on a render pipeline resource). Per-frame CPU constants come from `AllocUpload<T>()` (one upload ring; there is no `perFrame` flag). A consume-only pass (queries, readback) uses `PreventCulling()`. Everything else survives by feeding a sink (`MarkOutput`/present/export).
 
 Living examples: the render graph tests under `Engine/Modules/Rendering/Tests/RenderGraph/` and the pipeline nodes under `Engine/Source/Engine/Rendering/Pipeline/Nodes/` (post-FX stages share `FullscreenShaderNode::DeclareForView`).
 
