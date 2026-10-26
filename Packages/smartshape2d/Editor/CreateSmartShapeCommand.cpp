@@ -34,7 +34,6 @@ void CreateSmartShapeCommand::Do()
         m_Entity = world->CreateEntity();
     else if (m_Undone && !world->ReviveEntityImmediatePreserveHandle(m_Entity))
         return;
-    m_Undone = false;
     if (m_Kind == ShapeCreationKind::EdgeOverride || m_Kind == ShapeCreationKind::Anchor || m_Kind == ShapeCreationKind::Texture)
     {
         Components::Name name{};
@@ -50,7 +49,7 @@ void CreateSmartShapeCommand::Do()
             world->Query<ECS::Read<Components::SmartShapeTexture>, ECS::Read<Components::Parent>>()
                 .Each([this, &texture](const Components::SmartShapeTexture& entry, const Components::Parent& parent)
                 {
-                    if (parent.parent == m_Context.TargetEntity && entry.Index < std::numeric_limits<uint32>::max())
+                    if (parent.Entity == m_Context.TargetEntity && entry.Index < std::numeric_limits<uint32>::max())
                         texture.Index = std::max(texture.Index, entry.Index + 1);
                 });
             world->AddComponentImmediate(m_Entity, texture);
@@ -98,8 +97,7 @@ void CreateSmartShapeCommand::NotifyCreated()
         world->AddComponentImmediate(m_Entity, Components::Parent{m_Context.TargetEntity});
     if (m_Context.NotifyEntityCreated)
         m_Context.NotifyEntityCreated(m_Entity);
-    if (m_Context.SelectEntity)
-        m_Context.SelectEntity(m_Entity);
+    m_Undone = false;
     if (m_Context.NotifyWorldStructureChanged)
         m_Context.NotifyWorldStructureChanged();
 }

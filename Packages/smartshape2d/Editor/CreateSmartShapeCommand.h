@@ -14,6 +14,7 @@ public:
     const char* GetName() const override { return "Create Smart Shape 2D"; }
     void Do() override;
     void Undo() override;
+    ECS::EntityHandle GetEntity() const { return m_Entity; }
 
 private:
     Editor::HierarchyCommandContext m_Context;

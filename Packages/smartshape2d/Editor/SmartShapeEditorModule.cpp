@@ -82,10 +82,18 @@ public:
                           command == kCreateOpenShape ? ShapeCreationKind::Open : command == kCreateAnchor ? ShapeCreationKind::Anchor :
                           command == kCreateTexture ? ShapeCreationKind::Texture : ShapeCreationKind::EdgeOverride;
         auto create = std::make_unique<CreateSmartShapeCommand>(context, kind);
+        auto* commandState = create.get();
         if (context.Undo)
+        {
+            context.Undo->BeginCompound(create->GetName());
             context.Undo->Execute(std::move(create));
+        }
         else
             create->Do();
+        if (context.SelectEntity)
+            context.SelectEntity(commandState->GetEntity());
+        if (context.Undo)
+            context.Undo->EndCompound();
         return true;
     }
 };

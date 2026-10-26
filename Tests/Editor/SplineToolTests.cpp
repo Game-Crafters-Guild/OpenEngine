@@ -26,6 +26,7 @@
 #include "TerrainECS/TerrainService.h"
 #include "Types/ColorUtils.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "UndoRedo/SplineUndoHelpers.h"
 
 using GameEngine::ApplicationConfig;
 using GameEngine::EngineCore;
@@ -1057,4 +1058,34 @@ TEST_F(SplineToolTests, TransformingControlsOnTwoSplinesIsOneUndoStep)
     undo.Redo();
     EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x + 2);
     EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x + 2);
+}
+
+TEST_F(SplineToolTests, SnapshotFollowsTheOwnersRecreatedSplineWithoutRestoringRuntimeHandles)
+{
+    auto* world = GetWorld();
+    const auto created = MakeSplineEntity(world, 3);
+    auto* service = GameEngine::SplineECS::SplineService::TryGet();
+    auto* component = world->GetComponentForWrite<SplineComponent>(created.SplineEntity);
+    const GameEngine::SplineECS::SplineHandle original{component->SplineDataIndex, component->SplineDataGeneration};
+    component->DefaultRadius = 3;
+    component->ShowWidthEnvelope = false;
+    service->GetSplineData(original)->SetPointPosition(0, {4, 5, 0});
+    auto target = GameEngine::Editor::SplineUndo::MakeSplineEditableSnapshotTarget(
+        service, original, world, created.SplineEntity, nullptr, "Edit spline");
+    GameEngine::Editor::UndoRedoService::SnapshotTarget::Snapshot snapshot;
+    ASSERT_TRUE(target.Capture(snapshot));
+    service->DestroySpline(original);
+    const auto replacement = service->CreateSpline();
+    component->SplineDataIndex = replacement.Index();
+    component->SplineDataGeneration = replacement.Generation();
+    component->DefaultRadius = 1;
+    component->ShowWidthEnvelope = true;
+    ASSERT_TRUE(target.Apply(snapshot));
+    EXPECT_EQ(component->SplineDataGeneration, replacement.Generation());
+    EXPECT_FLOAT_EQ(component->DefaultRadius, 3);
+    EXPECT_FALSE(component->ShowWidthEnvelope);
+    EXPECT_FLOAT_EQ(service->GetSplineData(replacement)->Points[0].Position.x, 4);
+    world->DestroyEntityImmediate(created.SplineEntity);
+    EXPECT_FALSE(target.Apply(snapshot));
+    service->DestroySpline(replacement);
 }

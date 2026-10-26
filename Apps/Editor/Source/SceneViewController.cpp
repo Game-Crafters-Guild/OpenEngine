@@ -1858,8 +1858,6 @@ void SceneViewController::OnEntityPicked(GameEngine::ECS::EntityHandle entity,
                                          bool ctrl,
                                          bool skipPickRootResolve)
 {
-    if (!GameEngine::Editor::SceneViewSettings::Get().GetExactPickMode())
-        entity = Editor::Picking::ResolveGeneratedPickOwner(GetWorld(), entity);
     if (entity.IsValid() && !IsEntityPickable(entity))
         return;
     m_DepthCycleAnchor = false;

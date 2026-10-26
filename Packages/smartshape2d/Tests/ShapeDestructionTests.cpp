@@ -136,7 +136,7 @@ TEST(ShapeDestruction, ExplosionRespectsOptInAndResetRemovesOnlyDamage)
     world.Query<ECS::Read<Components::SmartShapeCut>, ECS::Read<Components::Parent>>()
         .Each([&count, terrain](const Components::SmartShapeCut& cut, const Components::Parent& parent)
         {
-            EXPECT_EQ(parent.parent, terrain);
+            EXPECT_EQ(parent.Entity, terrain);
             EXPECT_FLOAT_EQ(cut.Center.x, 1);
             EXPECT_FLOAT_EQ(cut.Center.y, 2);
             EXPECT_FLOAT_EQ(cut.AxisX.x, 0.5f);

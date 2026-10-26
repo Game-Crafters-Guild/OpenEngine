@@ -20,10 +20,6 @@ struct PickHit;
 namespace GameEngine::Editor::Picking
 {
 
-// Generated geometry belongs to an explicitly registered authoring root.
-// Authored children and ordinary runtime entities retain their own selection.
-ECS::EntityHandle ResolveGeneratedPickOwner(ECS::World& world, ECS::EntityHandle entity);
-
 // Resolve the entity a root-mode pick selects: the topmost contiguous
 // ancestor that belongs to the same model instance as `entity` — mesh
 // ancestors referencing the same model asset, plus the Transform-only

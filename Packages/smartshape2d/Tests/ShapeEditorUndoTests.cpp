@@ -22,7 +22,9 @@ TEST(SmartShapeEditorUndo, PointEditRedoFollowsTheSplineRecreatedByCreationRedo)
         ECS::EntityHandle owner;
         Editor::HierarchyCommandContext context;
         context.World = &world;
-        context.SelectEntity = [&owner](ECS::EntityHandle entity) { owner = entity; };
+        int selections = 0;
+        context.SelectEntity = [&selections](ECS::EntityHandle) { ++selections; };
+        context.NotifyEntityCreated = [&owner](ECS::EntityHandle entity) { owner = entity; };
         undo.Execute(std::make_unique<CreateSmartShapeCommand>(context, kind));
         const auto reference = *world.GetComponent<Components::SplineComponent>(owner);
         const SplineECS::SplineHandle original{reference.SplineDataIndex, reference.SplineDataGeneration};
@@ -53,6 +55,7 @@ TEST(SmartShapeEditorUndo, PointEditRedoFollowsTheSplineRecreatedByCreationRedo)
         EXPECT_FLOAT_EQ(world.GetComponent<Components::SplineComponent>(owner)->DefaultRadius, 1);
         EXPECT_FALSE(world.GetComponent<Components::SplineComponent>(owner)->ShowWidthEnvelope);
         EXPECT_FLOAT_EQ(data->Points[0].Position.x, -2);
+        EXPECT_EQ(selections, 0) << "Selection belongs to the plugin compound, never command replay";
         service->DestroySpline(current);
     }
 }

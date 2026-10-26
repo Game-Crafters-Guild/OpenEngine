@@ -37,10 +37,10 @@ namespace
 void UpdateShapeAnchor(ECS::World& world, SplineECS::SplineService& splines,
     const Components::SmartShapeAnchor& anchor, const Components::Parent& parent, Components::Transform& transform)
 {
-    if (!world.IsValid(parent.parent) || !world.HasComponent<Components::SmartShape>(parent.parent))
+    if (!world.IsValid(parent.Entity) || !world.HasComponent<Components::SmartShape>(parent.Entity))
         return;
-    const auto* reference = world.GetComponent<Components::SplineComponent>(parent.parent);
-    const auto* parentTransform = world.GetComponent<Components::WorldTransform>(parent.parent);
+    const auto* reference = world.GetComponent<Components::SplineComponent>(parent.Entity);
+    const auto* parentTransform = world.GetComponent<Components::WorldTransform>(parent.Entity);
     if (!reference || !parentTransform)
         return;
     const auto* spline = splines.GetSplineData({reference->SplineDataIndex, reference->SplineDataGeneration});
@@ -285,15 +285,15 @@ void ShapeRuntime::Update(ECS::World& world)
     m_Edges.clear();
     world.Query<ECS::Read<Components::SmartShapeEdge>, ECS::Read<Components::Parent>>()
         .Each([this](const Components::SmartShapeEdge& edge, const Components::Parent& parent)
-              { m_Edges.emplace_back(parent.parent, edge); });
+              { m_Edges.emplace_back(parent.Entity, edge); });
     m_Textures.clear();
     world.Query<ECS::Read<Components::SmartShapeTexture>, ECS::Read<Components::Parent>>()
         .Each([this](const Components::SmartShapeTexture& texture, const Components::Parent& parent)
-              { m_Textures.emplace_back(parent.parent, texture); });
+              { m_Textures.emplace_back(parent.Entity, texture); });
     m_Cuts.clear();
     world.Query<ECS::Read<Components::SmartShapeCut>, ECS::Read<Components::Parent>>()
         .Each([this](const Components::SmartShapeCut& cut, const Components::Parent& parent)
-              { m_Cuts.emplace_back(parent.parent, cut); });
+              { m_Cuts.emplace_back(parent.Entity, cut); });
     // Structural writes happen after the query has released its archetype views.
     for (const auto entity : m_Candidates)
     {

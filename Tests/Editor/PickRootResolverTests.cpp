@@ -54,7 +54,7 @@ protected:
 TEST_F(PickRootResolverTest, GeneratedMeshesSelectTheirAuthoringContainerWithoutAModelAsset)
 {
     EXPECT_EQ(ResolvePickRoot(World, CreatePiece(true)), Owner);
-    EXPECT_EQ(ResolveGeneratedPickOwner(World, Owner), Owner);
+    EXPECT_EQ(ResolvePickRoot(World, Owner), Owner);
 }
 
 TEST_F(PickRootResolverTest, RepeatClicksNeverDrillIntoGeneratedFillOrEdges)
@@ -78,6 +78,6 @@ TEST_F(PickRootResolverTest, AuthoredChildrenAndUnownedRuntimeMeshesRemainIndepe
     const auto generated = CreatePiece(true);
     World.RemoveComponentImmediate<GeneratedShapeRoot>(Owner);
     EXPECT_EQ(ResolvePickRoot(World, generated), generated);
-    EXPECT_EQ(ResolveGeneratedPickOwner(World, ECS::EntityHandle{}), ECS::EntityHandle{});
+    EXPECT_EQ(ResolvePickRoot(World, ECS::EntityHandle{}), ECS::EntityHandle{});
 }
 }

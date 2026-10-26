@@ -21,7 +21,7 @@ ShapeDestructionHistory::Snapshot ShapeDestructionHistory::Capture(ECS::World& w
     Snapshot result;
     world.Query<ECS::Read<Components::SmartShapeCut>, ECS::Read<Components::Parent>>()
         .Each([&result](const Components::SmartShapeCut& cut, const Components::Parent& parent)
-              { result.push_back({parent.parent, cut}); });
+              { result.push_back({parent.Entity, cut}); });
     return result;
 }
 
