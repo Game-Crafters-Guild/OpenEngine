@@ -32,6 +32,7 @@
 
 #include "UI/Controls/BaseField.h"
 #include "UI/Controls/Dropdown.h"
+#include "UI/Controls/MarkdownText.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/UIElement.h"
 #include "UI/UIManager.h"
@@ -65,6 +66,23 @@ GE_Result ResolveTyped(uint64_t instanceId, TControl*& outControl)
 
 extern "C"
 {
+
+    GE_API GE_Result GE_CDECL GE_UIElement_SetMarkdownText(uint64_t instanceId, const char* text)
+    {
+        try
+        {
+            GameEngine::MarkdownText* markdown = nullptr;
+            const GE_Result result = ResolveTyped(instanceId, markdown);
+            if (result != GE_Result_Ok)
+                return result;
+            markdown->SetMarkdown(text ? text : "");
+            return GE_Result_Ok;
+        }
+        catch (...)
+        {
+            return GE_Result_Fail;
+        }
+    }
 
 // Any Field<float> — a Slider, a FloatField. The value read is the committed one: the
 // control's own SetValue clamps and quantises before it stores.
