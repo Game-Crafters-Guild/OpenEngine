@@ -209,7 +209,10 @@ endif()
 # ship it like any other runtime shader source.
 ge_stage_shader_graph_nodes(Player)
 
-# Stage the default UI fonts into the Player's staged Assets.
+# Stage the default UI fonts into the Player's staged Assets. Two consumers
+# resolve this install path: GameUIHost's default HUD font load and
+# UIManager's default-atlas resolver (<install assets root>/Fonts).
+# --asset-root selects project content independently of these bundled defaults.
 add_custom_command(TARGET Player POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Fonts"
