@@ -6,6 +6,7 @@
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Controls/Foldout.h"
 #include "UI/StyleProperties.h"
 #include "UndoRedo/UndoRedoService.h"
@@ -37,7 +38,7 @@ void TintToPickerState(const float* tint, uint32_t& outArgb, float& outIntensity
     const float inverseIntensity = 1.0f / outIntensity;
     const auto quantize = [inverseIntensity](float value)
     {
-        return static_cast<uint8_t>(std::clamp(value * inverseIntensity, 0.0f, 1.0f) * 255.0f + 0.5f);
+        return static_cast<uint8_t>(Math::Clamp01(value * inverseIntensity) * 255.0f + 0.5f);
     };
     outArgb = 0xFF000000u |
               (static_cast<uint32_t>(quantize(tint[0])) << 16) |
@@ -442,7 +443,7 @@ void RegisterFilmSimulationEffectInspector()
             w, e, n, undo, "Change Grain Density",
             [](Film& film, float value)
             {
-                film.GrainDensity = std::clamp(value, 0.0f, 1.0f);
+                film.GrainDensity = Math::Clamp01(value);
             },
             1.0f, "Fraction of grain cells that are active", {}, 0.0f, 1.0f);
         grain->AddChild(std::move(filmicShapeControls));
@@ -549,7 +550,7 @@ void RegisterFilmSimulationEffectInspector()
             w, e, n, undo, "Change Hair Random Size",
             [](Film& film, float value)
             {
-                film.HairRandomSize = std::clamp(value, 0.0f, 1.0f);
+                film.HairRandomSize = Math::Clamp01(value);
             },
             1.0f, "Random variation in each fiber's length and width", {}, 0.0f, 1.0f);
         AddComponentFloatRowWithDrag<Film>(
@@ -565,7 +566,7 @@ void RegisterFilmSimulationEffectInspector()
             w, e, n, undo, "Change Hair Curl Randomness",
             [](Film& film, float value)
             {
-                film.HairCurlRandomness = std::clamp(value, 0.0f, 1.0f);
+                film.HairCurlRandomness = Math::Clamp01(value);
             },
             1.0f, "Random variation in each fiber's curl strength", {}, 0.0f, 1.0f);
 
@@ -641,7 +642,7 @@ void RegisterFilmSimulationEffectInspector()
             w, e, n, undo, "Change Dust Size Randomness",
             [](Film& film, float value)
             {
-                film.DustRandomSize = std::clamp(value, 0.0f, 1.0f);
+                film.DustRandomSize = Math::Clamp01(value);
             },
             1.0f, "Random variation in each speck's size", {}, 0.0f, 1.0f);
 

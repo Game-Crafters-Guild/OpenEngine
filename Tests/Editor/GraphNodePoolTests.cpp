@@ -15,6 +15,7 @@
 #include "Graph/GraphOverlay.h"
 #include "Graph/GraphPort.h"
 #include "Graph/GraphPortedNode.h"
+#include "Types/StringUtils.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Label.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
@@ -419,7 +420,7 @@ TEST(GraphNodePoolTests, ParameterNodeRowsStartAtAValueColumnItsLabelsFit)
     // The widest label decides the column: "Variable Name", not "Slot"/"Value" —
     // as it is drawn, so through the node abbreviation.
     const std::string widest =
-        GraphPortLabels::AbbreviateForNode(GraphPortLabels::PrettifyParamKey("VariableName"));
+        GraphPortLabels::AbbreviateForNode(IdentifierToWords("VariableName"));
     const float expectedStart =
         GraphNodeMetrics::InlineEditorStartGraphFor(static_cast<int>(widest.size()));
     EXPECT_GT(expectedStart, 0.f) << "a value column of zero flushes the boxes left";

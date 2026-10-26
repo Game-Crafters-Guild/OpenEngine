@@ -1,6 +1,7 @@
 #include "Inspectors/ColorFilterEffectInspector.h"
 
 #include "InspectorRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include "Components/Rendering/PostProcessEffects/ColorFilterEffect.h"
@@ -237,7 +238,7 @@ void RegisterColorFilterEffectInspector()
 
         AddComponentFloatRowWithDrag<CF>(ctx.Parent, "Intensity", effect->Intensity, w, e, n,
             undo, "Change ColorFilter Intensity",
-            [](CF& u, float v) { u.Intensity = std::clamp(v, 0.0f, 1.0f); },
+            [](CF& u, float v) { u.Intensity = Math::Clamp01(v); },
             1.0f, "Blend amount: 0 = pass-through, 1 = full tint");
     };
 

@@ -1,5 +1,5 @@
 #version 450
-// Ocean displacement combine (optional, OceanRenderer.CombineDisplacementCascade).
+// Ocean displacement combine (optional, OceanRenderer.CombineCascade).
 // Sums the tileable FFT displacement cascades into a single camera-snapped,
 // viewer-centered cascade (one slice per LOD), so the surface can sample ~2
 // adjacent slices instead of all 16 FFT cascades per vertex/fragment. Per LOD

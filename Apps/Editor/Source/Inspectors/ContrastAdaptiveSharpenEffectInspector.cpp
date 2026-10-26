@@ -7,6 +7,7 @@
 
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 
@@ -36,9 +37,9 @@ void RegisterContrastAdaptiveSharpenEffectInspector()
         Editor::UndoRedoService* undo = ctx.Undo;
 
         AddComponentFloatRowWithDrag<CAS>(ctx.Parent, "Strength",
-            std::clamp(effect->Strength, 0.0f, 1.0f), w, e, n,
+            Math::Clamp01(effect->Strength), w, e, n,
             undo, "Change CAS Strength",
-            [](CAS& u, float v) { u.Strength = std::clamp(v, 0.0f, 1.0f); },
+            [](CAS& u, float v) { u.Strength = Math::Clamp01(v); },
             kCasDefault,
             "Contrast Adaptive Sharpening amount (recommended range 0.2-0.6)",
             {},

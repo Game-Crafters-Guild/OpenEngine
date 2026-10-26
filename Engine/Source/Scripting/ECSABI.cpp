@@ -25,6 +25,7 @@
 #include "Engine/Rendering/RenderServices.h"
 
 #include "AssetCore/AssetTypes.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <atomic>
@@ -721,10 +722,8 @@ GE_API GE_Result GE_CDECL GE_ECSABI_GetComponentTypeIdByName(const char* nameUtf
 static GE_Result RefuseEngineComponentWrite(GameEngine::ECS::ComponentTypeId typeId, GameEngine::ECS::ScriptWrite access,
                                             std::string_view writer)
 {
-    std::string_view name = GameEngine::ECS::ComponentFieldRegistry::GetCanonicalName(typeId);
-    if (const std::size_t scope = name.rfind("::"); scope != std::string_view::npos)
-        name = name.substr(scope + 2);
-    const std::string component(name);
+    const std::string component(
+        GameEngine::UnqualifiedName(GameEngine::ECS::ComponentFieldRegistry::GetCanonicalName(typeId)));
     const std::string writtenBy = writer.empty() ? std::string("the engine") : std::string(writer);
     if (access == GameEngine::ECS::ScriptWrite::EngineInternal)
         return GameEngine::ScriptingAbi::RefuseScriptWrite(

@@ -307,6 +307,15 @@ TEST(GraphInspectorRowsTests, ClipGuidSchemaPlansAssetRow)
     EXPECT_TRUE(HasKeyKind(rows, "speed", GraphInspectorRowKind::NodeFloat));
 }
 
+TEST(GraphInspectorRowsTests, ParameterLabelReadsTheKeyAsWords)
+{
+    const std::unordered_map<std::string, std::string> parameters = {{"seconds", "1"}, {"boolVar", "isOpen"}};
+    const auto rows = PlanGraphInspectorRows(parameters, nullptr);
+    ASSERT_EQ(rows.size(), 2u);
+    for (const GraphInspectorRow& row : rows)
+        EXPECT_EQ(row.Label, row.Key == "seconds" ? "Seconds" : "Bool Var");
+}
+
 TEST(GraphInspectorRowsTests, OtherGuidStaysText)
 {
     NodeTypeMeta schema;

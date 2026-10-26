@@ -31,12 +31,7 @@ std::string EntityIdLabel(ECS::EntityHandle entity)
 
 std::string ComponentTypeNameAsWords(std::string_view registeredTypeName)
 {
-    std::string_view name = registeredTypeName;
-    if (const size_t scope = name.rfind("::"); scope != std::string_view::npos)
-        name.remove_prefix(scope + 2);
-    if (const size_t dot = name.rfind('.'); dot != std::string_view::npos)
-        name.remove_prefix(dot + 1);
-    return IdentifierToWords(name);
+    return IdentifierToWords(UnqualifiedName(registeredTypeName));
 }
 
 } // namespace GameEngine::Editor

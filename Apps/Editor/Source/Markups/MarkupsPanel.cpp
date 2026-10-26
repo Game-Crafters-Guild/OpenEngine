@@ -44,7 +44,7 @@ constexpr const char* kNoMatchText = "No mark-ups match the search or the status
 std::vector<Dropdown::Option> StatusFilterOptions()
 {
     std::vector<Dropdown::Option> options;
-    options.push_back(Dropdown::Option{"", "All statuses"});
+    options.push_back(Dropdown::Option{"", "All Statuses"});
     if (const MarkupService* service = MarkupService::TryGet())
     {
         for (uint32 id = 0; id < service->GetTagCount(); ++id)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Components/Terrain/TerrainSurfaceRules.h"
+#include "Mathematics/Interpolation.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -131,7 +132,7 @@ inline float32 TerrainRuleConditionWeightForValue(const Components::TerrainRuleC
 
     const float32 distance = (value < condition.Min) ? (condition.Min - value)
                                                      : (value - condition.Max);
-    const float32 t = std::clamp(1.0f - distance / condition.Feather, 0.0f, 1.0f);
+    const float32 t = Math::Clamp01(1.0f - distance / condition.Feather);
     return TerrainRuleCurve(condition.FalloffCurve, t);
 }
 
@@ -162,7 +163,7 @@ float32 EvaluateTerrainSurfaceRuleWeight(const Components::TerrainSurfaceRule& r
         weight *= TerrainRuleConditionWeightForValue(condition, value);
     }
 
-    return std::clamp(weight, 0.0f, 1.0f);
+    return Math::Clamp01(weight);
 }
 
 } // namespace GameEngine::TerrainECS

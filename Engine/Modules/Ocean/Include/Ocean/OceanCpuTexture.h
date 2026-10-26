@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -28,8 +29,8 @@ struct OceanCpuTextureRG
         if (!IsValid())
             return false;
 
-        u = std::clamp(u, 0.0f, 1.0f);
-        v = std::clamp(v, 0.0f, 1.0f);
+        u = Math::Clamp01(u);
+        v = Math::Clamp01(v);
 
         const float32 x = u * static_cast<float32>(Width - 1u);
         const float32 y = v * static_cast<float32>(Height - 1u);

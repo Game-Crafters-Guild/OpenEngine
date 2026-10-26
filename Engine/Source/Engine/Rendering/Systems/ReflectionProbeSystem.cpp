@@ -11,6 +11,7 @@
 #include "Engine/Rendering/SkyEnvironmentSource.h"
 
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/VectorOps.h"
 
 #include <algorithm>
@@ -296,7 +297,7 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                 volume.HalfExtents[2]}));
             if (blend > 0.0001f && distanceToEdge < blend)
             {
-                weight = std::clamp(distanceToEdge / blend, 0.0f, 1.0f);
+                weight = Math::Clamp01(distanceToEdge / blend);
                 if (weight <= 0.0f)
                     return;
             }
@@ -330,7 +331,7 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                 const float distanceToEdge = ComputeEllipsoidDistanceToEdge(
                     local, volume.HalfExtents, normalizedRadius);
                 if (distanceToEdge < blend)
-                    weight = std::clamp(distanceToEdge / blend, 0.0f, 1.0f);
+                    weight = Math::Clamp01(distanceToEdge / blend);
                 if (weight <= 0.0f)
                     return;
             }
@@ -433,7 +434,7 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     desc.Intensity = std::max(0.0f, best.Probe.Intensity) * best.Weight;
     desc.ExposureEV = best.Probe.ExposureEV;
     desc.RotationRadians = best.Probe.RotationDegrees * kReflectionProbeDegToRad;
-    desc.LowerHemisphereDarkness = std::clamp(best.Probe.IblLowerHemisphereDarkness, 0.0f, 1.0f);
+    desc.LowerHemisphereDarkness = Math::Clamp01(best.Probe.IblLowerHemisphereDarkness);
     desc.CaptureEnvironment = best.Probe.CaptureEnvironment;
     desc.CaptureResolution =
         ImageBasedLightingFeature::NormalizeCaptureResolution(best.Probe.CaptureResolution);

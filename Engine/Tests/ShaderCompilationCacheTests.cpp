@@ -9,6 +9,7 @@
 // which BYTES end up cached.
 
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/HotReloadIntegration.h"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -331,15 +332,19 @@ class ShaderCompilationCacheEpochTest : public ::testing::Test
     void WriteSurface(const char* colorExpr) const
     {
         const auto path = m_projectRoot / kSurfaceFile;
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        ASSERT_TRUE(out.good()) << "could not open " << path.string();
-        out << "SurfaceOutput EvaluateSurface(SurfaceInput sIn) {\n"
-               "    SurfaceOutput o = DefaultSurfaceOutput();\n"
-               "    o.baseColor = "
-            << colorExpr
-            << ";\n"
-               "    return o;\n"
-               "}\n";
+        {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            ASSERT_TRUE(out.good()) << "could not open " << path.string();
+            out << "SurfaceOutput EvaluateSurface(SurfaceInput sIn) {\n"
+                   "    SurfaceOutput o = DefaultSurfaceOutput();\n"
+                   "    o.baseColor = "
+                << colorExpr
+                << ";\n"
+                   "    return o;\n"
+                   "}\n";
+        }
+        // The editor's watcher announces the edit; the compile path re-reads no held source until it is.
+        GameEngine::Rendering::NotifyShaderSourcesChanged();
     }
 
     static MaterialCompileSpec MakeSpec()
@@ -568,9 +573,13 @@ class ShaderCompilationCacheClosureTest : public ::testing::Test
     void WriteFile(const char* file, const std::string& text) const
     {
         const auto path = m_projectRoot / file;
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        ASSERT_TRUE(out.good()) << "could not open " << path.string();
-        out << text;
+        {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            ASSERT_TRUE(out.good()) << "could not open " << path.string();
+            out << text;
+        }
+        // The editor's watcher announces the edit; the compile path re-reads no held source until it is.
+        GameEngine::Rendering::NotifyShaderSourcesChanged();
     }
 
     // A helper include owning the base color, and a surface that consumes it.

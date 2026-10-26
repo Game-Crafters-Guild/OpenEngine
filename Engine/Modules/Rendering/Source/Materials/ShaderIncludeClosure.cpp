@@ -2,8 +2,7 @@
 
 #include "ShaderSourceCache.h"
 
-#include <fstream>
-#include <utility>
+#include "AssetCore/SharedFileRead.h"
 
 namespace GameEngine { namespace Rendering {
 
@@ -87,111 +86,51 @@ std::vector<std::string> ScanShaderIncludeDirectives(const std::string& src)
 
 bool ReadShaderFileText(const std::filesystem::path& p, std::string& out, std::string* outError)
 {
-    std::ifstream in(p, std::ios::binary);
-    if (!in.is_open())
-    {
-        if (outError)
-            *outError = "Failed to open file: " + p.string();
-        return false;
-    }
-    // Bulk read rather than std::istreambuf_iterator: the iterator form walks the
-    // stream one character at a time, which dominated compile-key construction
-    // once every file in a source's #include closure started being read there.
-    in.seekg(0, std::ios::end);
-    const std::streamoff size = in.tellg();
-    out.clear();
-    if (size > 0)
-    {
-        out.resize(static_cast<size_t>(size));
-        in.seekg(0, std::ios::beg);
-        in.read(out.data(), size);
-        out.resize(static_cast<size_t>(in.gcount()));
-    }
-    return true;
+    // SharedFileRead, not std::ifstream: an editor saves a header by renaming a
+    // new file over it, and on Windows that rename and a read without delete
+    // sharing refuse each other.
+    if (ReadFileTextShared(p, out))
+        return true;
+    if (outError)
+        *outError = "Failed to open file: " + p.string();
+    return false;
 }
 
 namespace {
 
-// Where one #include directive resolves to.
-struct IncludeResolution
-{
-    // The spelling the search produced, unnormalized: FileIncluder hands this
-    // back as source_name, so nested relative directives inside the file must
-    // resolve against it and not against the normalized form.
-    std::filesystem::path Candidate;
-    // Absolute and normalized — the identity a file is cached, deduped and
-    // reported by.
-    std::string Key;
-};
-
-// `dir / operand` if it exists. The normalized Key is the file's identity; the
-// unnormalized Candidate is the spelling FileIncluder reports, which nested
-// relative directives resolve against.
-bool TryResolveIn(const std::filesystem::path& dir, const std::filesystem::path& operand,
-                  IncludeResolution& out)
-{
-    std::error_code ec;
-    std::filesystem::path candidate = dir / operand;
-    if (!std::filesystem::exists(candidate, ec))
-        return false;
-
-    std::error_code absEc;
-    std::filesystem::path absolutePath = std::filesystem::absolute(candidate, absEc);
-    if (absEc)
-        absolutePath = candidate;
-    out.Key = absolutePath.lexically_normal().string();
-    out.Candidate = std::move(candidate);
-    return true;
-}
-
-// The first `dir / operand` that exists, searching the requesting file's own
-// directory and then `roots` in order — FileIncluder's order. Searched on every
-// walk, never remembered: which file a directive reaches depends on what is on
-// disk now.
-bool ResolveIncludeOperand(const std::filesystem::path& requestingDir,
-                           const std::vector<std::filesystem::path>& roots,
-                           const std::filesystem::path& operand, IncludeResolution& out)
-{
-    if (TryResolveIn(requestingDir, operand, out))
-        return true;
-    for (const std::filesystem::path& root : roots)
-        if (TryResolveIn(root, operand, out))
-            return true;
-    return false;
-}
-
 // The closure walk over a file's already-scanned include operands. Splitting
-// this from the text scan is what lets a file whose bytes are unchanged
-// contribute its operands without its text being re-scanned.
+// this from the text scan is what lets a held file contribute its operands
+// without its text being re-scanned.
 void CollectFromOperands(const std::vector<std::string>& operands,
                          const std::filesystem::path& requestingDir,
-                         const std::vector<std::filesystem::path>& roots, IncludeClosure& out)
+                         const std::vector<std::filesystem::path>& roots, const std::string& rootsSignature,
+                         IncludeClosure& out)
 {
+    ShaderSourceCache& cache = ShaderSourceCache::Get();
     for (const std::string& operand : operands)
     {
-        IncludeResolution resolved;
-        if (!ResolveIncludeOperand(requestingDir, roots, operand, resolved))
+        const ShaderSourceCache::ResolutionPtr resolved = cache.Resolve(requestingDir, roots, rootsSignature, operand);
+        if (!resolved)
             continue;
 
-        const ShaderSourceCache::EntryPtr entry =
-            ShaderSourceCache::Get().Read(resolved.Candidate, resolved.Key);
+        const ShaderSourceCache::EntryPtr entry = cache.Read(resolved->Candidate, resolved->Key);
         if (!entry)
         {
             // Exists but unreadable. Fold a distinct marker so the key still
             // moves, and leave it OUT of `covered` so the cache-info
-            // revalidation keeps checking it — then the compile itself reports
+            // revalidation keeps checking it -- then the compile itself reports
             // the unreadable include loudly.
-            out.paths.push_back(resolved.Key + "<unreadable>");
+            out.paths.push_back(resolved->Key + "<unreadable>");
             out.hashes.push_back(0);
             continue;
         }
         // First visit wins (mirrors FileIncluder's record dedupe) and
         // terminates include cycles.
-        if (!out.covered.insert(resolved.Key).second)
+        if (!out.covered.insert(resolved->Key).second)
             continue;
-        out.paths.push_back(resolved.Key);
+        out.paths.push_back(resolved->Key);
         out.hashes.push_back(entry->Hash);
-        CollectFromOperands(entry->IncludeOperands, resolved.Candidate.parent_path(), roots, out);
+        CollectFromOperands(entry->IncludeOperands, resolved->CandidateDir, roots, rootsSignature, out);
     }
 }
 
@@ -204,8 +143,8 @@ void CollectIncludeClosure(const std::string& sourceText,
 {
     // The top-level text is supplied by the caller -- it can be in-memory source
     // that exists on no disk -- so it is scanned here rather than read.
-    CollectFromOperands(ScanShaderIncludeDirectives(sourceText), requestingSource.parent_path(),
-                        searchDirs, out);
+    CollectFromOperands(ScanShaderIncludeDirectives(sourceText), requestingSource.parent_path(), searchDirs,
+                        ShaderSourceCache::MakeRootsSignature(searchDirs), out);
 }
 
 }} // namespace GameEngine::Rendering

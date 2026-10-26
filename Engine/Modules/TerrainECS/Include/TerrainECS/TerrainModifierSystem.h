@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "TerrainECS/TerrainColorMapBaker.h"
 #include "TerrainECS/BakeWarningLatch.h"
 #include "TerrainECS/TerrainService.h"
@@ -65,18 +66,18 @@ inline float32 ShapeFalloffWeight(float32 distFromEdge, float32 falloff, float32
         // One ramp across [-falloff, +falloffInward], the edge falling wherever
         // the two widths put it rather than at a fixed parameter value.
         const float32 t = (distFromEdge + falloff) / (falloff + falloffInward);
-        return smooth(std::clamp(t, 0.0f, 1.0f));
+        return smooth(Math::Clamp01(t));
     }
     if (distFromEdge <= 0.0f)
     {
         // Outside the shape, or exactly on the edge.
         if (falloff <= 0.0f)
             return 0.0f;
-        return smooth(std::clamp(1.0f + distFromEdge / falloff, 0.0f, 1.0f));
+        return smooth(Math::Clamp01(1.0f + distFromEdge / falloff));
     }
     if (falloffInward <= 0.0f)
         return 1.0f;
-    return smooth(std::clamp(distFromEdge / falloffInward, 0.0f, 1.0f));
+    return smooth(Math::Clamp01(distFromEdge / falloffInward));
 }
 
 // ---- World position -> sample index ----------------------------------------

@@ -1,6 +1,7 @@
 #include "Physics/Backend/JoltPhysicsBackend.h"
 
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/Capabilities.h"
 
 #include <algorithm>
@@ -1126,7 +1127,7 @@ BodyHandle JoltPhysicsBackend::CreateBody(const BodySettings& settings)
     bcs.mAngularDamping = static_cast<float>(settings.angularDamping);
     bcs.mGravityFactor = static_cast<float>(settings.gravityScale);
     bcs.mFriction = static_cast<float>(std::max(0.0f, settings.friction));
-    bcs.mRestitution = static_cast<float>(std::clamp(settings.restitution, 0.0f, 1.0f));
+    bcs.mRestitution = static_cast<float>(Math::Clamp01(settings.restitution));
     bcs.mUserData = static_cast<uint64_t>(settings.userData);
     bcs.mLinearVelocity = JPH::Vec3(settings.linearVelocity.x, settings.linearVelocity.y, settings.linearVelocity.z);
     bcs.mAngularVelocity = JPH::Vec3(settings.angularVelocity.x, settings.angularVelocity.y, settings.angularVelocity.z);

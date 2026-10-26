@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -14,7 +15,7 @@ namespace GameEngine::Terrain
 
 inline float32 GrassCoverageSmoothStep(float32 edge0, float32 edge1, float32 x)
 {
-    const float32 t = std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+    const float32 t = Math::Clamp01((x - edge0) / (edge1 - edge0));
     return t * t * (3.0f - 2.0f * t);
 }
 
@@ -31,7 +32,7 @@ inline float32 GrassSplatCoverage(const float32 (&weights)[4], uint32 grassLayer
         if (other != layer)
             otherMax = std::max(otherMax, weights[other]);
 
-    const float32 threshold = std::clamp(maskThreshold, 0.0f, 1.0f);
+    const float32 threshold = Math::Clamp01(maskThreshold);
     const float32 dominantGrass = grassWeight - otherMax;
     const float32 dominanceFloor = std::min(0.18f, threshold);
     if (hasSplatmap && (grassWeight < threshold || dominantGrass < dominanceFloor))
@@ -48,7 +49,7 @@ inline float32 GrassSplatCoverage(const float32 (&weights)[4], uint32 grassLayer
 // the grass (height 0). Both scales are the grass control field's, 1 where no region is authored.
 inline float32 GrassFieldCoverage(float32 splatCoverage, float32 heightScale, float32 densityScale)
 {
-    return heightScale > 0.0f ? splatCoverage * std::clamp(densityScale, 0.0f, 1.0f) : 0.0f;
+    return heightScale > 0.0f ? splatCoverage * Math::Clamp01(densityScale) : 0.0f;
 }
 
 } // namespace GameEngine::Terrain

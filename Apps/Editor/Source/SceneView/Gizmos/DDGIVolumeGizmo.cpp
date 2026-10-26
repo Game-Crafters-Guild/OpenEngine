@@ -23,11 +23,11 @@ using GameEngine::Mathematics::Vector3;
 namespace
 {
 
-// Visualization-only cap: at ProbesLongAxis=32 on a cubical volume the grid
+// Visualization-only cap: at Divisions=32 on a cubical volume the grid
 // is up to 32^3 = 32768 probes, and drawing one marker per probe every frame
 // while selected would be a real editor hitch. Subsample with a stride
 // instead of drawing every probe past this cap — an authoring preview, not a
-// claim about the actual traced probe count (the inspector's ProbesLongAxis
+// claim about the actual traced probe count (the inspector's Divisions
 // field is that source of truth).
 constexpr int kMaxDrawnProbeMarkers = 4096;
 constexpr float kProbeMarkerHalfExtent = 0.06f;
@@ -156,7 +156,7 @@ void DDGIVolumeGizmo::Render(GizmoRenderContext& context)
                     const float gridSizeWS[3] = {halfExtents[0] * 2.0f, halfExtents[1] * 2.0f,
                                                  halfExtents[2] * 2.0f};
                     centre = Engine::Renderer::DDGIProbeFeature::SnapCentreToProbeGrid(camPos, gridSizeWS,
-                                                                                       volume.ProbesLongAxis);
+                                                                                       volume.Divisions);
                 }
                 if (emphasize)
                 {
@@ -171,7 +171,7 @@ void DDGIVolumeGizmo::Render(GizmoRenderContext& context)
                 const float gridSizeWS[3] = {halfExtents[0] * 2.0f, halfExtents[1] * 2.0f,
                                              halfExtents[2] * 2.0f};
                 int32_t probeCount[3];
-                Engine::Renderer::DDGIProbeFeature::ComputeProbeGridLayout(gridSizeWS, volume.ProbesLongAxis,
+                Engine::Renderer::DDGIProbeFeature::ComputeProbeGridLayout(gridSizeWS, volume.Divisions,
                                                                            probeCount);
                 const int32_t probeTotal = probeCount[0] * probeCount[1] * probeCount[2];
                 const int32_t stride = std::max(1, probeTotal / kMaxDrawnProbeMarkers);

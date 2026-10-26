@@ -303,6 +303,7 @@ if(BUILD_TESTING)
         target_link_libraries(TerrainGrassStatsTests PRIVATE
             GameEngineRendering
             FileSystemObjects
+            AssetCore
             GTest::gtest
             GTest::gtest_main
         )

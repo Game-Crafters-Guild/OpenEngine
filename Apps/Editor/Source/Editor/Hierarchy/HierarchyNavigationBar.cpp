@@ -1,15 +1,21 @@
 #include "Editor/Hierarchy/HierarchyNavigationBar.h"
 
+#include "Editor/EditorPaths.h"
 #include "Editor/EditorTreeTitleIconVars.h"
+#include "Logger/Logger.h"
 #include "UI/Controls/ItemSizeSlider.h"
+#include "UI/Parsers/XMLParser.h"
 
 #include <cmath>
+#include <filesystem>
 #include <memory>
+#include <string>
 
 namespace GameEngine::Editor
 {
 namespace
 {
+constexpr const char* kLayoutAssetPath = "UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.uxml";
 constexpr const char* kStyleAssetPath = "UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.css";
 constexpr float kTreeIconSizeStepPx = 1.0f;
 // Sizes closer than this are the same size: the slider's step is a whole pixel.
@@ -21,8 +27,10 @@ HierarchyNavigationBar::HierarchyNavigationBar()
     AddClass("hierarchy-navigation-bar");
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    auto sizeSlider = std::make_unique<EditorUI::ItemSizeSlider>(
-        EditorUI::ItemSizeSlider::Subject{"Row size", "the Hierarchy", "resizes its rows"});
+    EditorUI::ItemSizeSlider::Subject subject{"Row size", "the Hierarchy", "resizes its rows"};
+    AddSizeGlyph(subject.Name);
+
+    auto sizeSlider = std::make_unique<EditorUI::ItemSizeSlider>(std::move(subject));
     m_SizeSlider = sizeSlider.get();
     m_SizeSlider->AddClass("hierarchy-size-slider");
     m_SizeSlider->SetMin(kMinEditorTreeIconSizePx);
@@ -36,6 +44,22 @@ HierarchyNavigationBar::HierarchyNavigationBar()
     });
     m_SizeSlider->SetOnResizeGesture([this](float scrollY) { ApplyResizeGesture(scrollY); });
     AddChild(std::move(sizeSlider));
+}
+
+// The glyph is the bar's layout; the bar is built once per Hierarchy, so the layout is read here.
+void HierarchyNavigationBar::AddSizeGlyph(const std::string& tooltip)
+{
+    const std::filesystem::path path = GetEditorGlobalPaths().installAssetsRoot / kLayoutAssetPath;
+    std::unique_ptr<UIElement> glyph;
+    if (!UIParsing::XMLParser::ParseLayoutFromFile(path.string(), glyph) || !glyph)
+    {
+        Logger::Log::Error("HierarchyNavigationBar: {} did not load, so the row size slider shows without its "
+                           "glyph. Check that it is staged under the editor asset mount.",
+                           path.generic_string());
+        return;
+    }
+    glyph->SetTooltip(tooltip);
+    AddChild(std::move(glyph));
 }
 
 void HierarchyNavigationBar::SetItemSize(float px)

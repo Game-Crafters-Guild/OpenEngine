@@ -1,5 +1,7 @@
 #include "SlangCompileLane.h"
 
+#include "ShaderSourceCache.h"
+
 #include "Logger/Logger.h"
 
 #include <atomic>
@@ -280,15 +282,6 @@ std::vector<std::string> ParseDepfile(const std::string& text)
     return deps;
 }
 
-std::string CanonicalAbs(const fs::path& p)
-{
-    std::error_code ec;
-    fs::path abs = fs::absolute(p, ec);
-    if (ec)
-        abs = p;
-    return abs.lexically_normal().string();
-}
-
 bool MapStageName(const std::string& stageKey, std::string& outSlangStage)
 {
     if (stageKey == "vs") { outSlangStage = "vertex"; return true; }
@@ -493,11 +486,11 @@ bool CompileStage(const StageInput& in, std::vector<uint32_t>& outWords,
         {
             std::string text((std::istreambuf_iterator<char>(f)),
                              std::istreambuf_iterator<char>());
-            const std::string rootA = CanonicalAbs(srcArg);
-            const std::string rootB = CanonicalAbs(in.sourcePath);
+            const std::string rootA = ShaderSourceCache::NormalizedKey(srcArg);
+            const std::string rootB = ShaderSourceCache::NormalizedKey(in.sourcePath);
             for (const auto& dep : ParseDepfile(text))
             {
-                const std::string canonical = CanonicalAbs(fs::path(dep));
+                const std::string canonical = ShaderSourceCache::NormalizedKey(fs::path(dep));
                 if (canonical == rootA || canonical == rootB)
                     continue;
                 outModuleDeps.push_back(canonical);

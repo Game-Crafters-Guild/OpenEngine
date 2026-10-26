@@ -17,6 +17,7 @@
 // every other writer could set a tile count no atlas grid could address.
 
 #include "Components/Terrain/TerrainGrass.h"
+#include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainTypes.h"
 #include "TerrainGrass/GrassPlacementModel.h"
 
@@ -51,9 +52,9 @@ inline void ClampFields(Components::TerrainGrass& grass)
     grass.Range = std::max(0.0f, grass.Range);
     grass.DensityFalloff = std::max(0.0f, grass.DensityFalloff);
     grass.ClumpSize = std::max(0.0f, grass.ClumpSize);
-    grass.ClumpHeightVariance = std::clamp(grass.ClumpHeightVariance, 0.0f, 1.0f);
-    grass.ClumpAlignment = std::clamp(grass.ClumpAlignment, 0.0f, 1.0f);
-    grass.ClumpTaper = std::clamp(grass.ClumpTaper, 0.0f, 1.0f);
+    grass.ClumpHeightVariance = Math::Clamp01(grass.ClumpHeightVariance);
+    grass.ClumpAlignment = Math::Clamp01(grass.ClumpAlignment);
+    grass.ClumpTaper = Math::Clamp01(grass.ClumpTaper);
     grass.BladeHeight = std::max(0.0f, grass.BladeHeight);
     grass.BladeWidth = std::max(0.0f, grass.BladeWidth);
     grass.BladeTilt = std::clamp(grass.BladeTilt, 0.0f, Components::kMaxTerrainGrassBladeTilt);
@@ -67,7 +68,7 @@ inline void ClampFields(Components::TerrainGrass& grass)
                                      Components::kMaxTerrainGrassBladeSegments);
     grass.RandomScale = std::max(0.0f, grass.RandomScale);
     grass.LayerIndex = std::min(grass.LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u);
-    grass.MaskThreshold = std::clamp(grass.MaskThreshold, 0.0f, 1.0f);
+    grass.MaskThreshold = Math::Clamp01(grass.MaskThreshold);
     grass.WindGustSpeed = std::max(0.0f, grass.WindGustSpeed);
     grass.WindGustScale = std::max(kMinWindGustScale, grass.WindGustScale);
     grass.WindStrength = std::max(0.0f, grass.WindStrength);
@@ -75,15 +76,15 @@ inline void ClampFields(Components::TerrainGrass& grass)
     grass.WindFlutterSpeed = std::max(0.0f, grass.WindFlutterSpeed);
     grass.Brightness = std::max(0.0f, grass.Brightness);
     grass.RandomBrightness = std::max(0.0f, grass.RandomBrightness);
-    grass.HueVariation = std::clamp(grass.HueVariation, 0.0f, 1.0f);
+    grass.HueVariation = Math::Clamp01(grass.HueVariation);
     grass.RootFadeStart = std::clamp(grass.RootFadeStart, Components::kMinTerrainGrassRootFadeStart,
                                      1.0f - Components::kMinTerrainGrassRootFadeSpan);
     grass.RootFadeEnd = std::clamp(grass.RootFadeEnd,
                                    grass.RootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f);
-    grass.GroundingStrength = std::clamp(grass.GroundingStrength, 0.0f, 1.0f);
+    grass.GroundingStrength = Math::Clamp01(grass.GroundingStrength);
     grass.GroundTintHeight = std::clamp(grass.GroundTintHeight, Components::kMinTerrainGrassGroundTintHeight, 1.0f);
     grass.CanopyShade = std::clamp(grass.CanopyShade, 0.0f, kMaxGrassCanopyShade);
-    grass.GroundDarkening = std::isfinite(grass.GroundDarkening) ? std::clamp(grass.GroundDarkening, 0.0f, 1.0f) : 0.0f;
+    grass.GroundDarkening = std::isfinite(grass.GroundDarkening) ? Math::Clamp01(grass.GroundDarkening) : 0.0f;
     grass.Translucency = std::clamp(grass.Translucency, 0.0f, Components::kMaxTerrainGrassTranslucency);
     grass.TextureCardsPerSquareMeter =
         std::clamp(grass.TextureCardsPerSquareMeter, 0.0f, kGrassMaxBladesPerSquareMeter);
@@ -97,7 +98,7 @@ inline void ClampFields(Components::TerrainGrass& grass)
     // after both, so the ceiling is the corrected grid rather than whatever arrived.
     grass.AtlasTileCount = std::clamp(grass.AtlasTileCount, kMinGrassAtlasTileCount,
                                       grass.AtlasColumns * grass.AtlasRows);
-    grass.AlphaCutoff = std::clamp(grass.AlphaCutoff, 0.0f, 1.0f);
+    grass.AlphaCutoff = Math::Clamp01(grass.AlphaCutoff);
     grass.NormalStrength = std::max(0.0f, grass.NormalStrength);
 }
 

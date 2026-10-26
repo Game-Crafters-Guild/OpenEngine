@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "Types/Types.h"
 
 #include "ECS/Entity.h" // ECS::EntityHandle
@@ -11,7 +12,6 @@
 #include "Mathematics/Curve.h" // Math::Curve, Math::CurveKey
 #include "Types/ColorUtils.h" // ColorUtils::LinearRec709Luminance
 
-#include <algorithm>
 #include <cmath>
 
 namespace GameEngine {
@@ -90,8 +90,8 @@ inline float32 EvaluateSkyScalarCubicBezier(const SkyScalarCubicBezier& bezier, 
         x += kDayHours;
     x /= kDayHours;
 
-    const float32 c1x = std::clamp(bezier.Control1X, 0.0f, 1.0f);
-    const float32 c2x = std::clamp(bezier.Control2X, 0.0f, 1.0f);
+    const float32 c1x = Math::Clamp01(bezier.Control1X);
+    const float32 c2x = Math::Clamp01(bezier.Control2X);
     auto sampleX = [c1x, c2x](float32 u) {
         const float32 inv = 1.0f - u;
         return 3.0f * inv * inv * u * c1x +

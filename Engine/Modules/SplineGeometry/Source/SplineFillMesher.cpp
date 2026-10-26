@@ -1,5 +1,7 @@
 #include "SplineGeometry/SplineFillMesher.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -27,7 +29,7 @@ float32 CrossingFraction(float32 insideA, float32 insideB)
     const float32 denominator = insideA - insideB;
     if (!std::isfinite(denominator) || !(denominator > 0.0f))
         return 0.5f; // only reachable via an unreadable corner, which the caller refuses
-    return std::clamp(insideA / denominator, 0.0f, 1.0f);
+    return Math::Clamp01(insideA / denominator);
 }
 
 } // namespace

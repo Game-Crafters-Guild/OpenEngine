@@ -1,14 +1,15 @@
 /* HierarchyNavigationBar (Apps/Editor/Include/Editor/Hierarchy/HierarchyNavigationBar.h).
  *
- * The Hierarchy's bottom bar with the item size slider. It stays at the bottom wherever the
- * panel search sits. The panel reserves the bar's strip with its own padding (theme/views.css,
- * .hierarchy-panel); this sheet places the bar in that strip. The bar requests it for its own
- * subtree.
+ * The Hierarchy's bottom bar: a rows glyph, then the item size slider. It stays at the bottom
+ * wherever the panel search sits. It leads with a 16px glyph as the Assets panel's bottom bar
+ * does, and has no plate of its own: the panel's fill is already the Assets bar's fill. The panel
+ * reserves the bar's strip with its own padding (theme/views.css, .hierarchy-panel); this sheet
+ * places the bar in that strip. The bar requests it for its own subtree.
  */
 .hierarchy-navigation-bar {
     position: absolute;
-    /* 23px: the slider's left edge on the tree's first icon column (8px panel inset plus the
-       tree's 15px row indent). */
+    /* 23px: the glyph on the tree's first icon column (8px panel inset plus the tree's 15px
+       row indent). */
     left: 23px;
     right: 8px;
     bottom: 8px;
@@ -25,4 +26,17 @@
    thickness is Scrollbar::kDefaultThicknessPx in C++, not a value any stylesheet can read. */
 .hierarchy-navigation-bar-above-scrollbar {
     bottom: 19px;
+}
+
+/* The rows glyph says what the slider sizes. It is the glyph of the Assets panel's list view. */
+.hierarchy-navigation-bar-size-icon {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    flex-shrink: 0;
+    background-image: url("editor:Icons/column-horizontal.svg");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-image-tint: var(--ui_icon_tint_default);
 }

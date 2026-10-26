@@ -2,6 +2,7 @@
 
 #include "Animation/AnimationClip.h"
 #include "Animation/SkeletonData.h"
+#include "Mathematics/Interpolation.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -25,7 +26,7 @@ constexpr float kRigEditRadToDeg = 180.0f / kRigEditPi;
 // captures as "no fix-up". Mirrors HumanoidImport::BakeRetargetPoseFromAPose.
 bool IsWithinIdentity(const glm::quat& q, float epsilonDeg)
 {
-    const float w = std::clamp(std::fabs(q.w), 0.0f, 1.0f);
+    const float w = Math::Clamp01(std::fabs(q.w));
     const float angleRad = 2.0f * std::acos(w);
     return angleRad * kRigEditRadToDeg < epsilonDeg;
 }
@@ -78,7 +79,7 @@ glm::quat SampleRotationChannel(const AnimChannel& ch, float time)
     const AnimKeyframe& lo = *(it - 1);
 
     const float dt = std::max(1e-6f, hi.time - lo.time);
-    const float a = std::clamp((time - lo.time) / dt, 0.0f, 1.0f);
+    const float a = Math::Clamp01((time - lo.time) / dt);
 
     const glm::quat qLo(lo.rotation[3], lo.rotation[0], lo.rotation[1], lo.rotation[2]);
     const glm::quat qHi(hi.rotation[3], hi.rotation[0], hi.rotation[1], hi.rotation[2]);

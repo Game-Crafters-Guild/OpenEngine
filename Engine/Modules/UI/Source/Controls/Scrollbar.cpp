@@ -1,4 +1,5 @@
 #include "UI/Controls/Scrollbar.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "UI/Internal/LayoutAccess.h"
 #include "UI/StyleProperties.h"
@@ -105,7 +106,7 @@ bool Scrollbar::UpdateThumbLayout() const
         thumbLen = std::max(20.0f, trackLen * (viewport / content));
         float usable = std::max(0.0f, trackLen - thumbLen);
         float maxScroll = std::max(0.0f, content - viewport);
-        float t = (maxScroll > 0.0f) ? std::clamp(scroll / maxScroll, 0.0f, 1.0f) : 0.0f;
+        float t = (maxScroll > 0.0f) ? Math::Clamp01(scroll / maxScroll) : 0.0f;
         pos = t * usable;
     }
     else if (!IsHidden())
@@ -264,7 +265,7 @@ void Scrollbar::OnPointerDown(float mouseX, float mouseY,
         const float maxScroll = std::max(0.0f, content - viewport);
         float thumbLen = std::max(20.0f, trackLen * (viewport / content));
         float usable = std::max(0.0f, trackLen - thumbLen);
-        float t0 = (maxScroll > 0.0f) ? std::clamp(scroll / maxScroll, 0.0f, 1.0f) : 0.0f;
+        float t0 = (maxScroll > 0.0f) ? Math::Clamp01(scroll / maxScroll) : 0.0f;
         float thumbPos = t0 * usable;
 
         // If click is outside the thumb, jump scroll so thumb center is at click.

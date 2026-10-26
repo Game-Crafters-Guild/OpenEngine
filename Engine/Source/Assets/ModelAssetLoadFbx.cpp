@@ -8,6 +8,7 @@
 #include "Assets/Textures/TextureMimeType.h"
 #include "FbxAxisConversion.h"
 #include "FbxEmission.h"
+#include "Mathematics/Interpolation.h"
 #include "SparseMorphTarget.h"
 #include "Core/Engine.h"
 #include "Image/Decode.h"
@@ -807,7 +808,7 @@ uint32 DemoteMaskMaterialsWithOpaqueUVFootprint(const Vector<Mesh>& meshes,
         // Near-one cutoffs sit inside float-filtering error of fully-opaque
         // texels; parity with the material-registration gate, which refuses
         // to reason about them.
-        if (std::clamp(material.AlphaCutoff, 0.0f, 1.0f) > kMaxDemotableAlphaCutoff)
+        if (Math::Clamp01(material.AlphaCutoff) > kMaxDemotableAlphaCutoff)
             continue;
         const int imageIndex = ParseEmbeddedTextureIndex(material.DiffuseTexture);
         if (imageIndex < 0 || static_cast<size_t>(imageIndex) >= images.size())
@@ -1433,8 +1434,7 @@ bool ModelAsset::LoadFBX(const Vector<uint8>& data,
         // texture and also wire that image to FBX TransparencyColor.
         if (mat->pbr.opacity.has_value)
         {
-            const float opacity = std::clamp(
-                static_cast<float>(mat->pbr.opacity.value_real), 0.0f, 1.0f);
+            const float opacity = Math::Clamp01(static_cast<float>(mat->pbr.opacity.value_real));
             out.DiffuseColor[3] = opacity;
             if (opacity < 0.999f)
                 out.AlphaMode = AlphaMode::Blend;

@@ -1,6 +1,7 @@
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
 
 #include "Engine/Rendering/IEnvironmentSource.h" // complete type for the owned m_Source unique_ptr
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Logger/Logger.h"
@@ -690,7 +691,7 @@ BufferHandle ImageBasedLightingFeature::UploadEnvData(IDevice* device)
     if (m_Source && m_Source->HasActiveContent())
     {
         d.lowerHemisphereDarkness =
-            std::clamp(m_Source->LowerHemisphereDarkness(), 0.0f, 1.0f);
+            Math::Clamp01(m_Source->LowerHemisphereDarkness());
         float tintSky[3], tintEquator[3], tintGround[3];
         m_Source->AmbientGradientTint(tintSky, tintEquator, tintGround);
         for (int i = 0; i < 3; ++i)

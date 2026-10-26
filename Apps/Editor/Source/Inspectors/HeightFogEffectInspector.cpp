@@ -1,6 +1,7 @@
 #include "Inspectors/HeightFogEffectInspector.h"
 
 #include "InspectorRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
 #include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
@@ -365,19 +366,19 @@ void RegisterHeightFogEffectInspector()
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Intensity", effect->Intensity, w, e, n,
             undo, "Change Height Fog Intensity",
-            [](HF& u, float v) { u.Intensity = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.Intensity = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.05f, "0 = off, 1 = full fog blend.",
             {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Density", effect->Density, w, e, n,
             undo, "Change Height Fog Density",
-            [](HF& u, float v) { u.Density = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.Density = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.01f, "Artist-scaled fog thickness.",
             {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Max Opacity", effect->MaxOpacity, w, e, n,
             undo, "Change Height Fog Max Opacity",
-            [](HF& u, float v) { u.MaxOpacity = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.MaxOpacity = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.01f, "Caps the final fog opacity.",
             {}, 0.0f, 1.0f);
 
@@ -508,7 +509,7 @@ void RegisterHeightFogEffectInspector()
 
             AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Gradient Strength", effect->GradientStrength, w, e, n,
                 undo, "Change Height Fog Gradient Strength",
-                [](HF& u, float v) { u.GradientStrength = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+                [](HF& u, float v) { u.GradientStrength = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
                 0.05f, "Blend weight between low and high fog colors.",
                 {}, 0.0f, 1.0f);
 
@@ -591,7 +592,7 @@ void RegisterHeightFogEffectInspector()
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Noise Strength", effect->NoiseStrength, w, e, n,
             undo, "Change Height Fog Noise Strength",
-            [](HF& u, float v) { u.NoiseStrength = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.NoiseStrength = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.01f, "Amount of noise modulation.");
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Noise Contrast", effect->NoiseContrast, w, e, n,
@@ -601,13 +602,13 @@ void RegisterHeightFogEffectInspector()
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Noise Min", effect->NoiseMin, w, e, n,
             undo, "Change Height Fog Noise Min",
-            [](HF& u, float v) { u.NoiseMin = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.NoiseMin = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.01f, "Lower bound for remapping noise density.",
             {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Noise Max", effect->NoiseMax, w, e, n,
             undo, "Change Height Fog Noise Max",
-            [](HF& u, float v) { u.NoiseMax = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.NoiseMax = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.01f, "Upper bound for remapping noise density.",
             {}, 0.0f, 1.0f);
 
@@ -653,13 +654,13 @@ void RegisterHeightFogEffectInspector()
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Sky Fill Start", effect->SkyFillStart, w, e, n,
             undo, "Change Height Fog Sky Fill Start",
-            [](HF& u, float v) { u.SkyFillStart = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.SkyFillStart = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.01f, "Horizon blend start along fog axis.",
             {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Sky Fill End", effect->SkyFillEnd, w, e, n,
             undo, "Change Height Fog Sky Fill End",
-            [](HF& u, float v) { u.SkyFillEnd = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.SkyFillEnd = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.01f, "Horizon blend end along fog axis.",
             {}, 0.0f, 1.0f);
 
@@ -671,7 +672,7 @@ void RegisterHeightFogEffectInspector()
 
         AddComponentFloatRowWithDrag<HF>(ctx.Parent, "Sky Bottom Strength", effect->SkyBottomStrength, w, e, n,
             undo, "Change Height Fog Sky Bottom Strength",
-            [](HF& u, float v) { u.SkyBottomStrength = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.SkyBottomStrength = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.01f, "Adds fog coverage below the horizon.",
             {}, 0.0f, 1.0f);
 
@@ -724,7 +725,7 @@ void RegisterHeightFogEffectInspector()
 
         AddComponentFloatRowWithDrag<HF>(pyramidOnlyControlsRaw, "Scatter", effect->FogGlowScatter, w, e, n,
             undo, "Change Height Fog Glow Scatter",
-            [](HF& u, float v) { u.FogGlowScatter = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.FogGlowScatter = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.7f, "Bias between narrow and broad pyramid levels", {}, 0.0f, 1.0f);
         glowControlsRaw->AddChild(std::move(pyramidOnlyControls));
 
@@ -740,12 +741,12 @@ void RegisterHeightFogEffectInspector()
 
         AddComponentFloatRowWithDrag<HF>(glowControlsRaw, "Fade Start", effect->FogGlowFadeStart, w, e, n,
             undo, "Change Height Fog Glow Fade Start",
-            [](HF& u, float v) { u.FogGlowFadeStart = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.FogGlowFadeStart = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.05f, "Fog opacity where scattering begins", {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<HF>(glowControlsRaw, "Fade End", effect->FogGlowFadeEnd, w, e, n,
             undo, "Change Height Fog Glow Fade End",
-            [](HF& u, float v) { u.FogGlowFadeEnd = std::clamp(v, 0.0f, 1.0f); u.Preset = HeightFogPreset::Custom; },
+            [](HF& u, float v) { u.FogGlowFadeEnd = Math::Clamp01(v); u.Preset = HeightFogPreset::Custom; },
             0.8f, "Fog opacity where scattering reaches full strength", {}, 0.0f, 1.0f);
 
         AddFogColorRow(glowControlsRaw, "Tint", "HDR tint for scattered fog", w, e, n, undo,

@@ -83,6 +83,7 @@ static const std::unordered_map<String, AssetType>& GetExtensionMap()
         {".geom", AssetType::Shader},
         {".comp", AssetType::Shader},
         {".shader", AssetType::Shader},
+        {".slang", AssetType::Shader}, // Slang module: an edit is announced like a GLSL include
 
         // Render pipeline / render graph formats
         {".rendergraph", AssetType::RenderPipeline},

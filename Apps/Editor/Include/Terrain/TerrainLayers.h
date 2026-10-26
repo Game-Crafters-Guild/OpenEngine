@@ -2,6 +2,7 @@
 
 #include "AssetCore/GUID.h"
 #include "Components/Terrain/Terrain.h"
+#include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainMaterialRecord.h"
 #include "Terrain/TerrainTypes.h"
 
@@ -31,7 +32,7 @@ inline uint32_t FallbackTintSwatchArgb(uint32_t layer)
     if (layer >= kCount)
         return 0xFF000000u;
     const auto encode = [](float linear) -> uint32_t {
-        const float c = std::clamp(linear, 0.0f, 1.0f);
+        const float c = Math::Clamp01(linear);
         const float s = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
         return static_cast<uint32_t>(s * 255.0f + 0.5f);
     };

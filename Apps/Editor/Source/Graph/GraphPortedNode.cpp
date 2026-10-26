@@ -1,7 +1,5 @@
 #include "Graph/GraphPortedNode.h"
 
-#include <Types/ParseNumber.h>
-
 #include "Core/Application.h"
 #include "Editor/EditorPaths.h"
 #include "Graph/GraphInspectorRows.h"
@@ -16,7 +14,10 @@
 #include "Graph/NodeColorSettings.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
+#include "Types/ParseNumber.h"
 #include "Types/StringId.h"
+#include "Types/StringUtils.h"
 #include "UI/Controls/Checkbox.h"
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/FloatField.h"
@@ -233,7 +234,7 @@ std::uint32_t PackSrgbArgb(float r, float g, float b)
 {
     auto toU8 = [](float v) -> std::uint32_t
     {
-        v = std::clamp(v, 0.0f, 1.0f);
+        v = Math::Clamp01(v);
         return static_cast<std::uint32_t>(v * 255.0f + 0.5f);
     };
     return (255u << 24) | (toU8(r) << 16) | (toU8(g) << 8) | toU8(b);
@@ -926,7 +927,7 @@ void GraphPortedNode::BindDetailRows(const Graph::Node& node, std::string_view k
                 return;
             if (label)
             {
-                const std::string pretty = GraphPortLabels::PrettifyParamKey(key);
+                const std::string pretty = IdentifierToWords(key);
                 label->SetText(GraphPortLabels::AbbreviateForNode(pretty));
                 label->SetTooltip(pretty);
             }

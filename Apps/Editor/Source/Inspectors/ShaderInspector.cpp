@@ -34,6 +34,7 @@
 #include <fstream>
 #include <sstream>
 #include <optional>
+#include <string_view>
 
 namespace GameEngine {
 
@@ -311,6 +312,62 @@ static bool InferStageFromExtension(const std::string& extLower, std::string& ou
     return false;
 }
 
+static bool IsIdentifierChar(char c)
+{
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+}
+
+// The position of the name in the declaration of the function main, or npos.
+static std::size_t FindSlangMainDeclaration(const std::string& sourceText)
+{
+    constexpr std::string_view kMain = "main";
+    for (std::size_t at = sourceText.find(kMain); at != std::string::npos; at = sourceText.find(kMain, at + 1))
+    {
+        if (at > 0 && IsIdentifierChar(sourceText[at - 1]))
+            continue;
+        const std::string_view rest = TrimWhitespaceView(std::string_view(sourceText).substr(at + kMain.size()));
+        if (rest.starts_with('('))
+            return at;
+    }
+    return std::string::npos;
+}
+
+// A Slang entry point names its stage with an attribute, such as
+// [shader("compute")], and the Slang lane compiles only the entry point main.
+// Returns the stage named on main, lowercase, or an empty string when the source
+// has no main or main has no [shader] attribute. Between main's attributes and its
+// name there is no brace or semicolon, so an attribute before one belongs to an
+// earlier declaration.
+static std::string FindSlangMainStage(const std::string& sourceText)
+{
+    const std::size_t mainAt = FindSlangMainDeclaration(sourceText);
+    if (mainAt == std::string::npos)
+        return {};
+    constexpr std::string_view kAttribute = "[shader(\"";
+    const std::size_t start = sourceText.rfind(kAttribute, mainAt);
+    if (start == std::string::npos)
+        return {};
+    const std::size_t nameStart = start + kAttribute.size();
+    if (sourceText.find_first_of("{};", nameStart) < mainAt)
+        return {};
+    const std::size_t nameEnd = sourceText.find('"', nameStart);
+    if (nameEnd == std::string::npos || nameEnd > mainAt)
+        return {};
+    return ToLowerAscii(sourceText.substr(nameStart, nameEnd - nameStart));
+}
+
+// The inspector's stage key for a Slang stage name; false for a stage the
+// inspector does not compile, such as hull, domain or a ray-tracing stage.
+static bool SlangStageToStageKey(const std::string& stage, std::string& outStageKey)
+{
+    if (stage == "vertex") { outStageKey = "vs"; return true; }
+    if (stage == "fragment" || stage == "pixel") { outStageKey = "fs"; return true; }
+    if (stage == "compute") { outStageKey = "cs"; return true; }
+    if (stage == "geometry") { outStageKey = "gs"; return true; }
+    if (stage == "mesh") { outStageKey = "ms"; return true; }
+    return false;
+}
+
 static std::vector<std::string> SplitDefinesCsv(const std::string& text)
 {
     std::vector<std::string> out;
@@ -409,24 +466,41 @@ static void BuildShaderSourceInspector(UIElement* root, ShaderSourceAsset* src, 
     auto& assetManager = EngineCore::GetInstance().GetAssetManager();
     auto& registry = assetManager.GetRegistry();
 
-    // Stage selection / inference
+    // Stage: the extension's, else the one picked and stored in the meta. An
+    // unpicked .slang module takes the stage named on main and has no stage when
+    // main names none the inspector compiles; other generic sources default to vertex.
+    const bool isSlang = ext == ".slang";
     std::string stageKey;
+    std::string slangMainStage;
     const bool stageFromExt = InferStageFromExtension(ext, stageKey);
     if (!stageFromExt)
     {
         auto metaStage = GetMetaString(registry, srcPath, "shader_stage");
-        stageKey = metaStage.has_value() ? ToLowerAscii(*metaStage) : "vs";
+        if (metaStage.has_value())
+            stageKey = ToLowerAscii(*metaStage);
+        else if (!isSlang)
+            stageKey = "vs";
+        else
+        {
+            slangMainStage = FindSlangMainStage(sourceText);
+            SlangStageToStageKey(slangMainStage, stageKey);
+        }
     }
 
     {
         auto l = std::make_unique<Label>();
         l->AddClass("inspector-text");
-        l->SetText(std::string("Stage: ") + StageKeyToPretty(stageKey) + " (" + stageKey + ")");
+        if (stageKey.empty() && !slangMainStage.empty())
+            l->SetText("Stage: none. main is a " + slangMainStage + " entry point, a stage the inspector does not compile.");
+        else if (stageKey.empty())
+            l->SetText("Stage: none. No main entry point with a [shader] attribute, so the inspector does not compile this module.");
+        else
+            l->SetText(std::string("Stage: ") + StageKeyToPretty(stageKey) + " (" + stageKey + ")");
         root->AddChild(std::move(l));
     }
 
-    // Allow stage picking for .glsl and .hlsl (generic)
-    const bool allowPickStage = (ext == ".glsl" || ext == ".hlsl");
+    // Generic sources (.glsl, .hlsl, .slang) carry no stage in the extension.
+    const bool allowPickStage = (ext == ".glsl" || ext == ".hlsl" || isSlang);
     if (allowPickStage)
     {
         auto row = std::make_unique<UIElement>();
@@ -466,6 +540,9 @@ static void BuildShaderSourceInspector(UIElement* root, ShaderSourceAsset* src, 
         addStageButton("Geometry", "gs");
     }
 
+    if (stageKey.empty())
+        return;
+
     // Entry point / defines (HLSL only for entry point; both can use defines)
     std::string entryPoint = "main";
     if (ext == ".hlsl")
@@ -497,8 +574,10 @@ static void BuildShaderSourceInspector(UIElement* root, ShaderSourceAsset* src, 
     }
     else
     {
-        // GLSL entry point is always main in our current compiler path.
+        // GLSL and Slang compile the entry point named main.
         entryPoint = "main";
+        if (isSlang)
+            AddTextBlock(root, "Entry point: main");
     }
 
     std::string definesCsv;
@@ -528,6 +607,15 @@ static void BuildShaderSourceInspector(UIElement* root, ShaderSourceAsset* src, 
                                  }
                              });
         root->AddChild(std::move(f));
+    }
+
+    // A .slang module compiles only through the Slang lane, so with the lane off
+    // there is no compile to fail: say how to turn it on instead.
+    if (isSlang && !Rendering::ShaderCompileService::IsSlangLaneEnabled())
+    {
+        AddTextBlock(root, "Not compiled: the Slang lane is off. Start the editor with GE_SHADER_SLANG_LANE=1 "
+                           "and GE_SLANGC=<path to slangc.exe> to compile Slang modules.");
+        return;
     }
 
     // Compile + reflect (cache-backed)
@@ -636,7 +724,7 @@ void RegisterShaderInspector()
             return;
         }
 
-        // Shader source text (.glsl/.hlsl/.vert/.frag/.comp)
+        // Shader source text (.glsl/.hlsl/.slang/.vert/.frag/.comp)
         if (auto* src = dynamic_cast<ShaderSourceAsset*>(base))
         {
             auto container = std::make_unique<UIElement>();

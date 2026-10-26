@@ -1,5 +1,7 @@
 #include "Terrain/TerrainRuleConditionVocabulary.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -191,7 +193,7 @@ std::string RuleOutcomeSentence(const Components::TerrainSurfaceRule& rule)
     if (rule.Strength < 1.0f)
     {
         const int percent =
-            static_cast<int>(std::lround(std::clamp(rule.Strength, 0.0f, 1.0f) * 100.0f));
+            static_cast<int>(std::lround(Math::Clamp01(rule.Strength) * 100.0f));
         return " The rule then scales this to " + std::to_string(percent) + "%.";
     }
     if (rule.Replace)

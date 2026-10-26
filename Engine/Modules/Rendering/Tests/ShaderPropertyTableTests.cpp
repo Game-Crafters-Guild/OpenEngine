@@ -144,11 +144,15 @@ TEST(ShaderPropertyGrammar, DisplayNameDerivesFromCamelCaseWhenAbsent)
     const auto t = ParseDeclaredProperties(Surface(
         "// @property float fresnelRimCap\n"
         "// @property float roughness\n"
-        "// @property float ao\n"));
+        "// @property float ao\n"
+        "// @property float detailUVScale\n"
+        "// @property color sRGBTint\n"));
     ASSERT_FALSE(t.Rejected()) << Errors(t);
     EXPECT_EQ(Prop(t, "fresnelRimCap").DisplayName, "Fresnel Rim Cap");
     EXPECT_EQ(Prop(t, "roughness").DisplayName, "Roughness");
     EXPECT_EQ(Prop(t, "ao").DisplayName, "AO");
+    EXPECT_EQ(Prop(t, "detailUVScale").DisplayName, "Detail UV Scale");
+    EXPECT_EQ(Prop(t, "sRGBTint").DisplayName, "sRGB Tint");
 }
 
 TEST(ShaderPropertyGrammar, DefaultsWithSpacesAfterCommasParse)

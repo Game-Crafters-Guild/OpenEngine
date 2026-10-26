@@ -233,7 +233,7 @@ void DecomposeT(const SplineData& spline, float32 globalT,
         return;
     }
 
-    globalT = std::clamp(globalT, 0.0f, 1.0f);
+    globalT = Math::Clamp01(globalT);
     float32 scaled = globalT * static_cast<float32>(segCount);
     outSegment = static_cast<uint32>(scaled);
     if (outSegment >= segCount)
@@ -489,7 +489,7 @@ float32 ParametricToDistance(const SplineData& spline, float32 t)
     if (spline.ArcLengthTable.empty() || spline.TotalArcLength <= 0.0f)
         return 0.0f;
 
-    t = std::clamp(t, 0.0f, 1.0f);
+    t = Math::Clamp01(t);
 
     // Binary search for t in ArcLengthParams.
     const auto& params = spline.ArcLengthParams;

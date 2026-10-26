@@ -3563,7 +3563,8 @@ endif()
 	# Engine is linked and its generated reflection TU has run its static initializers — in a
 	# suite without Engine they would sweep an empty registry and pass vacuously. The clamp suite
 	# additionally lives with the module that owns the pass but builds here, because constructing
-	# a real component pulls the AssetCore closure TerrainGrassStatsTests deliberately does without.
+	# a real component needs Engine and its component reflection, which TerrainGrassStatsTests
+	# does without.
 	if(GTest_FOUND OR TARGET GTest::gtest)
 	    add_executable(EngineSceneIOTests
 	        Tests/SceneIOTests.cpp

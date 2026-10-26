@@ -3,6 +3,7 @@
 
 #include "Audio/SpatializerHandedness.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 
 #include <cmath>
 #include <cstring>
@@ -469,7 +470,7 @@ void AudioSystem::MiniaudioBackend::SetBusMeterLevel(AudioBusId bus, float level
     const unsigned idx = (bus < static_cast<AudioBusId>(kMaxBuses)) ? static_cast<unsigned>(bus) : 0u;
     if (idx == 0u)
         return;
-    float v = (level < 0.0f) ? 0.0f : (level > 1.0f ? 1.0f : level);
+    float v = Math::Clamp01(level);
     m_BusMeterLevels[idx] = v;  // so this channel tracks master in real time while it has playing voices
 }
 
@@ -626,7 +627,7 @@ float AudioSystem::MiniaudioBackend::GetBusMeterLevel(AudioBusId bus) const
 void AudioSystem::MiniaudioBackend::PeakBusMeter(AudioBusId bus, float level)
 {
     const unsigned idx = (bus < static_cast<AudioBusId>(kMaxBuses)) ? static_cast<unsigned>(bus) : 0u;
-    float v = (level < 0.0f) ? 0.0f : (level > 1.0f ? 1.0f : level);
+    float v = Math::Clamp01(level);
     if (v > m_BusMeterLevels[idx])
         m_BusMeterLevels[idx] = v;
 }

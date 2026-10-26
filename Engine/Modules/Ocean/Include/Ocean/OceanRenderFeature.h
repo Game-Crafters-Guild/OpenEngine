@@ -1005,7 +1005,7 @@ private:
     std::atomic<bool> m_FlowEnabled{false};
     std::atomic<bool> m_DynWavesEnabled{false};
 
-    // Authored combine toggle (OceanRenderer.CombineDisplacementCascade).
+    // Authored combine toggle (OceanRenderer.CombineCascade).
     std::atomic<bool> m_CombineEnabled{false};
 
     // Authored clip + albedo toggles (from OceanSurface.ClipSurface / .Albedo), set

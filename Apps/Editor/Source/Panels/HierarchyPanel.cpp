@@ -121,6 +121,7 @@
 #include "PhysicsECS/Components/PhysicsCollider.h"
 #include "PhysicsECS/Components/PhysicsWorldSettingsComponent.h"
 #include "PhysicsECS/Components/SphereColliderShape.h"
+#include "Types/StringUtils.h"
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -5227,8 +5228,7 @@ void HierarchyPanel::ApplySearchFilter(const std::string& searchText)
         type.FullName = registeredName;
         std::transform(type.FullName.begin(), type.FullName.end(), type.FullName.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        const size_t namespaceEnd = type.FullName.rfind("::");
-        type.LeafName = namespaceEnd == std::string::npos ? type.FullName : type.FullName.substr(namespaceEnd + 2);
+        type.LeafName = std::string(UnqualifiedName(type.FullName));
         componentTypes.push_back(std::move(type));
     }
 
