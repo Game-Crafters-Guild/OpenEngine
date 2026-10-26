@@ -6,7 +6,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "Editor/Entities/EditorComponentTraits.h"
-#include "Picking/MeshPickingService.h"
+#include "Scene/SceneRaycast.h"
 
 #include <gtest/gtest.h>
 
@@ -61,7 +61,7 @@ TEST_F(PickRootResolverTest, RepeatClicksNeverDrillIntoGeneratedFillOrEdges)
 {
     const auto fill = CreatePiece(true);
     const auto edge = CreatePiece(true);
-    std::vector<PickHit> hits(2);
+    std::vector<Scene::PickHit> hits(2);
     hits[0].Entity = edge;
     hits[1].Entity = fill;
     std::vector<ECS::EntityHandle> candidates;
