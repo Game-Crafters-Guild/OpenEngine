@@ -37,7 +37,7 @@
 #include "Components/Rendering/Skybox.h"
 #include "Components/Rendering/WindVolume.h"
 #include "Components/RuntimeOnlyEntity.h"
-#include "Components/SceneBlueprintInstance.h"
+#include "Components/PrefabInstance.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/Terrain.h"
@@ -45,7 +45,6 @@
 #include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/Transform.h"
 #include "Core/Engine.h"
-#include "Editor/Assets/AssetRelativePath.h"
 #include "ECS/Components.h"   // Disabled marker component
 #include "ECS/ComponentRegistry.h"
 #include "ECS/ECSTemplates.h" // ensure template implementations are visible
@@ -1846,7 +1845,7 @@ HierarchyPanel::HierarchyPanel()
                 }
             } });
 
-    // Accept asset drags (e.g. blueprint scene files) to instantiate entities.
+    // Accept asset drags (e.g. prefab scene files) to instantiate entities.
     // Accept bookmark drags from Bookmarks panel to navigate (open scene, select entity).
     m_Tree->SetAcceptsPayload([](UI::Interaction::PayloadTypeId tid)
                               { return tid == UI::Interaction::GetPayloadTypeId<Editor::AssetPathsDragPayload>() ||
@@ -2683,11 +2682,11 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                                 ctx->OnSceneDirty();
                         },
                         absPath.filename().string());
-                    continue; // Skip SceneBlueprintInstance fallback.
+                    continue; // Skip PrefabInstance fallback.
                 }
             }
 
-            // Fallback: create entity with SceneBlueprintInstance for non-model files.
+            // Fallback: create an entity marked with PrefabInstance for non-model files.
             ECS::EntityHandle e = m_World->CreateEntity();
             if (!e.IsValid())
                 continue;
@@ -2701,19 +2700,9 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             std::strncpy(nm.value, stem.c_str(), sizeof(nm.value) - 1);
             m_World->AddComponentImmediate(e, nm);
 
-            // Store canonical relative path when possible.
-            Components::SceneBlueprintInstance inst{};
-            std::memset(inst.sourcePath, 0, sizeof(inst.sourcePath));
-            std::memset(inst.sourceGuid, 0, sizeof(inst.sourceGuid));
-            // Drop payloads carry registry paths, which are folded on
-            // case-insensitive platforms while the root carries its own
-            // spelling; a lexical subtraction compares case and would
-            // persist an absolute path into the scene file.
-            std::string relStr = Editor::TryMakeAssetRelativePathString(
-                EngineCore::GetInstance().GetAssetManager(), absPath);
-            if (relStr.empty())
-                relStr = absPath.generic_string();
-            std::strncpy(inst.sourcePath, relStr.c_str(), sizeof(inst.sourcePath) - 1);
+            // The marker names the source by GUID; the next load fills the instance from it.
+            Components::PrefabInstance inst{};
+            inst.Source = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(absPath);
             m_World->AddComponentImmediate(e, inst);
 
             if (parent.IsValid())

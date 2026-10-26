@@ -33,7 +33,7 @@ struct AssetDependencyInfo
 //
 // This is purely textual — no schema awareness — so the path patterns are
 // shaped to match common asset file content (textures, materials, models,
-// audio, UI). For .scene / .blueprint files an extra pass handles the INI
+// audio, UI). For .scene / .prefab files an extra pass handles the INI
 // schema's `path="..."` / `@"path"` forms.
 class AssetDependencyExtractor
 {

@@ -7,6 +7,7 @@
 #include "Engine/Rendering/SkyBackdrop.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Vector3.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Sky/SkyRenderer.h"
 #include "Rendering/Sky/SkySettings.h"
@@ -35,6 +36,15 @@ static constexpr float kProjectionEpsilon = 1e-6f;
 static constexpr float kSkyHdriProceduralSentinel = -1.0f;
 
 static constexpr uint32_t DivCeil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+
+// The falling stars in the sky at once at most: each slot flies one in every kFallingStarSlots x the
+// interval (sky_meteor.glsl), and at the shortest interval a slot's window still holds its longest flight.
+static constexpr uint32_t kFallingStarSlots = 4;
+
+static uint32_t FallingStarSlots(const Rendering::SkySettings& settings)
+{
+    return settings.fallingStarsEnabled ? kFallingStarSlots : 0u;
+}
 
 // The star light name always resolves, so the tonemap never declines for want of it: black when the
 // view draws no stars (no sky, a gradient or HDRI backdrop, daylight).
@@ -117,21 +127,30 @@ static void FillAtmosphereFromSettings(const Rendering::SkySettings& settings, R
     atmo.groundHazeStrength = settings.groundHazeStrength;
 }
 
+// The camera's world-space position and basis, in world units and unit directions.
+struct CameraVectors
+{
+    Mathematics::Vector3 Position;
+    Mathematics::Vector3 Forward;
+    Mathematics::Vector3 Up;
+    Mathematics::Vector3 Right;
+};
+
 // Extracts camera basis vectors and position from a column-major LH view matrix
 // (glm::lookAtLH). The upper-left 3x3 rows are right/up/forward directly in LH;
 // no sign flip is needed on forward.
-static void ExtractCameraVectors(const Rendering::CameraData& cam,
-                                 float outPos[3], float outFwd[3],
-                                 float outUp[3], float outRight[3])
+static CameraVectors ExtractCameraVectors(const Rendering::CameraData& cam)
 {
     const float* v = cam.view;
-    outRight[0] = v[0]; outRight[1] = v[4]; outRight[2] = v[8];
-    outUp[0]    = v[1]; outUp[1]    = v[5]; outUp[2]    = v[9];
-    outFwd[0]   = v[2]; outFwd[1]   = v[6]; outFwd[2]   = v[10];
+    CameraVectors out;
+    out.Right   = Mathematics::Vector3(v[0], v[4], v[8]);
+    out.Up      = Mathematics::Vector3(v[1], v[5], v[9]);
+    out.Forward = Mathematics::Vector3(v[2], v[6], v[10]);
 
-    outPos[0] = -(v[0] * v[12] + v[1] * v[13] + v[2]  * v[14]);
-    outPos[1] = -(v[4] * v[12] + v[5] * v[13] + v[6]  * v[14]);
-    outPos[2] = -(v[8] * v[12] + v[9] * v[13] + v[10] * v[14]);
+    out.Position = Mathematics::Vector3(-(v[0] * v[12] + v[1] * v[13] + v[2]  * v[14]),
+                                        -(v[4] * v[12] + v[5] * v[13] + v[6]  * v[14]),
+                                        -(v[8] * v[12] + v[9] * v[13] + v[10] * v[14]));
+    return out;
 }
 
 // Perspective LH projections leave proj[15] (m[3][3]) at 0 because clip.w = view.z.
@@ -212,14 +231,8 @@ static void FillSkyUBOFromSettings(const Rendering::SkySettings& settings, SkyUB
     // The star observer: 1 = the eye (glare, the faint fade), 0 = a camera.
     ubo.skyboxParams[3] = settings.starObserver == 0 ? 1.0f : 0.0f;
 
-    ubo.fallingStarParams[0] = settings.fallingStarsEnabled ? 1.0f : 0.0f;
-    ubo.fallingStarParams[1] = settings.fallingStarAmount;
-    ubo.fallingStarParams[2] = settings.fallingStarFrequency;
-    ubo.fallingStarParams[3] = settings.fallingStarSpeed;
-    ubo.fallingStarShapeParams[0] = settings.fallingStarLength;
-    ubo.fallingStarShapeParams[1] = settings.fallingStarThickness;
-    ubo.fallingStarShapeParams[2] = settings.fallingStarDotSize;
-    ubo.fallingStarShapeParams[3] = settings.fallingStarDotSize2D;
+    ubo.fallingStarParams[0] = static_cast<float>(FallingStarSlots(settings));
+    ubo.fallingStarParams[1] = settings.fallingStarIntervalSeconds;
 
     // Gradient sky: .rgb already scene-linear (intensity folded in by the system). The mode
     // sentinel rides gradientSkyTop.w: an HDRI backdrop wins (it is a separate component path),
@@ -252,8 +265,8 @@ static void MixDigest(uint64_t& h, const void* data, size_t bytes)
 // skies (the common editor-idle case).
 //
 // IMPORTANT: only hash the fields the LUT shaders actually read. SkyEnvironmentSystem updates
-// settings.skyTimeSeconds and several other fields every frame (for stars/falling-star animation in
-// the sky_render.frag stage), but the LUT shaders don't sample those; hashing them would force
+// settings.skyTimeSeconds and several other fields every frame (for the stars' twinkle and the falling
+// stars, animated in the star billboard pass), but the LUT shaders don't sample those; hashing them would force
 // redundant LUT recomputes every frame and defeat the gate.
 //
 // LUT shader inputs (see sky_view_lut.comp main()):
@@ -302,9 +315,8 @@ static uint32_t SkyViewLutCameraBand(const Engine::Renderer::RenderServices& rs,
     const auto* camData = rs.Views().FindMainCameraData(0);
     if (!camData)
         return 0u;
-    float camPos[3], camFwd[3], camUp[3], camRight[3];
-    ExtractCameraVectors(*camData, camPos, camFwd, camUp, camRight);
-    return Rendering::SkyViewLutAltitudeBand(Rendering::AltitudeAbovePlanetMeters(camPos, planetRadius));
+    const CameraVectors camera = ExtractCameraVectors(*camData);
+    return Rendering::SkyViewLutAltitudeBand(Rendering::AltitudeAbovePlanetMeters(camera.Position.v, planetRadius));
 }
 
 void SkyRenderNode::EnsureDescriptorSetDescs(const Rendering::SkyRenderer& renderer)
@@ -721,6 +733,8 @@ void SkyRenderNode::DeclareForView(ViewDeclare& d)
     // the far plane shows, and every surface drawn over it takes its own fog in its own shader.
     const SkyHeightFog fog = ResolveSkyHeightFog(d, renderer);
     const uint32_t starCount = renderer.GetStarInstanceCount(settings.starLimitingMagnitude);
+    // The falling stars are the first instances of the stars' draw (sky_stars_billboard.vert).
+    const uint32_t instanceCount = FallingStarSlots(settings) + starCount;
     const bool starsUp = out.IsValid() && exposure.IsValid() &&
                          ClassifySkyBackdrop(settings) == SkyBackdropKind::Atmosphere &&
                          settings.nightSkyBlend > 0.0f && starCount > 0 && renderer.GetStarSSBO().IsValid();
@@ -803,8 +817,7 @@ void SkyRenderNode::DeclareForView(ViewDeclare& d)
                 return;
             }
 
-            float camPos[3], camFwd[3], camUp[3], camRight[3];
-            ExtractCameraVectors(*camData, camPos, camFwd, camUp, camRight);
+            const CameraVectors camera = ExtractCameraVectors(*camData);
             const float tanHalfFovY = ExtractTanHalfFovY(*camData);
             const float aspect = ExtractAspect(*camData);
 
@@ -814,18 +827,18 @@ void SkyRenderNode::DeclareForView(ViewDeclare& d)
             const auto& settings = skyPtr->GetSettings();
             SkyUBOGPU skyUbo{};
             FillSkyUBOFromSettings(settings, skyUbo);
-            skyUbo.cameraPosition[0] = camPos[0];
-            skyUbo.cameraPosition[1] = camPos[1];
-            skyUbo.cameraPosition[2] = camPos[2];
-            skyUbo.cameraRight[0] = camRight[0];
-            skyUbo.cameraRight[1] = camRight[1];
-            skyUbo.cameraRight[2] = camRight[2];
-            skyUbo.cameraUp[0] = camUp[0];
-            skyUbo.cameraUp[1] = camUp[1];
-            skyUbo.cameraUp[2] = camUp[2];
-            skyUbo.cameraForward[0] = camFwd[0];
-            skyUbo.cameraForward[1] = camFwd[1];
-            skyUbo.cameraForward[2] = camFwd[2];
+            skyUbo.cameraPosition[0] = camera.Position.x;
+            skyUbo.cameraPosition[1] = camera.Position.y;
+            skyUbo.cameraPosition[2] = camera.Position.z;
+            skyUbo.cameraRight[0] = camera.Right.x;
+            skyUbo.cameraRight[1] = camera.Right.y;
+            skyUbo.cameraRight[2] = camera.Right.z;
+            skyUbo.cameraUp[0] = camera.Up.x;
+            skyUbo.cameraUp[1] = camera.Up.y;
+            skyUbo.cameraUp[2] = camera.Up.z;
+            skyUbo.cameraForward[0] = camera.Forward.x;
+            skyUbo.cameraForward[1] = camera.Forward.y;
+            skyUbo.cameraForward[2] = camera.Forward.z;
             skyUbo.viewportAspect = (vh > 0.0f) ? (vw / vh) : aspect;
             skyUbo.tanHalfFovY = tanHalfFovY;
             skyUbo.skyRotateAroundZenithRadians =
@@ -916,19 +929,22 @@ void SkyRenderNode::DeclareForView(ViewDeclare& d)
             p.Read(exposure.Graph, RenderGraph::RGBufferRead::Storage);
             p.Read(compensation.Graph, RenderGraph::RGBufferRead::Storage);
         },
-        [this, rendererPtr, viewKey, vpX, vpY, vpW, vpH, exposure, compensation, starCount, fog](RenderGraph::RGContext& passCtx)
+        [this, rendererPtr, viewKey, vpX, vpY, vpW, vpH, exposure, compensation, starCount, instanceCount,
+         fog](RenderGraph::RGContext& passCtx)
         {
-            RecordStars(passCtx, *rendererPtr, viewKey, vpX, vpY, vpW, vpH, exposure, compensation, starCount, fog);
+            RecordStars(passCtx, *rendererPtr, viewKey, vpX, vpY, vpW, vpH, exposure, compensation, starCount,
+                        instanceCount, fog);
         });
 }
 
-// The star billboards, additive into scene colour and the star light. The sky pass filled this view's
-// sky UBO and the atmosphere UBO for this frame slot.
+// The star billboards, additive into scene colour and the star light: instanceCount quads, the
+// falling stars' slots first, then the starCount catalog stars. The sky pass filled this view's sky
+// UBO and the atmosphere UBO for this frame slot.
 void SkyRenderNode::RecordStars(RenderGraph::RGContext& passCtx, Rendering::SkyRenderer& renderer, uint32_t viewKey,
                                 uint32_t vpX, uint32_t vpY, uint32_t vpW, uint32_t vpH,
                                 const PipelineBufferBindingRG& exposure,
                                 const PipelineBufferBindingRG& compensation, uint32_t starCount,
-                                const SkyHeightFog& fog)
+                                uint32_t instanceCount, const SkyHeightFog& fog)
 {
     auto* cl = passCtx.Cmd;
     auto* dev = passCtx.GetDevice();
@@ -965,7 +981,7 @@ void SkyRenderNode::RecordStars(RenderGraph::RGContext& passCtx, Rendering::SkyR
     if (fog.Active)
         dev->UpdateBufferBinding(starDS, starSlots.HeightFog, fog.Params.Buffer, fog.Params.Offset, fog.Params.Size);
     cl->BindDescriptorSet(0, starDS, starPipe);
-    cl->Draw(6, starCount);
+    cl->Draw(6, instanceCount);
 }
 
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

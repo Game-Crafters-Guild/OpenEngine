@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <span>
 #include <string>
@@ -486,21 +487,23 @@ void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
 
     // Planar reflection capture: re-render the opaque world mirrored across the
     // sea plane into a scaled target the surface samples for mirror reflections.
-    // Pre-world (the surface binds it on the world draw), once per frame (a full
-    // world pass; views share the single reflection target). Gated by the authored
-    // PlanarReflections toggle and by this view seeing water. Degrades to the
-    // procedural sky dome when it declines (no camera, the GPU-driven spine isn't
-    // stamped this frame). The
-    // reflection view is fed by extraction starting the frame after it is first
-    // allocated, so the very first frame is sky-only.
-    if (haveCamera && waterInView)
+    // Pre-world (the surface binds it on the world draw), once per view that sees
+    // water: each view gets its own mirror of its own camera, so two views that
+    // both see water cost two reflection world passes. Hidden capture views
+    // (probes, mirrors, depth captures) get none; the surface they draw, if any,
+    // keeps the procedural sky dome. Gated by the authored PlanarReflections
+    // toggle. Degrades to the procedural sky dome when it declines (no camera,
+    // the GPU-driven spine isn't stamped this frame). A view's reflection view is
+    // fed by extraction starting the frame after it is first allocated, so that
+    // view's first frame is sky-only.
+    if (haveCamera && waterInView && d.View.purpose != ::GameEngine::Rendering::ViewPurpose::UtilityCapture)
     {
         const OceanParamsGPU reflParams = feature.GetParams();
-        if (reflParams.PlanarReflections != 0u && feature.TryClaimReflectionDispatch(frameIndex))
+        if (reflParams.PlanarReflections != 0u)
             feature.GetPlanarReflection().DeclareForView(
-                d, reflParams.SeaLevel, feature.GetPlanarReflectionScale(), frameIndex);
+                d, reflParams.SeaLevel, feature.GetPlanarReflectionScale(), frameIndex,
+                std::chrono::steady_clock::now());
     }
-
 
     // Sea-floor depth bake: independent of the FFT dispatch (it drives the shallow-
     // water colour + shoreline foam), so it has its own once-per-frame claim.

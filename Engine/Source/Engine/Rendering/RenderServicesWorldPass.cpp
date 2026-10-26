@@ -54,6 +54,7 @@
 #include "Rendering/Materials/ShaderProfileDefines.h"
 #include "Rendering/Materials/ShaderReflection.h"
 #include "Rendering/Common/Utils.h"
+#include "Rendering/Passes/MsaaColorResolvePass.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "Rendering/Utils/BufferHelpers.h"
@@ -1166,9 +1167,9 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
         {
             if (colorDesc.SampleCount > 1u)
             {
-                // Resolve requires matching formats (VUID 06865); a mismatch
-                // means the resolve target is wrong for this color — render
-                // to the MSAA color only rather than emit an invalid resolve.
+                // A resolve target of another format is the wrong target for
+                // this color: render to the MSAA color only rather than
+                // resolve into it.
                 if (colorDesc.Format == resolveDesc.Format)
                     canResolveColor = true;
                 else
@@ -1503,8 +1504,9 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
                 }
                 col.Store = RenderGraph::RGStoreOp::Store;
 
+                // The multisampled color resolves in the next declared pass.
                 if (canResolveColor)
-                    p.AttachColorResolve(0, targets.Color, targets.Resolve, col);
+                    p.AttachColor(0, targets.Color, col);
                 else if (collapseToResolve)
                     p.AttachColor(0, targets.Resolve, col, targets.ColorRange);
                 else
@@ -2142,6 +2144,9 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
             binder.EndPass(pass);
         });
 
+    if (canResolveColor && result.Pass.IsValid())
+        Rendering::Passes::AddMsaaColorResolvePassRG(frame, targets.Color, targets.Resolve,
+                                                     (passName + ".ColorResolve").c_str());
     return result;
 }
 
@@ -2232,7 +2237,7 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
     debugName += std::to_string(static_cast<uint32_t>(viewId));
     debugName += "]";
 
-    return frame.AddPass(
+    const RenderGraph::RGPass drawPass = frame.AddPass(
         debugName.c_str(), Rendering::PassPhase::kWorldRender,
         [&](RenderGraph::RGPassBuilder& p)
         {
@@ -2346,8 +2351,9 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
                 RenderGraph::RGAttachmentOps col{};
                 col.Load = RenderGraph::RGLoadOp::Load;
                 col.Store = RenderGraph::RGStoreOp::Store;
+                // The multisampled color resolves in the next declared pass.
                 if (canResolveColor)
-                    p.AttachColorResolve(0, targets.Color, targets.Resolve, col);
+                    p.AttachColor(0, targets.Color, col);
                 else if (collapseToResolve)
                     p.AttachColor(0, targets.Resolve, col, targets.ColorRange);
                 else
@@ -2534,6 +2540,11 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
 
             binder.EndPass(pass);
         });
+
+    if (canResolveColor && drawPass.IsValid())
+        Rendering::Passes::AddMsaaColorResolvePassRG(frame, targets.Color, targets.Resolve,
+                                                     (debugName + ".ColorResolve").c_str());
+    return drawPass;
 }
 
 } // namespace Engine::Renderer

@@ -8,7 +8,7 @@ namespace GameEngine
 {
 struct AssetManifest;
 
-/// Rewrites every staged scene and blueprint of `manifest`, under `contentRoot`, without its
+/// Rewrites every staged scene and prefab of `manifest`, under `contentRoot`, without its
 /// editor-only components: the lines of every component marked "// @ge-editor-only"
 /// (ComponentFieldRegistry::IsComponentEditorOnly) and, on an entity that carries a mark-up,
 /// its title and spline (SceneAssetParser::StripEditorOnlyComponents). Every entity stays,

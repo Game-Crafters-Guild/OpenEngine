@@ -19,11 +19,13 @@
 #include "PageStreaming/PageResidency.h"
 #include "PageStreaming/PageStoreFormat.h"
 #include "PageStreaming/PageStoreReader.h"
+#include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
 #include "Mathematics/Rect.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
+#include "Terrain/TerrainTypes.h"
 #include "TestTempDir.h"
 
 #include <gtest/gtest.h>
@@ -192,9 +194,9 @@ void ExpectDirectoryMatchesResidency(const CpuPages& cpu, std::span<const PageSt
             for (uint32 x = 0; x < levels[level].PagesX; ++x)
             {
                 const PageAddress address{0, static_cast<uint8>(level), x, z};
-                std::span<const float32> samples;
+                std::span<const uint8> samples;
                 const PageStreaming::CpuPageState state = directory.Page(address, samples);
-                const std::vector<float32>* held = cpu.Residency.Samples(kStream, address);
+                const std::vector<uint8>* held = cpu.Residency.Bytes(kStream, address);
                 ASSERT_EQ(state == PageStreaming::CpuPageState::Resident, held != nullptr)
                     << when << ": level " << level << " page " << x << ", " << z;
                 if (held)
@@ -246,14 +248,14 @@ TEST(CpuHeightPages, TheCpuPageDirectoryHoldsEveryPageTheResidencyHoldsAfterLand
         cpu.Cache.Update(frame);
     }
     ExpectDirectoryMatchesResidency(cpu.Cache, levels, "after the first window landed");
-    ASSERT_NE(cpu.Cache.Residency.Samples(kStream, firstPage), nullptr);
+    ASSERT_NE(cpu.Cache.Residency.Bytes(kStream, firstPage), nullptr);
     for (; frame < 8; ++frame)
     {
         cpu.Cache.Want(WindowAround(700.0f, 700.0f));
         cpu.Cache.Update(frame);
     }
     ExpectDirectoryMatchesResidency(cpu.Cache, levels, "after the trim");
-    ASSERT_EQ(cpu.Cache.Residency.Samples(kStream, firstPage), nullptr) << "the trim did not drop the first window";
+    ASSERT_EQ(cpu.Cache.Residency.Bytes(kStream, firstPage), nullptr) << "the trim did not drop the first window";
 }
 
 TEST(CpuHeightPages, OutsideEveryWindowTheAnswerIsCoarseAndNeverUnsampledInsideTheFootprint)
@@ -402,7 +404,10 @@ void RunAndCollectLevel0Uploads(TerrainHeightPages& pages, const PagedTerrainReq
                 continue;
             for (const HeightPageUpload& samples : pages.Uploads())
                 if (samples.Slot == upload.Slot)
-                    uploads[{upload.Page.Address.X, upload.Page.Address.Z}] = samples.Samples;
+                {
+                    const std::span<const float32> heights = PageStreaming::HeightSamples(samples.Bytes);
+                    uploads[{upload.Page.Address.X, upload.Page.Address.Z}] = {heights.begin(), heights.end()};
+                }
         }
     }
 }
@@ -435,6 +440,44 @@ void ExpectQueryBitEqualToUploads(const TerrainHeightPages& pages,
                 ++compared;
             }
     EXPECT_EQ(compared, kSamples * kSamples);
+}
+
+// A terrain entity of `terrain` at world (x, y, z).
+ECS::EntityHandle AddTerrainEntity(ECS::World& world, const Components::Terrain& terrain, float32 x, float32 y,
+                                   float32 z)
+{
+    Components::WorldTransform transform;
+    transform.matrix[12] = x;
+    transform.matrix[13] = y;
+    transform.matrix[14] = z;
+    const ECS::EntityHandle entity = world.CreateEntity();
+    world.AddComponentImmediate(entity, terrain);
+    world.AddComponentImmediate(entity, transform);
+    return entity;
+}
+
+// A flat planar terrain of `size` metres with its height data, centered on world (x, 0, z).
+ECS::EntityHandle AddPlanarTerrain(ECS::World& world, float32 size, float32 x, float32 z)
+{
+    Terrain::TerrainConfig config;
+    config.HeightmapWidth = config.HeightmapHeight = 33;
+    config.WorldSizeX = config.WorldSizeZ = size;
+    const TerrainHandle handle = TerrainService::Get().CreateTerrain(config);
+    Components::Terrain terrain;
+    terrain.SizeX = terrain.SizeZ = size;
+    terrain.BaseSource = Components::TerrainBaseSource::Flat;
+    terrain.TerrainDataHandle = handle.Index;
+    terrain.TerrainDataGeneration = handle.Generation;
+    return AddTerrainEntity(world, terrain, x, 0.0f, z);
+}
+
+// A planet of `radius` metres, centered on the world origin as the renderer draws it.
+ECS::EntityHandle AddPlanet(ECS::World& world, float32 radius)
+{
+    Components::Terrain terrain;
+    terrain.Domain = Components::TerrainDomain::Spherical;
+    terrain.PlanetRadius = radius;
+    return AddTerrainEntity(world, terrain, 0.0f, 150.0f, -700.0f);
 }
 
 // A physics body of `motion` at world (x, 0, z).
@@ -479,7 +522,7 @@ TEST(CpuHeightPages, ADynamicBodyFarFromEveryCameraKeepsItsFinestPages)
 {
     // 64 slots: the pyramid streams (only the top page is pinned), so level 0 near the body comes
     // from its window alone.
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u});
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
@@ -511,7 +554,7 @@ TEST(CpuHeightPages, ADynamicBodyFarFromEveryCameraKeepsItsFinestPages)
 // (no camera) streams the CPU pages too.
 TEST(CpuHeightPages, ATerrainTheGpuDrawsFromItsTextureStillHasCpuPagesAndPublishesNoTable)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u});
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     request.GpuPages = false;
     const Mathematics::Vector3 camera{300.0f, 10.0f, 300.0f};
@@ -550,7 +593,7 @@ TEST(CpuHeightPages, ATerrainTheGpuDrawsFromItsTextureStillHasCpuPagesAndPublish
 // The CPU reads what the GPU fetched: a page the GPU wants beyond every CPU window answers finest.
 TEST(CpuHeightPages, APageTheGpuFetchedAnswersFinestOutsideEveryCpuWindow)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{512, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{512, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u});
     const PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
@@ -631,7 +674,7 @@ TEST(CpuHeightPages, AFailedFetchLeavesACoarserPageAnsweringUntilARetryLands)
         stores.Ensure(GUID::Generate(), heightmap, kWidth, kHeight, nullptr, nullptr);
     ASSERT_EQ(store.Error, "");
     auto reader = std::make_shared<PageStreaming::PageStoreReader>();
-    ASSERT_EQ(reader->Open(store.Store), "");
+    ASSERT_EQ(reader->Open(store.Store, PageStreaming::PageFieldKind::Height), "");
     std::vector<char> bytes;
     {
         std::ifstream in(store.Store, std::ios::binary);
@@ -680,7 +723,7 @@ TEST(CpuHeightPages, AFailedFetchLeavesACoarserPageAnsweringUntilARetryLands)
 
 TEST(CpuHeightPages, AWindowIsTwoPagesWideWithTheNeighborOnTheNearerSide)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u});
     // The CPU pages alone: the GPU's level-0 pages around the camera would be on the CPU too.
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     request.GpuPages = false;
@@ -709,7 +752,7 @@ TEST(CpuHeightPages, AWindowIsTwoPagesWideWithTheNeighborOnTheNearerSide)
 
 TEST(CpuHeightPages, AChangeOfFramesInFlightKeepsTheCpuPages)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u});
     const PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     const Mathematics::Vector3 camera{200.0f, 10.0f, 200.0f};
@@ -736,7 +779,7 @@ TEST(CpuHeightPages, BodyWindowsAreBoundedToTheBodiesNearestACamera)
     // A CPU budget of 16 pages: body windows may hold a quarter of it, one body's window.
     constexpr uint64 kSixteenPages = 16ull * PageStreaming::kPageSampleCount * sizeof(float32);
     TerrainHeightPages pages(nullptr, nullptr,
-                             HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, kSixteenPages, 4u});
+                             HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, kSixteenPages, 4u});
     const PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
@@ -760,7 +803,7 @@ TEST(CpuHeightPages, BodyWindowsAreBoundedToTheBodiesNearestACamera)
 
 TEST(CpuHeightPages, AReaderWindowBringsTheFinestPagesAwayFromEveryCamera)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u});
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     request.GpuPages = false; // only the CPU windows want level 0
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
@@ -790,7 +833,7 @@ TEST(CpuHeightPages, AReaderWindowBringsTheFinestPagesAwayFromEveryCamera)
 
 TEST(CpuHeightPages, AFetchOfTheFinestPageAnswersFinestBeforeTheNextUpdate)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap, 0, 64ull << 20, 4u});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u});
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     request.GpuPages = false;
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
@@ -1081,4 +1124,33 @@ TEST(CpuHeightPages, ARecordExactlyFullReportsEveryChangeItHoldsAndNoReaderOneCh
     changed.clear();
     EXPECT_FALSE(query.CollectPageChanges({directory.Epoch, changeCount - ring.size() - 1u}, changed))
         << "a reader one change further behind would miss the overwritten change";
+}
+
+// The island scene's three terrains: a planet around the origin, a planar terrain away from the
+// origin and the island at the origin. The query at a point on the island reads the island, in
+// whatever order the world stores the terrains.
+TEST(SurfaceHeightTerrain, ThePointPicksTheTerrainUnderItInEveryStorageOrder)
+{
+    if (!TerrainService::TryGet())
+        TerrainService::Initialize();
+    const Mathematics::Vector3 onIsland(10.0f, 0.0f, -20.0f);
+    for (const bool islandFirst : {false, true})
+    {
+        ECS::World world;
+        ECS::EntityHandle island;
+        if (islandFirst)
+            island = AddPlanarTerrain(world, 512.0f, 0.0f, 0.0f);
+        AddPlanet(world, 2000.0f);
+        AddPlanarTerrain(world, 256.0f, 700.0f, 0.0f);
+        if (!islandFirst)
+            island = AddPlanarTerrain(world, 512.0f, 0.0f, 0.0f);
+
+        EXPECT_EQ(FindSurfaceHeightTerrain(world, onIsland).Terrain, world.GetComponent<Components::Terrain>(island))
+            << "island first: " << islandFirst;
+        const SurfaceHeightQuery query = ResolveSurfaceHeightQuery(world, onIsland);
+        ASSERT_TRUE(query.IsValid()) << "island first: " << islandFirst;
+        EXPECT_FLOAT_EQ(query.FootprintOriginX(), -256.0f);
+        EXPECT_FLOAT_EQ(query.FootprintSizeX(), 512.0f);
+    }
+    TerrainService::Shutdown();
 }

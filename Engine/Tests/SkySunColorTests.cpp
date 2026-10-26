@@ -40,6 +40,7 @@
 #include "Rendering/Sky/SkyRenderer.h"
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SkySystem.h"
+#include "Types/ColorUtils.h"
 
 using namespace GameEngine;
 
@@ -53,11 +54,6 @@ Rendering::AtmosphereParametersGPU DefaultAtmosphere()
     Rendering::AtmosphereParametersGPU atmo{};
     Rendering::SkyRenderer::FillDefaultAtmosphere(atmo);
     return atmo;
-}
-
-float Luminance(const float rgb[3])
-{
-    return 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2];
 }
 
 float MuForElevationDegrees(float degrees)
@@ -239,14 +235,16 @@ TEST(SkySunColor, DimsAndReddensMonotonicallyAsTheSunDescends)
 
     float previous[3];
     Rendering::EvaluateGroundLevelSunColor(atmo, kWhite, MuForElevationDegrees(90.0f), previous);
-    EXPECT_FLOAT_EQ(Luminance(previous), 1.0f);
+    EXPECT_FLOAT_EQ(ColorUtils::LinearRec709Luminance({previous[0], previous[1], previous[2]}), 1.0f);
 
     for (float elevation : {60.0f, 45.0f, 30.0f, 15.0f, 7.5f, 2.0f, 0.5f, 0.0f})
     {
         float current[3];
         Rendering::EvaluateGroundLevelSunColor(atmo, kWhite, MuForElevationDegrees(elevation),
                                                current);
-        EXPECT_LT(Luminance(current), Luminance(previous)) << "elevation " << elevation;
+        EXPECT_LT(ColorUtils::LinearRec709Luminance({current[0], current[1], current[2]}),
+                  ColorUtils::LinearRec709Luminance({previous[0], previous[1], previous[2]}))
+            << "elevation " << elevation;
         for (int c = 0; c < 3; ++c)
             EXPECT_LT(current[c], previous[c]) << "elevation " << elevation << " channel " << c;
         EXPECT_GT(current[0] / std::max(current[2], 1e-30f),
@@ -260,7 +258,8 @@ TEST(SkySunColor, DimsAndReddensMonotonicallyAsTheSunDescends)
         float current[3];
         Rendering::EvaluateGroundLevelSunColor(atmo, kWhite, MuForElevationDegrees(elevation),
                                                current);
-        EXPECT_LE(Luminance(current), Luminance(previous))
+        EXPECT_LE(ColorUtils::LinearRec709Luminance({current[0], current[1], current[2]}),
+                  ColorUtils::LinearRec709Luminance({previous[0], previous[1], previous[2]}))
             << "elevation " << elevation << " — a set sun must not brighten";
         std::copy(std::begin(current), std::end(current), std::begin(previous));
     }
@@ -281,8 +280,8 @@ TEST(SkySunColor, LowSunIsWarmAndOrderedNotMagenta)
     EXPECT_GT(color[1] / color[2], 1.4f) << "the warmth has to be visible, not a rounding artefact";
     // Still a daylight sun, not a dusk one: through the default crisp day's aerosol (optical depth
     // 0.06) a 15-degree sun keeps about 60 % of its overhead luminous flux (0.59 measured).
-    EXPECT_GT(Luminance(color), 0.49f);
-    EXPECT_LT(Luminance(color), 0.69f);
+    EXPECT_GT(ColorUtils::LinearRec709Luminance({color[0], color[1], color[2]}), 0.49f);
+    EXPECT_LT(ColorUtils::LinearRec709Luminance({color[0], color[1], color[2]}), 0.69f);
 }
 
 // Once the moon has taken the primary slot (SkySystemConfig's blend completes at sunY = -0.17,
@@ -297,13 +296,14 @@ TEST(SkySunColor, ASetSourceIsExtinguished)
         float color[3];
         Rendering::EvaluateGroundLevelSunColor(atmo, kWhite, MuForElevationDegrees(elevation),
                                                color);
-        EXPECT_LT(Luminance(color), 1e-5f) << "elevation " << elevation;
+        EXPECT_LT(ColorUtils::LinearRec709Luminance({color[0], color[1], color[2]}), 1e-5f)
+            << "elevation " << elevation;
     }
 
     // And it is already almost gone at the horizon itself.
     float atHorizon[3];
     Rendering::EvaluateGroundLevelSunColor(atmo, kWhite, 0.0f, atHorizon);
-    EXPECT_LT(Luminance(atHorizon), 0.06f);
+    EXPECT_LT(ColorUtils::LinearRec709Luminance({atHorizon[0], atHorizon[1], atHorizon[2]}), 0.06f);
 }
 
 // The colour above the atmosphere is carried through untouched by anything except the extinction,
@@ -364,7 +364,9 @@ TEST(SkySunColor, TheNightSourceIsTheMoonsWarmTintAtUnitLuminance)
     constexpr float kMoonSource = 0.004f;
     Rendering::ApplySimpleLightingToSkySettings(state, config, kWhite, kMoonSource, settings);
 
-    EXPECT_NEAR(Luminance(settings.primarySunColor), 1.0f, 1e-4f);
+    EXPECT_NEAR(ColorUtils::LinearRec709Luminance(
+                    {settings.primarySunColor[0], settings.primarySunColor[1], settings.primarySunColor[2]}),
+                1.0f, 1e-4f);
     EXPECT_GT(settings.primarySunColor[0], settings.primarySunColor[2]) << "moonlight is warmer than sunlight";
     EXPECT_EQ(settings.primarySunIntensity, kMoonSource);
     EXPECT_EQ(settings.moonIntensity, kMoonSource);
@@ -395,7 +397,7 @@ TEST(SkySunColor, TheLinkedLightNeverFlaresBackOnAcrossTheSunsetHandoff)
 {
     const Rendering::AtmosphereParametersGPU atmo = DefaultAtmosphere();
     const Rendering::SkySystemConfig config{};
-    const float moonSourceLuminance = Luminance(config.moonColor);
+    const float moonSourceLuminance = ColorUtils::LinearRec709Luminance(config.moonColor);
 
     float previous = -1.0f;
     float firstLuminance = 0.0f;
@@ -417,12 +419,13 @@ TEST(SkySunColor, TheLinkedLightNeverFlaresBackOnAcrossTheSunsetHandoff)
         // The colour SkyEnvironmentSystem writes to the linked light, the moon shown.
         float linkedLight[3];
         Rendering::MixLinkedLightGroundColor(bodies, Rendering::LinkedLightMoonScale(config, true), linkedLight);
-        const float delivered = Luminance(linkedLight);
+        const float delivered = ColorUtils::LinearRec709Luminance({linkedLight[0], linkedLight[1], linkedLight[2]});
 
         // A hazy evening can extinguish the sun below the moonlight before the handover finishes, so
         // the light may rise again, but only to the moon it hands over to, never back towards the sun.
         const float moonLevel =
-            Luminance(bodies.Moon) * Rendering::LinkedLightMoonScale(config, true) * bodies.MoonBlend;
+            ColorUtils::LinearRec709Luminance({bodies.Moon[0], bodies.Moon[1], bodies.Moon[2]}) *
+            Rendering::LinkedLightMoonScale(config, true) * bodies.MoonBlend;
         if (previous >= 0.0f)
         {
             EXPECT_LE(delivered, std::max(previous * 1.5f, moonLevel * 1.001f))
@@ -434,7 +437,7 @@ TEST(SkySunColor, TheLinkedLightNeverFlaresBackOnAcrossTheSunsetHandoff)
                                       180.0f / 3.14159265358979323846f;
         if (sunElevationDeg <= -2.0f)
         {
-            EXPECT_LT(Luminance(ground), moonSourceLuminance * 1.2f)
+            EXPECT_LT(ColorUtils::LinearRec709Luminance({ground[0], ground[1], ground[2]}), moonSourceLuminance * 1.2f)
                 << "hour " << hour << ": sun is " << sunElevationDeg
                 << " degrees under and the source colour is brighter than moonlight";
         }
@@ -493,13 +496,15 @@ TEST(SkySunColor, EachBodyIsExtinguishedAtItsOwnElevation)
     float ground[3];
     Rendering::MixPrimaryGroundColor(Rendering::EvaluateBodyGroundColors(atmo, config, state, kWhite), ground);
 
+    const float moonColor[3] = {config.moonColor.r, config.moonColor.g, config.moonColor.b};
     float moonOnly[3];
-    Rendering::EvaluateGroundLevelSunColor(atmo, config.moonColor, state.moonDirWS[1], moonOnly);
+    Rendering::EvaluateGroundLevelSunColor(atmo, moonColor, state.moonDirWS[1], moonOnly);
 
     // Half the moon's own contribution, plus a set sun's ~nothing.
     for (int c = 0; c < 3; ++c)
         EXPECT_NEAR(ground[c], 0.5f * moonOnly[c], 0.5f * moonOnly[c] + 0.002f) << "channel " << c;
-    EXPECT_LT(Luminance(ground), Luminance(config.moonColor))
+    EXPECT_LT(ColorUtils::LinearRec709Luminance({ground[0], ground[1], ground[2]}),
+              ColorUtils::LinearRec709Luminance(config.moonColor))
         << "a set sun must not out-light the moon it is handing over to";
 }
 

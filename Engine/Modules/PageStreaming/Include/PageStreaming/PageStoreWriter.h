@@ -29,21 +29,21 @@ public:
     PageStoreWriter& operator=(const PageStoreWriter&) = delete;
 
     /// Starts a new store with `layout` (MakePageStoreLayout) for `target`. Every present page must
-    /// be written before Finish. Returns an empty string, else the reason.
+    /// be written before Finish; pages go into the file in the order they are written. Returns an empty string, else the reason.
     std::string Create(const std::filesystem::path& target, PageStoreLayout layout);
 
-    /// Starts rewriting the store at `existing`, whose validated layout is `layout`, as `target`
-    /// under the key in `layout.Header`: the existing file becomes the temporary file (a rename,
-    /// no copy), and every page not written keeps its bytes and entry. For an incremental cook,
-    /// whose unchanged pages cost no write; the previous store holds an earlier state of the same
-    /// source, so a patch that is abandoned discards it. Returns an empty string, else the reason.
+    /// Rewrites the store at `existing` (validated layout `layout`) as `target` under the key in `layout.Header`,
+    /// by rename, not copy: a page not written keeps its bytes. Pages that `layout` adds (AddPresentPages) are
+    /// written before Finish. Abandon discards the store. Returns an empty string, else the reason.
     std::string OpenForPatch(const std::filesystem::path& existing, const std::filesystem::path& target,
                              PageStoreLayout layout);
 
     const PageStoreLayout& Layout() const { return m_Layout; }
 
-    /// Writes a present page's bytes and records its entry. False on an absent or out-of-store
-    /// address, a size that is not the store's page size, or an I/O failure.
+    /// Writes a present page's bytes and records its entry. A page keeps its place in the file while
+    /// its size does; a first write, or one that changes the size, appends. False on an absent or
+    /// out-of-store address, bytes that do not match the store's format and the page's flags, or an
+    /// I/O failure.
     bool WritePage(const PageAddress& address, const EncodedPage& page);
 
     /// Reads back the stored bytes of a present page already written (or kept by a patch).
@@ -58,6 +58,7 @@ public:
 
 private:
     bool WriteAt(uint64 offset, const void* data, std::size_t bytes);
+    bool WriteAtLocked(uint64 offset, const void* data, std::size_t bytes);
     bool ReadAt(uint64 offset, void* data, std::size_t bytes);
 
     std::filesystem::path m_Target;
@@ -65,6 +66,7 @@ private:
     std::FILE* m_File = nullptr;
     std::mutex m_FileMutex; // one file position: every seek + transfer holds it
     PageStoreLayout m_Layout;
+    uint64 m_End = 0; // the file's end: where the next appended page goes; under m_FileMutex
     bool m_Failed = false;
 };
 

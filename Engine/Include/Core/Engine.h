@@ -31,6 +31,10 @@ namespace ECS
 {
 class World;
 }
+namespace Scene
+{
+class PrefabLibrary;
+}
 namespace NativeScripting
 {
 // Forward-declared: NativeScriptManager.h is a module-local header, not on the
@@ -220,6 +224,10 @@ class EngineCore
     // run before/without a full engine init (e.g. loading a model from a bare test
     // harness) fall back to defaults instead of asserting on a manager it never had.
     AssetManager* TryGetAssetManager() noexcept { return m_AssetManager.get(); }
+
+    /// The prefab library (one per engine, beside the AssetManager), or null before Initialize.
+    /// Engine-internal: its header is private to the scene sources. Main thread only.
+    Scene::PrefabLibrary* TryGetPrefabLibrary() noexcept { return m_PrefabLibrary.get(); }
 
     /// Test seam: whether a ScriptManager exists, read without constructing one.
     bool HasScriptManagerForTests() const { return m_ScriptManager != nullptr; }
@@ -455,6 +463,8 @@ class EngineCore
     // Subsystems
     UniquePtr<JobSystem::WorkStealingThreadPool> m_JobSystem;
     UniquePtr<AssetManager> m_AssetManager;
+    // Built after the AssetManager and destroyed before it: it listens for changed files.
+    UniquePtr<Scene::PrefabLibrary> m_PrefabLibrary;
     // Engine-managed rendering loop state
     UniquePtr<Engine::Renderer::RenderingLoop> m_RenderingLoop;
     bool m_RenderingLoopEnabled = false;

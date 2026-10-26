@@ -28,7 +28,7 @@ namespace GameEngine::Scene
 // A component schema teaches the scene system how to:
 // - serialize a component into "Component.property = value" lines
 // - apply parsed properties to an entity during load
-// - optionally remove the component via "-Component" directives (blueprint overrides)
+// - optionally remove the component for a prefab instance's "-Component" override
 class ISceneComponentSchema
 {
   public:
@@ -113,7 +113,7 @@ class ISceneComponentSchema
     }
 
     // Ensure the component exists on the entity using default values.
-    // Used for blueprint override "ComponentName" / "+ComponentName" additions.
+    // Used for a prefab instance's "+Component" override, which adds a component with no field lines.
     virtual bool AddDefault(ECS::World& world, ECS::EntityHandle entity, std::string* outError) const
     {
         (void)world;
@@ -200,6 +200,10 @@ class SceneSchemaRegistry
     static std::string_view SchemaTokenForComponentType(ECS::ComponentTypeId typeId);
 
     static std::vector<const ISceneComponentSchema*> GetAllSorted();
+
+    // Every registered component type that a scene saves, each once: the types of the hand-written
+    // schemas and every reflected type that saves through its reflection schema, C# components included.
+    static std::vector<ECS::ComponentTypeId> GetSavedComponentTypes();
 
     // Save-side reflection fallback: returns a synthesized reflection schema for `typeId` ONLY when
     // the type is reflected AND no hand-written schema serializes it (FindForComponentType is null),

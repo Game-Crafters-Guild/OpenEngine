@@ -2,7 +2,7 @@
 
 #include "Mathematics/Matrix4x4.h"
 #include "Placement/CenterlineSampling.h"
-#include "Placement/SplineSurfaceConform.h"
+#include "SplineRecipes/SplineSurfaceConform.h"
 #include "Placement/TileLayout.h"
 #include "Spline/SplineData.h"
 #include "Spline/SplineEvaluator.h"
@@ -69,7 +69,7 @@ void BuildSplineDrapedPolylines(ECS::World& world,
     {
         CenterSample sample;
         Vector3 hit;
-        sample.SurfaceValid = ConformRayDown(world, at, ignore, hit, nullptr, nullptr, target);
+        sample.SurfaceValid = SplineRecipes::ConformRayDown(world, at, ignore, hit, nullptr, nullptr, target);
         if (sample.SurfaceValid)
             at.y = hit.y;
         sample.Pos = at;

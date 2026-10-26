@@ -12,7 +12,9 @@
 // flat varyings: the transmittance along the ray to the sun, and whether the direct beam
 // reaches the camera at all. All of it is a function of push constants and ONE world position,
 // so evaluating it per fragment would repeat the same fetches for every pixel of a fullscreen
-// draw. Three vertices, one result.
+// draw. Three vertices, one result. The cascade term is the exception that is not evaluated
+// here: its 700-odd lookups run in parallel in a pass of their own (sun_glare_casters.comp),
+// and this stage reads the one float that pass writes.
 
 #include "Includes/sun_glare.glsl"
 #include "Includes/sky_transmittance_lut.glsl"
@@ -22,18 +24,13 @@ layout(location = 1) flat out vec3 vSunTransmittance;
 layout(location = 2) flat out float vSunGlareScale;
 
 layout(set = 0, binding = 0) uniform sampler2D uTransLUT;
-layout(set = 0, binding = 3) uniform sampler2DArrayShadow uShadowMapArray;
 
-// Leading prefix of the ShadowData block the shadow cascades upload
-// (shadow_sampling.glsl, set 0 binding 8). Only the first three fields are declared: std140
-// makes a prefix binding-compatible, and a source contract test pins these three against that
-// header so the two layouts cannot drift apart silently.
-layout(set = 0, binding = 4, std140) uniform SunGlareShadowData
+// The cascade term sun_glare_casters.comp wrote this frame: the fraction of the sun's disc whose
+// beam reaches the eye past every shadow caster. Read only when pc.horizon.w says it is real.
+layout(set = 0, binding = 3, std430) readonly buffer SunGlareCasters
 {
-    mat4 ge_shadowVP[4];   // Light view-projection per cascade
-    vec4 ge_shadowSplits;  // View-space split distances
-    vec4 ge_shadowParams;  // x=depthBias, y=normalBias, z=numCascades, w=maxShadowDistance
-} ShadowData;
+    float casters;
+} uCasters;
 
 layout(push_constant) uniform GlarePC
 {
@@ -51,12 +48,10 @@ layout(push_constant) uniform GlarePC
     // meaningful (depth bound, sun on screen), and 0 when it is not -- one field carrying both
     // because the block's 80-byte size is asserted against the shaders on both sides.
     vec4 params;
-    // xyz = camera world position, w = 1 when the cascade bindings are real this frame
-    // (the cascade COUNT comes from the shadow block, which is its owner).
-    vec4 cameraShadow;
     // x = terrain-skyline visibility in [0, 1], marched on the CPU against the heightfield so
     // it holds whether or not the sun is on screen. y = planet radius, z = atmosphere radius
-    // (the transmittance LUT's shell, metres). w is std140 padding.
+    // (the transmittance LUT's shell, meters). w = 1 when uCasters holds this frame's cascade
+    // term, 0 when the view has no cascades.
     vec4 horizon;
 } pc;
 
@@ -76,20 +71,8 @@ void main()
                                                  planetRadius, atmosphereRadius);
 
     // Shadow cascades: anything that CASTS, on screen or off, including a sun behind the
-    // camera. The MINIMUM over cascades, not the one a view depth would select — each
-    // cascade's map contains only the casters inside its own light frustum, and the beam has
-    // to survive the whole way; a cascade that does not cover the eye returns lit and drops
-    // out of the minimum harmlessly.
-    float sunlit = 1.0;
-    int cascades = pc.cameraShadow.w > 0.5 ? int(ShadowData.ge_shadowParams.z + 0.5) : 0;
-    for (int i = 0; i < 4; ++i)
-    {
-        if (i >= cascades)
-            break;
-        sunlit = min(sunlit, GE_SunGlareCascadeSunlit(uShadowMapArray, ShadowData.ge_shadowVP[i],
-                                                      i, pc.cameraShadow.xyz,
-                                                      ShadowData.ge_shadowParams.x));
-    }
+    // camera, as the fraction of the disc the beam reaches.
+    float sunlit = pc.horizon.w > 0.5 ? clamp(uCasters.casters, 0.0, 1.0) : 1.0;
 
     // Scene depth: anything in the depth attachment the world pass wrote, CBT terrain
     // included. Only meaningful while the sun is on screen, so it is gated rather than
@@ -101,10 +84,11 @@ void main()
     // see them separately — and keeping them out of its push-constant block is what lets that
     // block stay a 32-byte prefix of this one (the packager sums the per-stage ranges against
     // a 128-byte limit).
-    // Three terms, multiplied, because each sees occluders the others cannot: the cascades
-    // see casting meshes anywhere, the screen probe sees anything in the depth buffer while the
-    // sun is on screen, and the skyline sees terrain whether the sun is on screen or not.
-    vSunGlareScale = pc.params.x * sunlit * onScreen * pc.horizon.x;
+    // The cascades see casting meshes anywhere and the skyline sees terrain anywhere: disjoint
+    // occluders, so their fractions multiply. The screen probe sees both while the sun is on
+    // screen, so it is combined by the minimum rather than multiplied in, which would count an
+    // occluder both of them see twice (sun_glare.glsl, "Visibility").
+    vSunGlareScale = pc.params.x * min(onScreen, sunlit * pc.horizon.x);
 }
 
 #endif // GE_SUN_GLARE_VS_GLSL

@@ -9,7 +9,7 @@
 //   NearVerticesKeepTheirCachedCornerBits — below lambda 0.75 a vertex draws its cached level-0 height,
 //     the same bits, so the near field draws what it drew without the chain.
 //   ChainMatchesTheTentOracleAtThreeLevels — levels 1 to 3 of the GPU chain over a non-square lattice
-//     equal the page store's filter ([1 2 1] / 4 around 2j, edges clamped, HeightPyramidBuilder's order)
+//     equal the page store's filter ([1 2 1] / 4 around 2j, edges clamped, PagePyramidBuilder's order)
 //     restated on the CPU.
 //   EditRectRebuildsOnlyTheSamplesItsTentsReach — an edit announced by its rect rewrites the samples
 //     whose tents read the edited texels, at every level, and leaves the rest as they were: a change
@@ -76,9 +76,11 @@ float CBT_ChainLoad(uint word)
 #include "CBTTerrain/CBTResources.h"
 #include "CBTTerrain/CBTTreeAudit.h"
 #include "CBTDiamond.h"
+#include "CBTReliefHeightSource.h"
 #include "CBTTestHarness.h"
 #include "Mathematics/Interpolation.h"
 #include "Mathematics/MatrixOps.h"
+#include "Mathematics/Rect.h"
 #include "Mathematics/Vector3.h"
 #include "Rendering/Core/CommandList.h"
 
@@ -104,7 +106,7 @@ float LevelScale(uint32_t samples)
     return kTargetPx / (focal * (kTerrainM / static_cast<float>(samples - 1u)));
 }
 
-// ---- The CPU oracle: the page store's tent, HeightPyramidBuilder's order of operations ----
+// ---- The CPU oracle: the page store's tent, PagePyramidBuilder's order of operations ----
 
 float At(const std::vector<float>& level, uint32_t width, uint32_t height, int64_t x, int64_t z)
 {
@@ -274,36 +276,9 @@ class CBTHeightChain : public ::testing::Test
             m_Device->Shutdown();
     }
 
-    void Upload(TextureHandle tex, const std::vector<float>& data, uint32_t width, uint32_t height, ResourceState prior)
-    {
-        const size_t bytes = data.size() * sizeof(float);
-        BufferHandle staging = m_Device->CreateUploadBuffer(bytes, "CBT.Test.ChainStaging");
-        m_Device->UpdateBuffer(staging, 0, bytes, data.data());
-        auto cl = m_Device->CreateCommandList(IDevice::QueueType::Graphics);
-        cl->Begin();
-        cl->CopyBufferToTextureSubresource(staging, tex, 0, 0, width, height, 0, static_cast<size_t>(width) * sizeof(float),
-                                           1, 0, 0, 0, prior);
-        cl->Barrier(ResourceBarrier::CreateTextureBarrier(tex, ResourceState::CopyDest, ResourceState::ShaderResource));
-        cl->End();
-        std::vector<CommandList*> lists{cl.get()};
-        m_Device->ExecuteCommandLists(lists);
-        m_Device->WaitForIdle();
-        m_Device->DestroyBuffer(staging);
-    }
-
     TextureHandle MakeTexture(const std::vector<float>& data, uint32_t width, uint32_t height)
     {
-        TextureDesc td{};
-        td.width = width;
-        td.height = height;
-        td.format = static_cast<uint32_t>(TextureFormat::R32_FLOAT);
-        td.usage = static_cast<uint32_t>(TextureUsage::ShaderResource) | static_cast<uint32_t>(TextureUsage::TransferDst);
-        td.persistent = true;
-        td.debugName = "CBT.Test.ChainHeights";
-        TextureHandle tex = m_Device->CreateTexture(td);
-        if (tex.IsValid())
-            Upload(tex, data, width, height, ResourceState::Undefined);
-        return tex;
+        return MakeR32Texture(*m_Device, width, height, data, "CBT.Test.ChainHeights");
     }
 
     // An instance on `tex` with the chain provisioned for the lattice.
@@ -356,7 +331,7 @@ class CBTHeightChain : public ::testing::Test
     // `frames` updates at `p`: the first forced (a newly bound texture), the rest gated. When
     // `edit` is set the first is instead gated and announces that UV rect as edited.
     void Run(CBTInstance& inst, const CBTFrameParams& p, uint32_t frames, uint32_t firstFrame,
-             const float* edit = nullptr)
+             const GameEngine::Mathematics::Rect* edit = nullptr)
     {
         CBTClassifyDesc c{};
         c.Mode = kClassifyScreenSpace;
@@ -366,10 +341,10 @@ class CBTHeightChain : public ::testing::Test
         {
             c.GateVertexEval = (f == 0u && edit == nullptr) ? 0u : 1u;
             const bool announce = edit != nullptr && f == 0u;
-            c.DirtyMinU = announce ? edit[0] : 0.0f;
-            c.DirtyMinV = announce ? edit[1] : 0.0f;
-            c.DirtyMaxU = announce ? edit[2] : 0.0f;
-            c.DirtyMaxV = announce ? edit[3] : 0.0f;
+            c.DirtyMinU = announce ? edit->X : 0.0f;
+            c.DirtyMinV = announce ? edit->Y : 0.0f;
+            c.DirtyMaxU = announce ? edit->Right() : 0.0f;
+            c.DirtyMaxV = announce ? edit->Bottom() : 0.0f;
             auto cl = m_Device->CreateCommandList(IDevice::QueueType::Graphics);
             cl->Begin();
             inst.RecordUpdate(*cl, c, p, firstFrame + f);
@@ -383,10 +358,15 @@ class CBTHeightChain : public ::testing::Test
     std::vector<uint32_t> ReadChain(CBTInstance& inst)
     {
         CBTResources& res = inst.GetResources();
-        const size_t bytes = static_cast<size_t>(res.GetHeightChainWords()) * sizeof(uint32_t);
-        std::vector<uint32_t> out(res.GetHeightChainWords(), 0u);
-        BufferHandle readback = m_Device->CreateReadbackBuffer(bytes, "CBT.Test.ChainReadback");
-        const BufferHandle src = res.GetHeightChainBuffer();
+        return ReadWords(res.GetHeightChainBuffer(), res.GetHeightChainWords());
+    }
+
+    // The first `words` words of the storage buffer `src`, which rests in UnorderedAccess.
+    std::vector<uint32_t> ReadWords(BufferHandle src, uint32_t words)
+    {
+        const size_t bytes = static_cast<size_t>(words) * sizeof(uint32_t);
+        std::vector<uint32_t> out(words, 0u);
+        BufferHandle readback = m_Device->CreateReadbackBuffer(bytes, "CBT.Test.WordsReadback");
         auto cl = m_Device->CreateCommandList(IDevice::QueueType::Graphics);
         cl->Begin();
         cl->Barrier(ResourceBarrier::CreateBufferBarrier(src, ResourceState::UnorderedAccess, ResourceState::CopySource));
@@ -403,6 +383,22 @@ class CBTHeightChain : public ::testing::Test
         }
         m_Device->DestroyBuffer(readback);
         return out;
+    }
+
+    // The height-range buffer a whole build makes from `heights`, `samples` per axis, at `p`.
+    std::vector<uint32_t> WholePyramid(const std::vector<float>& heights, uint32_t samples, const CBTFrameParams& p)
+    {
+        const TextureHandle tex = MakeTexture(heights, samples, samples);
+        CBTInstance inst;
+        std::vector<uint32_t> words;
+        if (tex.IsValid() && Bring(inst, tex, samples, samples))
+        {
+            Run(inst, p, 1u, 0u);
+            words = ReadWords(inst.GetResources().GetHeightRangeBuffer(), kCBTHeightRangeBufferWords);
+        }
+        inst.Shutdown();
+        m_Device->DestroyTexture(tex);
+        return words;
     }
 
     // Converges a tree on the 1025^2 stripe field (4 m ridges at the lattice frequency) with the camera
@@ -699,10 +695,11 @@ TEST_F(CBTHeightChain, EditRectRebuildsOnlyTheSamplesItsTentsReach)
     for (uint32_t z = 40u; z < 60u; ++z)
         for (uint32_t x = 400u; x < 430u; ++x)
             uploaded[static_cast<size_t>(z) * kN + x] -= 0.5f;
-    Upload(tex, uploaded, kN, kN, ResourceState::ShaderResource);
+    UploadR32Texture(*m_Device, tex, kN, kN, uploaded, ResourceState::ShaderResource);
     // The rect the terrain announces for that texel rect (TerrainRenderFeature::AccumulateUnifiedHeightDirty).
-    const float rect[4] = {(200.0f - 1.0f) / kN, (300.0f - 1.0f) / kN, (232.0f + 1.0f) / kN, (312.0f + 1.0f) / kN};
-    Run(inst, p, 1u, 1u, rect);
+    const GameEngine::Mathematics::Rect rect = GameEngine::Mathematics::Rect::FromEdges(
+        (200.0f - 1.0f) / kN, (300.0f - 1.0f) / kN, (232.0f + 1.0f) / kN, (312.0f + 1.0f) / kN);
+    Run(inst, p, 1u, 1u, &rect);
 
     const std::vector<uint32_t> words = ReadChain(inst);
     const std::vector<std::vector<float>> expected = OracleChain(edited, kN, kN);
@@ -729,6 +726,163 @@ TEST_F(CBTHeightChain, EditRectRebuildsOnlyTheSamplesItsTentsReach)
     m_Device->DestroyTexture(tex);
 }
 
+namespace
+{
+// The words of the height-range buffer a build over a `samples` x `samples` lattice writes, with the
+// chain's ranges for `chainLevels` chain levels (cbt_kernels.comp Kernel_HeightRangeBuild): the header
+// words it sets, the ranges of every pyramid, the first stored level's differences and the level-0
+// pyramid's planes.
+std::vector<uint32_t> PyramidWords(uint32_t samples, uint32_t chainLevels)
+{
+    const uint32_t cells = samples - 1u;
+    const uint32_t first = CBTHeightRangeFirstLevel(cells, cells);
+    const uint32_t top = std::max(CBTHeightRangeTopLevel(cells, cells), first);
+    const uint32_t levelZero = CBTHeightRangeOffset(cells, cells, first, top + 1u);
+    uint32_t chainEntries = 0u;
+    for (uint32_t j = 1u; j <= chainLevels; ++j)
+        chainEntries += levelZero - CBTHeightRangeOffset(cells, cells, first, CBTHeightChainRangeBase(first, top, j));
+    std::vector<uint32_t> words{0u, 1u, 18u, 19u};
+    for (uint32_t k = first; k <= top; ++k)
+        words.push_back(2u + k);
+    for (uint32_t j = 1u; j <= chainLevels; ++j)
+        words.push_back(20u + j);
+    for (uint32_t w = 0; w < 2u * levelZero; ++w)
+        words.push_back(kCBTHeightRangeHeaderWords + w);
+    for (uint32_t w = 0; w < 2u * chainEntries; ++w) // the chain's pyramids start at entry kCBTHeightRangeEntries
+        words.push_back(kCBTHeightRangeHeaderWords + 2u * kCBTHeightRangeEntries + w);
+    const uint32_t firstBlocks = CBTHeightRangeDim(cells, first) * CBTHeightRangeDim(cells, first);
+    for (uint32_t w = 0; w < kCBTHeightDifferencesWordsPerEntry * firstBlocks; ++w)
+        words.push_back(kCBTHeightDifferencesFirstWord + w);
+    for (uint32_t w = 0; w < kCBTHeightPlaneWordsPerEntry * levelZero; ++w)
+        words.push_back(kCBTHeightPlaneFirstWord + w);
+    return words;
+}
+
+// Height-range pyramid rebuilds, each compared word for word against a whole build.
+class CBTHeightPyramid : public CBTHeightChain
+{
+  protected:
+    static constexpr uint32_t kN = 513u;
+
+    // A random field with the texels of `edit` (inclusive) raised far above the [0, 1] field and announced,
+    // so every chain sample its tents reach is the highest of its blocks, and a block over it left unbuilt
+    // shows. A second change far from it is not announced, so a build that reaches past the blocks over the
+    // edit shows it. With `chainOn` false the draw's chain is off, the paged arm's configuration, and the
+    // level-0 cover is the pyramid's only cover.
+    void ExpectEditRectRebuildEqualsAWholeBuild(const CBTHeightBuildRegion& edit, bool chainOn)
+    {
+        const uint32_t chainLevels = chainOn ? CBTHeightChainRangeLevels(kN, kN) : 0u;
+        ASSERT_TRUE(!chainOn || chainLevels > 0u) << "the lattice must carry the chain's ranges";
+        const std::vector<uint32_t> written = PyramidWords(kN, chainLevels);
+        const std::vector<float> before = RandomField(kN, kN, 23u);
+        CBTFrameParams p = CameraParams({256.0f, 3.0f, 10.0f}, 0.2f, kN, 40.0f);
+        if (!chainOn)
+            p.HeightChain[0] = 0.0f;
+
+        std::vector<float> edited = before;
+        for (uint32_t z = edit.MinZ; z <= edit.MaxZ; ++z)
+            for (uint32_t x = edit.MinX; x <= edit.MaxX; ++x)
+                edited[static_cast<size_t>(z) * kN + x] += 64.0f;
+        std::vector<float> uploaded = edited;
+        for (uint32_t z = 40u; z < 60u; ++z)
+            for (uint32_t x = 400u; x < 430u; ++x)
+                uploaded[static_cast<size_t>(z) * kN + x] -= 0.5f;
+
+        const TextureHandle tex = MakeTexture(before, kN, kN);
+        ASSERT_TRUE(tex.IsValid());
+        CBTInstance inst;
+        ASSERT_TRUE(Bring(inst, tex, kN, kN));
+        Run(inst, p, 1u, 0u);
+        const BufferHandle range = inst.GetResources().GetHeightRangeBuffer();
+        const std::vector<uint32_t> old = ReadWords(range, kCBTHeightRangeBufferWords);
+        UploadR32Texture(*m_Device, tex, kN, kN, uploaded, ResourceState::ShaderResource);
+        // The rect the terrain announces for that texel rect (CBTUpdateSystem::ConsumeDirtyRegion): one
+        // texel of padding each side, the upper edge exclusive.
+        const GameEngine::Mathematics::Rect rect = GameEngine::Mathematics::Rect::FromEdges(
+            (static_cast<float>(edit.MinX) - 1.0f) / kN, (static_cast<float>(edit.MinZ) - 1.0f) / kN,
+            (static_cast<float>(edit.MaxX) + 2.0f) / kN, (static_cast<float>(edit.MaxZ) + 2.0f) / kN);
+        Run(inst, p, 1u, 1u, &rect);
+        const std::vector<uint32_t> rebuilt = ReadWords(range, kCBTHeightRangeBufferWords);
+        inst.Shutdown();
+        m_Device->DestroyTexture(tex);
+
+        const std::vector<uint32_t> expected = WholePyramid(edited, kN, p);
+        const std::vector<uint32_t> unannounced = WholePyramid(uploaded, kN, p);
+        ASSERT_EQ(expected.size(), rebuilt.size());
+        ASSERT_EQ(unannounced.size(), rebuilt.size());
+        uint32_t mismatched = 0;
+        uint32_t edits = 0;
+        uint32_t unannouncedWords = 0;
+        for (uint32_t w : written)
+        {
+            mismatched += rebuilt[w] != expected[w] ? 1u : 0u;
+            edits += expected[w] != old[w] ? 1u : 0u;
+            unannouncedWords += unannounced[w] != expected[w] ? 1u : 0u;
+        }
+        std::printf("chain %s, pyramid words %zu: %u rewritten by the edit, %u the unannounced change moves in a "
+                    "whole build, %u differ from a whole build of the announced edit\n",
+                    chainOn ? "on" : "off", written.size(), edits, unannouncedWords, mismatched);
+        EXPECT_GT(edits, 0u) << "the edit must reach the pyramid";
+        EXPECT_GT(unannouncedWords, 0u) << "the unannounced change must show in a build that reaches it";
+        EXPECT_EQ(mismatched, 0u) << "a rect rebuild must equal a whole build of the edit and leave the rest as it was";
+    }
+};
+} // namespace
+
+TEST_F(CBTHeightPyramid, EditRectRebuildsOnlyThePyramidBlocksOverIt)
+{
+    ExpectEditRectRebuildEqualsAWholeBuild({200u, 300u, 231u, 311u}, true);
+}
+
+// A 3 x 3 texel edit on the lattice's center straddles a block boundary at every pyramid level, so each
+// coarser level's cover must take the parents of both sides.
+TEST_F(CBTHeightPyramid, EditRectWithTheChainOffRebuildsOnlyThePyramidBlocksOverIt)
+{
+    ExpectEditRectRebuildEqualsAWholeBuild({255u, 255u, 257u, 257u}, false);
+}
+
+// A newly bound height source rebuilds every block, even on a frame that announces no edit.
+TEST_F(CBTHeightPyramid, ReboundSourceRebuildsEveryBlock)
+{
+    const std::vector<uint32_t> written = PyramidWords(kN, 0u);
+    const std::vector<float> before = RandomField(kN, kN, 23u);
+    std::vector<float> other = before;
+    for (uint32_t z = 100u; z < 300u; ++z)
+        for (uint32_t x = 100u; x < 300u; ++x)
+            other[static_cast<size_t>(z) * kN + x] += 64.0f;
+    CBTFrameParams p = CameraParams({256.0f, 3.0f, 10.0f}, 0.2f, kN, 40.0f);
+    p.HeightChain[0] = 0.0f;
+    const TextureHandle first = MakeTexture(before, kN, kN);
+    const TextureHandle second = MakeTexture(other, kN, kN);
+    ASSERT_TRUE(first.IsValid() && second.IsValid());
+    CBTInstance inst;
+    ASSERT_TRUE(Bring(inst, first, kN, kN));
+    Run(inst, p, 1u, 0u);
+    const BufferHandle range = inst.GetResources().GetHeightRangeBuffer();
+    const std::vector<uint32_t> old = ReadWords(range, kCBTHeightRangeBufferWords);
+    for (uint32_t slot = 0; slot < kCBTFrameParamsRing; ++slot)
+        inst.SetHeightSource(slot, second);
+    const GameEngine::Mathematics::Rect none = GameEngine::Mathematics::Rect::FromEdges(0.0f, 0.0f, 0.0f, 0.0f);
+    Run(inst, p, 1u, 1u, &none); // a gated frame that announces no edit
+    const std::vector<uint32_t> rebuilt = ReadWords(range, kCBTHeightRangeBufferWords);
+    inst.Shutdown();
+    m_Device->DestroyTexture(first);
+    m_Device->DestroyTexture(second);
+
+    const std::vector<uint32_t> expected = WholePyramid(other, kN, p);
+    ASSERT_EQ(expected.size(), rebuilt.size());
+    uint32_t mismatched = 0;
+    uint32_t changed = 0;
+    for (uint32_t w : written)
+    {
+        mismatched += rebuilt[w] != expected[w] ? 1u : 0u;
+        changed += expected[w] != old[w] ? 1u : 0u;
+    }
+    std::printf("rebind: %u pyramid words differ between the sources, %u differ from a whole build of the new one\n",
+                changed, mismatched);
+    EXPECT_GT(changed, 0u) << "the two sources must build different pyramids";
+    EXPECT_EQ(mismatched, 0u) << "a new source must rebuild the whole pyramid";
+}
 
 namespace
 {

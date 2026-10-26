@@ -2164,7 +2164,7 @@ TEST(CBTLayout, PushConstantsWithinPolicy)
     // — the far-field-drain region-reseed root bitmask, round-9) + 1 u32 (DeepDecode — the
     // Earth-scale (sector, local) storage A/B, arc S2a; GLSL mirror pc.deepDecode) + 1 u32
     // (PoolPressure — the planar pool-pressure scale's A/B arm; GLSL mirror pc.poolPressure) + 2 u32
-    // (the height chain build's region; GLSL mirror pc.heightChainRegionMin / Extent) + 1 u32
+    // (the height build kernels' region; GLSL mirror pc.buildRegionMin / Extent) + 1 u32
     // (Settle — the rest rule; GLSL mirror pc.settle).
     EXPECT_EQ(sizeof(CBTPushConstants), 100u);
 }

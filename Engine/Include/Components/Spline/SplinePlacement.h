@@ -122,27 +122,23 @@ struct SplinePlacement
     // every jitter draw below (SplineStationJitter.h); same Seed + same station
     // index = same pick, same wobble, same survivors on every rebuild.
     uint32 Seed = 0;
-    // Per-station variation. A kit laid at an exact pitch reads as railway
-    // sleepers — the eye finds the period immediately — and these break that up
-    // without moving the path itself. All four are deterministic in Seed, and
-    // all four are keyed on a station's ORDINAL, so raising Dropout does not
-    // reshuffle the wobble or the mesh picks of the stations that survive.
-    //
-    // Metres a station may slide ALONG the centerline, either way. The layout
-    // clamps it to half the spacing, so stations never reorder.
+    // Per-station variation, so a kit at an exact pitch does not show its period. All four are
+    // deterministic in Seed and keyed on the station's ordinal: a Dropout change keeps the
+    // wobble and the picks of the stations that stay.
+
+    // Meters a station may slide along the centerline, either way, at most half the spacing.
+    // @ge-label Spacing Jitter Meters
     float32 SpacingJitterMetres = 0.0f;
     // Degrees a station may turn about its own up, either way.
     float32 YawJitterDegrees = 0.0f;
     // Metres a station may slide ACROSS travel, either way.
+    // @ge-label Lateral Jitter Meters
     float32 LateralJitterMetres = 0.0f;
     // Fraction of stations left empty: 0 places every station, 1 places none.
     // Gaps are what stop a run reading as a manufactured strip.
     float32 DropoutChance = 0.0f;
-    // Metres at EACH end of the spline over which stations thin to nothing, so
-    // a run peters out instead of stopping square. Mirrors the name
-    // SplineExtrude::EndTaperMetres carries for the same idea; that one narrows
-    // a swept ribbon, and a kit piece cannot narrow, so the placement analogue
-    // is density. 0 disables.
+    // Meters at each end of the spline over which stations thin to nothing. 0 turns it off.
+    // @ge-label End Taper Meters
     float32 EndTaperMetres = 0.0f;
     // Cap, in degrees, on the per-tile skew used to soften rigid seams: each
     // joint shears both neighbouring tiles by tan(yaw/2) toward its bisector,

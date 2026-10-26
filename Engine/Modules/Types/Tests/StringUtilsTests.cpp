@@ -75,6 +75,22 @@ TEST(StringUtilsTests, ContainsControlCharacterFindsBytesBelowSpaceAndDelete)
     EXPECT_FALSE(ContainsControlCharacter(""));
 }
 
+TEST(StringUtilsTests, IsValidUtf8TakesWellFormedTextOnly)
+{
+    EXPECT_TRUE(IsValidUtf8(""));
+    EXPECT_TRUE(IsValidUtf8("readme.txt"));
+    EXPECT_TRUE(IsValidUtf8("caf\xC3\xA9/\xE6\x97\xA5\xE6\x9C\xAC/\xF0\x9F\x98\x80.png")) << "two, three and four bytes";
+    EXPECT_TRUE(IsValidUtf8("\xF4\x8F\xBF\xBF")) << "U+10FFFF";
+    EXPECT_FALSE(IsValidUtf8("caf\x82.txt")) << "code page 437";
+    EXPECT_FALSE(IsValidUtf8("\xC0\xAF")) << "overlong '/'";
+    EXPECT_FALSE(IsValidUtf8("\xE0\x80\xAF")) << "overlong '/'";
+    EXPECT_FALSE(IsValidUtf8("a\x80" "b")) << "lone continuation byte";
+    EXPECT_FALSE(IsValidUtf8("caf\xC3")) << "truncated at the end";
+    EXPECT_FALSE(IsValidUtf8("\xE6\x97.txt")) << "truncated before ASCII";
+    EXPECT_FALSE(IsValidUtf8("\xED\xA0\x80")) << "surrogate half";
+    EXPECT_FALSE(IsValidUtf8("\xF4\x90\x80\x80")) << "past U+10FFFF";
+}
+
 // Reflected inspector rows and options are labelled from their identifiers.
 TEST(StringUtilsTests, IdentifierToWordsReadsIdentifiersAsWords)
 {

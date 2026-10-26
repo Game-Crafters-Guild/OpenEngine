@@ -22,6 +22,7 @@
 #include "Mathematics/Matrix4x4.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/RecomputeElision.h"
+#include "Rendering/Core/ReverseZ.h"
 
 #include <algorithm>
 #include <array>
@@ -503,7 +504,7 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareCascadePass(
             RenderGraph::RGAttachmentOps dops{};
             dops.Load = RenderGraph::RGLoadOp::Clear;
             dops.Store = RenderGraph::RGStoreOp::Store;
-            dops.Clear.Depth = 0.0f; // reverse-Z: clear to far
+            dops.Clear.Depth = Rendering::ReverseZ::kClearFar;
             // Per-layer attach: 2b-1 cell tracking keeps the four cascades from
             // self-serializing beyond their real hazards.
             p.AttachDepth(shadowArr, dops, RenderGraph::RGDepthAccess::ReadWrite,
@@ -845,7 +846,7 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareAreaPass(
             RenderGraph::RGAttachmentOps dops{};
             dops.Load = RenderGraph::RGLoadOp::Clear;
             dops.Store = RenderGraph::RGStoreOp::Store;
-            dops.Clear.Depth = 0.0f;
+            dops.Clear.Depth = Rendering::ReverseZ::kClearFar;
             p.AttachDepth(areaMap, dops, RenderGraph::RGDepthAccess::ReadWrite);
             // No PreventCulling: the world pass's sampled Read anchors it.
         },
@@ -963,7 +964,7 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareSpotPass(
             RenderGraph::RGAttachmentOps dops{};
             dops.Load = RenderGraph::RGLoadOp::Clear;
             dops.Store = RenderGraph::RGStoreOp::Store;
-            dops.Clear.Depth = 0.0f;
+            dops.Clear.Depth = Rendering::ReverseZ::kClearFar;
             p.AttachDepth(spotMap, dops, RenderGraph::RGDepthAccess::ReadWrite);
         },
         [rsPtr, params = std::move(params)](RenderGraph::RGContext& c) mutable
@@ -1187,7 +1188,7 @@ void ShadowMapRenderFeature::DeclarePointPasses(Rendering::RenderGraph::RGFrame&
                     RenderGraph::RGAttachmentOps dops{};
                     dops.Load = RenderGraph::RGLoadOp::Clear;
                     dops.Store = RenderGraph::RGStoreOp::Store;
-                    dops.Clear.Depth = 0.0f;
+                    dops.Clear.Depth = Rendering::ReverseZ::kClearFar;
                     p.AttachDepth(atlas, dops, RenderGraph::RGDepthAccess::ReadWrite,
                                   RenderGraph::RGRange{.BaseLayer = globalSlice, .LayerCount = 1});
                 },

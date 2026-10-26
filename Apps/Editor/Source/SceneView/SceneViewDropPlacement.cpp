@@ -10,7 +10,7 @@
 #include "Mathematics/Ray.h"
 #include "Physics/PhysicsQuery.h"
 #include "PhysicsECS/PhysicsWorldService.h"
-#include "Picking/MeshPickingService.h"
+#include "Picking/ScenePick.h"
 
 #include <cmath>
 
@@ -88,10 +88,11 @@ SceneViewDropPoint ResolveSceneViewDropPoint(const Mathematics::Ray3D& cameraRay
     // intentionally aiming at the surface they want to drop on. Future
     // follow-up: optional modifier to align the placed object's up-axis
     // to the hit normal (Unreal's "Surface Snap" feature).
-    Picking::PickOptions pickOpts;
+    Scene::PickOptions pickOpts;
     pickOpts.IncludeTerrain  = true;
+    pickOpts.IncludeBoundsFallback = true; // a renderer with no CPU mesh still takes the drop
     pickOpts.IgnoreEntities  = ignoreEntities;
-    const auto pick = Picking::RaycastScene(ray, world, pickOpts);
+    const auto pick = Picking::PickScene(ray, world, pickOpts);
     if (pick.Hit)
     {
         point.Position = pick.Best.WorldPosition;
@@ -121,10 +122,11 @@ SceneViewDropMesh PickSceneViewDropMesh(const Mathematics::Ray3D& cameraRay,
     ray.origin = cameraRay.origin;
     ray.direction = NormalizeDir(cameraRay.direction);
 
-    Picking::PickOptions pickOpts;
+    Scene::PickOptions pickOpts;
     pickOpts.IncludeTerrain = false;
+    pickOpts.IncludeBoundsFallback = true;
     pickOpts.IgnoreEntities = ignoreEntities;
-    const auto pick = Picking::RaycastScene(ray, world, pickOpts);
+    const auto pick = Picking::PickScene(ray, world, pickOpts);
     SceneViewDropMesh mesh;
     if (!pick.Hit || HasDisabledInAncestryOrSelf(world, pick.Best.Entity))
         return mesh;

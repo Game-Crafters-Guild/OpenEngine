@@ -745,9 +745,12 @@ inline constexpr uint32_t kCBTHeightRangeBinding = 21; // StorageBuffer: uint[kC
 // the bound terrain's table (CBTResources::ProvisionPageTableWords). Words, mirror cbt_layout.glsl
 // CBT_PAGE_*:
 //   [0, 4)   CBTPageField (level-0 samples X, Z, level count, cache slots per row)
-//   [4]      the cache's slot count; [5, 8) zero
-//   [8, 8 + 4 * kCBTPageMaxLevels) CBTPageLevel per level (first entry, pages X, Z, 0)
-//   then one arrival fade per cache slot (float bits), then the entries (level-major, row-major).
+//   [4]      the cache's slot count
+//   [5, 8)   the floor level, the tier count, the floor directory's offset (0, 0, 0: a dense table)
+//   [8, 8 + 4 * kCBTPageMaxLevels) CBTPageLevel per level (first word, pages X, Z, 0)
+//   then one arrival fade per cache slot (float bits), then the table's words (TerrainECS PageTable:
+//   the entries level-major and row-major for a dense table; the tiers, the dense levels, the floor
+//   directory and the block pools for a tiered one).
 // The ring's words per slot are not in the table: they ride the frame's own params
 // (CBTFrameParams::AnalyticParams[kCBTPageRingWordsLane], written by UploadFrameParams), so a frame
 // finds its slot without reading a slot another frame's upload may be rewriting.
@@ -872,7 +875,7 @@ static_assert(CBTHeightRangeFirstLevel(4096, 4096) == 3, "a 4097^2 unified set s
 // for the terrain draw (cbt_height_chain.glsl). Level 0 is the height texture itself; level L + 1 has
 // S / 2 + 1 samples along an axis where level L has S (PageStreaming::BuildPageStoreLevels' shapes),
 // and its sample j is the [1 2 1] / 4 tent of level L around sample 2j, both axes, edges clamped
-// (HeightPyramidBuilder's filter). So a unified terrain draws the surface a paged store holds.
+// (PagePyramidBuilder's height tent). So a unified terrain draws the surface a paged store holds.
 // Words: [0] the level-0 samples the chain was built from (x | z << 16), [1] the top level, [2, 4)
 // zero; then levels 1..top, row-major, each sample a normalized height as float bits. Mirror
 // cbt_height_chain.glsl CBT_CHAIN_* and CBT_Chain*.
@@ -976,8 +979,9 @@ static_assert(CBTNormalChainTexels(1025, 0) == 512 && CBTNormalChainMips(1025, 1
 static_assert(CBTHeightChainWords(8193, 8193) * 4ull < (128ull << 20),
               "the largest unified lattice's chain fits a 128 MiB storage range");
 
-// Inclusive sample bounds at one chain level.
-struct CBTHeightChainRegion
+// Inclusive bounds at one level of a height build: samples at a chain level, texels at a normal-chain
+// mip, blocks at a height-range pyramid level.
+struct CBTHeightBuildRegion
 {
     uint32_t MinX = 0;
     uint32_t MinZ = 0;
@@ -987,17 +991,47 @@ struct CBTHeightChainRegion
 
 // The samples of level `level` whose tents read any sample of `finer`, a region of level `level - 1`
 // whose axes have `finerX` and `finerZ` samples: coarse j reads finer 2j - 1 .. 2j + 1.
-constexpr CBTHeightChainRegion CBTHeightChainCoarserRegion(const CBTHeightChainRegion& finer, uint32_t finerX,
+constexpr CBTHeightBuildRegion CBTHeightChainCoarserRegion(const CBTHeightBuildRegion& finer, uint32_t finerX,
                                                            uint32_t finerZ)
 {
     const uint32_t lastX = finerX / 2u;
     const uint32_t lastZ = finerZ / 2u;
-    CBTHeightChainRegion coarse;
+    CBTHeightBuildRegion coarse;
     coarse.MinX = finer.MinX / 2u;
     coarse.MinZ = finer.MinZ / 2u;
     coarse.MaxX = (finer.MaxX + 1u) / 2u < lastX ? (finer.MaxX + 1u) / 2u : lastX;
     coarse.MaxZ = (finer.MaxZ + 1u) / 2u < lastZ ? (finer.MaxZ + 1u) / 2u : lastZ;
     return coarse;
+}
+
+// The blocks of a height-range pyramid level, `blocksX` x `blocksZ` of them, whose build reads any of the
+// `samples`, where a block spans 2^`shift` samples along each axis: block b reads samples b << shift to
+// (b + 1) << shift, and the last block also the samples past its end. Mirror cbt_kernels.comp
+// Kernel_HeightRangeBuild.
+constexpr CBTHeightBuildRegion CBTHeightRangeBlocksReading(const CBTHeightBuildRegion& samples, uint32_t shift,
+                                                           uint32_t blocksX, uint32_t blocksZ)
+{
+    CBTHeightBuildRegion blocks;
+    blocks.MinX = samples.MinX > 0u ? (samples.MinX - 1u) >> shift : 0u;
+    blocks.MinZ = samples.MinZ > 0u ? (samples.MinZ - 1u) >> shift : 0u;
+    blocks.MaxX = (samples.MaxX >> shift) < blocksX - 1u ? samples.MaxX >> shift : blocksX - 1u;
+    blocks.MaxZ = (samples.MaxZ >> shift) < blocksZ - 1u ? samples.MaxZ >> shift : blocksZ - 1u;
+    blocks.MinX = blocks.MinX < blocks.MaxX ? blocks.MinX : blocks.MaxX;
+    blocks.MinZ = blocks.MinZ < blocks.MaxZ ? blocks.MinZ : blocks.MaxZ;
+    return blocks;
+}
+
+// The blocks of the next coarser pyramid level whose 2 x 2 fold reads any block of `finer`.
+constexpr CBTHeightBuildRegion CBTHeightRangeCoarserRegion(const CBTHeightBuildRegion& finer)
+{
+    return {finer.MinX >> 1u, finer.MinZ >> 1u, finer.MaxX >> 1u, finer.MaxZ >> 1u};
+}
+
+// The smallest region that holds both `a` and `b`.
+constexpr CBTHeightBuildRegion CBTHeightBuildRegionUnion(const CBTHeightBuildRegion& a, const CBTHeightBuildRegion& b)
+{
+    return {a.MinX < b.MinX ? a.MinX : b.MinX, a.MinZ < b.MinZ ? a.MinZ : b.MinZ, a.MaxX > b.MaxX ? a.MaxX : b.MaxX,
+            a.MaxZ > b.MaxZ ? a.MaxZ : b.MaxZ};
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,10 +1209,11 @@ struct CBTPushConstants
     // Planar pool-pressure scale (Kernel_Reset / Kernel_Classify). 1 = on; 0 holds the scale at 1x —
     // the A/B arm the pinned-regime oracles use. Mirrors CBTClassifyDesc::PoolPressure.
     uint32_t PoolPressure = 1u;
-    // Kernel_HeightChainBuild's region at the level it writes (PassIndex): the first sample
-    // (x | z << 16) and the extent in samples (width | height << 16). Only that kernel reads them.
-    uint32_t HeightChainRegionMin = 0u;
-    uint32_t HeightChainRegionExtent = 0u;
+    // The region the height build kernels write at the level PassIndex names: the first element
+    // (x | z << 16) and the extent (width | height << 16), in samples for Kernel_HeightChainBuild, in
+    // texels for Kernel_NormalChainBuild and in blocks for Kernel_HeightRangeBuild. Only they read it.
+    uint32_t BuildRegionMin = 0u;
+    uint32_t BuildRegionExtent = 0u;
     // The rest rule (Kernel_Classify). 1 = every input matches the previous update's, so the planar
     // split and merge use one threshold; 0 = the camera or another input moved, and they keep the
     // hysteresis band. Mirrors CBTClassifyDesc::Settle.

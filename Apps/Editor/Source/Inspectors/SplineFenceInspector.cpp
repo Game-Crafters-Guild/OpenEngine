@@ -1,14 +1,15 @@
 #include "Inspectors/SplineFenceInspector.h"
 
-#include "InspectorRegistry.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "EditorChangeNotifications.h"
+#include "InspectorRegistry.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/SplineFenceOverrideFields.h"
+#include "Inspectors/SplineInspector.h"
 #include "Mathematics/Interpolation.h"
-#include "Placement/FenceSpanOverrides.h"
+#include "SplineRecipes/FenceSpanOverrides.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Assets/AssetRegistry.h"
@@ -158,7 +159,7 @@ void BuildOverrideRows(const InspectorContext& ctx)
     Editor::UndoRedoService* undo = ctx.Undo;
 
     InspectorUI::AddLine(ctx.Parent, "Span Overrides");
-    if (Editor::CountSpanOverrides(*comp) == 0u)
+    if (SplineRecipes::CountSpanOverrides(*comp) == 0u)
     {
         InspectorUI::AddLine(ctx.Parent,
                              "None. Select a span in the scene view to make it a gate or keep an "
@@ -263,158 +264,166 @@ void AddEnumDropdownRow(const InspectorContext& ctx, const std::string& label,
         });
 }
 
-} // namespace
-
-void RegisterSplineFenceInspector()
+void BuildSplineFenceInspector(const InspectorContext& context)
 {
     using namespace Components;
     using namespace InspectorDrag;
 
-    InspectorRegistry::Get().RegisterComponentInspector<SplineFence>(
-        [](const InspectorContext& ctx)
+    auto* comp = context.World ? context.World->GetComponent<SplineFence>(context.Entity) : nullptr;
+    if (!comp)
+        return;
+    AddSplineRecipeBuildStateNotice(context);
+
+    ECS::World* world = context.World;
+    ECS::EntityHandle entity = context.Entity;
+    Editor::EditorChangeNotifications* notifications = context.ChangeNotifications;
+    Editor::UndoRedoService* undo = context.Undo;
+
+    BuildPoolRows(context, "Post", &SplineFence::PostPool,
+                  "Meshes planted at stations. May be left EMPTY: most fence kits build "
+                  "the post into each panel's ends, and the spans then articulate at the "
+                  "stations by themselves.");
+    BuildPoolRows(context, "Span", &SplineFence::SpanPool,
+                  "Meshes stretched between consecutive stations. Members need not share "
+                  "a length — the run's fill computes how many instances cover it.");
+    BuildPoolRows(context, "Gate", &SplineFence::GatePool,
+                  "Pieces that stand in a span made a gate, at their own length. Make a "
+                  "span a gate by selecting it in the scene view. Optional; an empty pool "
+                  "leaves the opening empty.");
+    BuildPoolRows(context, "Crest", &SplineFence::CrestPool,
+                  "Whole pieces laid along the top of the spans at a fixed pitch — "
+                  "battlements, coping, lamps. Stretched only with the wall under them, "
+                  "when both share one length; towers and gates remove the pieces under "
+                  "them.");
+    BuildPoolRows(context, "Cap", &SplineFence::CapPool,
+                  "End pieces that close the gap where a whole crest piece does not fit — "
+                  "at a post, a tower or a gate. The longest that fits is used; shorter "
+                  "than the pitch. Empty leaves the gap, which the post covers. Used only "
+                  "where the row does not stand one piece on each wall: a crest piece of "
+                  "another length than the wall, or a Crest Pitch that leaves air.");
+
+    AddComponentFloatRowWithDrag<SplineFence>(
+        context.Parent, "Crest Pitch", comp->CrestPitch, world, entity, notifications, undo, "Change Crest Pitch",
+        [](SplineFence& u, float v)
+        { u.CrestPitch = std::max(v, 0.0f); }, 0.0f,
+        "Distance between crest pieces. 0 uses the longest crest piece's own length; a "
+        "smaller value is raised to it",
+        {}, 0.0f);
+
+    InspectorUI::AddAssetFieldRow(
+        context.Parent, "Material Override", comp->OverrideMaterial.ToGuid(),
+        {AssetType::Material}, &EngineCore::GetInstance().GetAssetManager().GetRegistry(),
+        [world, entity, notifications, undo](const GUID& picked)
         {
-            auto* comp = ctx.World ? ctx.World->GetComponent<SplineFence>(ctx.Entity) : nullptr;
-            if (!comp)
-                return;
+            InspectorDrag::CommitComponentWithUndo<SplineFence>(
+                world, entity, notifications, undo, "Change Material Override",
+                [picked](SplineFence& u)
+                { u.OverrideMaterial.Set(picked); });
+        },
+        context.Thumbnails,
+        "Material applied to every piece the fence places: posts, spans, crest pieces and "
+        "caps. Empty keeps each mesh's own embedded model material, which on many kits is "
+        "an untextured placeholder.");
 
-            ECS::World* w = ctx.World;
-            ECS::EntityHandle e = ctx.Entity;
-            Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
-            Editor::UndoRedoService* undo = ctx.Undo;
+    AddComponentFloatRowWithDrag<SplineFence>(
+        context.Parent, "Post Pitch", comp->PostPitch, world, entity, notifications, undo, "Change Post Pitch",
+        [](SplineFence& u, float v)
+        { u.PostPitch = std::max(v, 0.05f); }, 2.4f,
+        "Target metres between stations along the draped centerline; each run bends it "
+        "slightly so its stations land on both authored points",
+        {}, 0.05f);
 
-            BuildPoolRows(ctx, "Post", &SplineFence::PostPool,
-                          "Meshes planted at stations. May be left EMPTY: most fence kits build "
-                          "the post into each panel's ends, and the spans then articulate at the "
-                          "stations by themselves.");
-            BuildPoolRows(ctx, "Span", &SplineFence::SpanPool,
-                          "Meshes stretched between consecutive stations. Members need not share "
-                          "a length — the run's fill computes how many instances cover it.");
-            BuildPoolRows(ctx, "Gate", &SplineFence::GatePool,
-                          "Pieces that stand in a span made a gate, at their own length. Make a "
-                          "span a gate by selecting it in the scene view. Optional; an empty pool "
-                          "leaves the opening empty.");
-            BuildPoolRows(ctx, "Crest", &SplineFence::CrestPool,
-                          "Whole pieces laid along the top of the spans at a fixed pitch — "
-                          "battlements, coping, lamps. Stretched only with the wall under them, "
-                          "when both share one length; towers and gates remove the pieces under "
-                          "them.");
-            BuildPoolRows(ctx, "Cap", &SplineFence::CapPool,
-                          "End pieces that close the gap where a whole crest piece does not fit — "
-                          "at a post, a tower or a gate. The longest that fits is used; shorter "
-                          "than the pitch. Empty leaves the gap, which the post covers. Used only "
-                          "where the row does not stand one piece on each wall: a crest piece of "
-                          "another length than the wall, or a Crest Pitch that leaves air.");
+    {
+        static const std::vector<Dropdown::Option> kConformOptions = {
+            {"0", "None"},
+            {"1", "Height"},
+            {"2", "Height And Slope"},
+        };
+        AddEnumDropdownRow<SplinePlacementConform>(
+            context, "Conform", kConformOptions, comp->ConformMode, "Change Conform Mode",
+            &SplineFence::ConformMode,
+            "How stations meet the surface under the spline; spans derive their frame "
+            "from the stations and cast no rays");
+    }
+    {
+        static const std::vector<Dropdown::Option> kConformTargetOptions = {
+            {"0", "Scene"},
+            {"1", "Terrain Only"},
+        };
+        AddEnumDropdownRow<SplineConformTarget>(
+            context, "Conform Target", kConformTargetOptions, comp->ConformTarget,
+            "Change Conform Target", &SplineFence::ConformTarget,
+            "What the conform ray may land on. Scene takes the nearest surface of any "
+            "kind, so a run passing under a tree or an awning stands on top of it — and "
+            "because a run's length is measured over the draped line, that also changes "
+            "how many spans the run builds; TerrainOnly makes scenery transparent. Under "
+            "TerrainOnly the drawn drape line can still ride scene props while the built "
+            "pieces stand on the terrain under them — the line does not read this "
+            "setting yet");
+    }
+    {
+        static const std::vector<Dropdown::Option> kGradeOptions = {
+            {"0", "Racked"},
+            {"1", "Stepped"},
+            {"2", "Sheared"},
+        };
+        AddEnumDropdownRow<SplineSpanGrade>(
+            context, "Span Grade", kGradeOptions, comp->SpanGrade, "Change Span Grade",
+            &SplineFence::SpanGrade,
+            "Racked rotates the whole piece onto the grade, which leans its posts with it "
+            "(rails, hedges); Stepped holds it level at the lower station, so the height "
+            "jumps at stations and the uphill end buries (brick walls, castle walls); "
+            "Sheared slants only the run and leaves the piece's up axis with its stations, "
+            "so both ends meet their own station — the joinery a real fence uses on a "
+            "slope, and the one to reach for when a stepped run reads as a staircase. Its "
+            "posts therefore stand however the stations stand: plumb at Slope Blend 0, "
+            "leaning with them above it");
+    }
+    {
+        static const std::vector<Dropdown::Option> kPlantOptions = {
+            {"0", "Bounds Min"},
+            {"1", "Pivot Plane"},
+        };
+        AddEnumDropdownRow<SplinePlantMode>(
+            context, "Plant Mode", kPlantOptions, comp->PlantMode, "Change Plant Mode",
+            &SplineFence::PlantMode,
+            "Pivot Plane lands the mesh's local y=0 on the ground and lets a planting "
+            "skirt bury — right for kits authored that way. Bounds Min lifts until the "
+            "lowest vertex touches, which floats a skirted mesh");
+    }
 
-            AddComponentFloatRowWithDrag<SplineFence>(
-                ctx.Parent, "Crest Pitch", comp->CrestPitch, w, e, n, undo, "Change Crest Pitch",
-                [](SplineFence& u, float v) { u.CrestPitch = std::max(v, 0.0f); }, 0.0f,
-                "Distance between crest pieces. 0 uses the longest crest piece's own length; a "
-                "smaller value is raised to it",
-                {}, 0.0f);
+    AddComponentFloatRowWithDrag<SplineFence>(
+        context.Parent, "Slope Blend", comp->SlopeBlend, world, entity, notifications, undo, "Change Slope Blend",
+        [](SplineFence& u, float v)
+        { u.SlopeBlend = Math::Clamp01(v); }, 0.0f,
+        "0 = plumb posts, which is what a real fence does; 1 = posts lean into the slope",
+        {}, 0.0f, 1.0f);
 
-            InspectorUI::AddAssetFieldRow(
-                ctx.Parent, "Material Override", comp->OverrideMaterial.ToGuid(),
-                {AssetType::Material}, &EngineCore::GetInstance().GetAssetManager().GetRegistry(),
-                [w, e, n, undo](const GUID& picked)
-                {
-                    InspectorDrag::CommitComponentWithUndo<SplineFence>(
-                        w, e, n, undo, "Change Material Override",
-                        [picked](SplineFence& u) { u.OverrideMaterial.Set(picked); });
-                },
-                ctx.Thumbnails,
-                "Material applied to every piece the fence places: posts, spans, crest pieces and "
-                "caps. Empty keeps each mesh's own embedded model material, which on many kits is "
-                "an untextured placeholder.");
+    AddComponentFloatRowWithDrag<SplineFence>(
+        context.Parent, "Span Max Stretch", comp->SpanMaxStretch, world, entity, notifications, undo,
+        "Change Span Max Stretch",
+        [](SplineFence& u, float v)
+        { u.SpanMaxStretch = std::max(v, 1.0f); }, 1.25f,
+        "Cap on a span's length scale before the run re-walks with one more or one fewer "
+        "station; a run no count satisfies is reported rather than silently distorted",
+        {}, 1.0f);
 
-            AddComponentFloatRowWithDrag<SplineFence>(
-                ctx.Parent, "Post Pitch", comp->PostPitch, w, e, n, undo, "Change Post Pitch",
-                [](SplineFence& u, float v) { u.PostPitch = std::max(v, 0.05f); }, 2.4f,
-                "Target metres between stations along the draped centerline; each run bends it "
-                "slightly so its stations land on both authored points",
-                {}, 0.05f);
+    AddComponentIntRowWithDrag<SplineFence>(
+        context.Parent, "Seed", static_cast<int>(comp->Seed), world, entity, notifications, undo, "Change Seed",
+        [](SplineFence& u, int v)
+        { u.Seed = static_cast<uint32>(std::max(v, 0)); }, 0,
+        "Salts the per-station, per-span and per-crest-piece pool picks; same seed "
+        "reproduces the same picks on every rebuild. Caps are chosen by length, not by "
+        "the seed");
 
-            {
-                static const std::vector<Dropdown::Option> kConformOptions = {
-                    {"0", "None"},
-                    {"1", "Height"},
-                    {"2", "Height And Slope"},
-                };
-                AddEnumDropdownRow<SplinePlacementConform>(
-                    ctx, "Conform", kConformOptions, comp->ConformMode, "Change Conform Mode",
-                    &SplineFence::ConformMode,
-                    "How stations meet the surface under the spline; spans derive their frame "
-                    "from the stations and cast no rays");
-            }
-            {
-                static const std::vector<Dropdown::Option> kConformTargetOptions = {
-                    {"0", "Scene"},
-                    {"1", "Terrain Only"},
-                };
-                AddEnumDropdownRow<SplineConformTarget>(
-                    ctx, "Conform Target", kConformTargetOptions, comp->ConformTarget,
-                    "Change Conform Target", &SplineFence::ConformTarget,
-                    "What the conform ray may land on. Scene takes the nearest surface of any "
-                    "kind, so a run passing under a tree or an awning stands on top of it — and "
-                    "because a run's length is measured over the draped line, that also changes "
-                    "how many spans the run builds; TerrainOnly makes scenery transparent. Under "
-                    "TerrainOnly the drawn drape line can still ride scene props while the built "
-                    "pieces stand on the terrain under them — the line does not read this "
-                    "setting yet");
-            }
-            {
-                static const std::vector<Dropdown::Option> kGradeOptions = {
-                    {"0", "Racked"},
-                    {"1", "Stepped"},
-                    {"2", "Sheared"},
-                };
-                AddEnumDropdownRow<SplineSpanGrade>(
-                    ctx, "Span Grade", kGradeOptions, comp->SpanGrade, "Change Span Grade",
-                    &SplineFence::SpanGrade,
-                    "Racked rotates the whole piece onto the grade, which leans its posts with it "
-                    "(rails, hedges); Stepped holds it level at the lower station, so the height "
-                    "jumps at stations and the uphill end buries (brick walls, castle walls); "
-                    "Sheared slants only the run and leaves the piece's up axis with its stations, "
-                    "so both ends meet their own station — the joinery a real fence uses on a "
-                    "slope, and the one to reach for when a stepped run reads as a staircase. Its "
-                    "posts therefore stand however the stations stand: plumb at Slope Blend 0, "
-                    "leaning with them above it");
-            }
-            {
-                static const std::vector<Dropdown::Option> kPlantOptions = {
-                    {"0", "Bounds Min"},
-                    {"1", "Pivot Plane"},
-                };
-                AddEnumDropdownRow<SplinePlantMode>(
-                    ctx, "Plant Mode", kPlantOptions, comp->PlantMode, "Change Plant Mode",
-                    &SplineFence::PlantMode,
-                    "Pivot Plane lands the mesh's local y=0 on the ground and lets a planting "
-                    "skirt bury — right for kits authored that way. Bounds Min lifts until the "
-                    "lowest vertex touches, which floats a skirted mesh");
-            }
+    BuildOverrideRows(context);
+}
 
-            AddComponentFloatRowWithDrag<SplineFence>(
-                ctx.Parent, "Slope Blend", comp->SlopeBlend, w, e, n, undo, "Change Slope Blend",
-                [](SplineFence& u, float v) { u.SlopeBlend = Math::Clamp01(v); }, 0.0f,
-                "0 = plumb posts, which is what a real fence does; 1 = posts lean into the slope",
-                {}, 0.0f, 1.0f);
+} // namespace
 
-            AddComponentFloatRowWithDrag<SplineFence>(
-                ctx.Parent, "Span Max Stretch", comp->SpanMaxStretch, w, e, n, undo,
-                "Change Span Max Stretch",
-                [](SplineFence& u, float v) { u.SpanMaxStretch = std::max(v, 1.0f); }, 1.25f,
-                "Cap on a span's length scale before the run re-walks with one more or one fewer "
-                "station; a run no count satisfies is reported rather than silently distorted",
-                {}, 1.0f);
-
-            AddComponentIntRowWithDrag<SplineFence>(
-                ctx.Parent, "Seed", static_cast<int>(comp->Seed), w, e, n, undo, "Change Seed",
-                [](SplineFence& u, int v) { u.Seed = static_cast<uint32>(std::max(v, 0)); }, 0,
-                "Salts the per-station, per-span and per-crest-piece pool picks; same seed "
-                "reproduces the same picks on every rebuild. Caps are chosen by length, not by "
-                "the seed");
-
-            BuildOverrideRows(ctx);
-        });
+void RegisterSplineFenceInspector()
+{
+    InspectorRegistry::Get().RegisterComponentInspector<Components::SplineFence>(BuildSplineFenceInspector);
 }
 
 } // namespace GameEngine

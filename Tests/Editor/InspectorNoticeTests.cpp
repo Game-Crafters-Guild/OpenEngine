@@ -402,6 +402,43 @@ TEST(InspectorNoticeLayout, ATitledNoticesGlyphAndTitleTakeItsKindsColors)
     }
 }
 
+// A glyph the notice sets replaces the kind's image and keeps the kind's tint.
+TEST(InspectorNoticeLayout, ASetGlyphReplacesTheKindsImageAndKeepsItsTint)
+{
+    auto root = std::make_unique<UIElement>();
+    std::vector<InspectorNotice*> notices;
+    for (const InspectorNotice::Glyph glyph :
+         {InspectorNotice::Glyph::OfKind, InspectorNotice::Glyph::Clock, InspectorNotice::Glyph::Check})
+    {
+        auto notice = std::make_unique<InspectorNotice>("It builds when the model loads.",
+                                                        InspectorNotice::Kind::Information);
+        notice->SetTitle("Waiting");
+        notice->SetGlyph(glyph);
+        notices.push_back(notice.get());
+        root->AddChild(std::move(notice));
+    }
+    std::string diagnostic;
+    ASSERT_TRUE(AttachRequestedSheets(*root, diagnostic)) << diagnostic;
+
+    InspectorLayoutFixture fixture;
+    fixture.ViewportW = 600;
+    fixture.ExtraSheets = {"Assets/UI/theme/core.css"};
+    if (!fixture.Build(std::move(root)))
+        GTEST_SKIP() << fixture.Diagnostic;
+
+    const char* expectedImages[] = {"Icons/info.svg", "Icons/timer.svg", "Icons/checked.svg"};
+    const uint32_t kindTint =
+        FindByClass(notices[0], "inspector-notice-glyph")->GetResolvedStyle().Visual.BackgroundImage.Tint;
+    for (size_t i = 0; i < notices.size(); ++i)
+    {
+        UIElement* glyph = FindByClass(notices[i], "inspector-notice-glyph");
+        ASSERT_NE(glyph, nullptr);
+        const auto& image = glyph->GetResolvedStyle().Visual.BackgroundImage;
+        EXPECT_EQ(image.Source.Value, expectedImages[i]) << "notice " << i;
+        EXPECT_EQ(image.Tint, kindTint) << "notice " << i;
+    }
+}
+
 // An inspector can be rebuilt inside an event dispatch, where moving an element between parents is
 // refused; a notice built there still carries its text and its action.
 TEST(InspectorNotice, ANoticeBuiltInsideADispatchHasItsTextAndAction)

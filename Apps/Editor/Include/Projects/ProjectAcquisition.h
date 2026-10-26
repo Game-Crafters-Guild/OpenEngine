@@ -94,8 +94,17 @@ private:
 
     static void PublishTo(SharedState& state, ProjectAcquireState status,
                           const std::filesystem::path& destination, std::string error);
+    // Removes destination when the acquisition made it, then publishes Failed with error.
+    static void Fail(SharedState& state, const std::filesystem::path& destination, bool destinationExisted,
+                     std::string error);
+    // The job: runs Acquire and ends the acquisition as failed, with the message, when Acquire
+    // throws, so the status never stays Running.
     static void RunWorker(const std::shared_ptr<SharedState>& state,
                           ProjectAcquireRequest request, WorkerContext context);
+    // Acquires the project into request.Destination and publishes the result. destinationExisted
+    // tells whether the folder was there before the acquisition, which then never deletes it.
+    static void Acquire(const std::shared_ptr<SharedState>& state, ProjectAcquireRequest request,
+                        WorkerContext context, bool destinationExisted);
 
     std::shared_ptr<SharedState> m_Shared = std::make_shared<SharedState>();
     std::unique_ptr<JobSystem::JobChannel> m_Channel;

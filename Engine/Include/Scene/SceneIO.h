@@ -46,7 +46,7 @@ void ClearLastSceneIOError();
 // entity or resource reference is a claim about the document, not a value a component can decline.
 struct SceneLoadSkip
 {
-    std::string entityId;       // instantiated scene entity id (include/blueprint prefix applied)
+    std::string entityId;       // instantiated scene entity id (include/prefab prefix applied)
     std::string component;      // authored component name
     std::string field;          // authored property key; empty when the whole component failed
     std::string message;        // the schema's error, or the fix for a field the component does not have
@@ -165,7 +165,7 @@ struct LoadOptions
     std::filesystem::path assetRootOverride;
 
     // The project directory. A file the loader names in an error message is spelled relative to it
-    // ("Assets/props/crate.blueprint"), the way the user finds it; empty, or a file outside it, the
+    // ("Assets/props/crate.prefab"), the way the user finds it; empty, or a file outside it, the
     // message spells the path absolute.
     std::filesystem::path projectRoot;
 
@@ -194,9 +194,10 @@ struct SaveOptions
 {
     bool ensureSceneEntityTags = true; // assign SceneEntityTag to entities that lack one
 
-    // If true, entities that were loaded from [blueprint] sections and tagged in-world will be re-saved
-    // back to [blueprint] sections (with [resource] lines), rather than being flattened into [entity] blocks.
-    bool preserveBlueprintInstances = true;
+    // If true, each prefab instance is saved as a [prefab] section (with its [resource] line) that holds
+    // what the instance changes in its prefab, rather than flattened into [entity] blocks. The save
+    // reads each prefab's path from assetResolver and refuses an instance it cannot name.
+    bool preservePrefabInstances = true;
 
     // If true, entities that were loaded from [subscene] sections and tagged in-world will be re-saved
     // back to [subscene] sections (with [resource] lines), rather than being flattened into [entity] blocks.
@@ -218,7 +219,7 @@ struct SaveOptions
 
 // Load a human-readable .scene file into an ECS world.
 // - Replace: clears the world first.
-// - Additive: keeps existing entities; loaded entity ids are namespace-prefixed where needed (subscenes/blueprints).
+// - Additive: keeps existing entities; loaded entity ids are namespace-prefixed where needed (subscenes/prefabs).
 // A false return is reported through GetLastSceneIOError, not the log: the caller owns the outcome
 // and logs the record once, at the level the outcome deserves. The loader logs only Debug detail.
 bool LoadSceneFromFile(ECS::World& world,

@@ -42,6 +42,7 @@
 
 #include "TestDeviceHelper.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -63,7 +64,7 @@ namespace
 struct GlareProbePC
 {
     float kernelParams[4]; // angular radius, irradiance, sample count, mode
-    float sweepParams[4];  // smallest polar angle swept, largest
+    float sweepParams[4];  // smallest polar angle swept, largest; mode 3: sun direction, disc radius
     float visParams[4];    // probe uv, probe radius uv
     float cascadeVP[16];   // mode 3: the cascade's light view-projection, column-major
     float cascadeProbe[4]; // mode 3: xyz world position under test, w depth bias
@@ -72,6 +73,9 @@ struct GlareProbePC
 // The sun's apparent angular radius, radians — the width SunGlareRenderNode gives the kernel's
 // core. Half of the ~0.533 degree apparent diameter.
 constexpr float kSunAngularRadius = 0.004651f;
+// The angular radius of the disc both visibility terms sample: SunGlareRenderNode's probe ring,
+// 1.4 sun radii.
+constexpr float kVisibilityDiscRadius = 1.4f * kSunAngularRadius;
 // Above-atmosphere irradiance of a 100 klx sun on the engine's unitless scale, as the sky uploads it:
 // 100000 / 203 (LightPhotometry.h) times the sky's ground-to-top-of-atmosphere lift.
 const float kShippedSunIrradiance =
@@ -311,24 +315,20 @@ class SunGlareRadianceTest : public ::testing::Test
     }
 
     // A one-layer depth-comparison array carrying a single stored depth, so the cascade lookup
-    // has something real to compare against. `storedDepth` is reverse-Z NDC: a LARGER value is a
-    // nearer occluder, so 0.9 stands for something close in front of the eye and 0.0 for an
-    // empty cascade cleared to the far plane -- which is what the island scene turned out to
-    // have, and the reason this term needed a test of its own.
-    // A one-layer depth-comparison array carrying a single stored depth, so the cascade lookup
     // has something real to compare against. `storedDepth` is reverse-Z NDC: a LARGER value is
     // a nearer occluder, so 0.9 stands for something close in front of the receiver and 0.0 for
-    // an empty cascade cleared to the far plane -- which is what the island scene turned out to
-    // have, and the reason this term needed a behavioural test at all.
+    // an empty cascade cleared to the far plane.
     //
     // Written by CLEARING a depth render pass rather than by uploading a buffer:
     // CopyBufferToTextureSubresource hardcodes VK_IMAGE_ASPECT_COLOR_BIT
-    // (VulkanCommandList.cpp), so a buffer copy into a depth image silently writes nothing --
-    // which is exactly what the first version of this test did, and what its own
-    // two-different-maps-same-answer check caught.
+    // (VulkanCommandList.cpp), so a buffer copy into a depth image silently writes nothing; the
+    // tests' two-different-maps-same-answer check catches a map that was never written.
+    //
+    // 256 texels a side, so the bilinear comparison's one-texel ramp at the map's border is
+    // narrow beside the disc's footprint in the edge-crossing test.
     TextureHandle MakeShadowArray(float storedDepth)
     {
-        constexpr uint32_t kW = 4u, kH = 4u;
+        constexpr uint32_t kW = 256u, kH = 256u;
         TextureDesc td{};
         td.width = kW;
         td.height = kH;
@@ -371,24 +371,50 @@ class SunGlareRadianceTest : public ::testing::Test
         return m_DummyShadow;
     }
 
-    // GE_SunGlareCascadeSunlit at `posWS`, through a cascade whose stored depth is
-    // `storedDepth`. The light view-projection is the IDENTITY, so posWS.z IS the receiver's
-    // NDC depth and posWS.xy lands directly in the cascade's [-1, 1] box.
-    float ProbeCascade(float storedDepth, float posX, float posY, float posZ, float bias = 0.0f)
+    // The cascade term at the eye `posWS`: the fraction of the sun's disc the beam reaches,
+    // through a cascade whose every texel stores `shadow`'s one depth. The sun is straight up
+    // the light's depth axis, and the light view-projection turns the map by `mapTurn` radians
+    // about that axis and scales it by `lateralScale` NDC units per world unit: posWS.z IS the
+    // eye's NDC depth, and the map's NDC x is lateralScale times posWS.xy measured along
+    // (cos mapTurn, sin mapTurn). With no turn and unit scale, posWS.xy lands directly in the
+    // cascade's [-1, 1] box.
+    float ProbeCascade(TextureHandle shadow, float posX, float posY, float posZ, float bias,
+                       float mapTurn, float lateralScale)
     {
-        TextureHandle shadow = MakeShadowArray(storedDepth);
-        TextureHandle dummyDepth = MakeDepth(0u);
         GlareProbePC pc{};
         pc.kernelParams[0] = kSunAngularRadius;
         pc.kernelParams[3] = 3.0f; // mode 3
-        for (int i = 0; i < 16; ++i)
-            pc.cascadeVP[i] = (i % 5 == 0) ? 1.0f : 0.0f; // identity, column-major
+        pc.sweepParams[2] = 1.0f;  // toward the sun: +Z, the reverse-Z light's nearer side
+        pc.sweepParams[3] = kVisibilityDiscRadius;
+        const float scaledCosTurn = lateralScale * std::cos(mapTurn);
+        const float scaledSinTurn = lateralScale * std::sin(mapTurn);
+        // Column-major: NDC x = scaledCosTurn * x + scaledSinTurn * y,
+        // NDC y = -scaledSinTurn * x + scaledCosTurn * y, NDC z = z.
+        pc.cascadeVP[0] = scaledCosTurn;
+        pc.cascadeVP[1] = -scaledSinTurn;
+        pc.cascadeVP[4] = scaledSinTurn;
+        pc.cascadeVP[5] = scaledCosTurn;
+        pc.cascadeVP[10] = 1.0f;
+        pc.cascadeVP[15] = 1.0f;
         pc.cascadeProbe[0] = posX;
         pc.cascadeProbe[1] = posY;
         pc.cascadeProbe[2] = posZ;
         pc.cascadeProbe[3] = bias;
-        const std::vector<float> raw = Dispatch(pc, 1u, dummyDepth, shadow);
+        const std::vector<float> raw = Dispatch(pc, 1u, EnsureDummyDepth(), shadow);
         return raw[0];
+    }
+
+    // The same at no turn, through a fresh cascade storing `storedDepth`.
+    float ProbeCascade(float storedDepth, float posX, float posY, float posZ, float bias = 0.0f)
+    {
+        return ProbeCascade(MakeShadowArray(storedDepth), posX, posY, posZ, bias, 0.0f, 1.0f);
+    }
+
+    TextureHandle EnsureDummyDepth()
+    {
+        if (!m_DummyDepth.IsValid())
+            m_DummyDepth = MakeDepth(0u);
+        return m_DummyDepth;
     }
 
     std::vector<float> Dispatch(const GlareProbePC& pc, uint32_t slots, TextureHandle depth,
@@ -530,6 +556,7 @@ class SunGlareRadianceTest : public ::testing::Test
     SamplerHandle m_Sampler{};
     SamplerHandle m_ShadowSampler{};
     TextureHandle m_DummyShadow{};
+    TextureHandle m_DummyDepth{};
     std::vector<BufferHandle> m_Buffers;
     std::vector<TextureHandle> m_Textures;
 };
@@ -722,6 +749,68 @@ TEST_F(SunGlareRadianceTest, CascadeBiasPushesTheReceiverTowardTheLight)
            "for reverse-Z";
 }
 
+// An occluder's edge crossing the sun's disc where only the cascades see it: a sun off screen,
+// or a caster the depth probe cannot reach. The term is the FRACTION of the disc the beam
+// reaches, so as the edge sweeps across the disc the halo fades through every tap the edge
+// passes, instead of switching off in the frame the eye's own point enters the shadow.
+//
+// The edge is the map's own border. Every texel stores an occluder 0.4 in front of the eye, and
+// a lookup outside the map reads lit, so the line NDC x = 1 is the silhouette of a half-plane
+// occluder. The RHI's buffer-to-texture copy writes the color aspect only, so a depth map
+// holding two different values cannot be uploaded; the border is the edge that can. The map is
+// turned against the tap pattern so that no two taps cross the edge in the same step.
+TEST_F(SunGlareRadianceTest, CascadeEdgeCrossingTheDiscFadesThroughEveryTap)
+{
+    constexpr int kSteps = 400;
+    constexpr float kMapTurn = 0.35f; // radians, about 20 degrees
+    // NDC units per world unit across the map: the sweep then spans half the map, about 64
+    // texels, so the border's one-texel bilinear ramp is a small part of it.
+    constexpr float kLateralScale = 50.0f;
+    // An occluder at distance d hides the disc over a lateral band of d times the disc's
+    // diameter. The sweep covers four times that on each side of the edge.
+    constexpr float kOccluderDistance = 0.4f;
+    constexpr float kHalfSweep = 4.0f * kOccluderDistance * kVisibilityDiscRadius;
+    // The largest share of the pattern's weight one tap carries: the center tap, 1 of 8.5.
+    constexpr float kMaxStep = 0.125f;
+
+    const TextureHandle shadow = MakeShadowArray(0.5f + kOccluderDistance);
+    const float cosTurn = std::cos(kMapTurn);
+    const float sinTurn = std::sin(kMapTurn);
+    std::vector<float> visibility;
+    visibility.reserve(kSteps + 1);
+    for (int i = 0; i <= kSteps; ++i)
+    {
+        // From outside the map's border to inside it, along the map's turned x axis, in world
+        // units: the border is at 1 / kLateralScale.
+        const float along = 1.0f / kLateralScale + kHalfSweep -
+                            2.0f * kHalfSweep * static_cast<float>(i) / static_cast<float>(kSteps);
+        visibility.push_back(
+            ProbeCascade(shadow, along * cosTurn, along * sinTurn, 0.5f, 0.0f, kMapTurn, kLateralScale));
+    }
+
+    EXPECT_FLOAT_EQ(visibility.front(), 1.0f) << "the disc reads hidden with the edge clear of it";
+    EXPECT_FLOAT_EQ(visibility.back(), 0.0f) << "the disc reads visible behind the occluder";
+
+    float largestStep = 0.0f;
+    int levels = 0;
+    for (int i = 1; i <= kSteps; ++i)
+    {
+        const float step = visibility[i - 1] - visibility[i];
+        EXPECT_GE(step, -1e-6f) << "the halo brightened at step " << i
+                                << " while the occluder only advanced";
+        largestStep = std::max(largestStep, step);
+        if (step > 1e-6f)
+            ++levels;
+    }
+    EXPECT_LE(largestStep, kMaxStep + 1e-3f)
+        << "one step of the edge took out more than any single tap carries: the term is not "
+           "sampling the disc";
+    EXPECT_LE(largestStep, 0.25f);
+    EXPECT_GE(levels, 8) << "the fade passed through too few levels to read as continuous";
+    RecordProperty("largestStep", std::to_string(largestStep));
+    RecordProperty("levels", levels);
+}
+
 // ---------------------------------------------------------------------------
 // Source contracts. No device needed; these pin what the probe above measures.
 // ---------------------------------------------------------------------------
@@ -797,7 +886,7 @@ TEST(SunGlareSourceContract, ThereIsExactlyOneGlareFractionConstant)
         << "the glare pass no longer bounds what it writes to the fp16 target";
 }
 
-TEST(SunGlareSourceContract, VisibilityIsTheProductOfBothIndependentTerms)
+TEST(SunGlareSourceContract, VisibilityCombinesTheThreeTermsWithoutCountingAnOccluderTwice)
 {
     const std::string vsBody =
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/Includes/sun_glare_vs.glsl");
@@ -811,16 +900,24 @@ TEST(SunGlareSourceContract, VisibilityIsTheProductOfBothIndependentTerms)
 
     // No term alone can see every occluder in this engine: the cascades cannot see CBT terrain
     // (it casts no shadows), the screen probe cannot see anything while the sun is off screen,
-    // and the CPU skyline march sees only terrain. The product is the fix; dropping any one of
-    // them silently reopens a hole, and the off-frame one was a visible one-frame POP.
-    EXPECT_NE(vsBody.find("GE_SunGlareCascadeSunlit"), std::string::npos)
+    // and the CPU skyline march sees only terrain. Dropping any one of them silently reopens a
+    // hole, and the off-frame one was a visible one-frame POP. The cascades and the skyline see
+    // disjoint occluders and multiply; the probe sees both, so it takes the minimum with their
+    // product: multiplied in, a caster on screen covering half the disc would read 0.25.
+    const std::string castersPass =
+        LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare_casters.comp");
+    ASSERT_FALSE(castersPass.empty());
+    EXPECT_NE(castersPass.find("GE_SunGlareCastersVisibility("), std::string::npos)
         << "the cascade term is gone: an off-frame or behind-camera sun would glare through "
            "any occluder";
+    EXPECT_NE(vsBody.find("uCasters.casters"), std::string::npos)
+        << "the vertex stage no longer reads the cascade term its pass writes";
     EXPECT_NE(vsBody.find("GE_SUN_GLARE_PROBE("), std::string::npos)
         << "the screen probe is gone: CBT terrain casts no shadows, so the sun would glare "
            "through every hill";
-    EXPECT_NE(vsBody.find("sunlit * onScreen * pc.horizon.x"), std::string::npos)
-        << "visibility is no longer the product of all three terms";
+    EXPECT_NE(vsBody.find("min(onScreen, sunlit * pc.horizon.x)"), std::string::npos)
+        << "visibility is no longer the minimum of the screen probe and the product of the "
+           "cascade and skyline terms";
     EXPECT_NE(vsBody.find("pc.horizon.x"), std::string::npos)
         << "the terrain-skyline term is gone: a sun just outside the frame edge would be "
            "unoccludable, and the halo would step the frame its centre crosses in";
@@ -857,7 +954,7 @@ TEST(SunGlareSourceContract, TheMultisampledProbeAveragesOverSamplesRatherThanPi
 TEST(SunGlareSourceContract, ShadowBlockPrefixMatchesTheShadowSamplingHeader)
 {
     const std::string vert =
-        LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/Includes/sun_glare_vs.glsl");
+        LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/sun_glare_casters.comp");
     const std::string header =
         LoadRepoFileWithoutComments("Engine/Modules/Rendering/Shaders/Includes/shadow_sampling.glsl");
     ASSERT_FALSE(vert.empty());
@@ -961,9 +1058,9 @@ TEST(SunGlareSourceContract, TheSkylineTermIsIndependentOfWhereTheCameraPoints)
     // The fade width is the sun's own angular radius, so it is geometry rather than a dial.
     EXPECT_NE(node.find("2.0f * radiusTangent"), std::string::npos)
         << "the skyline fade is no longer spanned by the sun's angular diameter";
-    // Four uses: the kernel core width, the probe ring scale on each axis, and the skyline fade
-    // width. A fifth occurrence is probably a new constant in disguise.
-    EXPECT_EQ(CountOccurrences(node, "kSunAngularRadiusRad"), 4u);
+    // Three uses: the kernel core width, the visibility disc both probes sample, and the
+    // skyline fade width. A fourth occurrence is probably a new constant in disguise.
+    EXPECT_EQ(CountOccurrences(node, "kSunAngularRadiusRad"), 3u);
     // The sun's angular radius is named once, in SkySettings.h, and the glare and the sky read
     // the same name. A local definition here is the duplication coming back.
     EXPECT_EQ(CountOccurrences(node, "kSunAngularRadiusRad ="), 0u)

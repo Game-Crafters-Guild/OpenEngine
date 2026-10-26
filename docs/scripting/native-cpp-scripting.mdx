@@ -69,7 +69,7 @@ struct SpawnHint : ECS::ComponentBase {
 | Marker | On | Effect |
 |---|---|---|
 | `@ge-no-add` | struct | The component registers, loads and saves as usual but stays out of the Add Component menu. Use it for a component a tool or a system adds, where a hand-added one would be wrong. |
-| `@ge-editor-only` | struct | The component loads, saves and shows in the editor as usual. A game export removes its lines from every scene and blueprint it ships, so the shipped scene has no trace of it. The entity stays, with its other components and its children. Use it for annotations only the editor reads. |
+| `@ge-editor-only` | struct | The component loads, saves and shows in the editor as usual. A game export removes its lines from every scene and prefab it ships, so the shipped scene has no trace of it. The entity stays, with its other components and its children. Use it for annotations only the editor reads. |
 | `[DoNotSerialize]` | struct or field | Never saved or loaded: runtime state rebuilt every session. On a field, only that field. |
 | `@ge-readonly Writer` | struct | The engine owns the component, and `Writer` (the text after the marker) is the system that writes it. Its C# mirror is read-only, and a script's `ComponentType<T>.Set` is refused with an error that names the writer. |
 | `@ge-engine-internal Writer` | struct | Engine runtime state, no game API: the component has no C# mirror and no web type, and a script cannot write it. `Writer` is the system that writes it. |

@@ -35,6 +35,7 @@ class UIElement;
 class Label;
 class ScrollView;
 class TextField;
+struct UIEvent;
 class Dropdown;
 class Button;
 class InspectorSection;
@@ -302,6 +303,8 @@ private:
     void ReleaseShownAssetReloadSubscription();
     void CommitGraphTransition(bool commitUndo);
     void AdjustValueByDrag(const std::string& varName, TextField* field, float deltaX);
+    // Escape or another button during a script variable drag: the start value comes back and is applied.
+    void CancelScriptVariableDrag(UIEvent& e, const std::string& varName, TextField* field, UIElement* label);
     void WireSoloHandlersForSections();
     void ExecuteRemoveComponent(ECS::ComponentTypeId typeId);
     void EnsurePostProcessVolumeRemoveModal();
@@ -500,6 +503,8 @@ private:
     float m_DragStartX = 0.0f;
     std::string m_DragStartValue;
     std::string m_DragVariableName;
+    // The press passed InspectorDrag::kInspectorDragThresholdPx: below it the press is a click.
+    bool m_DragBegun = false;
     
     // Smart folder inspector widget (owned by UI tree when added)
     SmartFolderInspector* m_SmartFolderInspector = nullptr;

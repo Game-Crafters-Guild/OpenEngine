@@ -157,10 +157,7 @@ EMSCRIPTEN_KEEPALIVE int32_t ge_entity_destroy(uint32_t entityId)
     ECS::EntityHandle entity;
     if (!world || !ResolveEntity(*world, entityId, "ge_entity_destroy", entity))
         return kFailed;
-    std::vector<ECS::EntityHandle> doomed = Components::DescendantsOf(*world, entity);
-    doomed.push_back(entity);
-    for (const ECS::EntityHandle e : doomed)
-        world->DestroyEntityImmediate(e);
+    Components::DestroySubtreeImmediate(*world, entity);
     return kOk;
 }
 

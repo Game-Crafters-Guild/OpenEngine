@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <vector>
 
 using GameEngine::Mathematics::AABB;
@@ -182,6 +183,28 @@ TEST(GeometryTests, SegmentsIntersectWhenTheyCrossOrTouchAndNotWhenApart)
     EXPECT_FALSE(SegmentsIntersect({0.0f, 0.0f}, {2.0f, 2.0f}, {0.0f, 1.0f}, {1.0f, 2.0f}));
 }
 
+TEST(GeometryTests, SegmentIntersectionFractionsLocatesTheCrossingOnBothSegments)
+{
+    using GameEngine::Mathematics::SegmentIntersectionFractions;
+    const std::optional<Vector2> cross = SegmentIntersectionFractions({0.0f, 0.0f}, {4.0f, 0.0f}, {1.0f, -1.0f}, {1.0f, 3.0f});
+    ASSERT_TRUE(cross.has_value());
+    EXPECT_FLOAT_EQ(cross->x, 0.25f);
+    EXPECT_FLOAT_EQ(cross->y, 0.25f);
+    const std::optional<Vector2> atEnd = SegmentIntersectionFractions({0.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, -1.0f}, {2.0f, 1.0f});
+    ASSERT_TRUE(atEnd.has_value());
+    EXPECT_FLOAT_EQ(atEnd->x, 1.0f);
+    EXPECT_FALSE(SegmentIntersectionFractions({0.0f, 0.0f}, {2.0f, 0.0f}, {1.0f, 0.0f}, {3.0f, 0.0f}).has_value()); // collinear
+    EXPECT_FALSE(SegmentIntersectionFractions({0.0f, 0.0f}, {2.0f, 0.0f}, {3.0f, -1.0f}, {3.0f, 1.0f}).has_value()); // apart
+}
+
+TEST(GeometryTests, GroundDistanceIgnoresHeight)
+{
+    using GameEngine::Mathematics::GroundDistance;
+    using GameEngine::Mathematics::GroundPoint;
+    EXPECT_EQ(GroundPoint(Vector3(1.0f, 7.0f, -2.0f)), Vector2(1.0f, -2.0f));
+    EXPECT_FLOAT_EQ(GroundDistance(Vector3(0.0f, 0.0f, 0.0f), Vector3(3.0f, 100.0f, 4.0f)), 5.0f);
+}
+
 TEST(GeometryTests, ConvexHullKeepsTheCornersCounterClockwiseAndDropsInnerAndCollinearPoints)
 {
     const std::vector<Vector2> points = {{1.0f, 1.0f}, {0.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 2.0f},
@@ -248,4 +271,28 @@ TEST(GeometryTests, ClosestPointOnSegmentClampsToTheEnds)
     EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector3(1.0f, -3.0f, 0.0f), a, b).y, 0.0f);
     EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector3(1.0f, 9.0f, 0.0f), a, b).y, 4.0f);
     EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector3(1.0f, 9.0f, 0.0f), a, a).y, 0.0f);
+}
+
+TEST(GeometryTests, ClosestPointOnSegmentOnThePlaneClampsToTheEnds)
+{
+    using GameEngine::Mathematics::ClosestPointOnSegment;
+    using GameEngine::Mathematics::Vector2;
+    const Vector2 a(0.0f, 0.0f);
+    const Vector2 b(4.0f, 0.0f);
+    const Vector2 middle = ClosestPointOnSegment(Vector2(2.0f, 3.0f), a, b);
+    EXPECT_FLOAT_EQ(middle.x, 2.0f);
+    EXPECT_FLOAT_EQ(middle.y, 0.0f);
+    EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector2(-3.0f, 1.0f), a, b).x, 0.0f);
+    EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector2(9.0f, -1.0f), a, b).x, 4.0f);
+    EXPECT_FLOAT_EQ(ClosestPointOnSegment(Vector2(9.0f, 1.0f), a, a).x, 0.0f);
+}
+
+TEST(GeometryTests, DistanceToSegmentOnThePlaneIsToTheNearestPointOfTheSegment)
+{
+    using GameEngine::Mathematics::DistanceToSegment;
+    using GameEngine::Mathematics::Vector2;
+    const Vector2 a(0.0f, 0.0f);
+    const Vector2 b(4.0f, 0.0f);
+    EXPECT_FLOAT_EQ(DistanceToSegment(Vector2(2.0f, 3.0f), a, b), 3.0f);
+    EXPECT_FLOAT_EQ(DistanceToSegment(Vector2(7.0f, 4.0f), a, b), 5.0f) << "past the end, to the end";
 }

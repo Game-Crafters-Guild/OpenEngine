@@ -20,7 +20,7 @@ namespace GameEngine
 
 namespace
 {
-// Fast, schema-aware extraction for .scene/.blueprint INI-ish files. Walks
+// Fast, schema-aware extraction for .scene/.prefab INI-ish files. Walks
 // the content for `path="..."` / `path=...` / `@"path"` forms.
 static std::vector<std::string> ExtractSceneIniPathRefs(const std::string& content)
 {
@@ -138,9 +138,9 @@ AssetDependencyInfo AssetDependencyExtractor::ExtractDependencies(const AssetMet
         info.Dependencies = ExtractGUIDReferences(content);
         info.DependencyPaths = ExtractPathReferences(content);
 
-        if (metadata.Type == AssetType::Scene ||
+        if (metadata.Type == AssetType::Scene || metadata.Type == AssetType::Prefab ||
             EndsWithIgnoreCase(metadata.Path.string(), ".scene") ||
-            EndsWithIgnoreCase(metadata.Path.string(), ".blueprint"))
+            EndsWithIgnoreCase(metadata.Path.string(), ".prefab"))
         {
             std::vector<std::string> extra = ExtractSceneIniPathRefs(content);
             if (!extra.empty())
@@ -260,7 +260,7 @@ std::vector<std::string> AssetDependencyExtractor::ExtractPathReferences(const s
         std::regex(R"(["']([^"']*\.(fbx|obj|dae|gltf|glb))["'])", std::regex_constants::icase),
         std::regex(R"(["']([^"']*\.(wav|mp3|ogg|flac))["'])", std::regex_constants::icase),
         std::regex(R"(["']([^"']*\.(xml|uxml|css|uss))["'])", std::regex_constants::icase),
-        std::regex(R"(["']([^"']*\.(scene|blueprint))["'])", std::regex_constants::icase),
+        std::regex(R"(["']([^"']*\.(scene|prefab))["'])", std::regex_constants::icase),
         // A project or package shader package is named with its source, as a render
         // pipeline pass names it ("project:RenderPipelines/Shaders/fog.shaderpkg"). An
         // unprefixed name is an engine package, which the export ships with the engine's

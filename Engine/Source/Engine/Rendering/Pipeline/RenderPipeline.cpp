@@ -1135,17 +1135,7 @@ RenderPipelineBlueprint RenderPipelineCompiler::Compile(const GameEngine::Render
             PipelineIssue iss{};
             iss.severity = PipelineIssueSeverity::Error;
             iss.nodeId = id;
-            // Deleted types get an actionable migration hint: just removing
-            // the pass block would compile but silently resurrect the hazard
-            // its replacement fixes (an early consumer's buffer ref failing to
-            // resolve drops that stage).
-            if (type == "ExposureHistoryDeclare")
-                iss.message =
-                    "RenderPipelineCompiler: pass type 'ExposureHistoryDeclare' was deleted — "
-                    "remove this pass AND declare an \"ExposureHistory\" entry in \"resources\" "
-                    "(kind Buffer, scope PerView, size.bytes 16, usage [Storage], zeroOnCreate "
-                    "true); consumers materialize it on first resolve.";
-            else if (unknownPassTypes == UnknownPassTypes::PendingScripts)
+            if (unknownPassTypes == UnknownPassTypes::PendingScripts)
             {
                 iss.severity = PipelineIssueSeverity::Info;
                 iss.code = PipelineIssueCode::PendingScriptPass;
@@ -2092,8 +2082,18 @@ PipelineBufferBindingRG RenderPipelineInstance::MaterializeBuffer(Rendering::Ren
         perView ? ("Pipeline." + m_Blueprint.pipelineName + ".View" +
                    std::to_string(static_cast<uint32_t>(viewId)) + "." + name)
                 : ("Pipeline." + m_Blueprint.pipelineName + "." + name);
-    bd.debugName = poolName.c_str();
 
+    // perFrameCopies: a small history buffer one queue writes and another reads, kept as one copy
+    // per frame in flight, so a frame's write never waits for an earlier frame's reads.
+    if (jr.contains("perFrameCopies") && jr["perFrameCopies"].is_boolean() && jr["perFrameCopies"].get<bool>())
+    {
+        const PipelineBufferBindingRG binding = MaterializeBufferCopies(frame, name, poolName, bd);
+        if (binding.IsValid())
+            m_FrameResources.Buffers[{scopeView, name}] = binding;
+        return binding;
+    }
+
+    bd.debugName = poolName.c_str();
     bool needsZeroInit = false;
     const Rendering::RenderGraph::RGBuffer b =
         frame.ImportPersistentBuffer(poolName.c_str(), bd, &needsZeroInit);
@@ -2108,6 +2108,93 @@ PipelineBufferBindingRG RenderPipelineInstance::MaterializeBuffer(Rendering::Ren
     binding.Graph = b;
     m_FrameResources.Buffers[{scopeView, name}] = binding;
     return binding;
+}
+
+PipelineBufferBindingRG RenderPipelineInstance::MaterializeBufferCopies(Rendering::RenderGraph::RGFrame& frame,
+                                                                        const std::string& name,
+                                                                        const std::string& poolName,
+                                                                        Rendering::BufferDesc desc)
+{
+    // The copy this frame writes was last used kBufferCopies frames of this view ago. The device
+    // has finished that frame before this one records (IDevice::BeginFrame waits for it), so the
+    // render graph's cross-frame ordering finds that work complete and adds no wait.
+    BufferCopiesState& state = m_BufferCopies.GetOrInsert(poolName);
+    if (state.CarryPassName.empty())
+    {
+        for (uint32_t copy = 0; copy < kBufferCopies; ++copy)
+            state.CopyNames[copy] = poolName + ".Copy" + std::to_string(copy);
+        state.CarryPassName = "Carry." + name;
+        state.ZeroInitPassName = "ZeroInit." + name;
+    }
+    if (!state.HasFrame || state.Frame != frame.FrameIndex())
+    {
+        // Rotate once per frame; a frame declared again keeps its copies.
+        state.Previous = state.Current;
+        state.HasPrevious = state.HasFrame;
+        state.Current = state.HasFrame ? (state.Current + 1u) % kBufferCopies : 0u;
+        state.Frame = frame.FrameIndex();
+        state.HasFrame = true;
+    }
+
+    desc.usage |= static_cast<uint32_t>(Rendering::BufferUsage::TransferSrc) |
+                  static_cast<uint32_t>(Rendering::BufferUsage::TransferDst);
+    const std::string& currentName = state.CopyNames[state.Current];
+    desc.debugName = currentName.c_str();
+    bool currentFresh = false;
+    const Rendering::RenderGraph::RGBuffer current =
+        frame.ImportPersistentBuffer(currentName.c_str(), desc, &currentFresh);
+    if (!current.IsValid())
+        return {};
+
+    // The frame starts from the previous frame's contents. A copy that holds none (the first frame,
+    // a device rebuild, an evicted copy) starts at zero, as a zeroOnCreate buffer does.
+    Rendering::RenderGraph::RGBuffer previous{};
+    if (state.HasPrevious)
+    {
+        const std::string& previousName = state.CopyNames[state.Previous];
+        desc.debugName = previousName.c_str();
+        bool previousFresh = false;
+        previous = frame.ImportPersistentBuffer(previousName.c_str(), desc, &previousFresh);
+        if (previousFresh)
+            previous = {};
+    }
+    // A fresh copy is zero-filled even when the carry overwrites it: only a fill clears the pool's
+    // fresh mark, and the carry skips a previous copy that is still marked fresh.
+    if (currentFresh || !previous.IsValid())
+        frame.AddBufferZeroInit(current, state.ZeroInitPassName.c_str());
+    if (previous.IsValid())
+        DeclareBufferCarry(frame, previous, current, desc.size, state.CarryPassName.c_str());
+
+    PipelineBufferBindingRG binding{};
+    binding.Buffer = frame.PhysicalBuffer(current);
+    binding.Offset = 0;
+    binding.Size = desc.size;
+    binding.Graph = current;
+    return binding;
+}
+
+void RenderPipelineInstance::DeclareBufferCarry(Rendering::RenderGraph::RGFrame& frame,
+                                                Rendering::RenderGraph::RGBuffer previous,
+                                                Rendering::RenderGraph::RGBuffer current, size_t sizeBytes,
+                                                const char* passName)
+{
+    // On the compute queue, where the shipped first writer of such a history (the pre-exposure
+    // snapshot) runs. A carry on the graphics queue would run after the previous frame's graphics
+    // work and make that writer wait for it.
+    frame.AddComputePass(
+        passName, Rendering::PassPhase::kEarlySetup,
+        [&](Rendering::RenderGraph::RGPassBuilder& p)
+        {
+            p.Read(previous, Rendering::RenderGraph::RGBufferRead::CopySrc);
+            p.Write(current, Rendering::RenderGraph::RGBufferWrite::CopyDst);
+        },
+        [previous, current, sizeBytes](Rendering::RenderGraph::RGContext& ctx)
+        {
+            const Rendering::BufferHandle src = ctx.GetBuffer(previous);
+            const Rendering::BufferHandle dst = ctx.GetBuffer(current);
+            if (ctx.Cmd != nullptr && src.IsValid() && dst.IsValid())
+                ctx.Cmd->CopyBuffer(src, dst, sizeBytes);
+        });
 }
 
 Rendering::RenderGraph::RGTexture RenderPipelineInstance::GetOutputRG(Rendering::ViewId viewId,

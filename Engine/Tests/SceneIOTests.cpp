@@ -15,6 +15,7 @@
 #include "Components/Audio/AudioEmitter.h"
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
+#include "Components/PrefabInstance.h"
 #include "Components/Animation/AnimatedNodeRef.h"
 #include "Components/Animation/AnimatedSprite2D.h"
 #include "Components/Animation/HumanoidRetargeterComponent.h"
@@ -87,6 +88,7 @@
 #include "SplineECS/SplineService.h"
 #include "TerrainECS/Scene/TerrainSceneSchemas.h"
 #include "TerrainGrass/Scene/TerrainGrassSceneSchemas.h"
+#include "Types/Fnv1a.h"
 
 #include <algorithm>
 #include <cctype>
@@ -95,7 +97,9 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <sstream>
 #include <limits>
@@ -866,11 +870,11 @@ Components::Name MakeName(std::string_view text)
 }
 
 // Whether a token names one of the types the save machinery treats as scene structure rather
-// than as a component of an entity: a subscene or blueprint instance root becomes its own file
+// than as a component of an entity: a subscene or prefab instance root becomes its own file
 // section, and Name is the entity's own label the probes below are found by.
 bool IsStructuralToken(std::string_view token)
 {
-    return token == "SceneSubsceneInstance" || token == "SceneBlueprintInstance" || token == "Name";
+    return token == "SceneSubsceneInstance" || token == "PrefabInstance" || token == "Name";
 }
 
 struct SwitchProbe
@@ -1904,7 +1908,7 @@ Components::SceneEntityTag MakeSceneTag(const char* value)
 } // namespace
 
 // A RuntimeOnlyEntity-tagged entity (e.g. an HLOD proxy) is engine-created runtime state:
-// SaveSceneToFile must drop the whole entity, mirroring the blueprint-instance exclusion,
+// SaveSceneToFile must drop the whole entity, mirroring the prefab-instance exclusion,
 // while untagged entities round-trip untouched.
 TEST(SceneIO, SaveThenLoad_RuntimeOnlyEntityExcludedFromScene)
 {
@@ -2078,7 +2082,7 @@ TEST(SceneIO, SaveThenLoad_RuntimeOnlyChildrenOfSavedParentExcluded)
 // The exclusion is built unconditionally, so it must be APPLIED unconditionally. The
 // flattening save arm (both preserve-* options off) writes entity blocks through a
 // separate loop; a tagged entity must be dropped there too, or a caller that flattens
-// blueprints silently bakes every generated piece into the file.
+// prefabs silently bakes every generated piece into the file.
 TEST(SceneIO, Save_RuntimeOnlyChildrenExcludedWhenPreserveOptionsAreOff)
 {
     const auto scenePath = MakeTempPath("runtime_only_children_flat.scene");
@@ -2088,7 +2092,7 @@ TEST(SceneIO, Save_RuntimeOnlyChildrenExcludedWhenPreserveOptionsAreOff)
     ASSERT_TRUE(built.placer.IsValid());
 
     Scene::SaveOptions opts;
-    opts.preserveBlueprintInstances = false;
+    opts.preservePrefabInstances = false;
     opts.preserveSubscenes = false;
     ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, opts));
 
@@ -2123,7 +2127,7 @@ TEST(SceneIO, Save_RefusesAnAuthoredEntityParentedUnderAGeneratedOne)
     EXPECT_FALSE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
 
     Scene::SaveOptions flat;
-    flat.preserveBlueprintInstances = false;
+    flat.preservePrefabInstances = false;
     flat.preserveSubscenes = false;
     EXPECT_FALSE(Scene::SaveSceneToFile(w1, scenePath, flat));
 
@@ -2602,9 +2606,9 @@ TEST(SceneIO, SaveThenLoad_RoundTripSkyAmbientGradientTint)
     w1.AddComponentImmediate(e, Components::SceneEntityTag{{'s', 'k', 'y', '\0'}});
 
     Components::SkyEnvironment s{};
-    s.AmbientTintSky[0] = 0.62f;    s.AmbientTintSky[1] = 0.30f;    s.AmbientTintSky[2] = 0.85f;    // purple
-    s.AmbientTintEquator[0] = 0.90f; s.AmbientTintEquator[1] = 0.20f; s.AmbientTintEquator[2] = 0.55f; // magenta
-    s.AmbientTintGround[0] = 0.10f;  s.AmbientTintGround[1] = 0.70f;  s.AmbientTintGround[2] = 0.80f;  // cyan
+    s.AmbientTintSky.r = 0.62f;    s.AmbientTintSky.g = 0.30f;    s.AmbientTintSky.b = 0.85f;    // purple
+    s.AmbientTintEquator.r = 0.90f; s.AmbientTintEquator.g = 0.20f; s.AmbientTintEquator.b = 0.55f; // magenta
+    s.AmbientTintGround.r = 0.10f;  s.AmbientTintGround.g = 0.70f;  s.AmbientTintGround.b = 0.80f;  // cyan
     w1.AddComponentImmediate(e, s);
 
     ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
@@ -2615,15 +2619,15 @@ TEST(SceneIO, SaveThenLoad_RoundTripSkyAmbientGradientTint)
     ASSERT_TRUE(e2.IsValid());
     auto* s2 = w2.GetComponent<Components::SkyEnvironment>(e2);
     ASSERT_NE(s2, nullptr);
-    EXPECT_FLOAT_EQ(s2->AmbientTintSky[0], 0.62f);
-    EXPECT_FLOAT_EQ(s2->AmbientTintSky[1], 0.30f);
-    EXPECT_FLOAT_EQ(s2->AmbientTintSky[2], 0.85f);
-    EXPECT_FLOAT_EQ(s2->AmbientTintEquator[0], 0.90f);
-    EXPECT_FLOAT_EQ(s2->AmbientTintEquator[1], 0.20f);
-    EXPECT_FLOAT_EQ(s2->AmbientTintEquator[2], 0.55f);
-    EXPECT_FLOAT_EQ(s2->AmbientTintGround[0], 0.10f);
-    EXPECT_FLOAT_EQ(s2->AmbientTintGround[1], 0.70f);
-    EXPECT_FLOAT_EQ(s2->AmbientTintGround[2], 0.80f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintSky.r, 0.62f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintSky.g, 0.30f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintSky.b, 0.85f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintEquator.r, 0.90f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintEquator.g, 0.20f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintEquator.b, 0.55f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintGround.r, 0.10f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintGround.g, 0.70f);
+    EXPECT_FLOAT_EQ(s2->AmbientTintGround.b, 0.80f);
 }
 
 // The stylistic sun size must survive save/load, and the 2D-only size has to stay a SEPARATE
@@ -2847,9 +2851,9 @@ TEST(SceneIO, SaveThenLoad_RoundTripSkyGradientMode)
 
     Components::SkyEnvironment s{};
     s.Mode = Components::SkyMode::Gradient;
-    s.GradientSkyTopColor[0] = 0.10f;    s.GradientSkyTopColor[1] = 0.35f;    s.GradientSkyTopColor[2] = 0.90f;
-    s.GradientSkyHorizonColor[0] = 0.85f; s.GradientSkyHorizonColor[1] = 0.55f; s.GradientSkyHorizonColor[2] = 0.40f;
-    s.GradientSkyBottomColor[0] = 0.05f;  s.GradientSkyBottomColor[1] = 0.06f;  s.GradientSkyBottomColor[2] = 0.08f;
+    s.GradientSkyTopColor.r = 0.10f;    s.GradientSkyTopColor.g = 0.35f;    s.GradientSkyTopColor.b = 0.90f;
+    s.GradientSkyHorizonColor.r = 0.85f; s.GradientSkyHorizonColor.g = 0.55f; s.GradientSkyHorizonColor.b = 0.40f;
+    s.GradientSkyBottomColor.r = 0.05f;  s.GradientSkyBottomColor.g = 0.06f;  s.GradientSkyBottomColor.b = 0.08f;
     s.GradientSkyIntensity = 6500.0f;
     w1.AddComponentImmediate(e, s);
 
@@ -2862,16 +2866,48 @@ TEST(SceneIO, SaveThenLoad_RoundTripSkyGradientMode)
     auto* s2 = w2.GetComponent<Components::SkyEnvironment>(e2);
     ASSERT_NE(s2, nullptr);
     EXPECT_EQ(s2->Mode, Components::SkyMode::Gradient);
-    EXPECT_FLOAT_EQ(s2->GradientSkyTopColor[0], 0.10f);
-    EXPECT_FLOAT_EQ(s2->GradientSkyTopColor[1], 0.35f);
-    EXPECT_FLOAT_EQ(s2->GradientSkyTopColor[2], 0.90f);
-    EXPECT_FLOAT_EQ(s2->GradientSkyHorizonColor[0], 0.85f);
-    EXPECT_FLOAT_EQ(s2->GradientSkyHorizonColor[1], 0.55f);
-    EXPECT_FLOAT_EQ(s2->GradientSkyHorizonColor[2], 0.40f);
-    EXPECT_FLOAT_EQ(s2->GradientSkyBottomColor[0], 0.05f);
-    EXPECT_FLOAT_EQ(s2->GradientSkyBottomColor[1], 0.06f);
-    EXPECT_FLOAT_EQ(s2->GradientSkyBottomColor[2], 0.08f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyTopColor.r, 0.10f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyTopColor.g, 0.35f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyTopColor.b, 0.90f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyHorizonColor.r, 0.85f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyHorizonColor.g, 0.55f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyHorizonColor.b, 0.40f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyBottomColor.r, 0.05f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyBottomColor.g, 0.06f);
+    EXPECT_FLOAT_EQ(s2->GradientSkyBottomColor.b, 0.08f);
     EXPECT_FLOAT_EQ(s2->GradientSkyIntensity, 6500.0f);
+}
+
+// The gradient-sky colors and the ambient tints are colors in memory and three numbers in the
+// scene text: a load and a save give back the authored lines unchanged.
+TEST(SceneIO, SkyGradientColorsAndAmbientTintsResaveAsTheirAuthoredText)
+{
+    constexpr const char* kColorLines[] = {
+        "SkyEnvironment.AmbientTintSky = (0.75, 0.5, 0.25)\n",
+        "SkyEnvironment.AmbientTintEquator = (1, 0.5, 0.25)\n",
+        "SkyEnvironment.AmbientTintGround = (0.25, 0.75, 1)\n",
+        "SkyEnvironment.GradientSkyTopColor = (0.25, 0.5, 0.75)\n",
+        "SkyEnvironment.GradientSkyHorizonColor = (0.125, 0.375, 0.625)\n",
+        "SkyEnvironment.GradientSkyBottomColor = (0.5, 0.25, 0.125)\n",
+    };
+    std::string text = "[scene name=\"SkyColors\" version=1]\n\n[entity id=\"sky\"]\n";
+    for (const char* line : kColorLines)
+        text += line;
+    const auto scenePath = MakeTempPath("sky_color_text.scene");
+    ASSERT_TRUE(WriteFile(scenePath, text));
+    ECS::World world;
+    Scene::SceneLoadDegradation degradation;
+    Scene::LoadOptions opts{Scene::LoadMode::Replace};
+    opts.outDegradation = &degradation;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, opts));
+    EXPECT_TRUE(degradation.skips.empty()) << degradation.skips.size() << " skip(s)";
+
+    const auto resavedPath = MakeTempPath("sky_color_text_resaved.scene");
+    ASSERT_TRUE(Scene::SaveSceneToFile(world, resavedPath, Scene::SaveOptions{}));
+    std::string saved;
+    ASSERT_TRUE(ReadFile(resavedPath, saved));
+    for (const char* line : kColorLines)
+        EXPECT_NE(saved.find(line), std::string::npos) << line << saved;
 }
 
 // The opt-in AmbientLight floor (mode enum + flat/gradient colors + intensity + affect-specular)
@@ -3095,6 +3131,57 @@ TEST(SceneIO, SkyEnvironmentStarObserverAndCoreScaleRoundTrip)
     EXPECT_NE(saved.find("SkyEnvironment.StarCoreScale = 1.5\n"), std::string::npos) << saved;
     EXPECT_NE(saved.find("SkyEnvironment.StarObserver = Camera\n"), std::string::npos) << saved;
     EXPECT_EQ(saved.find("StarNotADial"), std::string::npos) << saved;
+}
+
+// The falling star interval round-trips by name, loads clamped to its range, and a falling-star key
+// the sky does not have is reported by name with the fix.
+TEST(SceneIO, SkyEnvironmentFallingStarIntervalRoundTripsClampedAndAnUnknownKeyIsNamed)
+{
+    const auto scenePath = MakeTempPath("sky_falling_star_interval.scene");
+    ASSERT_TRUE(WriteFile(scenePath,
+                          "[scene name=\"FallingStars\" version=1]\n\n"
+                          "[entity id=\"sky\"]\n"
+                          "SkyEnvironment.FallingStarIntervalSeconds = 42\n"
+                          "SkyEnvironment.FallingStarAmount = 0.3\n"));
+    ECS::World world;
+    Scene::SceneLoadDegradation degradation;
+    Scene::LoadOptions opts{Scene::LoadMode::Replace};
+    opts.outDegradation = &degradation;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, opts)) << Scene::GetLastSceneIOError().message;
+    const auto* sky = world.GetComponent<Components::SkyEnvironment>(FindByTag(world, "sky"));
+    ASSERT_NE(sky, nullptr);
+    EXPECT_FLOAT_EQ(sky->FallingStarIntervalSeconds, 42.0f);
+    ASSERT_EQ(degradation.skips.size(), 1u);
+    EXPECT_EQ(degradation.skips[0].field, "FallingStarAmount");
+    EXPECT_EQ(degradation.skips[0].message,
+              "SkyEnvironment has no field named 'FallingStarAmount': delete the line or correct the spelling");
+
+    const auto resavedPath = MakeTempPath("sky_falling_star_interval_resaved.scene");
+    ASSERT_TRUE(Scene::SaveSceneToFile(world, resavedPath, Scene::SaveOptions{}));
+    std::string saved;
+    ASSERT_TRUE(ReadFile(resavedPath, saved));
+    EXPECT_NE(saved.find("SkyEnvironment.FallingStarIntervalSeconds = 42\n"), std::string::npos) << saved;
+    EXPECT_EQ(saved.find("FallingStarAmount"), std::string::npos) << saved;
+
+    struct Case
+    {
+        const char* Authored;
+        float Loaded;
+    };
+    for (const Case& c : {Case{"0.1", Components::kFallingStarIntervalMinSeconds},
+                          Case{"1000", Components::kFallingStarIntervalMaxSeconds}})
+    {
+        const auto clampPath = MakeTempPath("sky_falling_star_interval_clamp.scene");
+        ASSERT_TRUE(WriteFile(clampPath, std::string("[scene name=\"FallingStars\" version=1]\n\n"
+                                                     "[entity id=\"sky\"]\n"
+                                                     "SkyEnvironment.FallingStarIntervalSeconds = ") +
+                                             c.Authored + "\n"));
+        ECS::World clampWorld;
+        ASSERT_TRUE(Scene::LoadSceneFromFile(clampWorld, clampPath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+        const auto* clamped = clampWorld.GetComponent<Components::SkyEnvironment>(FindByTag(clampWorld, "sky"));
+        ASSERT_NE(clamped, nullptr);
+        EXPECT_FLOAT_EQ(clamped->FallingStarIntervalSeconds, c.Loaded) << c.Authored;
+    }
 }
 
 // The night tint is authored as a strength and a color: the color is what a picker shows (each channel
@@ -3941,7 +4028,7 @@ TEST(SceneIO, LoadFromSecondaryMount_PathRefsResolveProjectFirstThenOtherMounts)
     std::filesystem::remove_all(root, ec);
 }
 
-// [resource] paths follow the same mount order: a blueprint shipped next to an
+// [resource] paths follow the same mount order: a prefab shipped next to an
 // editor-mount scene instantiates from the editor mount.
 TEST(SceneIO, LoadFromSecondaryMount_ResourcePathResolvesOnThatMount)
 {
@@ -3951,18 +4038,18 @@ TEST(SceneIO, LoadFromSecondaryMount_ResourcePathResolvesOnThatMount)
     const auto projectRoot = root / "project";
     const auto editorRoot = root / "editor";
     std::filesystem::create_directories(projectRoot, ec);
-    std::filesystem::create_directories(editorRoot / "Examples" / "Blueprints", ec);
+    std::filesystem::create_directories(editorRoot / "Examples" / "Prefabs", ec);
     std::filesystem::create_directories(editorRoot / "Examples" / "Scenes", ec);
 
-    ASSERT_TRUE(WriteFile(editorRoot / "Examples" / "Blueprints" / "bp.blueprint",
-                          "[blueprint name=\"BP\" version=1]\n\n"
+    ASSERT_TRUE(WriteFile(editorRoot / "Examples" / "Prefabs" / "bp.prefab",
+                          "[prefab name=\"BP\" version=1]\n\n"
                           "[entity id=\"root\"]\n"
                           "Name.value = \"BP\"\n"));
     const auto scenePath = editorRoot / "Examples" / "Scenes" / "with_bp.scene";
     ASSERT_TRUE(WriteFile(scenePath,
                           "[scene name=\"S\" version=1]\n"
-                          "[resource id=\"bp\" path=\"Examples/Blueprints/bp.blueprint\"]\n\n"
-                          "[blueprint id=\"inst\" source=\"bp\"]\n"
+                          "[resource id=\"bp\" path=\"Examples/Prefabs/bp.prefab\"]\n\n"
+                          "[prefab id=\"inst\" source=\"bp\"]\n"
                           "Transform.position = (1, 0, 0)\n"));
 
     FakeAssetResolver resolver;
@@ -3983,7 +4070,7 @@ TEST(SceneIO, LoadFromSecondaryMount_ResourcePathResolvesOnThatMount)
 
 namespace
 {
-// A blueprint instance whose source file does not exist: the scene parses and validates cleanly (the
+// A prefab instance whose source file does not exist: the scene parses and validates cleanly (the
 // [resource] id it names IS declared, which is all ValidateDocument checks), and the read fails
 // inside LoadParsedIntoWorld — after World::Clear.
 //
@@ -3993,12 +4080,12 @@ namespace
 // past. The entity comes first, so the abort still strands it in the world.
 const char* const kSceneFailingAfterInstantiateBegins =
     "[scene name=\"PartialLoad\" version=1]\n"
-    "[resource id=\"bp\" path=\"no_such_blueprint.blueprint\"]\n"
+    "[resource id=\"bp\" path=\"no_such_prefab.prefab\"]\n"
     "\n"
     "[entity id=\"good_one\"]\n"
     "Transform.position = (1, 2, 3)\n"
     "\n"
-    "[blueprint id=\"bad_one\" source=\"bp\"]\n";
+    "[prefab id=\"bad_one\" source=\"bp\"]\n";
 } // namespace
 
 // The failure that strands a half-loaded world says so. Nothing else in the API
@@ -4023,27 +4110,27 @@ TEST(SceneIO, ReplaceLoadFailingAfterClear_ReportsTheWorldWasCleared)
     const auto& err = Scene::GetLastSceneIOError();
     EXPECT_TRUE(err.worldCleared)
         << "the clear ran before the instantiate failed, so the caller's scene is gone: " << err.message;
-    EXPECT_NE(err.message.find("Blueprint file not found"), std::string::npos) << err.message;
+    EXPECT_NE(err.message.find("Prefab file not found"), std::string::npos) << err.message;
 
     // The damage the flag is claiming, asserted rather than assumed: the
     // outgoing scene is gone, and what replaced it is a half-applied incoming
     // one — the entity instantiated before the abort is complete, and the
-    // blueprint instance the load aborted on never arrived at all.
+    // prefab instance the load aborted on never arrived at all.
     EXPECT_FALSE(FindByTag(world, "outgoing_scene_entity").IsValid())
         << "the previous scene must be gone — that is what makes this failure different";
     const ECS::EntityHandle good = FindByTag(world, "good_one");
     ASSERT_TRUE(good.IsValid());
     EXPECT_NE(world.GetComponent<Components::Transform>(good), nullptr);
     EXPECT_FALSE(FindByTag(world, "bad_one").IsValid())
-        << "the blueprint instance the load aborted on must not be in the world";
+        << "the prefab instance the load aborted on must not be in the world";
 }
 
-// A missing blueprint is an error IN THE SCENE: the line the error names is a line of the scene file,
-// so the file must be the scene, not the blueprint path that does not exist. The message carries
+// A missing prefab is an error IN THE SCENE: the line the error names is a line of the scene file,
+// so the file must be the scene, not the prefab path that does not exist. The message carries
 // what the line alone cannot: which file is missing, the resource that names it, and what to do.
-TEST(SceneIO, MissingBlueprintIsReportedAtTheSceneLineWithThePathAndTheFix)
+TEST(SceneIO, MissingPrefabIsReportedAtTheSceneLineWithThePathAndTheFix)
 {
-    const auto scenePath = MakeTempPath("missing_blueprint.scene");
+    const auto scenePath = MakeTempPath("missing_prefab.scene");
     ASSERT_TRUE(WriteFile(scenePath, kSceneFailingAfterInstantiateBegins));
 
     // With no asset root the resource resolves next to the scene, so the scene's directory stands in
@@ -4056,32 +4143,32 @@ TEST(SceneIO, MissingBlueprintIsReportedAtTheSceneLineWithThePathAndTheFix)
     const auto& err = Scene::GetLastSceneIOError();
     EXPECT_EQ(err.file.lexically_normal(), scenePath.lexically_normal())
         << "line " << err.line << " is a line of the scene, so the file is the scene: " << err.file;
-    EXPECT_EQ(err.line, 7) << "the [blueprint] instance the load stopped on";
-    EXPECT_NE(err.message.find("Blueprint file not found at no_such_blueprint.blueprint."), std::string::npos)
+    EXPECT_EQ(err.line, 7) << "the [prefab] instance the load stopped on";
+    EXPECT_NE(err.message.find("Prefab file not found at no_such_prefab.prefab."), std::string::npos)
         << "where the loader looked, relative to the project: " << err.message;
     EXPECT_EQ(err.message.find(scenePath.parent_path().generic_string()), std::string::npos)
         << "the absolute path belongs in the log, not the message: " << err.message;
-    EXPECT_NE(err.message.find("The blueprint on line 7 uses resource \"bp\", which line 2 declares."),
+    EXPECT_NE(err.message.find("The prefab on line 7 uses resource \"bp\", which line 2 declares."),
               std::string::npos)
         << "both lines involved, the instance and the declaration: " << err.message;
-    EXPECT_NE(err.message.find("Restore the file, change line 2, or remove the blueprint on line 7"),
+    EXPECT_NE(err.message.find("Restore the file, change line 2, or remove the prefab on line 7"),
               std::string::npos)
         << "the cause alone leaves the user to guess the fix: " << err.message;
 }
 
 // Outside the project, or with no project named, a relative spelling would point nowhere: the
 // searched path stays absolute.
-TEST(SceneIO, MissingBlueprintOutsideTheProjectNamesTheAbsolutePath)
+TEST(SceneIO, MissingPrefabOutsideTheProjectNamesTheAbsolutePath)
 {
-    const auto scenePath = MakeTempPath("missing_blueprint_no_project.scene");
+    const auto scenePath = MakeTempPath("missing_prefab_no_project.scene");
     ASSERT_TRUE(WriteFile(scenePath, kSceneFailingAfterInstantiateBegins));
 
     ECS::World world;
     ASSERT_FALSE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
 
     const auto& err = Scene::GetLastSceneIOError();
-    const std::string searched = (scenePath.parent_path() / "no_such_blueprint.blueprint").lexically_normal().generic_string();
-    EXPECT_NE(err.message.find("Blueprint file not found at " + searched + "."), std::string::npos)
+    const std::string searched = (scenePath.parent_path() / "no_such_prefab.prefab").lexically_normal().generic_string();
+    EXPECT_NE(err.message.find("Prefab file not found at " + searched + "."), std::string::npos)
         << err.message;
 }
 
@@ -4778,13 +4865,13 @@ TEST(SceneIO, DegradedLoadThatThenFailsAfterClearStillReportsItsCensus)
     const auto scenePath = MakeTempPath("degrade_then_fail.scene");
     ASSERT_TRUE(WriteFile(scenePath,
                           "[scene name=\"DegradeThenFail\" version=1]\n"
-                          "[resource id=\"bp\" path=\"no_such_blueprint.blueprint\"]\n"
+                          "[resource id=\"bp\" path=\"no_such_prefab.prefab\"]\n"
                           "\n"
                           "[entity id=\"fence\"]\n"
                           "SplineFence.SpanGrade = Cantilevered\n"
                           "SplineFence.Seed = 4242\n"
                           "\n"
-                          "[blueprint id=\"bad_one\" source=\"bp\"]\n"));
+                          "[prefab id=\"bad_one\" source=\"bp\"]\n"));
 
     ECS::World world;
     Scene::SceneLoadDegradation degradation;
@@ -5033,7 +5120,7 @@ TEST(SceneIO, PostProcessSchemaCollapse_CrtEffectReflectionParity)
                                  });
 }
 
-// The CRT runs as its own blueprint pass at a fixed place, so no stack order is authored or saved for it.
+// The CRT runs as its own prefab pass at a fixed place, so no stack order is authored or saved for it.
 TEST(SceneIO, CrtEffectSavesNoStackOrder)
 {
     ECS::World world;
@@ -8062,14 +8149,14 @@ TEST(SceneIO, Validate_CycleFailsLoad)
     EXPECT_FALSE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
 }
 
-TEST(SceneIO, BlueprintInstance_InstantiatesWithPrefixAndOverrides)
+TEST(SceneIO, PrefabInstance_InstantiatesWithPrefixAndOverrides)
 {
     const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
-    const auto bpPath = (dir / "bp.blueprint").lexically_normal();
+    const auto bpPath = (dir / "bp.prefab").lexically_normal();
     const auto scenePath = (dir / "bp_scene.scene").lexically_normal();
 
     const std::string bp =
-        "[blueprint name=\"BP\" version=1]\n"
+        "[prefab name=\"BP\" version=1]\n"
         "\n"
         "[entity id=\"root\"]\n"
         "Name.value = \"BP\"\n"
@@ -8080,9 +8167,9 @@ TEST(SceneIO, BlueprintInstance_InstantiatesWithPrefixAndOverrides)
 
     const std::string scene =
         "[scene name=\"S\" version=1]\n"
-        "[resource id=\"bp\" path=\"bp.blueprint\"]\n"
+        "[resource id=\"bp\" path=\"bp.prefab\"]\n"
         "\n"
-        "[blueprint id=\"inst\" source=\"bp\"]\n"
+        "[prefab id=\"inst\" source=\"bp\"]\n"
         "Transform.position = (5, 0, 0)\n";
     ASSERT_TRUE(WriteFile(scenePath, scene));
 
@@ -8099,15 +8186,15 @@ TEST(SceneIO, BlueprintInstance_InstantiatesWithPrefixAndOverrides)
     EXPECT_EQ(p->Entity.id, inst.id);
 }
 
-TEST(SceneIO, Save_PreservesBlueprintInstanceAndRemovalDirectives)
+TEST(SceneIO, Save_PreservesPrefabInstanceAndRemovalDirectives)
 {
     const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
-    const auto bpPath = (dir / "bp_remove.blueprint").lexically_normal();
+    const auto bpPath = (dir / "bp_remove.prefab").lexically_normal();
     const auto scenePath = (dir / "bp_remove_scene.scene").lexically_normal();
     const auto outPath = (dir / "bp_remove_scene_out.scene").lexically_normal();
 
     const std::string bp =
-        "[blueprint name=\"BP\" version=1]\n"
+        "[prefab name=\"BP\" version=1]\n"
         "\n"
         "[entity id=\"root\"]\n"
         "Name.value = \"BP\"\n"
@@ -8119,28 +8206,736 @@ TEST(SceneIO, Save_PreservesBlueprintInstanceAndRemovalDirectives)
 
     const std::string scene =
         "[scene name=\"S\" version=1]\n"
-        "[resource id=\"bp\" path=\"bp_remove.blueprint\"]\n"
+        "[resource id=\"bp\" path=\"bp_remove.prefab\"]\n"
         "\n"
-        "[blueprint id=\"inst\" source=\"bp\"]\n"
+        "[prefab id=\"inst\" source=\"bp\"]\n"
         "-DebugMarker\n";
     ASSERT_TRUE(WriteFile(scenePath, scene));
 
     ECS::World world;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    // The saver writes an instance's source path from the asset database.
+    FakeAssetResolver resolver;
+    resolver.SetRoot(dir);
+    Scene::LoadOptions loadOptions{Scene::LoadMode::Replace};
+    loadOptions.assetResolver = &resolver;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, loadOptions));
 
-    // Save back out and ensure we didn't flatten the blueprint's child entities and we kept removals.
+    // Save back out and ensure we didn't flatten the prefab's child entities and we kept removals.
     Scene::SaveOptions so{};
-    so.preserveBlueprintInstances = true;
+    so.preservePrefabInstances = true;
+    so.assetResolver = &resolver;
     ASSERT_TRUE(Scene::SaveSceneToFile(world, outPath, so));
 
     std::string saved;
     ASSERT_TRUE(ReadFile(outPath, saved));
-    EXPECT_NE(saved.find("[blueprint id=\"inst\""), std::string::npos);
+    EXPECT_NE(saved.find("[prefab id=\"inst\""), std::string::npos);
     EXPECT_NE(saved.find("-DebugMarker"), std::string::npos);
     EXPECT_EQ(saved.find("[entity id=\"inst.child\""), std::string::npos);
 }
 
-// The policies SaveThenLoad_NavigationSourcePolicyOnEntitiesAndBlueprints authors, as `world` holds them.
+// Writes the prefab `prefabFile` and the scene `sceneFile` under the test folder, loads the scene
+// through `resolver` into `world`, saves it with its instances to `<sceneFile stem>_out.scene`, and
+// loads that into `reloaded`. `savedText` receives the saved file.
+static void LoadSaveAndReloadPrefabScene(const std::vector<std::pair<std::string, std::string>>& prefabs,
+                                         const std::string& sceneFile, const std::string& scene,
+                                         FakeAssetResolver& resolver, ECS::World& world,
+                                         const std::function<void(ECS::World&)>& edit, ECS::World& reloaded,
+                                         std::string& savedText)
+{
+    const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
+    for (const auto& [file, text] : prefabs)
+        ASSERT_TRUE(WriteFile(dir / file, text));
+    const auto scenePath = MakeTempPath(sceneFile.c_str());
+    ASSERT_TRUE(WriteFile(scenePath, scene));
+    resolver.SetRoot(dir);
+    Scene::LoadOptions loadOptions{Scene::LoadMode::Replace};
+    loadOptions.assetResolver = &resolver;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
+    edit(world);
+
+    const auto outPath = MakeTempPath((scenePath.stem().string() + "_out.scene").c_str());
+    std::filesystem::remove(outPath);
+    Scene::SaveOptions saveOptions{};
+    saveOptions.preservePrefabInstances = true;
+    saveOptions.assetResolver = &resolver;
+    ASSERT_TRUE(Scene::SaveSceneToFile(world, outPath, saveOptions)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(ReadFile(outPath, savedText));
+    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, outPath, loadOptions))
+        << Scene::GetLastSceneIOError().message << "\n" << savedText;
+}
+
+// An edit to a child of an instance is saved as an override at the child's address, so it survives
+// a save and a load, and the child is not written as an entity of the scene.
+TEST(SceneIO, PrefabInstanceChildEditSurvivesSaveAndLoad)
+{
+    FakeAssetResolver resolver;
+    ECS::World world;
+    ECS::World reloaded;
+    std::string saved;
+    LoadSaveAndReloadPrefabScene(
+        {{"child_edit.prefab", "[prefab version=1]\n"
+                               "[entity id=\"root\"]\n"
+                               "Name.value = \"Crate\"\n"
+                               "[entity id=\"lid\" parent=\"root\"]\n"
+                               "Name.value = \"Lid\"\n"
+                               "Transform.position = (0, 1, 0)\n"}},
+        "child_edit.scene",
+        "[scene name=\"S\" version=1]\n"
+        "[resource id=\"p\" path=\"child_edit.prefab\"]\n"
+        "[prefab id=\"crate2\" source=\"p\"]\n"
+        "Transform.position = (5, 0, 0)\n",
+        resolver, world,
+        [](ECS::World& w) {
+            auto* lid = w.GetComponentForWrite<Components::Transform>(FindByTag(w, "crate2.lid"));
+            ASSERT_NE(lid, nullptr);
+            lid->Translate(0.0f, 1.0f, 0.0f);
+        },
+        reloaded, saved);
+
+    EXPECT_EQ(saved.find("[entity id=\"crate2.lid\""), std::string::npos) << saved;
+    const auto* lid = reloaded.GetComponent<Components::Transform>(FindByTag(reloaded, "crate2.lid"));
+    ASSERT_NE(lid, nullptr) << saved;
+    EXPECT_FLOAT_EQ(lid->GetPosition().y, 2.0f) << saved;
+}
+
+// A child's material that the instance clears is saved as a cleared override and stays cleared
+// after a load, rather than coming back from the prefab.
+TEST(SceneIO, PrefabInstanceChildClearedMaterialStaysClearedAfterSaveAndLoad)
+{
+    FakeAssetResolver resolver;
+    ECS::World world;
+    ECS::World reloaded;
+    std::string saved;
+    LoadSaveAndReloadPrefabScene(
+        {{"cleared_material.prefab",
+          "[prefab version=1]\n"
+          "[entity id=\"root\"]\n"
+          "Name.value = \"Crate\"\n"
+          "[entity id=\"lid\" parent=\"root\"]\n"
+          "Name.value = \"Lid\"\n"
+          "MeshRenderer.material = [path=\"Materials/Oak.material\" guid=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"]\n"}},
+        "cleared_material.scene",
+        "[scene name=\"S\" version=1]\n"
+        "[resource id=\"p\" path=\"cleared_material.prefab\"]\n"
+        "[prefab id=\"crate\" source=\"p\"]\n",
+        resolver, world,
+        [](ECS::World& w) {
+            auto* renderer = w.GetComponentForWrite<Components::MeshRenderer>(FindByTag(w, "crate.lid"));
+            ASSERT_NE(renderer, nullptr);
+            ASSERT_FALSE(renderer->materialAssetGuid.IsNull());
+            renderer->materialAssetGuid.Clear();
+        },
+        reloaded, saved);
+
+    EXPECT_NE(saved.find("lid/MeshRenderer.material = 0\n"), std::string::npos) << saved;
+    const auto* renderer = reloaded.GetComponent<Components::MeshRenderer>(FindByTag(reloaded, "crate.lid"));
+    ASSERT_NE(renderer, nullptr) << saved;
+    EXPECT_TRUE(renderer->materialAssetGuid.IsNull()) << saved;
+}
+
+// Writes the prefab files and the scene under the test folder and loads the scene; returns the load
+// error message (empty when the load succeeds). `report` receives the load report.
+static std::string LoadPrefabSceneError(const std::vector<std::pair<std::string, std::string>>& prefabs,
+                                        const std::string& sceneFile, const std::string& scene,
+                                        ECS::World& world, Scene::SceneLoadDegradation* report = nullptr)
+{
+    const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
+    for (const auto& [file, text] : prefabs)
+        EXPECT_TRUE(WriteFile(dir / file, text));
+    const auto scenePath = MakeTempPath(sceneFile.c_str());
+    EXPECT_TRUE(WriteFile(scenePath, scene));
+    Scene::LoadOptions options{Scene::LoadMode::Replace};
+    options.outDegradation = report;
+    if (Scene::LoadSceneFromFile(world, scenePath, options))
+        return {};
+    return Scene::GetLastSceneIOError().message;
+}
+
+static std::string EntityName(ECS::World& world, ECS::EntityHandle h)
+{
+    const auto* name = world.GetComponent<Components::Name>(h);
+    return name ? std::string(name->View()) : std::string();
+}
+
+static const char* const kOverrideKindsPrefab = "[prefab version=1]\n"
+                                                "[entity id=\"root\"]\n"
+                                                "Name.value = \"Crate\"\n"
+                                                "[entity id=\"lid\" parent=\"root\"]\n"
+                                                "Name.value = \"Lid\"\n"
+                                                "DebugMarker.value = 1\n"
+                                                "[entity id=\"handle\" parent=\"lid\"]\n"
+                                                "Name.value = \"Handle\"\n"
+                                                "[entity id=\"hinge\" parent=\"root\"]\n"
+                                                "Name.value = \"Hinge\"\n";
+
+// Each of the five override kinds on a child of an instance is saved in its one spelling and
+// survives a load: a changed field, an added component, a removed component, an entity added under
+// a child, and a removed child.
+TEST(SceneIO, PrefabInstanceOverridesOfEveryKindRoundTrip)
+{
+    FakeAssetResolver resolver;
+    ECS::World world;
+    ECS::World reloaded;
+    std::string saved;
+    LoadSaveAndReloadPrefabScene(
+        {{"override_kinds.prefab", kOverrideKindsPrefab}}, "override_kinds.scene",
+        "[scene name=\"S\" version=1]\n"
+        "[resource id=\"p\" path=\"override_kinds.prefab\"]\n"
+        "[prefab id=\"crate2\" source=\"p\"]\n",
+        resolver, world,
+        [](ECS::World& w) {
+            const ECS::EntityHandle lid = FindByTag(w, "crate2.lid");
+            w.AddComponentImmediate(lid, MakeName("Lid 2"));
+            w.RemoveComponentImmediate<DebugMarker>(lid);
+            w.AddComponentImmediate(FindByTag(w, "crate2.hinge"), DebugMarker{3.0f});
+            w.DestroyEntityImmediate(FindByTag(w, "crate2.lid.handle"));
+            const ECS::EntityHandle rope = w.CreateEntity();
+            w.AddComponentImmediate(rope, MakeName("Rope"));
+            w.AddComponentImmediate(rope, Components::Parent{lid});
+        },
+        reloaded, saved);
+
+    EXPECT_NE(saved.find("lid/Name.value = \"Lid 2\"\n"), std::string::npos) << saved;
+    EXPECT_NE(saved.find("+hinge/DebugMarker\nhinge/DebugMarker.value = 3"), std::string::npos) << saved;
+    EXPECT_NE(saved.find("-lid/DebugMarker\n"), std::string::npos) << saved;
+    EXPECT_NE(saved.find("-entity lid.handle\n"), std::string::npos) << saved;
+    EXPECT_NE(saved.find("[entity id=\"rope\" parent=\"crate2.lid\"]"), std::string::npos) << saved;
+    EXPECT_EQ(saved.find("hinge/Name"), std::string::npos) << "a field equal to the prefab's writes no line\n" << saved;
+
+    const ECS::EntityHandle lid = FindByTag(reloaded, "crate2.lid");
+    EXPECT_EQ(EntityName(reloaded, lid), "Lid 2");
+    EXPECT_EQ(reloaded.GetComponent<DebugMarker>(lid), nullptr);
+    const auto* marker = reloaded.GetComponent<DebugMarker>(FindByTag(reloaded, "crate2.hinge"));
+    ASSERT_NE(marker, nullptr) << saved;
+    EXPECT_FLOAT_EQ(marker->value, 3.0f);
+    EXPECT_FALSE(FindByTag(reloaded, "crate2.lid.handle").IsValid()) << saved;
+    const auto* ropeParent = reloaded.GetComponent<Components::Parent>(FindByTag(reloaded, "rope"));
+    ASSERT_NE(ropeParent, nullptr) << saved;
+    EXPECT_EQ(ropeParent->Entity.id, lid.id);
+}
+
+// An override whose address names no entity of the prefab is a load-report row, and so are the
+// removal of a component no module registers and the removal of a component the entity does not
+// have; the load goes on.
+TEST(SceneIO, OrphanedOverrideAndUnknownRemovalAreLoadReportRows)
+{
+    ECS::World world;
+    Scene::SceneLoadDegradation report;
+    const std::string error = LoadPrefabSceneError({{"orphan.prefab", kOverrideKindsPrefab}}, "orphan.scene",
+                                                   "[scene name=\"S\" version=1]\n"
+                                                   "[resource id=\"p\" path=\"orphan.prefab\"]\n"
+                                                   "[prefab id=\"inst\" source=\"p\"]\n"
+                                                   "ghost/Name.value = \"Ghost\"\n"
+                                                   "-lid/NoSuchComponent\n"
+                                                   "-lid.handle/DebugMarker\n",
+                                                   world, &report);
+    ASSERT_EQ(error, "");
+    ASSERT_EQ(report.skips.size(), 3u);
+    EXPECT_EQ(report.skips[0].entityId, "inst.ghost");
+    EXPECT_EQ(report.skips[0].line, 4);
+    EXPECT_NE(report.skips[0].message.find("names \"ghost\", which the prefab does not have"), std::string::npos)
+        << report.skips[0].message;
+    EXPECT_EQ(report.skips[1].line, 5);
+    EXPECT_NE(report.skips[1].message.find("removes a component no loaded module registers"), std::string::npos)
+        << report.skips[1].message;
+    EXPECT_EQ(report.skips[2].line, 6);
+    EXPECT_NE(report.skips[2].message.find("'-lid.handle/DebugMarker' removes a component the entity does not have. "
+                                           "Delete the line."),
+              std::string::npos)
+        << report.skips[2].message;
+    EXPECT_FALSE(report.skips[2].preserved);
+    EXPECT_EQ(EntityName(world, FindByTag(world, "inst.lid")), "Lid");
+}
+
+// A component line after a doubled separator and a removed entity whose address holds the separator
+// are refused with the fix, never read as a component named "/Name".
+TEST(SceneIO, OverrideAddressWithTheSeparatorTwiceIsRefused)
+{
+    ECS::World world;
+    const std::string doubled = LoadPrefabSceneError({{"double_slash.prefab", kOverrideKindsPrefab}},
+                                                     "double_slash.scene",
+                                                     "[scene name=\"S\" version=1]\n"
+                                                     "[resource id=\"p\" path=\"double_slash.prefab\"]\n"
+                                                     "[prefab id=\"inst\" source=\"p\"]\n"
+                                                     "lid//Name.value = \"x\"\n",
+                                                     world);
+    EXPECT_NE(doubled.find("Line 4: 'lid//Name.value' has two '/'. Write lid/Name.value."), std::string::npos)
+        << doubled;
+
+    const std::string removed = LoadPrefabSceneError({{"slash_entity.prefab", kOverrideKindsPrefab}},
+                                                     "slash_entity.scene",
+                                                     "[scene name=\"S\" version=1]\n"
+                                                     "[resource id=\"p\" path=\"slash_entity.prefab\"]\n"
+                                                     "[prefab id=\"inst\" source=\"p\"]\n"
+                                                     "-entity lid/handle\n",
+                                                     world);
+    EXPECT_NE(removed.find("Line 4: the address \"lid/handle\" does not read."), std::string::npos) << removed;
+}
+
+// Loads a scene with the [prefab] section `instance` and its lines `body`, placing kOverrideKindsPrefab
+// from `stem`.prefab; returns the load error message.
+static std::string LoadInstanceOfOverrideKindsPrefab(const std::string& stem, const std::string& instance,
+                                                     const std::string& body)
+{
+    ECS::World world;
+    return LoadPrefabSceneError({{stem + ".prefab", kOverrideKindsPrefab}}, stem + ".scene",
+                                "[scene name=\"S\" version=1]\n[resource id=\"p\" path=\"" + stem +
+                                    ".prefab\"]\n" + instance + body,
+                                world);
+}
+
+// A "-entity" line with no address, a line that writes the root's address with a '/' in front, and
+// a source written with '#' are refused with the fix.
+TEST(SceneIO, RemovedEntityWithNoAddressRootSeparatorAndHashSourceStateTheFix)
+{
+    const std::string instance = "[prefab id=\"inst\" source=\"p\"]\n";
+
+    const std::string noAddress = LoadInstanceOfOverrideKindsPrefab("no_address", instance, "-entity\n");
+    EXPECT_NE(noAddress.find("Line 4: '-entity' names no entity. Write -entity address, as in -entity lid.handle."),
+              std::string::npos)
+        << noAddress;
+
+    const std::string rootSeparator =
+        LoadInstanceOfOverrideKindsPrefab("root_separator", instance, "/Name.value = \"R\"\n");
+    EXPECT_NE(rootSeparator.find("Line 4: the root's lines take no address."), std::string::npos) << rootSeparator;
+
+    const std::string hashSource =
+        LoadInstanceOfOverrideKindsPrefab("hash_source", "[prefab id=\"inst\" source=\"#p\"]\n", "");
+    EXPECT_NE(hashSource.find("A source names a [resource] id without '#': source=\"p\""), std::string::npos)
+        << hashSource;
+}
+
+// A [prefab] section that names no source is refused with its line and the form it takes.
+TEST(SceneIO, PrefabSectionWithoutASourceIsRefused)
+{
+    ECS::World world;
+    const std::string error = LoadPrefabSceneError({{"no_source.prefab", kOverrideKindsPrefab}}, "no_source.scene",
+                                                   "[scene name=\"S\" version=1]\n"
+                                                   "[resource id=\"p\" path=\"no_source.prefab\"]\n"
+                                                   "[prefab id=\"inst\"]\n"
+                                                   "Name.value = \"x\"\n",
+                                                   world);
+    EXPECT_NE(error.find("Line 3: a [prefab] section needs id and source: [prefab id=\"...\" source=\"...\"]"),
+              std::string::npos)
+        << error;
+}
+
+// A section that adds and removes one component at one address, and a component name on a line of
+// its own, are refused with the line and the fix.
+TEST(SceneIO, AddAndRemoveOfOneComponentAndABareComponentLineAreRefused)
+{
+    ECS::World world;
+    const std::string both = LoadPrefabSceneError({{"add_remove.prefab", kOverrideKindsPrefab}}, "add_remove.scene",
+                                                  "[scene name=\"S\" version=1]\n"
+                                                  "[resource id=\"p\" path=\"add_remove.prefab\"]\n"
+                                                  "[prefab id=\"inst\" source=\"p\"]\n"
+                                                  "+lid/DebugMarker\n"
+                                                  "-lid/DebugMarker\n",
+                                                  world);
+    EXPECT_NE(both.find("Line 4 adds DebugMarker to \"lid\" and line 5 removes it. Keep one of the two lines."),
+              std::string::npos)
+        << both;
+
+    const std::string bare = LoadPrefabSceneError({{"bare_line.prefab", kOverrideKindsPrefab}}, "bare_line.scene",
+                                                  "[scene name=\"S\" version=1]\n"
+                                                  "[resource id=\"p\" path=\"bare_line.prefab\"]\n"
+                                                  "[prefab id=\"inst\" source=\"p\"]\n"
+                                                  "DebugMarker\n",
+                                                  world);
+    EXPECT_NE(bare.find("Line 4: 'DebugMarker' names a component on a line of its own. Write +DebugMarker"),
+              std::string::npos)
+        << bare;
+}
+
+// A prefab holds an instance of another prefab, with its own override line; a scene's instance
+// edits a field two levels down. Each entity's scene identity is its full path, and the edit
+// survives a save and a load as one addressed line.
+TEST(SceneIO, NestedPrefabInstanceTwoDeepRoundTrips)
+{
+    const std::pair<std::string, std::string> wheel{"nested_wheel.prefab", "[prefab version=1]\n"
+                                                                           "[entity id=\"root\"]\n"
+                                                                           "Name.value = \"Wheel\"\n"
+                                                                           "[entity id=\"hub\" parent=\"root\"]\n"
+                                                                           "Name.value = \"Hub\"\n"};
+    const std::pair<std::string, std::string> cart{"nested_cart.prefab",
+                                                   "[prefab version=1]\n"
+                                                   "[resource id=\"wheel\" path=\"nested_wheel.prefab\"]\n"
+                                                   "[entity id=\"root\"]\n"
+                                                   "Name.value = \"Cart\"\n"
+                                                   "[prefab id=\"wheel_l\" source=\"wheel\" parent=\"root\"]\n"
+                                                   "hub/Name.value = \"Left hub\"\n"};
+    FakeAssetResolver resolver;
+    ECS::World world;
+    ECS::World reloaded;
+    std::string saved;
+    LoadSaveAndReloadPrefabScene(
+        {wheel, cart}, "nested.scene",
+        "[scene name=\"S\" version=1]\n"
+        "[resource id=\"p\" path=\"nested_cart.prefab\"]\n"
+        "[prefab id=\"cart2\" source=\"p\"]\n",
+        resolver, world,
+        [](ECS::World& w) {
+            EXPECT_EQ(EntityName(w, FindByTag(w, "cart2.wheel_l.hub")), "Left hub");
+            EXPECT_NE(w.GetComponent<Components::PrefabInstance>(FindByTag(w, "cart2.wheel_l")), nullptr);
+            w.AddComponentImmediate(FindByTag(w, "cart2.wheel_l.hub"), MakeName("Edited hub"));
+        },
+        reloaded, saved);
+
+    EXPECT_NE(saved.find("wheel_l.hub/Name.value = \"Edited hub\"\n"), std::string::npos) << saved;
+    EXPECT_EQ(saved.find("[entity"), std::string::npos) << saved;
+    EXPECT_EQ(EntityName(reloaded, FindByTag(reloaded, "cart2.wheel_l.hub")), "Edited hub") << saved;
+    const auto* hubParent = reloaded.GetComponent<Components::Parent>(FindByTag(reloaded, "cart2.wheel_l.hub"));
+    ASSERT_NE(hubParent, nullptr);
+    EXPECT_EQ(hubParent->Entity.id, FindByTag(reloaded, "cart2.wheel_l").id);
+}
+
+// A variant is a prefab whose root is an instance of another prefab: its lines override the base,
+// it may add entities under the base's, and a variant of a variant applies both layers.
+TEST(SceneIO, VariantChainAppliesEachLayer)
+{
+    const std::pair<std::string, std::string> base{"variant_base.prefab", "[prefab version=1]\n"
+                                                                          "[entity id=\"root\"]\n"
+                                                                          "Name.value = \"Base\"\n"
+                                                                          "[entity id=\"lid\" parent=\"root\"]\n"
+                                                                          "Name.value = \"Lid\"\n"
+                                                                          "DebugMarker.value = 1\n"};
+    const std::pair<std::string, std::string> middle{"variant_middle.prefab",
+                                                     "[prefab version=1]\n"
+                                                     "[resource id=\"base\" path=\"variant_base.prefab\"]\n"
+                                                     "[prefab id=\"root\" source=\"base\"]\n"
+                                                     "lid/DebugMarker.value = 2\n"
+                                                     "[entity id=\"knob\" parent=\"root.lid\"]\n"
+                                                     "Name.value = \"Knob\"\n"};
+    const std::pair<std::string, std::string> top{"variant_top.prefab",
+                                                  "[prefab version=1]\n"
+                                                  "[resource id=\"middle\" path=\"variant_middle.prefab\"]\n"
+                                                  "[prefab id=\"root\" source=\"middle\"]\n"
+                                                  "Name.value = \"Top\"\n"};
+    FakeAssetResolver resolver;
+    ECS::World world;
+    ECS::World reloaded;
+    std::string saved;
+    LoadSaveAndReloadPrefabScene({base, middle, top}, "variant.scene",
+                                 "[scene name=\"S\" version=1]\n"
+                                 "[resource id=\"p\" path=\"variant_top.prefab\"]\n"
+                                 "[prefab id=\"v\" source=\"p\"]\n",
+                                 resolver, world, [](ECS::World&) {}, reloaded, saved);
+
+    for (ECS::World* w : {&world, &reloaded})
+    {
+        EXPECT_EQ(EntityName(*w, FindByTag(*w, "v")), "Top") << saved;
+        const auto* marker = w->GetComponent<DebugMarker>(FindByTag(*w, "v.lid"));
+        ASSERT_NE(marker, nullptr) << saved;
+        EXPECT_FLOAT_EQ(marker->value, 2.0f);
+        EXPECT_EQ(EntityName(*w, FindByTag(*w, "v.lid.knob")), "Knob") << saved;
+    }
+    EXPECT_EQ(saved.find("lid/"), std::string::npos) << "an unedited variant writes no override\n" << saved;
+}
+
+// A prefab that holds itself through another is refused with the chain.
+TEST(SceneIO, PrefabCycleIsRefusedWithTheChain)
+{
+    ECS::World world;
+    const std::string error = LoadPrefabSceneError(
+        {{"cycle_a.prefab", "[prefab version=1]\n[resource id=\"b\" path=\"cycle_b.prefab\"]\n"
+                            "[entity id=\"root\"]\n[prefab id=\"b1\" source=\"b\" parent=\"root\"]\n"},
+         {"cycle_b.prefab", "[prefab version=1]\n[resource id=\"a\" path=\"cycle_a.prefab\"]\n"
+                            "[entity id=\"root\"]\n[prefab id=\"a1\" source=\"a\" parent=\"root\"]\n"}},
+        "cycle.scene",
+        "[scene name=\"S\" version=1]\n[resource id=\"p\" path=\"cycle_a.prefab\"]\n[prefab id=\"inst\" source=\"p\"]\n",
+        world);
+    EXPECT_NE(error.find("Prefab cycle: cycle_a.prefab places cycle_b.prefab places cycle_a.prefab."),
+              std::string::npos)
+        << error;
+}
+
+// Two instances of one prefab give their children two scene identities.
+TEST(SceneIO, TwoInstancesOfOnePrefabGiveDistinctTags)
+{
+    ECS::World world;
+    ASSERT_EQ(LoadPrefabSceneError({{"two_instances.prefab", kOverrideKindsPrefab}}, "two_instances.scene",
+                                   "[scene name=\"S\" version=1]\n"
+                                   "[resource id=\"p\" path=\"two_instances.prefab\"]\n"
+                                   "[prefab id=\"a\" source=\"p\"]\n"
+                                   "[prefab id=\"b\" source=\"p\"]\n",
+                                   world),
+              "");
+    const ECS::EntityHandle a = FindByTag(world, "a.lid.handle");
+    const ECS::EntityHandle b = FindByTag(world, "b.lid.handle");
+    ASSERT_TRUE(a.IsValid());
+    ASSERT_TRUE(b.IsValid());
+    EXPECT_NE(a.id, b.id);
+}
+
+// A component no module registers, authored inside a prefab, is kept on every placed instance with
+// its fields, so a save of the scene and a later build that registers the type both still see it.
+TEST(SceneIO, AnUnknownComponentInAPrefabIsKeptOnEveryInstance)
+{
+    ECS::World world;
+    ASSERT_EQ(LoadPrefabSceneError({{"unknown_component.prefab", "[prefab version=1]\n"
+                                                                 "[entity id=\"root\"]\n"
+                                                                 "[entity id=\"spring\" parent=\"root\"]\n"
+                                                                 "Jumpable.height = 2.5\n"
+                                                                 "Jumpable.charge = \"full\"\n"}},
+                                   "unknown_component.scene",
+                                   "[scene name=\"S\" version=1]\n"
+                                   "[resource id=\"p\" path=\"unknown_component.prefab\"]\n"
+                                   "[prefab id=\"a\" source=\"p\"]\n"
+                                   "[prefab id=\"b\" source=\"p\"]\n",
+                                   world),
+              "");
+    const ECS::UnresolvedComponentStore* store = world.TryGetUnresolvedComponents();
+    ASSERT_NE(store, nullptr);
+    for (const char* tag : {"a.spring", "b.spring"})
+    {
+        const ECS::EntityHandle spring = FindByTag(world, tag);
+        ASSERT_TRUE(spring.IsValid()) << tag;
+        const auto components = store->Map().find(spring);
+        ASSERT_NE(components, store->Map().end()) << tag;
+        ASSERT_EQ(components->second.size(), 1u) << tag;
+        EXPECT_EQ(components->second[0].Name, "Jumpable") << tag;
+        ASSERT_EQ(components->second[0].Props.size(), 2u) << tag;
+        EXPECT_EQ(components->second[0].Props[0], (std::pair<std::string, std::string>{"height", "2.5"})) << tag;
+        EXPECT_EQ(components->second[0].Props[1], (std::pair<std::string, std::string>{"charge", "\"full\""})) << tag;
+    }
+}
+
+// An entity whose path is longer than the tag holds gets the hashed scene identity ending in its
+// own id; an override on it saves at the address its parent chain gives and survives a load.
+TEST(SceneIO, OverrideAtASeventyCharacterPathRoundTripsWithAHashedTag)
+{
+    const std::string first(40, 'a');
+    const std::string second(20, 'b');
+    FakeAssetResolver resolver;
+    ECS::World world;
+    ECS::World reloaded;
+    std::string saved;
+    const std::string path = "inst." + first + "." + second + ".lamp";
+    ASSERT_EQ(path.size(), 71u);
+    const std::string tag = std::format("{:016x}~lamp", Hashing::Fnv1a64(path));
+    LoadSaveAndReloadPrefabScene(
+        {{"long_path.prefab", "[prefab version=1]\n[entity id=\"root\"]\n[entity id=\"" + first +
+                                  "\" parent=\"root\"]\n[entity id=\"" + second + "\" parent=\"" + first +
+                                  "\"]\n[entity id=\"lamp\" parent=\"" + second + "\"]\nName.value = \"Lamp\"\n"}},
+        "long_path.scene",
+        "[scene name=\"S\" version=1]\n[resource id=\"p\" path=\"long_path.prefab\"]\n[prefab id=\"inst\" source=\"p\"]\n",
+        resolver, world,
+        [&tag](ECS::World& w) {
+            const ECS::EntityHandle lamp = FindByTag(w, tag);
+            ASSERT_TRUE(lamp.IsValid());
+            w.AddComponentImmediate(lamp, MakeName("Edited"));
+        },
+        reloaded, saved);
+
+    EXPECT_NE(saved.find(first + "." + second + ".lamp/Name.value = \"Edited\"\n"), std::string::npos) << saved;
+    EXPECT_EQ(EntityName(reloaded, FindByTag(reloaded, tag)), "Edited") << saved;
+}
+
+// A path of 63 characters is its own scene identity and one of 64 is hashed; an edit at either
+// saves at its address and survives a load.
+TEST(SceneIO, PathsOf63And64CharactersTakeTheVerbatimAndTheHashedTag)
+{
+    const std::string first(46, 'a');
+    for (const std::size_t secondLength : {6u, 7u})
+    {
+        const std::string second(secondLength, 'b');
+        const std::string path = "inst." + first + "." + second + ".lamp";
+        const std::string tag = path.size() <= 63 ? path : std::format("{:016x}~lamp", Hashing::Fnv1a64(path));
+        FakeAssetResolver resolver;
+        ECS::World world;
+        ECS::World reloaded;
+        std::string saved;
+        LoadSaveAndReloadPrefabScene(
+            {{"boundary_path.prefab", "[prefab version=1]\n[entity id=\"root\"]\n[entity id=\"" + first +
+                                          "\" parent=\"root\"]\n[entity id=\"" + second + "\" parent=\"" + first +
+                                          "\"]\n[entity id=\"lamp\" parent=\"" + second + "\"]\nName.value = \"Lamp\"\n"}},
+            "boundary_path.scene",
+            "[scene name=\"S\" version=1]\n[resource id=\"p\" path=\"boundary_path.prefab\"]\n"
+            "[prefab id=\"inst\" source=\"p\"]\n",
+            resolver, world,
+            [&tag](ECS::World& w) {
+                const ECS::EntityHandle lamp = FindByTag(w, tag);
+                ASSERT_TRUE(lamp.IsValid()) << tag;
+                w.AddComponentImmediate(lamp, MakeName("Edited"));
+            },
+            reloaded, saved);
+
+        EXPECT_NE(saved.find(first + "." + second + ".lamp/Name.value = \"Edited\"\n"), std::string::npos)
+            << path.size() << "\n" << saved;
+        EXPECT_EQ(EntityName(reloaded, FindByTag(reloaded, tag)), "Edited") << path.size() << "\n" << saved;
+    }
+}
+
+// An entity dragged from one instance into another keeps its member tag; the save writes it as an
+// entity added on the second instance, with a scene-level id from its name, and the first instance
+// as missing it.
+TEST(SceneIO, EntityDraggedIntoAnotherInstanceSavesAsAnAddedEntity)
+{
+    FakeAssetResolver resolver;
+    ECS::World world;
+    ECS::World reloaded;
+    std::string saved;
+    LoadSaveAndReloadPrefabScene(
+        {{"dragged.prefab", kOverrideKindsPrefab}}, "dragged.scene",
+        "[scene name=\"S\" version=1]\n"
+        "[resource id=\"p\" path=\"dragged.prefab\"]\n"
+        "[prefab id=\"a\" source=\"p\"]\n"
+        "[prefab id=\"b\" source=\"p\"]\n",
+        resolver, world,
+        [](ECS::World& w) {
+            w.AddComponentImmediate(FindByTag(w, "a.hinge"), Components::Parent{FindByTag(w, "b")});
+        },
+        reloaded, saved);
+
+    EXPECT_NE(saved.find("[entity id=\"hinge\" parent=\"b\"]"), std::string::npos) << saved;
+    EXPECT_NE(saved.find("-entity hinge\n"), std::string::npos) << saved;
+    EXPECT_FALSE(FindByTag(reloaded, "a.hinge").IsValid()) << saved;
+    EXPECT_TRUE(FindByTag(reloaded, "b.hinge").IsValid()) << saved;
+    const auto* parent = reloaded.GetComponent<Components::Parent>(FindByTag(reloaded, "hinge"));
+    ASSERT_NE(parent, nullptr) << saved;
+    EXPECT_EQ(parent->Entity.id, FindByTag(reloaded, "b").id);
+}
+
+// Two paths whose hashed scene identities are equal are refused, naming both. The two ids below
+// were found by a collision search over Fnv1a64 for exactly these paths.
+TEST(SceneIO, TwoPathsWithOneHashedTagAreRefused)
+{
+    const std::string pad(40, 'p');
+    const std::string pathA = "inst." + pad + ".1b1a48d118660cee.lamp";
+    const std::string pathB = "inst." + pad + ".7c20ac7af06f69d5.lamp";
+    ASSERT_EQ(Hashing::Fnv1a64(pathA), Hashing::Fnv1a64(pathB));
+    ECS::World world;
+    const std::string error = LoadPrefabSceneError(
+        {{"collide_lamp.prefab", "[prefab version=1]\n[entity id=\"root\"]\n[entity id=\"lamp\" parent=\"root\"]\n"},
+         {"collide.prefab", "[prefab version=1]\n[resource id=\"lamp\" path=\"collide_lamp.prefab\"]\n"
+                            "[entity id=\"root\"]\n[entity id=\"" + pad + "\" parent=\"root\"]\n"
+                            "[prefab id=\"1b1a48d118660cee\" source=\"lamp\" parent=\"" + pad + "\"]\n"
+                            "[prefab id=\"7c20ac7af06f69d5\" source=\"lamp\" parent=\"" + pad + "\"]\n"}},
+        "collide.scene",
+        "[scene name=\"S\" version=1]\n[resource id=\"p\" path=\"collide.prefab\"]\n[prefab id=\"inst\" source=\"p\"]\n",
+        world);
+    EXPECT_NE(error.find("\"" + pathA + "\" and \"" + pathB + "\". Shorten an id in one of the chains."),
+              std::string::npos)
+        << error;    // The entity that takes the identity second, where it is authored.
+    EXPECT_EQ(Scene::GetLastSceneIOError().file.filename(), "collide_lamp.prefab");
+    EXPECT_EQ(Scene::GetLastSceneIOError().line, 3);
+}
+
+// The marker holds only the source GUID, so a save with no asset database to name the
+// prefab's path is refused with the fix rather than writing a [resource] line with no path.
+TEST(SceneIO, Save_RefusesAPrefabInstanceWhoseSourceTheAssetDatabaseCannotName)
+{
+    const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
+    const auto prefabPath = (dir / "unnamed_source.prefab").lexically_normal();
+    const auto scenePath = (dir / "unnamed_source_scene.scene").lexically_normal();
+    ASSERT_TRUE(WriteFile(prefabPath, "[prefab version=1]\n[entity id=\"root\"]\nName.value = \"P\"\n"));
+    ASSERT_TRUE(WriteFile(scenePath, "[scene name=\"S\" version=1]\n"
+                                     "[resource id=\"p\" path=\"unnamed_source.prefab\"]\n"
+                                     "[prefab id=\"inst\" source=\"p\"]\n"));
+
+    ECS::World world;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    const ECS::EntityHandle inst = FindByTag(world, "inst");
+    ASSERT_NE(world.GetComponent<Components::PrefabInstance>(inst), nullptr);
+
+    EXPECT_FALSE(Scene::SaveSceneToFile(world, (dir / "unnamed_source_out.scene").lexically_normal(), {}));
+    EXPECT_NE(Scene::GetLastSceneIOError().message.find("the asset database does not know its source prefab"),
+              std::string::npos)
+        << Scene::GetLastSceneIOError().message;
+    EXPECT_NE(Scene::GetLastSceneIOError().message.find("or delete the instance."), std::string::npos)
+        << Scene::GetLastSceneIOError().message;
+}
+
+// A scene written before prefabs places instances with [blueprint] sections; the load refuses it
+// and names the conversion.
+TEST(SceneIO, Load_RefusesABlueprintSectionAndNamesTheMigrationScript)
+{
+    const auto scenePath = MakeTempPath("blueprint_section.scene");
+    ASSERT_TRUE(WriteFile(scenePath, "[scene name=\"S\" version=1]\n"
+                                     "[resource id=\"p\" path=\"crate.blueprint\"]\n"
+                                     "[blueprint id=\"inst\" source=\"p\"]\n"));
+
+    ECS::World world;
+    EXPECT_FALSE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    const std::string& message = Scene::GetLastSceneIOError().message;
+    EXPECT_NE(message.find("Unknown section [blueprint] at line 3."), std::string::npos) << message;
+    EXPECT_NE(message.find("migrate_blueprints_to_prefabs.py"), std::string::npos) << message;
+}
+
+// Loads a scene that places one instance of a prefab whose text is `prefab`, and returns the load's
+// error message (empty when the load succeeds).
+static std::string LoadErrorForPrefab(const char* stem, const std::string& prefab)
+{
+    const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
+    const std::string prefabFile = std::string(stem) + ".prefab";
+    const auto scenePath = MakeTempPath((std::string(stem) + ".scene").c_str());
+    EXPECT_TRUE(WriteFile(dir / prefabFile, prefab));
+    EXPECT_TRUE(WriteFile(scenePath, "[scene name=\"S\" version=1]\n"
+                                     "[resource id=\"p\" path=\"" + prefabFile + "\"]\n"
+                                     "[prefab id=\"inst\" source=\"p\"]\n"));
+    ECS::World world;
+    if (Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}))
+        return {};
+    return Scene::GetLastSceneIOError().message;
+}
+
+// A prefab file whose header is still [blueprint ...] is refused with the conversion that fixes it.
+TEST(SceneIO, PrefabFileWithABlueprintHeaderNamesTheMigrationScript)
+{
+    const std::string message = LoadErrorForPrefab("blueprint_header", "[blueprint name=\"Crate\" version=1]\n"
+                                                                        "[entity id=\"root\"]\n");
+    EXPECT_NE(message.find("Unknown section [blueprint] at line 1."), std::string::npos) << message;
+    EXPECT_NE(message.find("migrate_blueprints_to_prefabs.py"), std::string::npos) << message;
+}
+
+// A prefab has exactly one root, the entity with id "root"; a second one is refused with both lines
+// and the fix.
+TEST(SceneIO, PrefabWithTwoRootsIsRefusedWithBothLines)
+{
+    const std::string message = LoadErrorForPrefab("two_roots", "[prefab version=1]\n"
+                                                                "[entity id=\"root\"]\n"
+                                                                "[entity id=\"other\"]\n");
+    EXPECT_NE(message.find("two roots, \"root\" at line 2 and \"other\" at line 3"), std::string::npos) << message;
+    EXPECT_NE(message.find("give \"other\" a parent"), std::string::npos) << message;
+}
+
+// An id holding '.', '/' or '~' is refused in a scene and in a prefab, with the line and the fix.
+TEST(SceneIO, IdHoldingADotSlashOrTildeIsRefused)
+{
+    for (const char* id : {"a.b", "a/b", "a~b"})
+    {
+        const auto scenePath = MakeTempPath("id_separator.scene");
+        ASSERT_TRUE(WriteFile(scenePath, std::string("[scene name=\"S\" version=1]\n[entity id=\"") + id + "\"]\n"));
+        ECS::World world;
+        EXPECT_FALSE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace})) << id;
+        const std::string& message = Scene::GetLastSceneIOError().message;
+        EXPECT_NE(message.find(std::string("Entity id \"") + id + "\" at line 2"), std::string::npos) << message;
+        EXPECT_NE(message.find("Rename it, for example to \"a_b\""), std::string::npos) << message;
+
+        const std::string prefabMessage =
+            LoadErrorForPrefab("id_separator", std::string("[prefab version=1]\n[entity id=\"root\"]\n[entity id=\"") +
+                                                   id + "\" parent=\"root\"]\n");
+        EXPECT_NE(prefabMessage.find(std::string("Entity id \"") + id + "\" at line 3"), std::string::npos)
+            << prefabMessage;
+    }
+}
+
+// An id in a prefab file is at most 46 characters, so the hashed scene identity keeps it whole; a
+// 47-character id is refused with the fix. A scene keeps the 63-character limit of the tag.
+TEST(SceneIO, PrefabIdLongerThan46CharactersIsRefused)
+{
+    const std::string id47(47, 'a');
+    const std::string message = LoadErrorForPrefab(
+        "long_id", "[prefab version=1]\n[entity id=\"root\"]\n[entity id=\"" + id47 + "\" parent=\"root\"]\n");
+    EXPECT_NE(message.find("is 47 characters"), std::string::npos) << message;
+    EXPECT_NE(message.find("Shorten the id to 46 characters"), std::string::npos) << message;
+
+    EXPECT_EQ(LoadErrorForPrefab("id_46", "[prefab version=1]\n[entity id=\"root\"]\n[entity id=\"" +
+                                              std::string(46, 'a') + "\" parent=\"root\"]\n"),
+              "");
+}
+
+// The policies SaveThenLoad_NavigationSourcePolicyOnEntitiesAndPrefabs authors, as `world` holds them.
 static void ExpectNavigationSourcePolicies(ECS::World& world, const char* pass)
 {
     using Components::NavigationSource;
@@ -8160,17 +8955,17 @@ static void ExpectNavigationSourcePolicies(ECS::World& world, const char* pass)
 }
 
 // The navigation bake's source policy is authored data: on a scene entity (Auto included, which
-// overrides an ancestor's) and on a blueprint's root it survives a load, a save and a second load;
-// the blueprint's child authors none and keeps none, so it goes on following the root.
-TEST(SceneIO, SaveThenLoad_NavigationSourcePolicyOnEntitiesAndBlueprints)
+// overrides an ancestor's) and on a prefab's root it survives a load, a save and a second load;
+// the prefab's child authors none and keeps none, so it goes on following the root.
+TEST(SceneIO, SaveThenLoad_NavigationSourcePolicyOnEntitiesAndPrefabs)
 {
     const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
-    const auto bpPath = (dir / "nav_source_tree.blueprint").lexically_normal();
+    const auto bpPath = (dir / "nav_source_tree.prefab").lexically_normal();
     const auto scenePath = (dir / "nav_source_scene.scene").lexically_normal();
     const auto outPath = (dir / "nav_source_scene_out.scene").lexically_normal();
 
     const std::string bp =
-        "[blueprint name=\"Tree\" version=1]\n"
+        "[prefab name=\"Tree\" version=1]\n"
         "\n"
         "[entity id=\"root\"]\n"
         "NavigationSource.Policy = Exclude\n"
@@ -8181,9 +8976,9 @@ TEST(SceneIO, SaveThenLoad_NavigationSourcePolicyOnEntitiesAndBlueprints)
 
     const std::string scene =
         "[scene name=\"S\" version=1]\n"
-        "[resource id=\"tree\" path=\"nav_source_tree.blueprint\"]\n"
+        "[resource id=\"tree\" path=\"nav_source_tree.prefab\"]\n"
         "\n"
-        "[blueprint id=\"tree1\" source=\"tree\"]\n"
+        "[prefab id=\"tree1\" source=\"tree\"]\n"
         "\n"
         "[entity id=\"stairs\"]\n"
         "NavigationSource.Policy = Include\n"
@@ -8193,14 +8988,20 @@ TEST(SceneIO, SaveThenLoad_NavigationSourcePolicyOnEntitiesAndBlueprints)
     ASSERT_TRUE(WriteFile(scenePath, scene));
 
     ECS::World world;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    // The saver writes an instance's source path from the asset database.
+    FakeAssetResolver resolver;
+    resolver.SetRoot(dir);
+    Scene::LoadOptions loadOptions{Scene::LoadMode::Replace};
+    loadOptions.assetResolver = &resolver;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, loadOptions));
     ExpectNavigationSourcePolicies(world, "loaded");
 
     Scene::SaveOptions saveOptions{};
-    saveOptions.preserveBlueprintInstances = true;
+    saveOptions.preservePrefabInstances = true;
+    saveOptions.assetResolver = &resolver;
     ASSERT_TRUE(Scene::SaveSceneToFile(world, outPath, saveOptions));
     ECS::World reloaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, outPath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, outPath, loadOptions));
     ExpectNavigationSourcePolicies(reloaded, "saved and loaded again");
 }
 
@@ -8244,13 +9045,13 @@ TEST(SceneIO, Save_PreservesSubsceneInstanceAndDoesNotFlatten)
 TEST(SceneIO, Save_PreservesCommentBlocksBeforeSections)
 {
     const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
-    const auto bpPath = (dir / "bp_comment.blueprint").lexically_normal();
+    const auto bpPath = (dir / "bp_comment.prefab").lexically_normal();
     const auto chunkPath = (dir / "chunk_comment.scene").lexically_normal();
     const auto scenePath = (dir / "comment_main.scene").lexically_normal();
     const auto outPath = (dir / "comment_main.scene").lexically_normal(); // overwrite to preserve comments
 
     const std::string bp =
-        "[blueprint name=\"BP\" version=1]\n"
+        "[prefab name=\"BP\" version=1]\n"
         "\n"
         "[entity id=\"root\"]\n"
         "Name.value = \"BP\"\n";
@@ -8266,11 +9067,11 @@ TEST(SceneIO, Save_PreservesCommentBlocksBeforeSections)
     const std::string scene =
         "; Header comment\n"
         "[scene name=\"Main\" version=1]\n"
-        "[resource id=\"bp\" path=\"bp_comment.blueprint\"]\n"
+        "[resource id=\"bp\" path=\"bp_comment.prefab\"]\n"
         "[resource id=\"chunk\" path=\"chunk_comment.scene\"]\n"
         "\n"
-        "; Comment before blueprint\n"
-        "[blueprint id=\"inst\" source=\"bp\"]\n"
+        "; Comment before prefab\n"
+        "[prefab id=\"inst\" source=\"bp\"]\n"
         "\n"
         "; Comment before subscene\n"
         "[subscene id=\"area\" source=\"chunk\"]\n"
@@ -8278,18 +9079,24 @@ TEST(SceneIO, Save_PreservesCommentBlocksBeforeSections)
     ASSERT_TRUE(WriteFile(scenePath, scene));
 
     ECS::World world;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    // The saver writes an instance's source path from the asset database.
+    FakeAssetResolver resolver;
+    resolver.SetRoot(dir);
+    Scene::LoadOptions loadOptions{Scene::LoadMode::Replace};
+    loadOptions.assetResolver = &resolver;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, loadOptions));
 
     Scene::SaveOptions so{};
-    so.preserveBlueprintInstances = true;
+    so.preservePrefabInstances = true;
     so.preserveSubscenes = true;
+    so.assetResolver = &resolver;
     ASSERT_TRUE(Scene::SaveSceneToFile(world, outPath, so));
 
     std::string saved;
     ASSERT_TRUE(ReadFile(outPath, saved));
 
-    const size_t c1 = saved.find("; Comment before blueprint");
-    const size_t h1 = saved.find("[blueprint id=\"inst\"");
+    const size_t c1 = saved.find("; Comment before prefab");
+    const size_t h1 = saved.find("[prefab id=\"inst\"");
     ASSERT_NE(c1, std::string::npos);
     ASSERT_NE(h1, std::string::npos);
     EXPECT_LT(c1, h1);
@@ -8851,13 +9658,13 @@ TEST(SceneIO, DanglingEntityReferenceStillAbortsTheLoad)
         << Scene::GetLastSceneIOError().message;
 }
 
-TEST(SceneIO, ValidateFails_WhenBlueprintSourceMissing)
+TEST(SceneIO, ValidateFails_WhenPrefabSourceMissing)
 {
     const auto scenePath = MakeTempPath("bp_missing_resource.scene");
     const std::string src =
         "[scene name=\"BPBad\" version=1]\n"
         "\n"
-        "[blueprint id=\"inst\" source=\"missing\"]\n";
+        "[prefab id=\"inst\" source=\"missing\"]\n";
     ASSERT_TRUE(WriteFile(scenePath, src));
 
     ECS::World world;
@@ -8891,18 +9698,18 @@ TEST(SceneIO, CustomComponentSchema_LoadAndSaveRoundTrip)
     EXPECT_NE(saved.find("Health.value"), std::string::npos);
 }
 
-TEST(SceneIO, Include_MergesResourcesAndEnablesBlueprintUse)
+TEST(SceneIO, Include_MergesResourcesAndEnablesPrefabUse)
 {
     const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
 
     const auto incPath = (dir / "common.scene").lexically_normal();
-    const auto bpPath = (dir / "bp_inc.blueprint").lexically_normal();
+    const auto bpPath = (dir / "bp_inc.prefab").lexically_normal();
     const auto scenePath = (dir / "main_with_include.scene").lexically_normal();
 
     const std::string bp =
-        "[blueprint name=\"BP\" version=1]\n"
+        "[prefab name=\"BP\" version=1]\n"
         "\n"
         "[entity id=\"root\"]\n"
         "Name.value = \"BP\"\n";
@@ -8911,14 +9718,14 @@ TEST(SceneIO, Include_MergesResourcesAndEnablesBlueprintUse)
     const std::string inc =
         "[scene name=\"Common\" version=1]\n"
         "\n"
-        "[resource id=\"bp\" path=\"bp_inc.blueprint\"]\n";
+        "[resource id=\"bp\" path=\"bp_inc.prefab\"]\n";
     ASSERT_TRUE(WriteFile(incPath, inc));
 
     const std::string scene =
         "[scene name=\"Main\" version=1]\n"
         "[include path=\"common.scene\"]\n"
         "\n"
-        "[blueprint id=\"inst\" source=\"bp\"]\n"
+        "[prefab id=\"inst\" source=\"bp\"]\n"
         "Name.value = \"Over\"\n";
     ASSERT_TRUE(WriteFile(scenePath, scene));
 
@@ -8929,7 +9736,7 @@ TEST(SceneIO, Include_MergesResourcesAndEnablesBlueprintUse)
     ASSERT_TRUE(inst.IsValid());
 }
 
-TEST(SceneIO, AssetDependencyExtractor_FindsSceneAndBlueprintPathRefs)
+TEST(SceneIO, AssetDependencyExtractor_FindsSceneAndPrefabPathRefs)
 {
     const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
     std::error_code ec;
@@ -8939,7 +9746,7 @@ TEST(SceneIO, AssetDependencyExtractor_FindsSceneAndBlueprintPathRefs)
     const std::string src =
         "[scene name=\"Deps\" version=1]\n"
         "[include path=common.scene]\n"
-        "[resource id=\"bp\" path=enemy.blueprint]\n"
+        "[resource id=\"bp\" path=enemy.prefab]\n"
         "\n"
         "[entity id=\"e\"]\n"
         "Foo.path = @\"meshes/cube.fbx\"\n";
@@ -8955,7 +9762,7 @@ TEST(SceneIO, AssetDependencyExtractor_FindsSceneAndBlueprintPathRefs)
     const auto info = AssetDependencyExtractor::ExtractDependencies(md);
     // We don't require the registry to be initialized here; we just want path refs recorded.
     EXPECT_NE(std::find(info.DependencyPaths.begin(), info.DependencyPaths.end(), "common.scene"), info.DependencyPaths.end());
-    EXPECT_NE(std::find(info.DependencyPaths.begin(), info.DependencyPaths.end(), "enemy.blueprint"), info.DependencyPaths.end());
+    EXPECT_NE(std::find(info.DependencyPaths.begin(), info.DependencyPaths.end(), "enemy.prefab"), info.DependencyPaths.end());
     EXPECT_NE(std::find(info.DependencyPaths.begin(), info.DependencyPaths.end(), "meshes/cube.fbx"), info.DependencyPaths.end());
 }
 
@@ -9025,7 +9832,7 @@ TEST(SceneIO, ValidateFails_WhenEmbedIdCollidesWithResourceId)
     const auto scenePath = MakeTempPath("embed_resource_collision.scene");
     const std::string src =
         "[scene name=\"Collide\" version=1]\n"
-        "[resource id=\"x\" path=\"something.blueprint\"]\n"
+        "[resource id=\"x\" path=\"something.prefab\"]\n"
         "[embed id=\"x\" type=\"Material\"]\n"
         "color = (1, 0, 0)\n";
     ASSERT_TRUE(WriteFile(scenePath, src));
@@ -9055,30 +9862,30 @@ TEST(SceneIO, ParseFails_WhenSubsceneEnabledIsNotBool)
     EXPECT_EQ(err.line, 4);
 }
 
-TEST(SceneIO, BlueprintFileMustContainEntities)
+TEST(SceneIO, PrefabFileWithNoRootIsRefused)
 {
     const auto dir = std::filesystem::temp_directory_path() / "GameEngine_SceneIOTests";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
 
-    const auto bpPath = (dir / "empty.blueprint").lexically_normal();
+    const auto bpPath = (dir / "empty.prefab").lexically_normal();
     const auto scenePath = (dir / "scene_uses_empty_bp.scene").lexically_normal();
 
     const std::string bp =
-        "[blueprint name=\"Empty\" version=1]\n";
+        "[prefab name=\"Empty\" version=1]\n";
     ASSERT_TRUE(WriteFile(bpPath, bp));
 
     const std::string scene =
         "[scene name=\"Main\" version=1]\n"
-        "[resource id=\"bp\" path=\"empty.blueprint\"]\n"
-        "[blueprint id=\"inst\" source=\"bp\"]\n";
+        "[resource id=\"bp\" path=\"empty.prefab\"]\n"
+        "[prefab id=\"inst\" source=\"bp\"]\n";
     ASSERT_TRUE(WriteFile(scenePath, scene));
 
     ECS::World world;
     EXPECT_FALSE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
     const auto& err = Scene::GetLastSceneIOError();
     EXPECT_EQ(err.file.lexically_normal(), bpPath.lexically_normal());
-    EXPECT_NE(err.message.find("must contain at least one"), std::string::npos);
+    EXPECT_NE(err.message.find("Prefab file has no root. Add one [entity id=\"root\"]"), std::string::npos) << err.message;
 }
 
 TEST(SceneValue, ParseAssetRef_PathAndGuid)
@@ -9284,7 +10091,7 @@ static std::string SaveMatUserV2AndReadBack(HealHarness& h, const GUID& g, std::
 
     Scene::SaveOptions opts;
     opts.assetResolver = &h.resolver;
-    opts.preserveBlueprintInstances = false;
+    opts.preservePrefabInstances = false;
     opts.preserveSubscenes = false;
     if (!Scene::SaveSceneToFile(w, h.scenePath, opts))
         return {};
@@ -9359,7 +10166,7 @@ TEST(SceneIO_HealOnSave, NoResolver_EmitsAuthoredFieldsAsIs)
     w.AddComponentImmediate(e, mu);
 
     Scene::SaveOptions opts; // no resolver
-    opts.preserveBlueprintInstances = false;
+    opts.preservePrefabInstances = false;
     opts.preserveSubscenes = false;
     ASSERT_TRUE(Scene::SaveSceneToFile(w, h.scenePath, opts));
 
@@ -9441,7 +10248,7 @@ std::string SaveHarnessSceneAndReadBack(HealHarness& h, ECS::World& w)
 {
     Scene::SaveOptions opts;
     opts.assetResolver = &h.resolver;
-    opts.preserveBlueprintInstances = false;
+    opts.preservePrefabInstances = false;
     opts.preserveSubscenes = false;
     if (!Scene::SaveSceneToFile(w, h.scenePath, opts))
         return {};
@@ -10464,12 +11271,12 @@ static std::string NotAnAssignmentMessage(const std::string& quoted)
 }
 
 // A body line that is not "Component.field = value" is a load-report row with its file, its line and
-// the form a line takes, in an entity and in a blueprint instance, and the rest loads. A long line is
+// the form a line takes, in an entity and in a prefab instance, and the rest loads. A long line is
 // quoted up to 80 bytes and "...". The rows come in line order.
 TEST(SceneIO, Load_ALineThatIsNotAnAssignmentIsALoadReportRow)
 {
-    ASSERT_TRUE(WriteFile(MakeTempPath("not_an_assignment.blueprint"),
-                          "[blueprint name=\"BP\" version=1]\n"
+    ASSERT_TRUE(WriteFile(MakeTempPath("not_an_assignment.prefab"),
+                          "[prefab name=\"BP\" version=1]\n"
                           "\n"
                           "[entity id=\"root\"]\n"
                           "Name.value = \"BP\"\n"));
@@ -10477,7 +11284,7 @@ TEST(SceneIO, Load_ALineThatIsNotAnAssignmentIsALoadReportRow)
     const std::string longLine(200, 'x');
     const std::string src =
         "[scene name=\"NotAnAssignment\" version=1]\n"
-        "[resource id=\"bp\" path=\"not_an_assignment.blueprint\"]\n"
+        "[resource id=\"bp\" path=\"not_an_assignment.prefab\"]\n"
         "\n"
         "[entity id=\"lines\"]\n"
         "SkyEnvironment = 1\n"
@@ -10488,7 +11295,7 @@ TEST(SceneIO, Load_ALineThatIsNotAnAssignmentIsALoadReportRow)
         "SkyEnvironment.Latitud = 1\n"
         "SkyEnvironment.Latitude = -45\n"
         "\n"
-        "[blueprint id=\"inst\" source=\"bp\"]\n"
+        "[prefab id=\"inst\" source=\"bp\"]\n"
         "Transform.position\n";
 
     ECS::World w;

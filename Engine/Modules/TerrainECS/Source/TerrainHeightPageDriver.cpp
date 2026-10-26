@@ -19,13 +19,9 @@
 namespace GameEngine::TerrainECS
 {
 
-namespace
-{
-
 using Hashing::HashCombine;
 
-// The generated lattice of a noise or flat tiled terrain: its tile grid and the tile fill's noise.
-PageStreaming::GeneratedHeightLattice MakeGeneratedLattice(const TiledTerrainData& tiled)
+PageStreaming::GeneratedHeightLattice MakeGeneratedHeightLattice(const TiledTerrainData& tiled)
 {
     PageStreaming::GeneratedHeightLattice lattice;
     lattice.Source = tiled.Config.Base.Source == Components::TerrainBaseSource::ProceduralNoise
@@ -41,7 +37,7 @@ PageStreaming::GeneratedHeightLattice MakeGeneratedLattice(const TiledTerrainDat
     return lattice;
 }
 
-uint64 GeneratedIdentity(const PageStreaming::GeneratedHeightLattice& lattice)
+uint64 GeneratedHeightIdentity(const PageStreaming::GeneratedHeightLattice& lattice)
 {
     uint64 hash = HashCombine(0x9E3779B97F4A7C15ull, static_cast<uint64>(lattice.Source));
     hash = HashCombine(hash, std::bit_cast<uint32>(lattice.TerrainOriginX));
@@ -51,8 +47,6 @@ uint64 GeneratedIdentity(const PageStreaming::GeneratedHeightLattice& lattice)
     hash = HashCombine(hash, lattice.TilesX);
     return HashCombine(hash, lattice.TilesZ);
 }
-
-} // namespace
 
 void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::IDevice& device,
                                     TiledTerrainData& tiled, const TiledRenderExtent& extent,
@@ -78,8 +72,8 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
     PageStreaming::GeneratedHeightLattice lattice;
     if (generated)
     {
-        lattice = MakeGeneratedLattice(tiled);
-        request.SourceIdentity = GeneratedIdentity(lattice);
+        lattice = MakeGeneratedHeightLattice(tiled);
+        request.SourceIdentity = GeneratedHeightIdentity(lattice);
         samplesX = lattice.TilesX * (lattice.TileSamples - 1u) + 1u;
         samplesZ = lattice.TilesZ * (lattice.TileSamples - 1u) + 1u;
     }
@@ -91,6 +85,16 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
             request.SourceIdentity = HashCombine(reinterpret_cast<uintptr_t>(store.get()), base.HeightmapContentVersion);
             samplesX = store->Layout().Header.SamplesX;
             samplesZ = store->Layout().Header.SamplesZ;
+        }
+        const std::string directoryRefusal =
+            DenseDirectoryRefusal(name.empty() ? std::string_view("A terrain") : name, samplesX, samplesZ);
+        if (!directoryRefusal.empty())
+        {
+            // It draws from its height texture, as a terrain without a store does.
+            pages.ReportRefusal(request.Terrain, directoryRefusal);
+            store = nullptr;
+            samplesX = 0;
+            samplesZ = 0;
         }
     }
 
@@ -105,9 +109,8 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
     const bool onLattice = samplesX == extent.UnifiedWidth && samplesZ == extent.UnifiedHeight;
     const std::string_view label = name.empty() ? std::string_view("A terrain") : name;
     const bool fitsLattice = samplesX > 1u && samplesZ > 1u && (!generated || onLattice);
-    std::string refusal = fitsLattice ? PageTableRefusal(label, samplesX, samplesZ, pages.Profile()) : std::string();
+    std::string refusal;
     inputs.PagesOnLattice = fitsLattice;
-    inputs.PageTableFits = fitsLattice && refusal.empty();
     // The modifier system builds the overlay for every terrain with CPU pages: the CPU readers take
     // it on every GPU arm, and the GPU pages take it where they are drawn.
     const bool cpuPages = TerrainHeightHasCpuPages(inputs);

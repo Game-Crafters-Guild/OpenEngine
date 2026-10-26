@@ -704,12 +704,12 @@ BufferHandle ImageBasedLightingFeature::UploadEnvData(IDevice* device)
         if (local.BoxProjection)
         {
             d.localBoxProjection = 1.0f;
-            std::memcpy(d.localProbePositionWS, local.ProbePositionWS, sizeof(local.ProbePositionWS));
-            std::memcpy(d.localBoxCenterWS, local.BoxCenterWS, sizeof(local.BoxCenterWS));
-            std::memcpy(d.localBoxHalfExtentsWS, local.BoxHalfExtentsWS, sizeof(local.BoxHalfExtentsWS));
-            std::memcpy(d.localBoxAxisXWS, local.BoxAxisXWS, sizeof(local.BoxAxisXWS));
-            std::memcpy(d.localBoxAxisYWS, local.BoxAxisYWS, sizeof(local.BoxAxisYWS));
-            std::memcpy(d.localBoxAxisZWS, local.BoxAxisZWS, sizeof(local.BoxAxisZWS));
+            std::memcpy(d.localProbePositionWS, local.ProbePositionWS.v, sizeof(local.ProbePositionWS));
+            std::memcpy(d.localBoxCenterWS, local.BoxCenterWS.v, sizeof(local.BoxCenterWS));
+            std::memcpy(d.localBoxHalfExtentsWS, local.BoxHalfExtentsWS.v, sizeof(local.BoxHalfExtentsWS));
+            std::memcpy(d.localBoxAxisXWS, local.BoxAxisXWS.v, sizeof(local.BoxAxisXWS));
+            std::memcpy(d.localBoxAxisYWS, local.BoxAxisYWS.v, sizeof(local.BoxAxisYWS));
+            std::memcpy(d.localBoxAxisZWS, local.BoxAxisZWS.v, sizeof(local.BoxAxisZWS));
         }
     }
     device->UpdateBuffer(buf, 0, sizeof(d), &d);

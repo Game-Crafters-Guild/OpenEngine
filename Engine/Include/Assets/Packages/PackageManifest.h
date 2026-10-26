@@ -59,7 +59,7 @@ struct PackageManifest
     // "runtimeAssets": component name -> asset-dir-relative files or folders the
     // package's code loads by path for that component (no dependency edge names
     // them). A build ships them, with their own references, when a built scene or
-    // blueprint uses the component.
+    // prefab uses the component.
     std::map<std::string, std::vector<std::string>> RuntimeAssets;
     std::vector<std::string> Platforms;
     bool EnabledByDefault = true;

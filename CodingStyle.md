@@ -154,6 +154,9 @@ A public symbol is a promise the engine keeps for every future caller, so the sm
 
 - Doxygen-style comments for public APIs
 - Examples and docs should use canonical PascalCase API only
+- A comment is short, one to three lines, in Simplified Technical English (ASD-STE100): one meaning per word, active voice, present tense, short sentences.
+- A comment describes the code as it is now: the invariant, the unit or coordinate convention, the trap, the rule. It never describes a change, a former value, a removed path, a review or a reason that no longer applies. A comment that narrates history is deleted on contact.
+- A name that needs a comment to be understood is the wrong name; fix the name first.
 
 ## Assertions
 

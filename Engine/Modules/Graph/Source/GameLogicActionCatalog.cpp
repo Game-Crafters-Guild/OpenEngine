@@ -203,6 +203,9 @@ const std::vector<GameLogicActionSpec>& BuildCatalog()
          {Param("bus", "0"), Param("volume", "1")}},
 
         {"CreateEntity", "Create Entity", "Game Object", FlowPortsWith({In("name", "string", "Name")}), {Param("name", "Entity")}},
+        {"SpawnPrefab", "Spawn Prefab", "Game Object",
+         FlowPortsWith({In("prefab", "string", "Prefab"), In("position", "float3", "Position"), In("rotation", "float3", "Rotation")}),
+         {Param("prefab", ""), Param("position", "0, 0, 0"), Param("rotation", "0, 0, 0")}},
         {"DestroyEntity", "Destroy Entity", "Game Object", FlowPortsWith({In("entity", "entity", "Entity")}), {Param("entity", "self")}},
         {"SetEntityEnabled", "Set Entity Enabled", "Game Object", FlowPortsWith({In("entity", "entity", "Entity"), In("enabled", "bool", "Enabled")}),
          {Param("entity", "self"), Param("enabled", "true")}},

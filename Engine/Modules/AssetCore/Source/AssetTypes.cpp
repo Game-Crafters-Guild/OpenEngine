@@ -69,6 +69,7 @@ static const std::unordered_map<String, AssetType>& GetExtensionMap()
         // Scene formats
         {".scene", AssetType::Scene},
         {".unity", AssetType::Scene},
+        {".prefab", AssetType::Prefab},
 
         // Material formats
         {".mat", AssetType::Material},
@@ -295,6 +296,7 @@ bool IsTextBasedAssetType(AssetType type) {
         case AssetType::Script:
         case AssetType::CubeLut:
         case AssetType::Scene:
+        case AssetType::Prefab:
         case AssetType::Material:
         case AssetType::Shader:
         case AssetType::RenderPipeline:

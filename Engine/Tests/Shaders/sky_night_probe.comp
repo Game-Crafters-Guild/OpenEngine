@@ -9,14 +9,16 @@
 // disc's frame from GE_MoonDiscFrame (right, then up), so the test can place the lit side on the sky.
 // Mode 1, the night glow: invocation i writes GE_ApplySkyGroundAndNight for a view direction at
 // elevation 90 x i / (count - 1) degrees, on the open sky (no stylized ground).
-// Mode 2, the sky under the disc and what it hides, a fixed table: slots 0 to 3 write the four
+// Mode 2, the sky under the disk, a fixed table: slots 0 to 3 write the four
 // GE_MoonRimDirection taps (xyz) and their angle from the moon (w); slots 4 to 6 write
 // GE_MoonSkyUnderDisc over a direct sky of 0 and a rim sky of 1 for a hidden moon (cover 1, no
 // transmittance), a full cover in clear air and a half cover in clear air (x); slot 7 writes
-// GE_MoonHidesBehind for a unit falling star under a cover of 0.75 (x).
+// GE_StarMoonCover at the moon's center for a star (x) and a falling star (y), and for a star at
+// twice the drawn radius (z).
 
 #include "Includes/moon_disc.glsl"
 #include "Includes/sky_composite.glsl"
+#include "Includes/sky_star_model.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -87,7 +89,11 @@ void main()
         else if (i == 6u)
             uOut.result[i] = vec4(GE_MoonSkyUnderDisc(vec3(0.0), vec3(1.0), 0.5, vec3(1.0)), 0.0);
         else if (i == 7u)
-            uOut.result[i] = vec4(GE_MoonHidesBehind(vec3(1.0), 0.75), 0.0);
+            uOut.result[i] = vec4(GE_StarMoonCover(moonDir, moonDir, drawnRadius, false),
+                                  GE_StarMoonCover(moonDir, moonDir, drawnRadius, true),
+                                  GE_StarMoonCover(GE_MoonRimDirection(moonDir, discRight, discUp, 2.0 * drawnRadius, 0),
+                                                   moonDir, drawnRadius, false),
+                                  0.0);
         return;
     }
 

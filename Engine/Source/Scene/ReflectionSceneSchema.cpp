@@ -73,7 +73,8 @@ bool IsAssetGuidArrayField(const ECS::FieldInfo& f)
 // recipe's override list. Each element is written as one "<Name><index>.<SubField> = value" line
 // per sub-field, through that sub-field's own codec; a struct array inside an element nests the
 // same way ("<Name><index>.<Inner><index>.<SubField>"). An element equal to what the owning
-// component's default bytes hold at its place writes no line at all, because that default is
+// component's default bytes hold at its place writes no line at all (unless the save writes every
+// field, SceneSaveContext::WriteEveryField), because that default is
 // what the reader starts from — comparing against the element struct's own default instead would
 // drop an authored value that happens to equal it wherever the owner defaults differently. So an
 // untouched table costs nothing on disk and a filled one round-trips slot-exact, as the AssetGuid
@@ -128,7 +129,8 @@ struct StructArrayLine
 
 // The lines of one struct-array field whose bytes are `field` and whose owner-default bytes are
 // `defaults`, both Size bytes long. Every sub-field of an element that differs from its default
-// is written, not just the ones that differ: an authored element then loads the same whatever
+// (of every element, when the save writes every field) is written, not just the sub-fields that
+// differ: an authored element then loads the same whatever
 // the defaults become later. A struct array nested in an element whose struct has no field table
 // cannot be written, and says so rather than vanishing from the file.
 void WriteStructArrayLines(const ECS::FieldInfo& f, const std::uint8_t* field, const std::uint8_t* defaults,
@@ -147,7 +149,7 @@ void WriteStructArrayLines(const ECS::FieldInfo& f, const std::uint8_t* field, c
     {
         const std::uint8_t* element = field + static_cast<std::size_t>(i) * layout.Stride;
         const std::uint8_t* elementDefault = defaults + static_cast<std::size_t>(i) * layout.Stride;
-        if (std::memcmp(element, elementDefault, layout.Stride) == 0)
+        if (!ctx.WriteEveryField && std::memcmp(element, elementDefault, layout.Stride) == 0)
             continue;
         const std::string index = prefix + std::to_string(i) + ".";
         for (const ECS::FieldInfo& sub : layout.ElementFields)
@@ -660,7 +662,8 @@ void ReflectionSceneSchema::Serialize(const ECS::World& world, ECS::EntityHandle
         {
             // One "<Name><index> = [path=... guid=...]" line per non-null element; null
             // slots omit their line and load back as empty (the codec's null-omission
-            // rule, element-wise), so a pool round-trips its exact slot layout.
+            // rule, element-wise), so a pool round-trips its exact slot layout. A save that writes
+            // every field writes a null slot as its clear form `0`.
             const IFieldSerializer* ser = FieldSerializerRegistry::Resolve(f);
             if (!ser)
                 continue;

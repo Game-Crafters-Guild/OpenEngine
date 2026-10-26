@@ -19,11 +19,10 @@ Engine colors are explicit and type-safe, defined in `Engine/Modules/Types/Inclu
 
 ## 2. UI and sRGB Input
 
-UI/theme colors are typically authored as ARGB 0xAARRGGBB values in sRGB space. The central helper is `GameEngine::ColorUtils::ARGBToLinearFloats` in `Engine/Modules/Types/Include/Types/ColorUtils.h`:
+UI/theme colors are typically authored as ARGB 0xAARRGGBB values in sRGB space. The UI passes these bytes to its shaders as they are: `UI::PackFromARGB` (`Engine/Modules/UI/Include/UI/UIPrimitive.h`) only reorders the channels. Two helpers in `Engine/Modules/Types/Include/Types/ColorUtils.h` convert on the CPU, where a linear color meets such bytes:
 
-- ARGB bytes are interpreted as **sRGB**.
-- We construct a `ColorSRGB` via `FromSRGB255` and call `ToLinear()`.
-- The resulting linear RGBA floats are what UI shaders see.
+- `GameEngine::ColorUtils::ArgbToLinear` decodes sRGB bytes to a `ColorLinear` (through `ColorSRGB::FromSRGB255` and `ToLinear()`). The inspector's color row uses it to write a picked color into a component.
+- `GameEngine::ColorUtils::LinearToArgb` encodes a `ColorLinear` to opaque sRGB bytes. The inspector's color swatches and the light inspector's Kelvin gradient use it.
 
 Effectively:
 

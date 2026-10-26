@@ -1,5 +1,6 @@
 #include "MeshPicking/MeshBvh.h"
 
+#include "Core/CpuProfiler.h"
 #include "SceneBvh/BinnedSahSplit.h"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 // Per-node 8-child SIMD slab test path selection.
 //
 // AVX2 (x86_64): one 256-bit lane covers all 8 children in a single pass.
@@ -31,9 +33,6 @@
 #else
 #  define GE_MESHBVH_USE_NEON 0
 #endif
-#include <limits>
-
-#include "Core/CpuProfiler.h"
 
 namespace GameEngine::MeshPicking
 {
@@ -961,6 +960,15 @@ bool MeshBvh::Deserialize(const std::vector<uint8>& bytes, const MeshView& sourc
         return false;
 
     if (!source.IsValid() && (hdr.TriangleCount > 0 || hdr.NodeCount > 0))
+        return false;
+
+    // The declared counts must describe exactly the bytes given, checked before anything is
+    // allocated: a corrupt count would otherwise ask for gigabytes.
+    const uint64 expectedSize = sizeof(SerializedHeader) +
+                                static_cast<uint64>(hdr.TriangleCount) * sizeof(uint32) +
+                                static_cast<uint64>(hdr.TriIndexCount) * sizeof(uint32) +
+                                static_cast<uint64>(hdr.NodeCount) * sizeof(BvhNode8);
+    if (expectedSize != bytes.size())
         return false;
 
     // Triangles: read OriginalIndex per triangle, rebuild V0/V1/V2 from source.

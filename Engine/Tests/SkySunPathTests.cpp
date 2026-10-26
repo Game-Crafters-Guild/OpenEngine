@@ -374,11 +374,12 @@ TEST(SkySunPath, TheSunsShareOfTheDrivenLightEndsAtTheTwilightFloor)
             ASSERT_LT(blend, 1.0f);
             const auto* feature = harness.Services.GetFeature<Engine::Renderer::SkyRenderFeature>();
             ASSERT_NE(feature, nullptr);
+            const float moonColor[3] = {config.moonColor.r, config.moonColor.g, config.moonColor.b};
             float moonGround[3];
-            Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), config.moonColor,
+            Rendering::EvaluateGroundLevelSunColor(Rendering::ScatteringAtmosphere(), moonColor,
                                                    feature->GetSettings().moonDirWS[1], moonGround);
             const float moonTerm = kSunLux * blend * config.moonLightIlluminanceScale *
-                                   ColorUtils::LinearRec709Luminance(moonGround);
+                                   ColorUtils::LinearRec709Luminance({moonGround[0], moonGround[1], moonGround[2]});
             EXPECT_NEAR(sunShare, delivered - moonTerm, delivered * 1e-3f) << "hour " << hour.Hours;
         }
     }

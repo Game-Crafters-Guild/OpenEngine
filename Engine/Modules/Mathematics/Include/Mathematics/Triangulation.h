@@ -40,8 +40,19 @@ inline bool SamePoint(const Vector2& a, const Vector2& b, float distance)
     return d.x * d.x + d.y * d.y <= distance * distance;
 }
 
+// On the open segment ac, its ends left out: within `minDoubledArea` of its line and between them.
+inline bool OnOpenSegment(const Vector2& a, const Vector2& c, const Vector2& p, float minDoubledArea)
+{
+    const Vector2 ac = c - a;
+    const Vector2 ap = p - a;
+    const float along = ac.x * ap.x + ac.y * ap.y;
+    return std::abs(Cross2(ac, ap)) <= minDoubledArea && along > 0.0f && along < ac.x * ac.x + ac.y * ac.y;
+}
+
 // Whether the corner at polygon[i] is an ear: turning left by more than `minTurn` with no other
-// polygon point strictly inside the triangle it cuts.
+// polygon point strictly inside the triangle it cuts or on the diagonal it cuts along. A corner on
+// the diagonal (where two straight runs of the outline line up) would leave the rest of the
+// outline running back over itself along it, and a later ear would then cross the outline.
 inline bool IsEar(std::span<const Vector2> points, const std::vector<std::uint32_t>& polygon, std::size_t i,
                   float minTurn, const EarClipTolerances& tolerances)
 {
@@ -57,7 +68,8 @@ inline bool IsEar(std::span<const Vector2> points, const std::vector<std::uint32
         if (SamePoint(p, a, tolerances.SamePointDistance) || SamePoint(p, b, tolerances.SamePointDistance) ||
             SamePoint(p, c, tolerances.SamePointDistance))
             continue;
-        if (StrictlyInsideTriangle(a, b, c, p, tolerances.MinDoubledArea))
+        if (StrictlyInsideTriangle(a, b, c, p, tolerances.MinDoubledArea) ||
+            OnOpenSegment(a, c, p, tolerances.MinDoubledArea))
             return false;
     }
     return true;

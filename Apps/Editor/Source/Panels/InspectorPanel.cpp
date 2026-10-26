@@ -151,7 +151,7 @@
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/Rendering/Skybox.h"
 #include "Components/Rendering/WindVolume.h"
-#include "Components/SceneBlueprintInstance.h"
+#include "Components/PrefabInstance.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/SceneSubsceneInstance.h"
 #include "Components/Spline/SplineComponent.h"
@@ -661,7 +661,7 @@ static const std::unordered_map<ECS::ComponentTypeId, std::string>& GetComponent
         s_Names[ECS::GetComponentTypeId<AnimatedNodeRef>()] = "Animated Node";
 
         s_Names[ECS::GetComponentTypeId<SceneEntityTag>()] = "Scene Entity Tag";
-        s_Names[ECS::GetComponentTypeId<SceneBlueprintInstance>()] = "Scene Blueprint Instance";
+        s_Names[ECS::GetComponentTypeId<PrefabInstance>()] = "Prefab Instance";
         s_Names[ECS::GetComponentTypeId<SceneSubsceneInstance>()] = "Scene Subscene Instance";
 
         s_Names[ECS::GetComponentTypeId<Components::Terrain>()] = "Terrain";
@@ -5591,6 +5591,7 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                 m_DragStartX = e.X;
                 m_DragStartValue = fieldPtr->GetValue();
                 m_DragVariableName = varName;
+                m_DragBegun = false;
                 
                 // Highlight the field when dragging starts
                 HighlightVariableField(varName);
@@ -5609,6 +5610,8 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                                            {
             if (m_LeftMouseDragging && m_DraggingLabel == nameLabelPtr && m_DraggingField == fieldPtr) {
                 float totalDeltaX = e.X - m_DragStartX;
+                if (!InspectorDrag::BeginLabelDragPastThreshold(nameLabelPtr, m_DragBegun, totalDeltaX))
+                    return;
                 AdjustValueByDrag(varName, fieldPtr, totalDeltaX);
                 HighlightVariableField(varName);
             } });
@@ -5645,6 +5648,9 @@ void InspectorPanel::ShowScriptVariables(const std::filesystem::path& scriptPath
                 }
                 e.Stop();
             } });
+
+        nameLabelPtr->RegisterEventHandler(kEventMouseCancel, [this, varName, fieldPtr, nameLabelPtr](UIEvent& e)
+                                           { CancelScriptVariableDrag(e, varName, fieldPtr, nameLabelPtr); });
 
         sectionContent->AddChild(std::move(row));
     }
@@ -5747,6 +5753,23 @@ void InspectorPanel::FocusScriptVariableField(const std::string& varName)
     {
         apply();
     }
+}
+
+void InspectorPanel::CancelScriptVariableDrag(UIEvent& e, const std::string& varName, TextField* field,
+                                              UIElement* label)
+{
+    if (!m_LeftMouseDragging || m_DraggingLabel != label)
+        return;
+    m_LeftMouseDragging = false;
+    m_DraggingLabel = nullptr;
+    m_DraggingField = nullptr;
+    if (field->GetValue() != m_DragStartValue)
+    {
+        field->SetValue(m_DragStartValue);
+        if (m_OnVariableEdited)
+            m_OnVariableEdited(varName, m_DragStartValue);
+    }
+    e.Stop();
 }
 
 void InspectorPanel::AdjustValueByDrag(const std::string& varName, TextField* field, float totalDeltaX)

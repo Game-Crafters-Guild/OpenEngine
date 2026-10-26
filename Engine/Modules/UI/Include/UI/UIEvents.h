@@ -35,8 +35,8 @@ constexpr EventId HashEvent(std::string_view sv)
 //    ancestors receive their own events via the precomputed hover sets.
 inline constexpr EventId kEventMouseDown = HashEvent("UI.MouseDown");
 inline constexpr EventId kEventMouseUp = HashEvent("UI.MouseUp");
-// The in-flight press ended without a release, because the pointer stream itself ended
-// (UIManager::CancelPress — the Game View viewport the host reads pointer from was left).
+// The in-flight press ended without a release (UIManager::CancelPress): the pointer stream ended
+// (the Game View viewport was left), or Escape or another button cancelled a locked drag.
 // Bubbles like MouseUp and carries the unknown-position sentinel in X/Y, because no
 // release position exists. A control that arms on MouseDown must disarm here and must
 // NOT activate. Deliberately NOT delivered as a MouseUp: subscribers reasonably read a

@@ -20,6 +20,8 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Interpolation.h"
+#include "Mathematics/Matrix4x4.h"
+#include "Mathematics/Vector4.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Core/NamedDescriptorWriter.h"
@@ -27,6 +29,7 @@
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Types/Color.h"
 
 namespace GameEngine::Engine::Renderer
 {
@@ -313,9 +316,9 @@ void DDGIProbeFeature::SetActiveVolume(const DDGIVolumeDesc& desc)
     const bool placementChanged = clamped.ProbePlacement != m_Volume.ProbePlacement;
     const bool shapeChanged =
         !m_Volume.Enabled != !clamped.Enabled || clamped.ProbesLongAxis != m_Volume.ProbesLongAxis ||
-        std::memcmp(clamped.GridSizeWS, m_Volume.GridSizeWS, sizeof(clamped.GridSizeWS)) != 0;
+        std::memcmp(clamped.GridSizeWS.v, m_Volume.GridSizeWS.v, sizeof(clamped.GridSizeWS.v)) != 0;
     const bool movedAtAll =
-        std::memcmp(clamped.GridMinWS, m_Volume.GridMinWS, sizeof(clamped.GridMinWS)) != 0;
+        std::memcmp(clamped.GridMinWS.v, m_Volume.GridMinWS.v, sizeof(clamped.GridMinWS.v)) != 0;
 
     // A pure TRANSLATION does not invalidate the field. Probe storage slots are
     // keyed on absolute world cell modulo resolution (Includes/ddgi_common.glsl),
@@ -420,27 +423,29 @@ void DDGIProbeFeature::LoadKernelsIfNeeded()
     LoadKernel("Shaders/ddgi_map_atlas_blit.shaderpkg", m_MapBlit, "DDGI.MapBlit");
 }
 
-void DDGIProbeFeature::ComputeVolumeHalfExtents(const float worldMatrix[16], float outHalfExtents[3])
+Mathematics::Vector3 DDGIProbeFeature::ComputeVolumeHalfExtents(const Mathematics::Matrix4x4& worldMatrix)
 {
     // Column-major: columns 0/1/2 are the transform's basis vectors, whose
     // lengths are the per-axis scale (rotation is a unit-length rotation of
     // each column, so taking the length drops it — which is what v1's
     // world-axis-aligned grid wants). Unit cube => half-extent 0.5 * scale.
+    Mathematics::Vector3 halfExtents;
     for (int axis = 0; axis < 3; ++axis)
     {
-        const float x = worldMatrix[axis * 4 + 0];
-        const float y = worldMatrix[axis * 4 + 1];
-        const float z = worldMatrix[axis * 4 + 2];
+        const float x = worldMatrix[axis][0];
+        const float y = worldMatrix[axis][1];
+        const float z = worldMatrix[axis][2];
         const float scale = std::sqrt(x * x + y * y + z * z);
         // A collapsed or mirrored transform would otherwise give an empty or
         // inverted grid; clamp to something small but positive so the volume
         // stays well-formed and visibly tiny rather than silently absent.
-        outHalfExtents[axis] = std::max(scale * 0.5f, 1.0e-3f);
+        halfExtents[axis] = std::max(scale * 0.5f, 1.0e-3f);
     }
+    return halfExtents;
 }
 
 Mathematics::Vector3 DDGIProbeFeature::SnapCentreToProbeGrid(const Mathematics::Vector3& cameraWS,
-                                                             const float gridSizeWS[3],
+                                                             const Mathematics::Vector3& gridSizeWS,
                                                              int32_t probesLongAxis)
 {
     int32_t probeCount[3];
@@ -458,7 +463,7 @@ Mathematics::Vector3 DDGIProbeFeature::SnapCentreToProbeGrid(const Mathematics::
     return snapped;
 }
 
-void DDGIProbeFeature::ComputeProbeGridLayout(const float gridSizeWS[3], int32_t probesLongAxis,
+void DDGIProbeFeature::ComputeProbeGridLayout(const Mathematics::Vector3& gridSizeWS, int32_t probesLongAxis,
                                               int32_t outCounts[3])
 {
     // Longest-axis-gets-probesLongAxis, others scaled by aspect (matches the
@@ -483,7 +488,8 @@ namespace
 // sharing C0's center. Pure function of the volume desc; called from both
 // DeclareProbePasses (to size/place C1's dispatch) and UploadVolumeDataFine
 // (to fill the consumer's DDGIVolumeData UBO) so the two never drift apart.
-void ComputeFineCascadeBounds(const DDGIVolumeDesc& volume, float outMinWS[3], float outSizeWS[3])
+void ComputeFineCascadeBounds(const DDGIVolumeDesc& volume, Mathematics::Vector3& outMinWS,
+                              Mathematics::Vector3& outSizeWS)
 {
     for (int i = 0; i < 3; ++i)
     {
@@ -496,7 +502,7 @@ void ComputeFineCascadeBounds(const DDGIVolumeDesc& volume, float outMinWS[3], f
 
 }  // namespace
 
-bool DDGIProbeFeature::EnsureCascadeGpuResources(CascadeGrid& grid, const float gridSizeWS[3],
+bool DDGIProbeFeature::EnsureCascadeGpuResources(CascadeGrid& grid, const Mathematics::Vector3& gridSizeWS,
                                                  int32_t probesLongAxis, int32_t rawRaysPerProbe,
                                                  int32_t depthTile, float deltaTimeSeconds,
                                                  const CascadeDebugNames& names)
@@ -693,7 +699,8 @@ void DDGIProbeFeature::ReleaseCascadeGpuResources(CascadeGrid& grid)
 }
 
 void DDGIProbeFeature::DispatchClear(Rendering::RenderGraph::RGFrame& frame, Rendering::BufferHandle target,
-                                     uint32_t elementCount, const float fillValue[4], const char* passName)
+                                     uint32_t elementCount, const Mathematics::Vector4& fillValue,
+                                     const char* passName)
 {
     namespace RG = Rendering::RenderGraph;
     // A clear is a WRITER of the buffer its consumers read this frame. Phase is
@@ -793,8 +800,9 @@ size_t DDGIProbeFeature::GetVolumeDataSize()
     return sizeof(VolumeDataUBO);
 }
 
-Rendering::BufferHandle DDGIProbeFeature::UploadCascadeVolumeData(CascadeGrid& grid, const float gridMinWS[3],
-                                                                   const float gridSizeWS[3],
+Rendering::BufferHandle DDGIProbeFeature::UploadCascadeVolumeData(CascadeGrid& grid,
+                                                                   const Mathematics::Vector3& gridMinWS,
+                                                                   const Mathematics::Vector3& gridSizeWS,
                                                                    float normalBiasScale, float intensity,
                                                                    bool convergedEnabled, bool glossyEnabled,
                                                                    float reflectionIntensity,
@@ -936,8 +944,8 @@ DDGIProbeFeature::GatherReadsRG DDGIProbeFeature::ImportGatherReads(Rendering::R
 
 Rendering::BufferHandle DDGIProbeFeature::UploadVolumeDataFine(Rendering::IDevice* /*device*/)
 {
-    float fineMinWS[3];
-    float fineSizeWS[3];
+    Mathematics::Vector3 fineMinWS;
+    Mathematics::Vector3 fineSizeWS;
     ComputeFineCascadeBounds(m_Volume, fineMinWS, fineSizeWS);
     return UploadCascadeVolumeData(m_C1, fineMinWS, fineSizeWS, m_Volume.NormalBiasScale, m_Volume.Intensity,
                                    HasConvergedFineCascade(), m_Volume.EnableGlossy && m_C1Refl.GpuValid,
@@ -945,7 +953,8 @@ Rendering::BufferHandle DDGIProbeFeature::UploadVolumeDataFine(Rendering::IDevic
 }
 
 void DDGIProbeFeature::DeclareCascadeGridPasses(Rendering::RenderGraph::RGFrame& frame, CascadeGrid& grid,
-                                                const float gridMinWS[3], const float gridSizeWS[3],
+                                                const Mathematics::Vector3& gridMinWS,
+                                                const Mathematics::Vector3& gridSizeWS,
                                                 const SharedTickInputs& shared, const CascadeDebugNames& names,
                                                 uint32_t* outProbeBaseThisTick, uint32_t* outProbesThisTick)
 {
@@ -1010,20 +1019,20 @@ void DDGIProbeFeature::DeclareCascadeGridPasses(Rendering::RenderGraph::RGFrame&
     if (grid.NeedsClear)
     {
         const uint32_t stateElementCount = static_cast<uint32_t>(grid.ProbeTotal) * uint32_t(kTile * kTile);
-        const float zeroFill[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        const Mathematics::Vector4 zeroFill(0.0f, 0.0f, 0.0f, 0.0f);
         DispatchClear(frame, grid.IrradianceState, stateElementCount, zeroFill, names.ClearIrradiance);
         DispatchClear(frame, grid.DepthState,
                       static_cast<uint32_t>(grid.ProbeTotal) * uint32_t(grid.DepthTile * grid.DepthTile),
                       zeroFill, names.ClearDepth);
         // One float per irradiance texel, cleared as vec4 elements.
         DispatchClear(frame, grid.TemporalState, stateElementCount / 4u, zeroFill, names.ClearTemporal);
-        const float probeStateFill[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        const Mathematics::Vector4 probeStateFill(0.0f, 0.0f, 0.0f, 1.0f);
         DispatchClear(frame, grid.ProbeStateBuffer, static_cast<uint32_t>(grid.ProbeTotal), probeStateFill,
                      names.ClearProbeState);
         // Unstamped: every slot reads as "changed cell" on its first blend,
         // which is the same seeding path a fresh allocation already takes
         // (GE_DDGI_PROBE_CELL_UNSTAMPED, Includes/ddgi_common.glsl).
-        const float probeCellFill[4] = {-1.0e30f, -1.0e30f, -1.0e30f, 0.0f};
+        const Mathematics::Vector4 probeCellFill(-1.0e30f, -1.0e30f, -1.0e30f, 0.0f);
         DispatchClear(frame, grid.ProbeCellBuffer, static_cast<uint32_t>(grid.ProbeTotal), probeCellFill,
                      names.ClearProbeCell);
         // Initialize every ray as a black miss so a declared trace pass that
@@ -1034,7 +1043,7 @@ void DDGIProbeFeature::DeclareCascadeGridPasses(Rendering::RenderGraph::RGFrame&
         // discard poisoned history before arithmetic. A bad later trace can
         // darken one visit but cannot permanently contaminate the state.
         // The -1 hit distance uses the same miss encoding as traced rays.
-        const float rayMissFill[4] = {0.0f, 0.0f, 0.0f, -1.0f};
+        const Mathematics::Vector4 rayMissFill(0.0f, 0.0f, 0.0f, -1.0f);
         const uint32_t rayElementCount =
             static_cast<uint32_t>(grid.ProbeTotal) * static_cast<uint32_t>(grid.AllocatedRaysPerProbe);
         DispatchClear(frame, grid.RayBuffer, rayElementCount, rayMissFill, names.ClearRayBuffer);
@@ -2109,8 +2118,8 @@ bool DDGIProbeFeature::AllocateReflectionCascade(const CascadeGrid& grid, Reflec
 }
 
 void DDGIProbeFeature::DeclareReflectionPasses(Rendering::RenderGraph::RGFrame& frame, CascadeGrid& grid,
-                                               ReflectionCascade& refl, const float gridMinWS[3],
-                                               const float gridSizeWS[3], uint32_t probeBaseThisTick,
+                                               ReflectionCascade& refl, const Mathematics::Vector3& gridMinWS,
+                                               const Mathematics::Vector3& gridSizeWS, uint32_t probeBaseThisTick,
                                                uint32_t probesThisTick, const SharedTickInputs& shared,
                                                const CascadeDebugNames& names)
 {
@@ -2131,7 +2140,7 @@ void DDGIProbeFeature::DeclareReflectionPasses(Rendering::RenderGraph::RGFrame& 
     const uint32_t glossyTexelsPerProbe = static_cast<uint32_t>(kDDGIGlossyTile * kDDGIGlossyTile);
     if (refl.NeedsClear)
     {
-        const float zeroFill[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        const Mathematics::Vector4 zeroFill(0.0f, 0.0f, 0.0f, 0.0f);
         const uint32_t roughElementCount = static_cast<uint32_t>(grid.ProbeTotal) * uint32_t(kTile * kTile);
         DispatchClear(frame, refl.RoughState, roughElementCount, zeroFill, names.ClearRough);
 
@@ -2174,6 +2183,7 @@ void DDGIProbeFeature::DeclareReflectionPasses(Rendering::RenderGraph::RGFrame& 
         uint32_t Dispatch0[4];
         float Timing[4];
     };
+    static_assert(sizeof(RoughBlendParamsUBO) == 96, "must match ddgi_rough_blend.comp's DDGIRoughBlendParams");
     auto roughUb = frame.AllocUpload<RoughBlendParamsUBO>();
     if (!roughUb.Valid())
         return;
@@ -2313,6 +2323,7 @@ void DDGIProbeFeature::DeclareReflectionPasses(Rendering::RenderGraph::RGFrame& 
         uint32_t Dispatch0[4];
         float Timing[4];
     };
+    static_assert(sizeof(GlossyBlendParamsUBO) == 64, "must match ddgi_glossy_blend.comp's DDGIGlossyBlendParams");
     auto glossyUb = frame.AllocUpload<GlossyBlendParamsUBO>();
     if (!glossyUb.Valid())
         return;
@@ -3083,8 +3094,8 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
                                                                                                  : kTile;
     EnsureCascadeGpuResources(m_C0, m_Volume.GridSizeWS, m_Volume.ProbesLongAxis, m_Volume.RaysPerProbe,
                               depthTile, deltaTimeSeconds, kC0DebugNames);
-    float fineMinWS[3] = {0.0f, 0.0f, 0.0f};
-    float fineSizeWS[3] = {1.0f, 1.0f, 1.0f};
+    Mathematics::Vector3 fineMinWS(0.0f, 0.0f, 0.0f);
+    Mathematics::Vector3 fineSizeWS(1.0f, 1.0f, 1.0f);
     if (m_Volume.EnableFineCascade)
     {
         ComputeFineCascadeBounds(m_Volume, fineMinWS, fineSizeWS);
@@ -3214,9 +3225,9 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
     // one buffer and the same kDDGIMaxLights ceiling the NEE loop costs against.
     struct EmitterProxy
     {
-        float CenterWS[3];
-        float Radius;
-        float Radiance[3];
+        Mathematics::Vector3 CenterWS;
+        float Radius = 0.0f;
+        ColorLinear Radiance;  // rgb; alpha is unused
     };
     std::vector<EmitterProxy> emitters;
     if (lightCount < kDDGIMaxLights)
@@ -3239,9 +3250,7 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
             if (!(inst.boundingRadius > 0.0f))
                 continue;
             EmitterProxy proxy{};
-            proxy.CenterWS[0] = inst.boundingCenter.x;
-            proxy.CenterWS[1] = inst.boundingCenter.y;
-            proxy.CenterWS[2] = inst.boundingCenter.z;
+            proxy.CenterWS = inst.boundingCenter;
             proxy.Radius = inst.boundingRadius;
             // Weight the proxy by the mesh's mean projected area (A/4, or A/2
             // when both faces emit), not the bounding sphere's area: thin
@@ -3255,9 +3264,8 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
             if (!(projectedArea > 0.0f))
                 continue;
             const DDGIEmissive& emissive = emitter->Emissive;
-            proxy.Radiance[0] = emissive.Color[0] * projectedArea;
-            proxy.Radiance[1] = emissive.Color[1] * projectedArea;
-            proxy.Radiance[2] = emissive.Color[2] * projectedArea;
+            proxy.Radiance = ColorLinear(emissive.Color.r * projectedArea, emissive.Color.g * projectedArea,
+                                         emissive.Color.b * projectedArea);
             emitters.push_back(proxy);
         }
     }
@@ -3341,9 +3349,9 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
         // against it regardless of distance.
         p.range = std::max(e.Radius * kDDGIEmitterRangeScale, kDDGIEmitterMinRange);
         p.intensity = 1.0f;  // radiance rides in color; the proxy carries no separate scale
-        p.color[0] = e.Radiance[0];
-        p.color[1] = e.Radiance[1];
-        p.color[2] = e.Radiance[2];
+        p.color[0] = e.Radiance.r;
+        p.color[1] = e.Radiance.g;
+        p.color[2] = e.Radiance.b;
         p.areaRadius = e.Radius;  // source radius: the solid-angle term
         p.decay = 2.0f;
         outLights[lightCount + ei] = p;

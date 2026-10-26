@@ -1,0 +1,7 @@
+[blueprint name="Tree" version=1]
+
+[entity id="root"]
+NavigationSource.Policy = Exclude
+
+[entity id="crown" parent="root"]
+Name.value = "Crown"

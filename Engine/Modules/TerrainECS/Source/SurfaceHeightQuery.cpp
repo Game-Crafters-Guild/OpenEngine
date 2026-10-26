@@ -135,9 +135,9 @@ bool SurfaceHeightQuery::SamplePaged(float32 u, float32 v, SurfaceHeightPolicy p
     for (uint32 level = 0; level < m_Levels.size(); ++level)
     {
         const PageTexel texel = LocatePageTexel(m_Levels, level, u, v);
-        std::span<const float32> samples;
+        std::span<const uint8> bytes;
         const PageStreaming::CpuPageState state =
-            m_Pages.Page(PageStreaming::PageAddress{0, static_cast<uint8>(level), texel.PageX, texel.PageZ}, samples);
+            m_Pages.Page(PageStreaming::PageAddress{0, static_cast<uint8>(level), texel.PageX, texel.PageZ}, bytes);
         if (state == PageStreaming::CpuPageState::Missing)
         {
             finerMissing = true;
@@ -149,6 +149,7 @@ bool SurfaceHeightQuery::SamplePaged(float32 u, float32 v, SurfaceHeightPolicy p
         if (policy == SurfaceHeightPolicy::RequireFinest && detail == SurfaceHeightDetail::Coarse)
             return false;
         constexpr uint32 kStride = PageStreaming::kPageStrideSamples;
+        const std::span<const float32> samples = PageStreaming::HeightSamples(bytes);
         float32 normalized = SampleGridBilinearTexel(samples.data(), kStride, kStride, texel.StrideX, texel.StrideZ);
         if (m_Overlay)
             normalized += OverlayDelta(*m_Overlay, level, texel);
@@ -163,9 +164,10 @@ bool SurfaceHeightQuery::FillFinestPage(uint32 pageX, uint32 pageZ, std::span<fl
     assert(out.size() == static_cast<std::size_t>(kFinestPageGridSamples) * kFinestPageGridSamples);
     if (!HasPageSource() || out.size() != static_cast<std::size_t>(kFinestPageGridSamples) * kFinestPageGridSamples)
         return false;
-    std::span<const float32> samples;
-    if (m_Pages.Page(PageStreaming::PageAddress{0, 0, pageX, pageZ}, samples) != PageStreaming::CpuPageState::Resident)
+    std::span<const uint8> bytes;
+    if (m_Pages.Page(PageStreaming::PageAddress{0, 0, pageX, pageZ}, bytes) != PageStreaming::CpuPageState::Resident)
         return false;
+    const std::span<const float32> samples = PageStreaming::HeightSamples(bytes);
     // Grid sample i of the page is its stride sample i + kPageApronSamples: the first owned sample on.
     constexpr uint32 kApron = PageStreaming::kPageApronSamples;
     constexpr uint32 kStride = PageStreaming::kPageStrideSamples;
@@ -262,21 +264,57 @@ void SurfaceHeightQuery::HeightRange(float32& outLow, float32& outHigh) const
     outHigh = std::max(a, b);
 }
 
-SurfaceHeightTerrain FindSurfaceHeightTerrain(ECS::World& world)
+namespace
+{
+
+constexpr float32 kNotCovered = -1.0f;
+
+// The distance from `point` to the surface of `terrain`, or kNotCovered when the terrain does not
+// cover the point. A planet is centered on the world origin, as the renderer draws it; its relief
+// is HeightScale above PlanetRadius.
+float32 DistanceToSurface(TerrainService& service, const Components::Terrain& terrain,
+                          const Components::WorldTransform& transform, const Mathematics::Vector3& point)
+{
+    if (terrain.Domain == Components::TerrainDomain::Spherical)
+    {
+        const float32 radial = point.Length();
+        if (radial > terrain.PlanetRadius + std::abs(terrain.HeightScale))
+            return kNotCovered;
+        return std::abs(radial - terrain.PlanetRadius);
+    }
+    const SurfaceHeightQuery query = service.SurfaceQuery(terrain, transform);
+    if (!query.ContainsXZ(point.x, point.z))
+        return kNotCovered;
+    float32 low = 0.0f;
+    float32 high = 0.0f;
+    query.HeightRange(low, high);
+    return std::max({low - point.y, point.y - high, 0.0f});
+}
+
+} // namespace
+
+SurfaceHeightTerrain FindSurfaceHeightTerrain(ECS::World& world, const Mathematics::Vector3& point)
 {
     SurfaceHeightTerrain found;
+    TerrainService* service = TerrainService::TryGet();
+    if (!service)
+        return found;
+    float32 nearest = 0.0f;
     world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>().Each(
-        [&found](const Components::Terrain& terrain, const Components::WorldTransform& transform) {
-            if (!found.Terrain)
-                found = {&terrain, &transform};
+        [&](const Components::Terrain& terrain, const Components::WorldTransform& transform) {
+            const float32 distance = DistanceToSurface(*service, terrain, transform, point);
+            if (distance < 0.0f || (found.Terrain && distance >= nearest))
+                return;
+            found = {&terrain, &transform};
+            nearest = distance;
         });
     return found;
 }
 
-SurfaceHeightQuery ResolveSurfaceHeightQuery(ECS::World& world)
+SurfaceHeightQuery ResolveSurfaceHeightQuery(ECS::World& world, const Mathematics::Vector3& point)
 {
     TerrainService* service = TerrainService::TryGet();
-    const SurfaceHeightTerrain terrain = FindSurfaceHeightTerrain(world);
+    const SurfaceHeightTerrain terrain = FindSurfaceHeightTerrain(world, point);
     if (!service || !terrain.Terrain || terrain.Terrain->Domain == Components::TerrainDomain::Spherical)
         return {};
     return service->SurfaceQuery(*terrain.Terrain, *terrain.Transform);

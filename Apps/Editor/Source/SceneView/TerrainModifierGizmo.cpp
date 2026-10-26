@@ -68,15 +68,13 @@ struct TerrainContext
     TerrainECS::SurfaceHeightQuery Planar;
 };
 
-// The single active terrain: first enabled terrain (single-active-terrain by
-// design, mirroring CBTTerrainECS::FindActiveTerrain's scope). The planar half —
-// the heightfield the footprint drapes onto — is resolved by the shared query;
-// the domain flag and the planet's radius/feature are the gizmo's own, because
-// only the drawing code needs them.
-TerrainContext ResolveTerrainContext(ECS::World& world)
+// The domain flag and the planet's radius come from the first terrain, as
+// CBTTerrainECS::FindActiveTerrain draws it. The planar half (the heightfield the
+// footprint drapes onto) is the shared query's terrain under `point`.
+TerrainContext ResolveTerrainContext(ECS::World& world, const Mathematics::Vector3& point)
 {
     TerrainContext ctx{};
-    ctx.Planar = TerrainECS::ResolveSurfaceHeightQuery(world);
+    ctx.Planar = TerrainECS::ResolveSurfaceHeightQuery(world, point);
 
     bool found = false;
     world.Query<ECS::Read<Terrain>, ECS::Read<WorldTransform>>()
@@ -372,7 +370,10 @@ void TerrainModifierGizmo::Render(GizmoRenderContext& context)
     if (!world)
         return;
 
-    const TerrainContext terrain = ResolveTerrainContext(*world);
+    const ECS::EntityHandle focus = m_HoveredEntity.IsValid() ? m_HoveredEntity : m_SelectedEntities.front();
+    const auto* focusTransform = world->GetComponent<WorldTransform>(focus);
+    const TerrainContext terrain =
+        ResolveTerrainContext(*world, focusTransform ? focusTransform->GetPosition() : Mathematics::Vector3{});
     if (!terrain.Valid)
         return;
 

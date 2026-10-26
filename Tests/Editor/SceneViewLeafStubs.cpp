@@ -3,8 +3,7 @@
 // SelectionTool::OnPointerEvent calls SceneViewController::OnEntityPicked, which lives in
 // SceneViewController.cpp with UI-panel deps. EditorTests exercise the tool math, not the
 // controller, so no-op stubs at link time are sufficient. The picking entry points are NOT
-// stubbed — ScenePickTerrainInclusionTests compiles the real MeshPickingService in and
-// exercises them.
+// stubbed: the engine's SceneRaycast answers them.
 
 #include "SceneView/SceneViewGizmos.h"
 #include "SceneView/SceneViewNoticeOverlay.h"

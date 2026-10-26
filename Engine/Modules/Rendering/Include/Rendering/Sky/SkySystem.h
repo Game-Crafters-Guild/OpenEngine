@@ -273,9 +273,9 @@ inline void ApplySimpleLightingToSkySettings(const SkySystemState& state,
     ioSky.moonIntensity = moonSourceIntensity;
     ioSky.primarySunIntensity = kSunIntensity * (1.0f - w) + moonSourceIntensity * w;
 
-    ioSky.primarySunColor[0] = (1.0f - w) * sunTint[0] + w * config.moonColor[0];
-    ioSky.primarySunColor[1] = (1.0f - w) * sunTint[1] + w * config.moonColor[1];
-    ioSky.primarySunColor[2] = (1.0f - w) * sunTint[2] + w * config.moonColor[2];
+    ioSky.primarySunColor[0] = (1.0f - w) * sunTint[0] + w * config.moonColor.r;
+    ioSky.primarySunColor[1] = (1.0f - w) * sunTint[1] + w * config.moonColor.g;
+    ioSky.primarySunColor[2] = (1.0f - w) * sunTint[2] + w * config.moonColor.b;
 }
 
 } // namespace Rendering

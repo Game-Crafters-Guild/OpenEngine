@@ -1,0 +1,7 @@
+[blueprint name="BP" version=1]
+
+[entity id="root"]
+Name.value = "BP"
+
+[entity id="child" parent="root"]
+Name.value = "Child"

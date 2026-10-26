@@ -267,8 +267,8 @@ void TileStreamingManager::DispatchCoarseJob(TerrainStream& stream,
         return;
 
     auto result = tracker.Result;
-    const float32 worldOriginX = tiled.WorldOriginX + coord.X * tiled.Config.TileWorldSize;
-    const float32 worldOriginZ = tiled.WorldOriginZ + coord.Z * tiled.Config.TileWorldSize;
+    const float32 worldOriginX = TileWorldOrigin(tiled.WorldOriginX, coord.X, tiled.Config.TileWorldSize);
+    const float32 worldOriginZ = TileWorldOrigin(tiled.WorldOriginZ, coord.Z, tiled.Config.TileWorldSize);
     const float32 terrainOriginX = tiled.WorldOriginX;
     const float32 terrainOriginZ = tiled.WorldOriginZ;
     const float32 tileWorld = tiled.Config.TileWorldSize;
@@ -339,8 +339,8 @@ void TileStreamingManager::DispatchFullJob(TerrainStream& stream,
         return;
 
     auto result = tracker.Result;
-    const float32 worldOriginX = tiled.WorldOriginX + coord.X * tiled.Config.TileWorldSize;
-    const float32 worldOriginZ = tiled.WorldOriginZ + coord.Z * tiled.Config.TileWorldSize;
+    const float32 worldOriginX = TileWorldOrigin(tiled.WorldOriginX, coord.X, tiled.Config.TileWorldSize);
+    const float32 worldOriginZ = TileWorldOrigin(tiled.WorldOriginZ, coord.Z, tiled.Config.TileWorldSize);
     const float32 terrainOriginX = tiled.WorldOriginX;
     const float32 terrainOriginZ = tiled.WorldOriginZ;
     const float32 tileWorld = tiled.Config.TileWorldSize;

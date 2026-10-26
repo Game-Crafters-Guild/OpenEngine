@@ -1,0 +1,130 @@
+---
+title: Spawning prefabs
+description: Spawn an instance of a prefab from C# with EntityCommands.Spawn, from native code with Scene::SpawnPrefab or from a game graph with Spawn Prefab, remove it with a despawn, and keep the prefab loaded with a PrefabRef field.
+---
+
+A prefab is a reusable hierarchy of entities saved in a `.prefab` file. The engine keeps one template of each loaded prefab. A spawn copies the template into a world in one batch, so a spawn never reads a file.
+
+## Spawn an instance
+
+A spawn creates the entities of the prefab in the world, in the order of the prefab file, and returns the root at once. The root gets the transform `at`, relative to `parent`, or to the world when there is no parent. When `parent` is an entity, the root becomes its child. The other entities of the spawn keep their parents from the prefab, so the root's children are the children it has in the prefab. The root also gets a `PrefabInstance` component that names the prefab.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Scene/PrefabSpawn.h"
+ECS::EntityHandle SpawnPrefab(ECS::World& world, const GUID& prefab, const Components::Transform& at,
+                              ECS::EntityHandle parent);
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.ABI"
+public uint Spawn(PrefabRef prefab, in Transform at, uint parent = 0);
+```
+
+::::
+:::::
+
+An entity system gets `EntityCommands` as a parameter of `Execute`; a `GameSystem` uses its `Commands` property. `Spawn` returns the root's id, or 0 when the prefab is not loaded. A `PrefabRef` that names no prefab throws an `ArgumentException`.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Spawn a soldier at the gate"
+const auto at = Components::Transform::FromTRS(gatePosition, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f});
+const ECS::EntityHandle soldier = Scene::SpawnPrefab(world, spawner.Soldier.Guid, at, ECS::EntityHandle{});
+```
+
+::::
+::::tab[C#]
+
+```csharp title="Spawn a soldier at the gate"
+public partial struct TrainSoldiers : IEntitySystem
+{
+    public void Execute(ref Barracks barracks, in Transform gate, EntityCommands commands)
+    {
+        if (barracks.Trained)
+            return;
+        uint soldier = commands.Spawn(barracks.Soldier, gate);
+        if (soldier != 0)
+            barracks.Trained = true;
+    }
+}
+```
+
+::::
+:::::
+
+A spawned instance is a set of plain entities. Change them with the usual component calls. The entities of a spawn carry no scene identity, so a scene save does not write them.
+
+## Despawn an instance
+
+A despawn destroys the root and every entity under it in the hierarchy. A destroy of the root alone destroys only the root, and its children stay in the world, so use a despawn to remove an instance. The entities go at the point where a destroy goes: in C#, after all systems complete. A root that is not alive destroys nothing.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Scene/PrefabSpawn.h"
+void DespawnPrefab(ECS::World& world, ECS::EntityHandle root);
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.ABI"
+public void Despawn(uint root);
+```
+
+::::
+:::::
+
+## Keep a prefab loaded
+
+A spawn works only for a prefab that is loaded. A prefab is loaded while a loaded scene places an instance of it, or while a component in a loaded scene holds a `PrefabRef` field that names it. The engine unloads a prefab at the end of the frame in which the last such scene is unloaded.
+
+Give the component that spawns a `PrefabRef` field, and assign the prefab to it in the scene:
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="A spawner component"
+struct SoldierSpawner
+{
+    Components::PrefabRef Soldier;
+};
+```
+
+::::
+::::tab[C#]
+
+```csharp title="A spawner component"
+[StructLayout(LayoutKind.Sequential)]
+public struct Barracks : IComponent
+{
+    public PrefabRef Soldier;
+    public bool Trained;
+}
+```
+
+::::
+:::::
+
+When the prefab is not loaded, a spawn creates nothing: `Scene::SpawnPrefab` returns an invalid handle and `EntityCommands.Spawn` returns 0. The log then shows one error for that prefab, with the fix:
+
+```text title="The log line for a prefab that is not loaded"
+Prefab Soldier.prefab is not loaded. Reference it from a PrefabRef field of a component in the scene, or place an instance in the scene.
+```
+
+## Threads
+
+Call `Scene::SpawnPrefab` from the main thread, outside a system or a job. Call `EntityCommands.Spawn` from a C# system: C# systems run on the main thread. A call from a job or from a thread of your own is refused. The engine changes its templates on the main thread: when a scene loads and when a prefab file changes on disk.
+
+A spawn runs at once, also inside a C# system, where the other structural changes wait for the end of the update: it adds new entities and moves no entity that already exists.
+
+When a prefab file changes, the engine builds a new template beside the old one. Spawns after the change use the new template. Entities that a spawn created before the change do not change.
+
+## Spawn from a game graph
+
+The **Spawn Prefab** action in the **Game Object** group of a game graph spawns a prefab when its flow input runs. Set **Prefab** to the GUID of the prefab asset, and **Position** and **Rotation** to the root's place in the world; **Rotation** is in degrees around X, Y and Z. The prefab must be loaded, as for any spawn. The action compiles to `ctx.SpawnPrefab(prefab, position, rotation)` in the graph's C++, and nothing in the engine runs a compiled graph today.

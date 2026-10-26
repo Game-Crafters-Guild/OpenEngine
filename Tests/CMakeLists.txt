@@ -444,8 +444,11 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/Tools/CleanupGate/cleanup_gate.py
             --root ${CMAKE_SOURCE_DIR})
   set_tests_properties(CleanupGateTests PROPERTIES TIMEOUT 300)
+  add_test(NAME CleanupGateRuleTests
+    COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/Tools/CleanupGate/test_rule_comments.py)
+  set_tests_properties(CleanupGateRuleTests PROPERTIES TIMEOUT 60)
 else()
-  message(STATUS "Python 3 not found - CleanupGateTests not registered")
+  message(STATUS "Python 3 not found - CleanupGateTests and CleanupGateRuleTests not registered")
 endif()
 
 # The host cook reads and writes packages only through ShaderReflect.
@@ -680,6 +683,7 @@ add_executable(ScriptingAbiIntegrationTests
     Integration/ScriptingAbiUiTypeOwnerTests.cpp
     Integration/ScriptingAbiInputActionTests.cpp
     Integration/ScriptingAbiPathMaskTests.cpp
+    Integration/ScriptingAbiPrefabSpawnTests.cpp
     # Opening a project loads its C# scripts and applies the kept components (#4050).
     Integration/ProjectScriptsOnOpenTests.cpp
     # The unity-import package's converter assembly on the engine's CoreCLR,
@@ -1020,6 +1024,9 @@ find_package(Python3 3.10 COMPONENTS Interpreter)
 if(Python3_FOUND)
   add_test(NAME GamePublishingTests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/Tests/GamePublishingTests.py")
+  # The scene blueprint to prefab conversion, on a fixture project.
+  add_test(NAME PrefabMigrationTests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/Tests/PrefabMigrationTests.py")
 endif()
 add_executable(BuildOutputPromotionTests
   BuildOutputPromotionTests.cpp
@@ -1309,11 +1316,11 @@ set_tests_properties(TerrainAtlasTests PROPERTIES
 )
 
 # PageStoreTests: the terrain page store (Engine/Modules/PageStreaming) as pure oracles: the
-# .gepage round trip, the apron's bit-equality under the store-wide height quantum, the sparse
+# .gepage round trip, the apron's bit-equality under the per-level height step, the sparse
 # resolve, the incremental re-cook, the lattice-preserving tent, the generated provider's level 0
 # against the terrain's tile fill (FillTiledBaseRegion), the cook key, the terrain container, the
-# PNG decoder limit and the asynchronous page loader. Links Engine for the tile fill and the
-# asset reader threads.
+# PNG decoder limit, the asynchronous page loader, and the surface kinds' codecs and filters.
+# Links Engine for the tile fill and the asset reader threads.
 add_executable(PageStoreTests
   PageStoreTests.cpp
 )
@@ -1333,6 +1340,10 @@ target_include_directories(PageStoreTests PRIVATE
   ${CMAKE_SOURCE_DIR}/Engine/Modules/Types/Include
   ${CMAKE_SOURCE_DIR}/Engine/Modules/Mathematics/Include
   ${CMAKE_SOURCE_DIR}/Engine/Modules/JobSystem/Include
+  # HeightPageCodec.h: the height encoding and the 16-bit step the format tests check;
+  # HeightStepPlanner.h: the step rule's constants; PagePyramidBuilder.h: the builder the
+  # surface-kind tests make their stores with.
+  ${CMAKE_SOURCE_DIR}/Engine/Modules/PageStreaming/Source
 )
 ge_set_output_tests(PageStoreTests)
 ge_stage_runtime_dependencies(PageStoreTests)

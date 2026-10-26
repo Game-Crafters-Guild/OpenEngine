@@ -2,6 +2,8 @@
 
 #include "Types/Types.h"
 
+#include <compare>
+
 namespace GameEngine::PageStreaming
 {
 
@@ -21,6 +23,8 @@ struct PageAddress
     PageAddress Parent() const { return PageAddress{Face, static_cast<uint8>(Level + 1u), X / 2u, Z / 2u}; }
 
     bool operator==(const PageAddress&) const = default;
+    /// Face, then level, then X, then Z: the order of a sorted map of pages.
+    auto operator<=>(const PageAddress&) const = default;
 };
 
 /// The Morton (Z-order) code of a page in its level: the bits of X in the even positions and the

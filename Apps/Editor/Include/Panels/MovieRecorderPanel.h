@@ -67,7 +67,7 @@ public:
         int Width = 1920;
         int Height = 1080;
         int BitrateKbps = 60000;
-        bool AutoBitrate = true;
+        bool ConstantQuality = true;
         bool RecordAudio = true;
         bool FadeIn = false;
         bool FadeOut = false;
@@ -145,8 +145,12 @@ private:
     IntField* m_WidthField = nullptr;
     IntField* m_HeightField = nullptr;
     IntField* m_BitrateField = nullptr;
+    // Shown only for H.264 and HEVC.
+    UIElement* m_ConstantQualityRow = nullptr;
+    // Shown only while the bitrate is used: H.264 or HEVC with Constant Quality off.
+    UIElement* m_BitrateRow = nullptr;
     IntField* m_FadeDurationField = nullptr;
-    Toggle* m_AutoBitrateToggle = nullptr;
+    Toggle* m_ConstantQualityToggle = nullptr;
     Toggle* m_RecordAudioToggle = nullptr;
     Toggle* m_FadeInToggle = nullptr;
     Toggle* m_FadeOutToggle = nullptr;

@@ -38,7 +38,7 @@ Rendering::BufferDesc ReadbackSlotDesc()
 // (1.0 scene-linear = 203 nits).
 float IrradianceTexelToLux(const float linearRgb[3])
 {
-    const float unitless = std::numbers::pi_v<float> * ColorUtils::LinearRec709Luminance(linearRgb);
+    const float unitless = std::numbers::pi_v<float> * ColorUtils::LinearRec709Luminance({linearRgb[0], linearRgb[1], linearRgb[2]});
     return Components::UnitlessToLightIntensity(unitless, Components::LightUnit::Lux);
 }
 

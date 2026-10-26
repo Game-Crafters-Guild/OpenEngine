@@ -43,6 +43,11 @@ std::filesystem::path EditorSourceRoot()
     return std::filesystem::path(GE_EDITOR_SOURCE_DIR);
 }
 
+std::filesystem::path SplineRecipesSourceRoot()
+{
+    return std::filesystem::path(GE_REPO_SOURCE_DIR) / "Engine" / "Modules" / "SplineRecipes" / "Source";
+}
+
 std::string ReadFile(const std::filesystem::path& p)
 {
     std::ifstream in(p, std::ios::binary);
@@ -183,10 +188,9 @@ TEST(SceneSwapOrdering, TheSharedStepReleasesTheSplineGenerators)
            "survive the swap and the next sweep destroys entities of the incoming scene";
 }
 
-// The release is supplied by the generators' owner, so the wiring is part of the
-// contract: an unwired hook is a silent no-op that reads exactly like a fix. The
-// editor wires it to RecipeControllers, which owns the generators, and that
-// release must reach every one of them.
+// The release is supplied through the editor services, so the wiring is part of the contract:
+// an unwired hook is a silent no-op that reads like a fix. The chain runs from the editor's swap
+// hook through the registered recipe hooks to every spline generator.
 TEST(SceneSwapOrdering, EditorApplicationWiresTheSplineGeneratorRelease)
 {
     const std::string src = ReadFile(EditorSourceRoot() / "Source" / "EditorApplication.cpp");
@@ -195,11 +199,27 @@ TEST(SceneSwapOrdering, EditorApplicationWiresTheSplineGeneratorRelease)
     const size_t wire = src.find("SetSceneScopedGeneratorRelease(");
     ASSERT_NE(wire, std::string::npos)
         << "EditorApplication must supply the release to the scene editor";
-    EXPECT_NE(src.substr(wire).find("m_RecipeControllers->ReleaseSceneScoped("), std::string::npos)
-        << "the release must reach the owner of the spline generators";
+    EXPECT_NE(src.substr(wire).find("m_EditorServices.ReleaseSceneScoped("), std::string::npos)
+        << "the release must reach the editor services";
+
+    const std::string builtIn =
+        ReadFile(EditorSourceRoot() / "Source" / "Editor" / "Registries" / "EditorServiceRegistry.cpp");
+    EXPECT_NE(builtIn.find("RecipeEditorHooks::Create"), std::string::npos)
+        << "the recipe hooks must be a registered editor service";
+    const std::string hooks = ReadFile(EditorSourceRoot() / "Source" / "Placement" / "RecipeEditorHooks.cpp");
+    EXPECT_NE(FunctionBody(hooks, "RecipeEditorHooks::", "void RecipeEditorHooks::ReleaseSceneScoped(")
+                  .find("m_Recipes.ReleaseSceneScoped("),
+              std::string::npos)
+        << "the hooks' release must reach the spline recipe system";
+
+    const std::string system = ReadFile(SplineRecipesSourceRoot() / "SplineRecipeSystem.cpp");
+    EXPECT_NE(FunctionBody(system, "SplineRecipeSystem::", "void SplineRecipeSystem::ReleaseSceneScoped(")
+                  .find("m_Controllers->ReleaseSceneScoped("),
+              std::string::npos)
+        << "the system's release must reach its controllers";
 
     const std::string owner =
-        ReadFile(EditorSourceRoot() / "Source" / "Placement" / "RecipeControllers.cpp");
+        ReadFile(SplineRecipesSourceRoot() / "RecipeControllers.cpp");
     const std::string body = FunctionBody(owner, "RecipeControllers::",
                                           "void RecipeControllers::ReleaseSceneScoped(");
     ASSERT_FALSE(body.empty()) << "RecipeControllers::ReleaseSceneScoped not found";
@@ -310,9 +330,9 @@ TEST(SceneSwapOrdering, DeserializeWorldPreservesHandlesAndBumpsTheResetGenerati
 
 namespace
 {
-std::string PlacementSource(const char* fileName)
+std::string RecipeSource(const char* fileName)
 {
-    return ReadFile(EditorSourceRoot() / "Source" / "Placement" / fileName);
+    return ReadFile(SplineRecipesSourceRoot() / fileName);
 }
 } // namespace
 
@@ -339,7 +359,7 @@ TEST(SceneSwapOrdering, EveryGeneratorDropsItsCacheOnAWorldReset)
 
     for (const Generator& g : generators)
     {
-        const std::string src = PlacementSource(g.File);
+        const std::string src = RecipeSource(g.File);
         ASSERT_FALSE(src.empty()) << g.File << " not found under " << GE_EDITOR_SOURCE_DIR;
 
         const std::string body = FunctionBody(src, g.Qualifier, g.UpdateSignature);
@@ -389,7 +409,7 @@ TEST(SceneSwapOrdering, EveryGroundReadingGeneratorHoldsItsFirstBuildForProvisio
 
     for (const Generator& g : generators)
     {
-        const std::string src = PlacementSource(g.File);
+        const std::string src = RecipeSource(g.File);
         ASSERT_FALSE(src.empty()) << g.File << " not found under " << GE_EDITOR_SOURCE_DIR;
 
         const std::string body = FunctionBody(src, g.Qualifier, g.UpdateSignature);

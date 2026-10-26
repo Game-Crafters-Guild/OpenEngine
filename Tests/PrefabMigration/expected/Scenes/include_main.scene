@@ -1,0 +1,5 @@
+[scene name="Main" version=1]
+[include path="Scenes/common.scene"]
+
+[prefab id="inst" source="bp"]
+Name.value = "Over"

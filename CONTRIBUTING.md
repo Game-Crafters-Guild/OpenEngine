@@ -17,6 +17,7 @@ Screenshots and comparison images, generated `.assetdb` files, build and test lo
 - Documentation pages are Markdown with directives (`.mdx`) in `docs/<area>/`: one canonical file per topic, undated filename, a changelog section. The rules, the directives and the C++ | C# tabs are in `.claude/rules/documentation.md`. The root files (`README.md`, `BUILD.md`, `CodingStyle.md`, `CLAUDE.md`, this file) stay plain Markdown by convention.
 - A change to documented behaviour edits the canonical. A dated sibling file for "the same topic, another iteration" is a defect.
 - No engine names (Unity, Unreal) in user-facing strings, tooltips, enum display names or comments; import features keep their names. User-facing text uses American spelling.
+- Comments are short (one to three lines), in Simplified Technical English, and describe the code as it is now: never a change, a former value, a removed path or a reviewer note.
 
 ## Tests
 

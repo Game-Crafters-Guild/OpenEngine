@@ -89,9 +89,9 @@ TEST(StarLookPresets, TheComponentsDefaultsAreTheVividLook)
         << "a new sky is seen by a camera, so every star keeps its color";
     const Components::PostProcessVolume volume{};
     EXPECT_FLOAT_EQ(volume.NightTintStrength, vivid.NightTintStrength);
-    EXPECT_FLOAT_EQ(volume.NightTintColor[0], vivid.NightTintColor.r);
-    EXPECT_FLOAT_EQ(volume.NightTintColor[1], vivid.NightTintColor.g);
-    EXPECT_FLOAT_EQ(volume.NightTintColor[2], vivid.NightTintColor.b);
+    EXPECT_FLOAT_EQ(volume.NightTintColor.r, vivid.NightTintColor.r);
+    EXPECT_FLOAT_EQ(volume.NightTintColor.g, vivid.NightTintColor.g);
+    EXPECT_FLOAT_EQ(volume.NightTintColor.b, vivid.NightTintColor.b);
     EXPECT_GT(vivid.Spikes, 0.0f) << "Vivid carries the diffraction spikes";
     EXPECT_LT(vivid.CoreScale, 1.0f) << "Vivid's core is tighter than the physical one";
 }
@@ -192,7 +192,7 @@ TEST(StarLookPresets, AHandTunedNightTintReadsCustomAndTheLookResetsIt)
     world.AddComponentImmediate(volume, tuned);
     EXPECT_EQ(FindStarLook(skyValues, world), nullptr) << "a tint no look has is Custom";
     tuned.NightTintStrength = Look("Vivid").NightTintStrength;
-    tuned.NightTintColor[0] = 0.5f;
+    tuned.NightTintColor.r = 0.5f;
     world.AddComponentImmediate(volume, tuned);
     EXPECT_EQ(FindStarLook(skyValues, world), nullptr) << "a hue no look has is Custom";
 
@@ -200,7 +200,7 @@ TEST(StarLookPresets, AHandTunedNightTintReadsCustomAndTheLookResetsIt)
     const StarLookPreset* after = FindStarLook(*world.GetComponent<Components::SkyEnvironment>(sky), world);
     ASSERT_NE(after, nullptr);
     EXPECT_STREQ(after->Name, "Vivid");
-    EXPECT_FLOAT_EQ(world.GetComponent<Components::PostProcessVolume>(volume)->NightTintColor[0],
+    EXPECT_FLOAT_EQ(world.GetComponent<Components::PostProcessVolume>(volume)->NightTintColor.r,
                     Look("Vivid").NightTintColor.r);
 }
 

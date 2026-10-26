@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Components/Rendering/LightPhotometry.h"  // kReferenceWhiteNits
+#include "Types/Color.h"
 
 namespace GameEngine::Engine::Renderer
 {
@@ -17,13 +18,13 @@ namespace GameEngine::Engine::Renderer
 // pinnable in a unit test; dropping it makes DDGI emit 203x hot.
 struct DDGIEmissive
 {
-    float Color[3] = {0.0f, 0.0f, 0.0f};
+    ColorLinear Color{0.0f, 0.0f, 0.0f};  // rgb; alpha is unused
 };
 
-inline DDGIEmissive ComputeDDGIEmissive(float tintR, float tintG, float tintB, float nits)
+inline DDGIEmissive ComputeDDGIEmissive(const ColorLinear& tint, float nits)
 {
     const float luminance = nits / Components::kReferenceWhiteNits;
-    return DDGIEmissive{{tintR * luminance, tintG * luminance, tintB * luminance}};
+    return DDGIEmissive{ColorLinear(tint.r * luminance, tint.g * luminance, tint.b * luminance)};
 }
 
 }  // namespace GameEngine::Engine::Renderer

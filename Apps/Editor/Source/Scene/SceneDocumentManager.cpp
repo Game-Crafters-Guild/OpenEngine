@@ -15,6 +15,7 @@
 #include "Logger/Logger.h"
 #include "Navigation/NavigationBakedDataSave.h"
 #include "Types/StringUtils.h"
+#include "Scene/AssetManagerSceneResolver.h"
 #include "Scene/SceneBackupRecovery.h"
 #include "Scene/SceneIO.h"
 #include "Scene/SceneEngineEmbedMaterializer.h"
@@ -34,56 +35,6 @@
 
 namespace GameEngine::Editor
 {
-namespace
-{
-class EditorSceneAssetResolver final : public Scene::ISceneAssetResolver
-{
-  public:
-    EditorSceneAssetResolver(AssetManager& assetManager, std::filesystem::path assetRoot)
-        : m_AssetManager(assetManager), m_Registry(assetManager.GetRegistry()),
-          m_AssetRoot(std::move(assetRoot))
-    {
-    }
-
-    std::filesystem::path GetAssetRoot() const override { return m_AssetRoot; }
-    std::filesystem::path ResolveAssetPath(const std::filesystem::path& authoredPath) const override
-    {
-        return m_AssetManager.ResolveAssetPath(authoredPath);
-    }
-    GUID ResolveGuid(const GUID& guid) const override { return m_Registry.ResolveGuid(guid); }
-    GUID GetOrCreateAssetGuid(const std::filesystem::path& absolutePath) override
-    {
-        const auto result = m_Registry.RegisterAssetByPath(absolutePath);
-        return result.IsOk() ? result.Value() : GUID::Null();
-    }
-
-    bool TryGetPathAndType(const GUID& guid, std::filesystem::path& outPath, AssetType& outType) const override
-    {
-        AssetMetadata md{};
-        if (!m_Registry.TryGetAssetMetadata(guid, md))
-            return false;
-        outPath = md.Path;
-        outType = md.Type;
-        return true;
-    }
-
-    bool TryGetGuidAndType(const std::filesystem::path& absolutePath, GUID& outGuid, AssetType& outType) const override
-    {
-        AssetMetadata md{};
-        if (!m_Registry.TryGetAssetMetadata(absolutePath, md))
-            return false;
-        outGuid = md.Guid;
-        outType = md.Type;
-        return true;
-    }
-
-  private:
-    AssetManager& m_AssetManager;
-    AssetRegistry& m_Registry;
-    std::filesystem::path m_AssetRoot;
-};
-} // namespace
-
 SceneDocumentManager::~SceneDocumentManager()
 {
     Unsubscribe();
@@ -368,7 +319,8 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
     opts.outDegradation = &degradation;
 
     auto& am = EngineCore::GetInstance().GetAssetManager();
-    EditorSceneAssetResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot());
+    Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
+                                              Scene::AssetManagerSceneResolver::UnknownFile::Register);
     opts.assetResolver = &resolver;
     opts.assetRootOverride = resolver.GetAssetRoot();
     opts.projectRoot = EngineCore::GetInstance().GetWorkspaceRoot();
@@ -386,7 +338,7 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
         // Two different worlds can be live here. Read, parse, include expansion
         // and validation all run BEFORE World::Clear, so those failures leave the
         // outgoing scene intact. Failures the loader cannot continue past — an
-        // unreadable blueprint, a bad remove directive, entity creation — happen
+        // unreadable prefab, a bad remove directive, entity creation — happen
         // AFTER it, and leave a partially-applied incoming scene in the world.
         // A component or field that will not apply is NOT one of these: it is
         // collected into the degradation census and skipped, and the load
@@ -709,7 +661,8 @@ bool SceneDocumentManager::LoadSceneAdditive(const std::filesystem::path& sceneP
     opts.mode = Scene::LoadMode::Additive;
 
     auto& am = EngineCore::GetInstance().GetAssetManager();
-    EditorSceneAssetResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot());
+    Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
+                                              Scene::AssetManagerSceneResolver::UnknownFile::Register);
     opts.assetResolver = &resolver;
     opts.assetRootOverride = resolver.GetAssetRoot();
     opts.projectRoot = EngineCore::GetInstance().GetWorkspaceRoot();
@@ -863,7 +816,8 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
     Scene::SaveOptions opts{};
     auto& am = EngineCore::GetInstance().GetAssetManager();
     auto& reg = am.GetRegistry();
-    EditorSceneAssetResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot());
+    Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
+                                              Scene::AssetManagerSceneResolver::UnknownFile::Register);
     opts.assetResolver = &resolver;
     opts.assetRootOverride = resolver.GetAssetRoot();
     Scene::SceneHierarchyUi hierarchySnap{};
@@ -964,7 +918,8 @@ bool SceneDocumentManager::SaveAs(const std::filesystem::path& scenePath, Degrad
     Scene::SaveOptions opts{};
     auto& am = EngineCore::GetInstance().GetAssetManager();
     auto& reg = am.GetRegistry();
-    EditorSceneAssetResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot());
+    Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
+                                              Scene::AssetManagerSceneResolver::UnknownFile::Register);
     opts.assetResolver = &resolver;
     opts.assetRootOverride = resolver.GetAssetRoot();
     Scene::SceneHierarchyUi hierarchySnap{};
@@ -1072,7 +1027,8 @@ bool SceneDocumentManager::SaveBackupCopy()
     std::filesystem::copy_file(src, backupPath, std::filesystem::copy_options::overwrite_existing, ec);
 
     Scene::SaveOptions opts{};
-    EditorSceneAssetResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot());
+    Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
+                                              Scene::AssetManagerSceneResolver::UnknownFile::Register);
     opts.assetResolver = &resolver;
     opts.assetRootOverride = resolver.GetAssetRoot();
     Scene::SceneHierarchyUi hierarchySnap{};

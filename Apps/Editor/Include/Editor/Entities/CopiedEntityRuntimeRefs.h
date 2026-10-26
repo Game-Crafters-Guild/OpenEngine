@@ -7,6 +7,7 @@
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Rendering/MorphTargetWeights.h"
 #include "Components/Spline/SplineComponent.h"
+#include "Components/Spline/SplineNetworkOverrides.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
 #include "ECS/Entity.h"
@@ -118,7 +119,10 @@ class CopiedEntityRuntimeRefs
     void RepairPayloadReferences(ECS::World& world)
     {
         for (const auto& [sourceId, copy] : m_CloneBySource)
+        {
             RepairMarkupRegionMembers(world, copy);
+            RepairSplineNetworkOverrides(world, copy);
+        }
     }
 
   private:
@@ -137,6 +141,29 @@ class CopiedEntityRuntimeRefs
             const ECS::EntityHandle member = updated.Members[i].Entity;
             updated.Members[i].Entity = CloneOf(member, member);
             remapped = remapped || updated.Members[i].Entity != member;
+        }
+        if (remapped)
+            world.AddComponentImmediate(copy, updated);
+    }
+
+    // A junction record names the other member of its junction. A partner duplicated in the same
+    // payload names its copy, so a pair duplicated together describes the copied junction; a
+    // partner outside the payload stays the original, so the copy's record describes its meeting
+    // with that partner, held by the network once the copy is moved away from it.
+    void RepairSplineNetworkOverrides(ECS::World& world, ECS::EntityHandle copy) const
+    {
+        const auto* overrides = world.GetComponent<Components::SplineNetworkOverrides>(copy);
+        if (!overrides)
+            return;
+        Components::SplineNetworkOverrides updated = *overrides;
+        bool remapped = false;
+        for (Components::SplineNetworkOverride& record : updated.Records)
+        {
+            if (record.Rule == Components::SplineNodeRule::None)
+                continue;
+            const ECS::EntityHandle partner = record.Other;
+            record.Other = CloneOf(partner, partner);
+            remapped = remapped || record.Other != partner;
         }
         if (remapped)
             world.AddComponentImmediate(copy, updated);

@@ -19,19 +19,14 @@ struct AssetManifest;
 /// What the export did with one shipped heightmap.
 struct TerrainPageExportResult
 {
-    std::vector<std::filesystem::path> Containers; ///< <contentRoot>/Assets/Cooked/Terrain/<guid>.geterrain, one per heightmap
+    /// <contentRoot>/Assets/Cooked/Terrain/<guid>.geterrain: one per heightmap, one per scene terrain
+    std::vector<std::filesystem::path> Containers;
     std::vector<std::string> Warnings;             ///< heightmaps that could not be cooked, each with the fix
 };
 
-/// Packs the cooked page stores of every terrain heightmap the package ships into one terrain
-/// container per heightmap, <contentRoot>/Assets/Cooked/Terrain/<heightmap guid>.geterrain, under the
-/// packaged asset root the Player reads it from, like the other cooked data a package ships (design
-/// D5: the shipped form is one cooked container per terrain, never loose page files). Each heightmap's store
-/// comes from the project's cache (<projectRoot>/.Cache/TerrainPages), cooked there first when the
-/// heightmap or its import grid changed since the last cook. Two terrains on one heightmap share its
-/// container, as they share its store. Raw heightmaps (.r16, .r32) only: a 16-bit PNG heightmap is a
-/// texture asset and keeps its texture path. Raising `cancel` stops a cook in progress and every
-/// heightmap after it; the stopped ones are reported as warnings.
+/// Packs the cooked pages of every shipped terrain into <contentRoot>/Assets/Cooked/Terrain (design D5): one container
+/// per raw heightmap (.r16, .r32; cooked in <projectRoot>/.Cache/TerrainPages when stale) and one per scene terrain
+/// whose surface stores that cache holds. Raising `cancel` stops the cook and the heightmaps after it, as warnings.
 TerrainPageExportResult ExportTerrainPages(const std::filesystem::path& projectRoot,
                                            const std::filesystem::path& contentRoot, const AssetManifest& manifest,
                                            const AssetRegistry& registry, JobSystem::WorkStealingThreadPool* pool,

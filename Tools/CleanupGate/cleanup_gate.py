@@ -1,6 +1,6 @@
 """The cleanup gate: the patterns the coding style replaces with an engine piece may only become fewer.
 
-Scans the production sources (gate_common.scope_files: the files git tracks) with the rules of the nine classes (rule_*.py). A
+Scans the production sources (gate_common.scope_files: the files git tracks) with the rules of the ten classes (rule_*.py). A
 rule's REPORTED patterns are counted and printed, never compared. The
 sites of a boundary that must stay raw are counted apart, against allowlist.txt: one `path:pattern:count  # boundary` per file and
 pattern. Every other site is counted against baseline.json (class, pattern, file, count).
@@ -31,6 +31,7 @@ kGateFolder = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, kGateFolder)
 
 import gate_common  # noqa: E402
+import rule_comments  # noqa: E402
 import rule_containers  # noqa: E402
 import rule_files_organization  # noqa: E402
 import rule_log_memory_time  # noqa: E402
@@ -42,7 +43,7 @@ import rule_threads  # noqa: E402
 import rule_ui_controls  # noqa: E402
 
 kRuleModules = [rule_math_types, rule_strings, rule_containers, rule_files_organization, rule_ui_controls, rule_threads,
-                rule_log_memory_time, rule_rendering, rule_math_helpers]
+                rule_log_memory_time, rule_rendering, rule_math_helpers, rule_comments]
 kUpdateCommand = "python -I Tools/CleanupGate/cleanup_gate.py --update-baseline"
 
 # One allowlist line: the entry's file, pattern and allowed count with the boundary that keeps it raw; or, for a comment or a

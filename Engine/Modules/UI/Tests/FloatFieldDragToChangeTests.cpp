@@ -148,6 +148,20 @@ TEST(Vector3FieldLabelDragTests, InspectorLabelsScrubByDefault)
     EXPECT_FLOAT_EQ(field.GetValue().y, 2.0f);
 }
 
+TEST(Vector3FieldLabelDragTests, ALabelClickThatJittersWithinTheThresholdKeepsTheValueAndCommitsNothing)
+{
+    Vector3Field field;
+    field.SetValue({1.0f, 2.0f, 3.0f});
+    int changed = 0;
+    field.SetOnValueChanged([&changed](const Rendering::Vector3&) { ++changed; });
+
+    auto* xLabel = FindChildByClass<Label>(field, "vector3-label-x");
+    ASSERT_NE(xLabel, nullptr);
+    Scrub(*xLabel, 10.0f, 10.0f + Vector3Field::kLabelDragThresholdPx);
+    EXPECT_EQ(field.GetValue().x, 1.0f);
+    EXPECT_EQ(changed, 0);
+}
+
 TEST(Vector3FieldLabelDragTests, GraphModeScrubsBoxesNotLabels)
 {
     Vector3Field field;

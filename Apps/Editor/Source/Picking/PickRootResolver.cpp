@@ -9,7 +9,7 @@
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "Editor/Entities/EditorComponentTraits.h"
-#include "Picking/MeshPickingService.h"
+#include "Scene/SceneRaycast.h"
 
 namespace GameEngine::Editor::Picking
 {
@@ -23,7 +23,7 @@ using ChildrenByParent =
 // Snapshot every (parent -> children) edge in one pass. O(parented-entities),
 // so the resolve walk builds it lazily, at most once, and only when it
 // actually reaches a container node. When a model-instance-root marker
-// component exists (planned with the prefab/blueprint system), this scan and
+// component exists (planned with the prefab system), this scan and
 // the subtree check below disappear in favor of an O(depth) climb.
 void BuildChildrenMap(ECS::World& world, ChildrenByParent& out)
 {
@@ -128,7 +128,7 @@ ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity)
 }
 
 void BuildPickCandidates(ECS::World& world,
-                         const std::vector<PickHit>& sortedHits,
+                         const std::vector<Scene::PickHit>& sortedHits,
                          bool exactPick,
                          std::vector<ECS::EntityHandle>& outCandidates)
 {
@@ -143,7 +143,7 @@ void BuildPickCandidates(ECS::World& world,
         if (root.IsValid())
             outCandidates.push_back(root);
     }
-    for (const PickHit& hit : sortedHits)
+    for (const Scene::PickHit& hit : sortedHits)
     {
         if (std::find(outCandidates.begin(), outCandidates.end(), hit.Entity) == outCandidates.end())
             outCandidates.push_back(hit.Entity);

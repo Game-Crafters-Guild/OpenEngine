@@ -4,6 +4,8 @@
 #include "ECS/ComponentMigration.h"
 #include "ECS/Components.h"
 #include "ECS/Entity.h"
+#include "ECS/ClonePlan.h"
+#include "ECS/EntityRemap.h"
 #include "ECS/Query.h"
 #include "ECS/ComponentFieldRegistry.h"
 #include "ECS/UnresolvedComponentStore.h"
@@ -117,16 +119,27 @@ EntityLocation Archetype::AddEntityUnsafe(EntityHandle entity)
         return {};
     }
     EntityLocation loc = m_Table->AddEntity(entity);
-    // Change signaling: every row enters a chunk through this Append, so the
-    // structural stamp here is what makes new/moved rows visible to gated
-    // consumers — the whole creation/clone family (CreateHandle, CreateBatch*,
-    // CloneEntity, CreateFromSignature/Bundle, MoveEntity destination, the
-    // add-or-set structural branch) funnels through it (design C7: stamps
-    // start at zero = "never changed"; correctness depends on this stamp,
-    // never on zero-init).
+    // Every row enters a chunk through this Append or the run in AddEntitiesUnsafe.
+    // This stamp makes new and moved rows visible to gated consumers. Stamps start
+    // at zero ("never changed"), so correctness depends on this stamp, not on zero-init.
     if (world)
         m_Table->StampAllColumnVersions(loc.ChunkIndex, world->NextGlobalSystemVersion());
     return loc;
+}
+
+RowRun Archetype::AddEntitiesUnsafe(std::span<const EntityHandle> entities)
+{
+    // No lock — caller must hold worldMutex.
+    if (!m_Table) [[unlikely]]
+    {
+        Logger::Log::Error("[ECS] Archetype::AddEntitiesUnsafe called without table");
+        return {};
+    }
+    const RowRun run = m_Table->AddEntities(entities);
+    // One stamp for the run: its rows are one structural write (see AddEntityUnsafe).
+    if (world)
+        m_Table->StampAllColumnVersions(run.ChunkIndex, world->NextGlobalSystemVersion());
+    return run;
 }
 
 EntityHandle Archetype::RemoveEntityUnsafe(EntityLocation loc)
@@ -258,6 +271,17 @@ World::~World()
     structuralChangeVersion.fetch_add(1, std::memory_order_relaxed);
     ++m_WorldGeneration;
     bulkOperationMode = false;
+}
+
+std::optional<uint64> World::FindLiveEntityHandleEpoch(uint64 worldId)
+{
+    std::lock_guard<std::mutex> lock(LiveWorldsMutex());
+    for (const World* world : LiveWorlds())
+    {
+        if (world->m_WorldId == worldId)
+            return world->m_EntityHandleEpoch;
+    }
+    return std::nullopt;
 }
 
 UnresolvedComponentStore& World::GetUnresolvedComponents()
@@ -2971,6 +2995,291 @@ EntityHandle World::CreateFromSignatureHandle(const ComponentSignature& signatur
 
     structuralChangeVersion.fetch_add(1, std::memory_order_relaxed);
     return entity;
+}
+
+namespace
+{
+// One run of EntityHandle values inside a component: a reflected EntityHandle
+// field (a C array of handles is Count handles) or the parent relation.
+struct EntityFieldSlot
+{
+    ComponentTypeId TypeId = 0;
+    uint32 Offset = 0;
+    uint32 Count = 0;
+};
+
+void CollectEntityFields(const ComponentSignature& signature, ComponentTypeId parentType, uint32 parentOffset,
+                         std::vector<EntityFieldSlot>& out)
+{
+    for (const ComponentTypeId typeId : signature.GetComponents())
+    {
+        for (const FieldInfo& field : ComponentFieldRegistry::Get(typeId))
+        {
+            if (field.Type == FieldTypeId::EntityHandle && field.Size >= sizeof(EntityHandle))
+                out.push_back({typeId, field.Offset, static_cast<uint32>(field.Size / sizeof(EntityHandle))});
+        }
+    }
+    if (parentType == 0 || !signature.Contains(parentType))
+        return;
+    const bool reflected = std::any_of(out.begin(), out.end(), [parentType, parentOffset](const EntityFieldSlot& slot)
+                                       { return slot.TypeId == parentType && slot.Offset == parentOffset; });
+    if (!reflected)
+        out.push_back({parentType, parentOffset, 1});
+}
+
+} // namespace
+
+bool World::PlanClone(std::span<const EntityHandle> entities, ClonePlan& plan) const
+{
+    plan = ClonePlan{};
+    for (const EntityHandle entity : entities)
+    {
+        if (!IsValid(entity))
+        {
+            Logger::Log::Error("[ECS] PlanClone refused entity {}: it is not alive in this world. Plan only live "
+                               "entities of the source world",
+                               entity.id);
+            return false;
+        }
+    }
+    const std::size_t count = entities.size();
+    plan.m_SourceWorldId = m_WorldId;
+    plan.m_Sources.assign(entities.begin(), entities.end());
+    plan.m_GroupOfPosition.resize(count);
+    plan.m_GroupedIndexOfPosition.resize(count);
+
+    // One group per source archetype, in first-seen order.
+    for (std::size_t position = 0; position < count; ++position)
+    {
+        const Archetype* archetype = entityMetadata[entities[position].index].archetype;
+        auto groupIt = std::find_if(plan.m_Groups.begin(), plan.m_Groups.end(),
+                                    [archetype](const ClonePlan::Group& group) { return group.Source == archetype; });
+        if (groupIt == plan.m_Groups.end())
+        {
+            plan.m_Groups.push_back({archetype, 0, 0});
+            groupIt = plan.m_Groups.end() - 1;
+        }
+        ++groupIt->Count;
+        plan.m_GroupOfPosition[position] = static_cast<uint32>(groupIt - plan.m_Groups.begin());
+    }
+    uint32 firstTarget = 0;
+    for (ClonePlan::Group& group : plan.m_Groups)
+    {
+        group.FirstTarget = firstTarget;
+        firstTarget += group.Count;
+    }
+    std::vector<uint32> placedInGroup(plan.m_Groups.size(), 0);
+    plan.m_GroupedSources.resize(count);
+    for (std::size_t position = 0; position < count; ++position)
+    {
+        const uint32 group = plan.m_GroupOfPosition[position];
+        const uint32 groupedIndex = plan.m_Groups[group].FirstTarget + placedInGroup[group]++;
+        plan.m_GroupedIndexOfPosition[position] = groupedIndex;
+        plan.m_GroupedSources[groupedIndex] = entities[position];
+    }
+
+    // The k-th occurrence of an entity is copy k; the positions of each entity in list order.
+    FastHashMap<uint32, std::vector<uint32>> positionsOfEntity;
+    std::vector<uint32> copyOfPosition(count);
+    for (std::size_t position = 0; position < count; ++position)
+    {
+        std::vector<uint32>& positions = positionsOfEntity[entities[position].id];
+        copyOfPosition[position] = static_cast<uint32>(positions.size());
+        positions.push_back(static_cast<uint32>(position));
+    }
+
+    // Entity fields name source entities; each names the same copy's entry of that entity.
+    std::vector<std::vector<EntityFieldSlot>> slotsOfGroup(plan.m_Groups.size());
+    for (std::size_t group = 0; group < plan.m_Groups.size(); ++group)
+    {
+        if (const Archetype* archetype = plan.m_Groups[group].Source; archetype && archetype->HasTable())
+            CollectEntityFields(archetype->GetSignature(), m_ParentRelationType, m_ParentRelationOffset,
+                                slotsOfGroup[group]);
+    }
+    for (std::size_t position = 0; position < count; ++position)
+    {
+        const uint32 group = plan.m_GroupOfPosition[position];
+        const EntityMetadata& metadata = entityMetadata[entities[position].index];
+        for (const EntityFieldSlot& slot : slotsOfGroup[group])
+        {
+            const auto* bytes = static_cast<const std::byte*>(plan.m_Groups[group].Source->GetComponentRawAt(
+                metadata.chunkIndex, metadata.indexInChunk, slot.TypeId));
+            if (!bytes)
+                continue;
+            for (uint32 i = 0; i < slot.Count; ++i)
+            {
+                const uint32 offset = slot.Offset + i * static_cast<uint32>(sizeof(EntityHandle));
+                EntityHandle value;
+                std::memcpy(&value, bytes + offset, sizeof(value));
+                uint32 target = ClonePlan::kNoPosition;
+                if (const auto it = positionsOfEntity.find(value.id);
+                    it != positionsOfEntity.end() && copyOfPosition[position] < it->second.size())
+                    target = it->second[copyOfPosition[position]];
+                plan.m_FieldTargets.push_back({slot.TypeId, static_cast<uint32>(position), offset, target});
+            }
+        }
+    }
+    return true;
+}
+
+void World::CopyGroupRows(const World& source, const ClonePlan& plan, uint32 group, Archetype& target,
+                          const EntityRemap& remap)
+{
+    const ClonePlan::Group& planned = plan.m_Groups[group];
+    const std::span<const EntityHandle> targets(remap.m_GroupedTargets.data() + planned.FirstTarget, planned.Count);
+    const std::span<const EntityHandle> sources(plan.m_GroupedSources.data() + planned.FirstTarget, planned.Count);
+    if (!target.HasTable())
+    {
+        // A signature of tags only has no rows to place.
+        for (const EntityHandle entity : targets)
+            entityMetadata[entity.index].archetype = &target;
+        return;
+    }
+    // A source world that sized none of the columns has no rows to copy from; the rows stay as placed.
+    const std::span<const ArchetypeChunk> sourceChunks =
+        planned.Source->HasTable() ? planned.Source->GetTable().GetChunks() : std::span<const ArchetypeChunk>{};
+    uint32 placed = 0;
+    while (placed < planned.Count)
+    {
+        const RowRun run = target.AddEntitiesUnsafe(targets.subspan(placed));
+        ArchetypeChunk& targetChunk = target.GetTable().GetChunks()[run.ChunkIndex];
+        for (uint32 row = 0; row < run.Count; ++row)
+        {
+            EntityMetadata& metadata = entityMetadata[targets[placed + row].index];
+            metadata.archetype = &target;
+            metadata.SetLocation(EntityLocation{run.ChunkIndex, run.FirstIndex + row});
+        }
+        uint32 copied = sourceChunks.empty() ? run.Count : 0;
+        while (copied < run.Count)
+        {
+            const EntityLocation from = source.entityMetadata[sources[placed + copied].index].GetLocation();
+            uint32 length = 1;
+            while (copied + length < run.Count)
+            {
+                const EntityLocation next = source.entityMetadata[sources[placed + copied + length].index].GetLocation();
+                if (next.ChunkIndex != from.ChunkIndex || next.IndexInChunk != from.IndexInChunk + length)
+                    break;
+                ++length;
+            }
+            ArchetypeChunk::CopyRows(sourceChunks[from.ChunkIndex], from.IndexInChunk, targetChunk,
+                                     run.FirstIndex + copied, length);
+            copied += length;
+        }
+        placed += run.Count;
+    }
+}
+
+bool World::CreateBatchFromWorld(const World& source, const ClonePlan& plan, EntityRemap& remap)
+{
+    assert(&source != this && "CreateBatchFromWorld copies between two worlds; use CloneEntity inside one world");
+    remap.m_Targets.clear();
+    if (&source == this)
+    {
+        Logger::Log::Error("[ECS] CreateBatchFromWorld refused: the source is this world. Use CloneEntity to copy "
+                           "inside one world");
+        return false;
+    }
+    const std::size_t count = plan.m_Sources.size();
+    if (count == 0)
+        return true;
+    if (source.m_WorldId != plan.m_SourceWorldId)
+    {
+        Logger::Log::Error("[ECS] CreateBatchFromWorld refused: the plan was built from another world. Build it with "
+                           "PlanClone on the source world");
+        return false;
+    }
+    for (std::size_t position = 0; position < count; ++position)
+    {
+        const EntityHandle entity = plan.m_Sources[position];
+        if (!source.IsValid(entity) ||
+            source.entityMetadata[entity.index].archetype != plan.m_Groups[plan.m_GroupOfPosition[position]].Source)
+        {
+            Logger::Log::Error("[ECS] CreateBatchFromWorld refused entity {}: it died or changed archetype after its "
+                               "plan was built. Build a new plan with PlanClone; nothing was created",
+                               entity.id);
+            return false;
+        }
+    }
+
+    CheckRemovalReentry();
+    std::unique_lock lock(worldMutex);
+
+    // The target archetype keeps the source signature: every column is copied, so the
+    // source row already holds what its requirements need.
+    remap.m_Targets.resize(count);
+    remap.m_GroupedTargets.resize(count);
+    remap.m_TargetArchetypes.assign(plan.m_Groups.size(), nullptr);
+    for (std::size_t group = 0; group < plan.m_Groups.size(); ++group)
+    {
+        const ClonePlan::Group& planned = plan.m_Groups[group];
+        if (!planned.Source)
+            continue;
+        const ComponentSignature& signature = planned.Source->GetSignature();
+        Archetype* target = nullptr;
+        if (const auto it = archetypes.find(signature); it != archetypes.end())
+        {
+            target = it->second.get();
+        }
+        else
+        {
+            for (const ComponentTypeId typeId : signature.GetComponents())
+            {
+                const auto sizeIt = source.componentSizes.find(typeId);
+                if (sizeIt != source.componentSizes.end())
+                    componentSizes.try_emplace(typeId, sizeIt->second);
+            }
+            target = GetOrCreateArchetype(signature);
+        }
+        target->Reserve(target->GetEntityCount() + planned.Count);
+        remap.m_TargetArchetypes[group] = target;
+    }
+
+    // Handles in plan order, so the k-th entity of a template is created k-th (handle determinism).
+    for (std::size_t position = 0; position < count; ++position)
+    {
+        const EntityHandle entity = CreateEntityUnsafe();
+        remap.m_Targets[position] = entity;
+        remap.m_GroupedTargets[plan.m_GroupedIndexOfPosition[position]] = entity;
+    }
+    for (std::size_t group = 0; group < plan.m_Groups.size(); ++group)
+    {
+        if (Archetype* target = remap.m_TargetArchetypes[group])
+            CopyGroupRows(source, plan, static_cast<uint32>(group), *target, remap);
+    }
+
+    for (const ClonePlan::FieldTarget& field : plan.m_FieldTargets)
+    {
+        Archetype* target = remap.m_TargetArchetypes[plan.m_GroupOfPosition[field.Position]];
+        const EntityMetadata& metadata = entityMetadata[remap.m_Targets[field.Position].index];
+        auto* bytes =
+            static_cast<std::byte*>(target->GetComponentRawAt(metadata.chunkIndex, metadata.indexInChunk, field.TypeId));
+        if (!bytes)
+            continue;
+        const EntityHandle value =
+            field.TargetPosition == ClonePlan::kNoPosition ? EntityHandle{} : remap.m_Targets[field.TargetPosition];
+        std::memcpy(bytes + field.Offset, &value, sizeof(value));
+    }
+
+    // The source's preserved unknown components and fields belong to the rows.
+    if (const UnresolvedComponentStore* sourceStore = source.TryGetUnresolvedComponents();
+        sourceStore && (!sourceStore->Empty() || !sourceStore->FieldsEmpty()))
+    {
+        UnresolvedComponentStore& store = GetUnresolvedComponents();
+        for (std::size_t position = 0; position < count; ++position)
+            store.CopyEntity(*sourceStore, plan.m_Sources[position], remap.m_Targets[position]);
+        store.CopyReferences(*sourceStore);
+    }
+
+    for (std::size_t group = 0; group < plan.m_Groups.size(); ++group)
+    {
+        if (const Archetype* target = remap.m_TargetArchetypes[group])
+            RecordAddedForSignatureBatch(target->GetSignature(),
+                                         remap.m_GroupedTargets.data() + plan.m_Groups[group].FirstTarget,
+                                         plan.m_Groups[group].Count);
+    }
+
+    structuralChangeVersion.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 std::vector<EntityHandle> World::CreateBatchFromBundle(size_t count, const ComponentBundle& bundle)

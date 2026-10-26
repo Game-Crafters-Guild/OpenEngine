@@ -5,7 +5,10 @@
 // pre-exposure, and its luminance added to the star light (SkyStarLight), which the tonemap's night
 // tint reads to keep the stars' colour. The sparkle's points are narrower than a pixel, so it is averaged over four taps of a
 // rotated grid in the pixel; the round core is the pixel's mean in closed form and takes one evaluation.
+// A falling star (vStreak not zero) spreads its whole light along its streak (GE_MeteorRadianceAt),
+// weighted toward the head.
 
+#include "Includes/sky_meteor.glsl"
 #include "Includes/sky_star_model.glsl"
 
 layout(location = 0) in vec2 vPixelOffset;
@@ -17,6 +20,7 @@ layout(location = 5) flat in vec3 vGlowPeak;
 layout(location = 6) flat in float vGlowRadius;
 layout(location = 7) flat in vec4 vSpikePeakAndLength;
 layout(location = 8) flat in float vShape;
+layout(location = 9) flat in vec2 vStreak;
 
 layout(location = 0) out vec4 oColor;
 layout(location = 1) out float oStarLight;
@@ -54,8 +58,6 @@ layout(set = 0, binding = 1) uniform SkyUBO
 
 void main()
 {
-    if (length(vPixelOffset) >= vCutRadius)
-        discard;
     GE_StarDrawn star;
     star.CorePeak = vCorePeak;
     star.CoreRadius = vCoreRadius;
@@ -66,8 +68,15 @@ void main()
     star.SpikePeak = vSpikePeakAndLength.rgb;
     star.SpikeLength = vSpikePeakAndLength.w;
     star.Shape = vShape;
+    bool meteor = dot(vStreak, vStreak) > 0.0;
+    if (GE_MeteorStreakDistance(vPixelOffset, vStreak) >= (meteor ? GE_MeteorCutRadius(star) : vCutRadius))
+        discard;
     vec3 radiance;
-    if (vShape >= 0.5)
+    if (meteor)
+    {
+        radiance = GE_MeteorRadianceAt(vPixelOffset, star, vStreak);
+    }
+    else if (vShape >= 0.5)
     {
         radiance = vec3(0.0);
         for (int i = 0; i < 4; ++i)

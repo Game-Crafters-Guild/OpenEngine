@@ -31,7 +31,9 @@ struct VideoWriterOptions
     uint32_t height = 0;
     double fps = 60.0;
     VideoCodec codec = VideoCodec::Auto;
-    // 0 lets the platform encoder choose its default video bitrate.
+    // 0 records H264 and HEVC at constant quality (the FFmpeg writer) or at the
+    // platform encoder's own rate control (AVFoundation). A value sets the
+    // stream's average rate instead.
     uint32_t bitrateKbps = 0;
     bool recordAudio = true;
     uint32_t audioSampleRate = 48000;

@@ -37,7 +37,7 @@ inline constexpr float32 kWorldSectorSize = 1024.0f;
 // Fast path: when sector is null or sector.x/y/z all zero, the input
 // matrix is already world-space and is returned unchanged. Both the
 // Scene TLAS broad-phase (SceneTlas.cpp) and the picker narrow-phase
-// (MeshPickingService.cpp) call this so they always agree on what
+// (SceneRaycast.cpp) call this so they always agree on what
 // "world space" means for a sector-aware entity. Callers pass kWorldSectorSize
 // (the TLAS default) so composition and the render path share one scale.
 inline WorldTransform ComposeEffectiveWorldTransform(

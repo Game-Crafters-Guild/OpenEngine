@@ -293,6 +293,22 @@ void KeepIfAmongWorst(std::vector<CornerHeightError>& worst, size_t capacity, co
 // drop a facet that is in view. The GPU samples the height texture at the corner UV; the CPU query
 // reads the composed heightfield, so the two agree to a lattice cell, and a stale corner is
 // metres off.
+// The first visible corner in world space, or the origin when there is none: the audit reads the
+// terrain under it.
+Mathematics::Vector3 FirstWorldCorner(const CBTTerrain::CBTTreeSnapshot& snapshot)
+{
+    for (uint32_t i = 0; i < snapshot.VisibleCount; ++i)
+    {
+        const uint32_t slot = snapshot.IndicesVisible[i];
+        if (slot >= snapshot.PoolSize || snapshot.HeapIds[slot] == CBTTerrain::kFreeSlotHeapID)
+            continue;
+        const CBTTerrain::CBTVertexData& v = snapshot.Vertices[slot];
+        if (v.DeepTag[0] == 0u)
+            return Mathematics::Vector3(v.Corner0[0], v.Corner0[1], v.Corner0[2]);
+    }
+    return Mathematics::Vector3{};
+}
+
 json CornerHeightAudit(const CBTTerrain::CBTTreeSnapshot& snapshot,
                        const TerrainECS::SurfaceHeightQuery& query)
 {
@@ -750,7 +766,7 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
         json heights;
         if (snapshot.DomainMode == CBTTerrain::kDomainPlanar && !snapshot.Vertices.empty())
             if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
-                heights = CornerHeightAudit(snapshot, TerrainECS::ResolveSurfaceHeightQuery(*world));
+                heights = CornerHeightAudit(snapshot, TerrainECS::ResolveSurfaceHeightQuery(*world, FirstWorldCorner(snapshot)));
         return json{
             {"heights", std::move(heights)},
             {"domain", snapshot.DomainMode == CBTTerrain::kDomainSpherical ? "spherical" : "planar"},

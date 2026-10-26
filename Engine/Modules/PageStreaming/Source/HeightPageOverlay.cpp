@@ -40,6 +40,15 @@ bool PageReadsLevel0Rect(const PageAddress& address, const PageSampleRect& level
            firstZ <= level0Rect.MaxZ;
 }
 
+PageSampleRect Level0RectReach(std::span<const PageStoreLevel> levels, const PageSampleRect& level0Rect,
+                               uint32 level)
+{
+    PageSampleRect rect = level0Rect;
+    for (uint32 coarser = 1; coarser <= level; ++coarser)
+        rect = CoarserRect(rect, levels[coarser].SamplesX, levels[coarser].SamplesZ);
+    return rect;
+}
+
 HeightPageOverlay::HeightPageOverlay(std::span<const PageStoreLevel> levels, const PageSampleRect& level0Rect,
                                      std::vector<float32> level0Delta)
 {

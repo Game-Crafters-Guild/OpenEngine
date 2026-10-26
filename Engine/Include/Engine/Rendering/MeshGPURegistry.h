@@ -503,7 +503,7 @@ class MeshGPURegistry
     // `mesh` is the CPU-side mesh data to upload. Set retainCpuMesh for
     // generated/runtime meshes that have no asset-backed CPU source, so
     // consumers that need to read the geometry back on the CPU can still find
-    // it: editor ray picking (MeshPickingService) and the DDGI software trace
+    // it: the scene raycast (SceneRaycast) and the DDGI software trace
     // lane (DDGISceneService, which builds its BVH from CPU triangles and
     // silently omits any mesh it cannot resolve). Asset-backed meshes need it
     // only if the asset may be evicted, since those consumers fall back to

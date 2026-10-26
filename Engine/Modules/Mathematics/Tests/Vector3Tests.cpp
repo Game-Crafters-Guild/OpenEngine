@@ -11,6 +11,16 @@ TEST(Vector3Tests, LengthSquaredIsTheDotWithItself)
     EXPECT_FLOAT_EQ(v.LengthSquared(), Vector3::Dot(v, v));
 }
 
+TEST(Vector3Tests, ConstructsInAConstantExpression)
+{
+    constexpr Vector3 origin;
+    constexpr Vector3 v(1.0f, -2.0f, 3.0f);
+    EXPECT_EQ(origin.LengthSquared(), 0.0f);
+    EXPECT_EQ(v.x, 1.0f);
+    EXPECT_EQ(v.y, -2.0f);
+    EXPECT_EQ(v.z, 3.0f);
+}
+
 TEST(Vector3Tests, NormalizeOrZeroReturnsAUnitVector)
 {
     const Vector3 n = Vector3(0.0f, 3.0f, 4.0f).NormalizeOrZero();

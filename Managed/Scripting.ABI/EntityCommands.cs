@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using GameEngine.ECS;
 using GameEngine.ECS.Internal;
@@ -13,10 +14,51 @@ namespace GameEngine.Scripting
     {
         internal ulong WorldHandle;
 
+        /// <summary>
+        /// Commands on the world <paramref name="worldHandle"/>. The generated code of a C# system passes them to
+        /// Execute, and <see cref="GameSystem"/> gives them as its Commands property; a system does not make its own.
+        /// </summary>
+        [EditorBrowsable(EditorBrowsableState.Never)]
+        public EntityCommands(ulong worldHandle)
+        {
+            WorldHandle = worldHandle;
+        }
+
         /// <summary>Creates a new empty entity (no components). Returns a valid entity ID immediately.</summary>
         public uint CreateEntity()
         {
             return ChunkQueryNative.CreateEntityRaw(WorldHandle);
+        }
+
+        /// <summary>
+        /// Spawns an instance of <paramref name="prefab"/> at once and returns its root: the entities of the prefab in
+        /// the order of the prefab file, the root at <paramref name="at"/>, relative to <paramref name="parent"/>, or to
+        /// the world when <paramref name="parent"/> is 0. The root's children are its children in the prefab. Returns 0
+        /// when the prefab is not loaded; the log then shows the fix once for that prefab. Call it from the main
+        /// thread, where a C# system runs; a call from a job or a thread of your own is refused.
+        /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="prefab"/> is <see cref="PrefabRef.None"/>.</exception>
+        public uint Spawn(PrefabRef prefab, in Transform at, uint parent = 0)
+        {
+            if (prefab.IsNone)
+                throw new ArgumentException("The PrefabRef names no prefab. Assign a prefab to the field in the Inspector.",
+                    nameof(prefab));
+            AssetGuid guid = prefab.Guid;
+            fixed (Transform* transform = &at)
+            {
+                return ChunkQueryNative.SpawnPrefab(WorldHandle, (byte*)&guid, (float*)transform, parent);
+            }
+        }
+
+        /// <summary>
+        /// Queues the destruction of <paramref name="root"/> and every entity under it in the hierarchy.
+        /// Any live entity can be the root. The entities go after all systems complete, as with
+        /// <see cref="DestroyEntity"/>. A root that is not alive destroys nothing. Call it from the main
+        /// thread, where a C# system runs; a call from a job or a thread of your own is refused.
+        /// </summary>
+        public void Despawn(uint root)
+        {
+            ChunkQueryNative.DespawnPrefab(WorldHandle, root);
         }
 
         /// <summary>Queues entity destruction. Executes after all systems complete.</summary>

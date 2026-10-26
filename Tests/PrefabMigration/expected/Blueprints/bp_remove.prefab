@@ -1,0 +1,8 @@
+[prefab name="BP" version=1]
+
+[entity id="root"]
+Name.value = "BP"
+DebugMarker.value = 1
+
+[entity id="child" parent="root"]
+Name.value = "Child"

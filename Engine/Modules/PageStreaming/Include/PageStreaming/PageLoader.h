@@ -34,13 +34,18 @@ struct PageSource
 {
     std::shared_ptr<const PageStoreReader> Store;
     std::shared_ptr<const GeneratedHeightPageProvider> Generated;
+
+    /// The bytes each loaded page of this source holds: PagePayloadBytes of the store's format, or
+    /// of a height page for the generated provider.
+    uint32 PayloadBytes() const;
 };
 
-/// How one page fetch ended: the samples, or why there are none.
+/// How one page fetch ended: the page's bytes, or why there are none.
 struct PageFetchOutcome
 {
     PageAddress Address;
-    std::shared_ptr<const std::vector<float32>> Samples; ///< kPageSampleCount; null: the page did not load
+    /// PageSource::PayloadBytes bytes (HeightSamples reads a height page's); null: the page did not load.
+    std::shared_ptr<const std::vector<uint8>> Bytes;
     std::string Error;   ///< why it did not load, when it is in its source
     bool Absent = false; ///< not in its source at all (a sparse store, or outside the generated pyramid)
 };
@@ -64,22 +69,22 @@ struct PageLoadRequest
     AssetLoadPriority Priority = AssetLoadPriority::Normal;
     /// Set to drop the load: a queued read is skipped, a finished read is not decoded.
     std::shared_ptr<std::atomic<bool>> Cancel;
-    /// The decoded page's kPageSampleCount samples, on a Background job.
-    std::function<void(const PageAddress&, std::vector<float32>)> OnLoaded;
+    /// The decoded page's bytes (PageStoreReader::DecodePayload), on a Background job.
+    std::function<void(const PageAddress&, std::vector<uint8>)> OnLoaded;
     /// Why the page did not load (absent, unreadable, cancelled, the service or the job pool
     /// stopped), on whichever thread found out. Exactly one of OnLoaded and OnFailed runs, also when
     /// the decode is dropped without running (a pool shutdown cancels queued work).
     std::function<void(const PageAddress&, const std::string&)> OnFailed;
 };
 
-/// Loads one height page: a byte-range read of the page on `io`'s reader threads at the request's
-/// priority, then the decode on a Background job. An absent page fails inline.
-void SubmitHeightPageLoad(AssetIOService& io, PageLoadRequest request);
+/// Loads one page of any field: a byte-range read of the page on `io`'s reader threads at the
+/// request's priority, then the decode with the store's codec on a Background job. An absent page
+/// fails inline.
+void SubmitPageLoad(AssetIOService& io, PageLoadRequest request);
 
-/// Fetches page `address` of `source` asynchronously: a store page through `io`'s reader threads
-/// (SubmitHeightPageLoad), a generated page (or a store page when there is no `io`) on a Background
-/// job of `pool`, inline when there is no pool. `done` runs exactly once, on whichever thread
-/// finished; a set `cancel` ends the fetch with an error and no samples.
+/// Fetches page `address` of `source`: a store page through `io`'s reader threads, a generated page
+/// (or any page when there is no `io`) on a Background job of `pool`, inline when there is no pool.
+/// `done` runs exactly once; a set `cancel` ends the fetch with an error and no bytes.
 void SubmitPageFetch(JobSystem::WorkStealingThreadPool* pool, AssetIOService* io, const PageSource& source,
                      const PageAddress& address, std::shared_ptr<std::atomic<bool>> cancel,
                      std::function<void(PageFetchOutcome)> done);

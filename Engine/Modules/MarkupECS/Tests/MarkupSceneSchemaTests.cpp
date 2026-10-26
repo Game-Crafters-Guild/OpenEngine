@@ -375,23 +375,23 @@ TEST_F(MarkupSceneSchemaTest, TheRevisionSurvivesAReopen)
     EXPECT_GT(reopened.GetComponent<Markup>(loadedLake)->Revision, readerSince);
 }
 
-// A mark-up in a blueprint is refused at load with the fix: its thread could not follow
+// A mark-up in a prefab is refused at load with the fix: its thread could not follow
 // an instance. The entity loads without it.
-TEST_F(MarkupSceneSchemaTest, AMarkupInABlueprintIsRefused)
+TEST_F(MarkupSceneSchemaTest, AMarkupInAPrefabIsRefused)
 {
-    const auto path = PathOf("Cart.blueprint");
+    const auto path = PathOf("Cart.prefab");
     {
         std::ofstream out(path, std::ios::binary);
-        out << "[blueprint name=\"Cart\" version=1]\n"
+        out << "[prefab name=\"Cart\" version=1]\n"
                "\n"
-               "[entity id=\"cart\"]\n"
+               "[entity id=\"root\"]\n"
                "Markup.status = \"Requested\"\n"
                "Transform.position = (1, 0, 0)\n";
     }
 
     ECS::World world;
     (void)Scene::LoadSceneFromFile(world, path, Scene::LoadOptions{Scene::LoadMode::Replace});
-    const ECS::EntityHandle cart = FindByTag(world, "cart");
+    const ECS::EntityHandle cart = FindByTag(world, "root");
     ASSERT_TRUE(cart.IsValid());
     EXPECT_EQ(world.GetComponent<Markup>(cart), nullptr);
     EXPECT_EQ(MarkupService::Get().FindNotes(world, cart), nullptr);

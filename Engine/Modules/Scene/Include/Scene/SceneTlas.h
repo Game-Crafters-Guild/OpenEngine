@@ -127,6 +127,9 @@ public:
     uint32 InstanceCount() const;
     uint32 NodeCount() const;
     bool   IsEmpty() const;
+    /// Goes up on every reconcile, on every refit that moves a leaf and on
+    /// Clear. Two equal reads mean the tree did not change between them. Lock-free.
+    uint64 Version() const;
 
     // ---- Bringing the tree current (main thread, between frames) --------
 

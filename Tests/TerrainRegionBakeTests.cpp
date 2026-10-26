@@ -2,6 +2,7 @@
 
 #include "AssetCore/GUID.h"
 #include "CBTTerrain/CBTPlanetShading.h"
+#include "Components/SceneEntityTag.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainGrass.h"
 #include "Components/Terrain/TerrainModifierEffects.h"
@@ -16,12 +17,22 @@
 #include "ECS/World.h"
 #include "ECSModules/Rendering/Systems/TransformHierarchySystem.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Mathematics/HalfFloat.h"
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/HeightPageOverlay.h"
 #include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStorePatcher.h"
+#include "PageStreaming/PageStoreReader.h"
+#include "PageStreaming/PageStoreWriter.h"
 #include "Terrain/Heightfield.h"
 #include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "TerrainECS/TerrainSurfacePageBaker.h"
+#include "TerrainECS/TerrainSurfacePageDriver.h"
+#include "TerrainECS/TerrainSurfaceStore.h"
+#include "TerrainECS/HeightPageStoreLoader.h"
+#include "TerrainECS/TerrainColorMapBaker.h"
+#include "Types/Fnv1a.h"
 #include "SplineECS/SplineService.h"
 #include "TerrainECS/TerrainAtlas.h" // BuildCoarseHeightField (the atlas coarse field)
 #include "TerrainECS/TerrainHeightPages.h"
@@ -39,8 +50,10 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <future>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -2950,6 +2963,1095 @@ TEST(TerrainRegionBake, TwoModifiersReachTheHeightPagesAsTheyReachTheBakedTiles)
     EXPECT_GT(modifiedSamples, 100u) << "the comparison never reached a flattened sample";
 }
 
+// The noise lattice of a tiled terrain made by CreateResidentTiledTerrain: the driver's page
+// source for a noise base, whose level 0 is the tiles' samples bit for bit.
+PageStreaming::GeneratedHeightLattice TileNoiseLattice(const TiledTerrainData& tiled)
+{
+    PageStreaming::GeneratedHeightLattice lattice;
+    lattice.Source = PageStreaming::GeneratedHeightSource::Noise;
+    lattice.TerrainOriginX = tiled.WorldOriginX;
+    lattice.TerrainOriginZ = tiled.WorldOriginZ;
+    lattice.TileWorldSize = tiled.Config.TileWorldSize;
+    lattice.TileSamples = tiled.Config.TileConfig.HeightmapWidth;
+    lattice.TilesX = tiled.Config.TilesPerAxisX;
+    lattice.TilesZ = tiled.Config.TilesPerAxisZ;
+    lattice.Noise = {kTileNoiseFrequency, kTileNoiseAmplitude, kTileNoiseOctaves, kTileNoiseSeed};
+    return lattice;
+}
+
+std::vector<PageStreaming::PageStoreLevel> TileLatticeLevels(const TiledTerrainData& tiled)
+{
+    const PageStreaming::PageStoreHeader header = MakeSurfaceStoreHeader(tiled, PageStreaming::PageFieldKind::Splat, 0u);
+    return PageStreaming::BuildPageStoreLevels(header.SamplesX, header.SamplesZ);
+}
+
+// The tile bake's splat at level-0 sample (gx, gz), from the tile that owns the sample.
+const uint8* TileSplatTexel(TiledTerrainData& tiled, uint32 gx, uint32 gz)
+{
+    const uint32 interior = tiled.Config.TileConfig.HeightmapWidth - 1u;
+    const uint32 tx = std::min(gx / interior, tiled.Config.TilesPerAxisX - 1u);
+    const uint32 tz = std::min(gz / interior, tiled.Config.TilesPerAxisZ - 1u);
+    const TerrainTileData* tile = Tile(&tiled, static_cast<int32>(tx), static_cast<int32>(tz));
+    return &tile->Splatmap[(static_cast<std::size_t>(gz - tz * interior) * tile->SplatmapWidth + (gx - tx * interior)) *
+                           4u];
+}
+
+// Counts of a comparison of surface pages against the tile bake.
+struct SplatPageComparison
+{
+    std::size_t Compared = 0;
+    std::size_t Weighted = 0;
+};
+
+// Expects level-0 surface page (px, pz) to hold the tile bake's splat at every stride texel inside
+// the terrain. A tile's first row and column inside the terrain are skipped: the tile bake clamps
+// its slope there (#5027), and the page reads across the seam.
+void ExpectSplatPageMatchesTiles(TiledTerrainData& tiled, uint32 px, uint32 pz, std::span<const uint8> page,
+                                 SplatPageComparison& comparison)
+{
+    const uint32 interior = tiled.Config.TileConfig.HeightmapWidth - 1u;
+    const PageStreaming::PageStoreLevel level0 = TileLatticeLevels(tiled).front();
+    constexpr uint32 kStride = PageStreaming::kPageStrideSamples;
+    ASSERT_EQ(page.size(), static_cast<std::size_t>(PageStreaming::kPageSampleCount) * 4u);
+    for (uint32 j = 0; j < kStride; ++j)
+        for (uint32 i = 0; i < kStride; ++i)
+        {
+            const int64 sx = static_cast<int64>(px) * PageStreaming::kPageOwnedSamples + i - 1;
+            const int64 sz = static_cast<int64>(pz) * PageStreaming::kPageOwnedSamples + j - 1;
+            if (sx < 0 || sz < 0 || sx >= level0.SamplesX || sz >= level0.SamplesZ)
+                continue;
+            const uint32 gx = static_cast<uint32>(sx);
+            const uint32 gz = static_cast<uint32>(sz);
+            if ((gx > 0u && gx % interior == 0u) || (gz > 0u && gz % interior == 0u))
+                continue;
+            const uint8* paged = &page[(static_cast<std::size_t>(j) * kStride + i) * 4u];
+            ASSERT_TRUE(std::equal(paged, paged + 4, TileSplatTexel(tiled, gx, gz)))
+                << "page (" << px << ", " << pz << ") stride texel (" << i << ", " << j << ")";
+            ++comparison.Compared;
+            if (paged[1] != 0u)
+                ++comparison.Weighted;
+        }
+}
+
+// A level-0 surface page's splat is the tile bake's splat at the same samples, bit for bit, apron
+// included, but for the tile seam ExpectSplatPageMatchesTiles skips.
+TEST(TerrainRegionBake, ALevel0SurfacePageHoldsTheTileBakesSplatBitForBit)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    const auto handle = CreateResidentTiledTerrain(svc, 2);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 2);
+    CreateGlobalRulesModifier(world);
+    CreateFlattenModifier(world, kTiledTileWorld, 300.0f, 20.0f);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_TRUE(tiled->SplatBakeRangeValid);
+
+    const uint32 interior = tiled->Config.TileConfig.HeightmapWidth - 1u;
+    const uint32 tilesX = tiled->Config.TilesPerAxisX;
+    const uint32 tilesZ = tiled->Config.TilesPerAxisZ;
+    const auto ownerTile = [&](uint32 gx, uint32 gz) {
+        return Tile(tiled, static_cast<int32>(std::min(gx / interior, tilesX - 1u)),
+                    static_cast<int32>(std::min(gz / interior, tilesZ - 1u)));
+    };
+    const auto tileLocal = [&](uint32 g, uint32 tiles) { return g - std::min(g / interior, tiles - 1u) * interior; };
+
+    const PageStreaming::PageStoreLevel level0 = TileLatticeLevels(*tiled).front();
+    SplatPageComparison comparison;
+    std::vector<uint8> page;
+    for (uint32 pz = 0; pz < level0.PagesZ; ++pz)
+        for (uint32 px = 0; px < level0.PagesX; ++px)
+        {
+            SurfaceHeightWindow window;
+            window.Rect = SurfaceHeightRect(level0, px, pz, PageStreaming::PageFieldFormat::Rgba8);
+            for (uint32 gz = window.Rect.MinZ; gz <= window.Rect.MaxZ; ++gz)
+                for (uint32 gx = window.Rect.MinX; gx <= window.Rect.MaxX; ++gx)
+                    window.Heights.push_back(ownerTile(gx, gz)->Heightfield.GetSample(tileLocal(gx, tilesX),
+                                                                                       tileLocal(gz, tilesZ)));
+            ASSERT_TRUE(system.BakeSurfaceSplatPage(*tiled, PageStreaming::PageAddress{0, 0, px, pz}, level0, window,
+                                                    page));
+            ExpectSplatPageMatchesTiles(*tiled, px, pz, page, comparison);
+            if (HasFatalFailure())
+                return;
+        }
+    EXPECT_GT(comparison.Compared, 2000000u);
+    EXPECT_GT(comparison.Weighted, 1000u) << "the rules never reached a compared texel";
+}
+
+// The height pages of a generated lattice, with the terrain's modifier overlay when it has one. A
+// page equal to `*refused` is reported as not on hand.
+SurfaceHeightPageFetch GeneratedHeightPages(const PageStreaming::GeneratedHeightPageProvider& provider,
+                                            const TiledTerrainData& tiled,
+                                            const std::optional<PageStreaming::PageAddress>* refused = nullptr)
+{
+    return [&provider, &tiled, refused](const PageStreaming::PageAddress& address, std::span<float32> samples) {
+        if ((refused && *refused == address) || !provider.FillPage(address, samples))
+            return false;
+        if (tiled.PageOverlay)
+            tiled.PageOverlay->ApplyToPage(address, samples);
+        return true;
+    };
+}
+
+// The level-0 pages whose first owned sample lies in tile (tx, tz): one tile's batch.
+std::vector<PageStreaming::PageAddress> TilePageBatch(const TiledTerrainData& tiled, uint32 tx, uint32 tz)
+{
+    const uint32 interior = tiled.Config.TileConfig.HeightmapWidth - 1u;
+    const PageStreaming::PageStoreLevel level0 = TileLatticeLevels(tiled).front();
+    std::vector<PageStreaming::PageAddress> pages;
+    for (uint32 pz = 0; pz < level0.PagesZ; ++pz)
+        for (uint32 px = 0; px < level0.PagesX; ++px)
+            if (std::min(px * PageStreaming::kPageOwnedSamples / interior, tiled.Config.TilesPerAxisX - 1u) == tx &&
+                std::min(pz * PageStreaming::kPageOwnedSamples / interior, tiled.Config.TilesPerAxisZ - 1u) == tz)
+                pages.push_back(PageStreaming::PageAddress{0, 0, px, pz});
+    return pages;
+}
+
+std::vector<uint8> StoreSplatPage(const PageStreaming::PageStoreReader& reader, const PageStreaming::PageAddress& address)
+{
+    std::vector<uint8> samples(static_cast<std::size_t>(PageStreaming::kPageSampleCount) * 4u);
+    EXPECT_TRUE(reader.ReadPageSamples(address, samples))
+        << "level " << int(address.Level) << " page (" << address.X << ", " << address.Z << ")";
+    return samples;
+}
+
+// A scratch folder for one test's stores, removed after it.
+struct ScopedStoreFolder
+{
+    std::filesystem::path Path;
+    explicit ScopedStoreFolder(const char* name)
+        : Path(std::filesystem::temp_directory_path() / ("ge-surface-pages-" + std::string(name)))
+    {
+        std::filesystem::remove_all(Path);
+        std::filesystem::create_directories(Path);
+    }
+    ~ScopedStoreFolder() { std::filesystem::remove_all(Path); }
+};
+
+// A tiled terrain with the global surface rules baked, for the splat store tests.
+struct SplatStoreTerrain
+{
+    ScopedTerrainService Scoped;
+    TiledTerrainData* Tiled = nullptr;
+    ECS::EntityHandle Entity;
+    ECS::World World;
+    TerrainModifierSystem System;
+    ECS::EntityHandle Rules; // the global surface rules
+
+    // `tilesX` by one tile, or a square of `tilesX` tiles a side when `tilesZ` is not one.
+    explicit SplatStoreTerrain(uint32 tilesX = 2u, uint32 tilesZ = 1u)
+    {
+        auto& svc = TerrainService::Get();
+        const auto handle =
+            tilesZ == 1u ? CreateResidentTiledTerrain(svc, tilesX) : CreateResidentSquareTiledTerrain(svc, tilesX);
+        Tiled = svc.GetTiledTerrainData(handle);
+        RegisterModifierLifecycleEvents(World);
+        Entity = CreateTiledTerrainEntity(World, handle, tilesX);
+        World.GetComponentForWrite<Components::Terrain>(Entity)->SizeZ = Tiled->Config.WorldSizeZ;
+        // The extraction system places the tiles at the entity's corner, and no extraction runs here.
+        // So the entity is centered on the corner that the tiles hold.
+        Components::WorldTransform* transform = World.GetComponentForWrite<Components::WorldTransform>(Entity);
+        transform->matrix[12] = Tiled->WorldOriginX + Tiled->Config.WorldSizeX * 0.5f;
+        transform->matrix[14] = Tiled->WorldOriginZ + Tiled->Config.WorldSizeZ * 0.5f;
+        Rules = CreateGlobalRulesModifier(World);
+        System.Update(World, 1.0f / 60.0f);
+    }
+};
+
+// A splat store is cold-baked coarsest level first and holds no level-0 page; tile batches then
+// add level 0, which is the tile bake's splat, and every coarser level settles on the weights tent
+// of level 0 whatever the tile order.
+TEST(TerrainRegionBake, ASplatStoreBakesItsCoarseLevelsFirstAndSettlesOnTheTentOfLevel0)
+{
+    SplatStoreTerrain terrain;
+    ASSERT_NE(terrain.Tiled, nullptr);
+    ASSERT_TRUE(terrain.Tiled->SplatBakeRangeValid);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    JobSystem::WorkStealingThreadPool pool(4);
+    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Splat, GeneratedHeightPages(provider, tiled),
+                           &pool);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    ASSERT_GE(levels.size(), 5u);
+    constexpr uint32 kFirstCoarse = 3u;
+    ScopedStoreFolder folder("coarse-first");
+    const std::filesystem::path forward = folder.Path / "forward.gepage";
+    const std::filesystem::path backward = folder.Path / "backward.gepage";
+    ASSERT_EQ(baker.CreateStore(forward, 7u, kFirstCoarse), "");
+    {
+        PageStreaming::PageStoreReader cold;
+        ASSERT_EQ(cold.Open(forward, PageStreaming::PageFieldKind::Splat), "");
+        for (uint32 level = 0; level < levels.size(); ++level)
+            for (uint32 pz = 0; pz < levels[level].PagesZ; ++pz)
+                for (uint32 px = 0; px < levels[level].PagesX; ++px)
+                {
+                    const PageStreaming::PageAddress address{0, static_cast<uint8>(level), px, pz};
+                    EXPECT_EQ(cold.Layout().FindPresent(address) != nullptr, level >= kFirstCoarse)
+                        << "level " << level << " page (" << px << ", " << pz << ")";
+                }
+    }
+    ASSERT_EQ(baker.CreateStore(backward, 7u, kFirstCoarse), "");
+    for (uint32 tx = 0; tx < 2u; ++tx)
+    {
+        ASSERT_EQ(baker.BakeLevel0Pages(forward, TilePageBatch(tiled, tx, 0u)), "");
+        ASSERT_EQ(baker.BakeLevel0Pages(backward, TilePageBatch(tiled, 1u - tx, 0u)), "");
+    }
+
+    // The settled pyramid: every level-0 page written, then every coarser page refiltered from it.
+    const std::filesystem::path settled = folder.Path / "settled.gepage";
+    PageStreaming::PageStoreReader forwardStore;
+    ASSERT_EQ(forwardStore.Open(forward, PageStreaming::PageFieldKind::Splat), "");
+    {
+        PageStreaming::PageStoreWriter writer;
+        ASSERT_EQ(writer.Create(settled, PageStreaming::MakePageStoreLayout(
+            MakeSurfaceStoreHeader(tiled, PageStreaming::PageFieldKind::Splat, 7u))), "");
+        PageStreaming::PageStorePatcher patcher(writer, nullptr);
+        for (uint32 pz = 0; pz < levels[0].PagesZ; ++pz)
+            for (uint32 px = 0; px < levels[0].PagesX; ++px)
+            {
+                const PageStreaming::PageAddress address{0, 0, px, pz};
+                ASSERT_TRUE(patcher.WritePage(address, StoreSplatPage(forwardStore, address)));
+            }
+        ASSERT_TRUE(patcher.RefilterAncestors(
+            PageStreaming::PageSampleRect{0u, 0u, levels[0].SamplesX - 1u, levels[0].SamplesZ - 1u}));
+        ASSERT_EQ(writer.Finish(), "");
+    }
+    PageStreaming::PageStoreReader backwardStore;
+    PageStreaming::PageStoreReader settledStore;
+    ASSERT_EQ(backwardStore.Open(backward, PageStreaming::PageFieldKind::Splat), "");
+    ASSERT_EQ(settledStore.Open(settled, PageStreaming::PageFieldKind::Splat), "");
+    SplatPageComparison comparison;
+    for (uint32 level = 0; level < levels.size(); ++level)
+        for (uint32 pz = 0; pz < levels[level].PagesZ; ++pz)
+            for (uint32 px = 0; px < levels[level].PagesX; ++px)
+            {
+                const PageStreaming::PageAddress address{0, static_cast<uint8>(level), px, pz};
+                const std::vector<uint8> page = StoreSplatPage(forwardStore, address);
+                ASSERT_EQ(page, StoreSplatPage(settledStore, address))
+                    << "level " << level << " page (" << px << ", " << pz << ") is not the tent of level 0";
+                ASSERT_EQ(page, StoreSplatPage(backwardStore, address))
+                    << "level " << level << " page (" << px << ", " << pz << ") depends on the tile order";
+                if (level == 0u)
+                    ExpectSplatPageMatchesTiles(tiled, px, pz, page, comparison);
+                if (HasFatalFailure())
+                    return;
+            }
+    EXPECT_GT(comparison.Compared, 2000000u);
+    EXPECT_GT(comparison.Weighted, 1000u) << "the rules never reached a compared texel";
+}
+
+// The height pages of `provider` with height page `neighbor` made from the edge of height page
+// `own`: each of its samples is the nearest sample that `own` stores, as a page bake clamps them.
+SurfaceHeightPageFetch EdgeExtendedHeightPages(const PageStreaming::GeneratedHeightPageProvider& provider,
+                                               const TiledTerrainData& tiled, PageStreaming::PageAddress neighbor,
+                                               PageStreaming::PageAddress own)
+{
+    const SurfaceHeightPageFetch pages = GeneratedHeightPages(provider, tiled);
+    return [pages, neighbor, own](const PageStreaming::PageAddress& address, std::span<float32> samples) {
+        if (address != neighbor)
+            return pages(address, samples);
+        std::vector<float32> owned(PageStreaming::kPageSampleCount);
+        if (!pages(own, owned))
+            return false;
+        constexpr int64 kStride = PageStreaming::kPageStrideSamples;
+        const auto first = [](uint32 page) {
+            return static_cast<int64>(page) * PageStreaming::kPageOwnedSamples - PageStreaming::kPageApronSamples;
+        };
+        for (int64 row = 0; row < kStride; ++row)
+            for (int64 column = 0; column < kStride; ++column)
+            {
+                const int64 x = std::clamp(first(neighbor.X) + column, first(own.X), first(own.X) + kStride - 1);
+                const int64 z = std::clamp(first(neighbor.Z) + row, first(own.Z), first(own.Z) + kStride - 1);
+                samples[static_cast<std::size_t>(row * kStride + column)] =
+                    owned[static_cast<std::size_t>((z - first(own.Z)) * kStride + x - first(own.X))];
+            }
+        return true;
+    };
+}
+
+// The stored bytes of page `address` of the store at `file`.
+std::vector<uint8> StoredPageBytes(const std::filesystem::path& file, PageStreaming::PageFieldKind plane,
+                                   const PageStreaming::PageAddress& address)
+{
+    PageStreaming::PageStoreReader store;
+    EXPECT_EQ(store.Open(file, plane), "");
+    std::vector<uint8> bytes;
+    EXPECT_TRUE(store.ReadPageBytes(address, bytes));
+    return bytes;
+}
+
+// A page at a tile boundary reads the edge rows of its neighbor height page. With the neighbor on
+// hand, its apron is the tile bake's. Without it, the apron takes the nearest heights of the page's
+// own height page. Without its own height page, the page is not baked and the bake says so.
+TEST(TerrainRegionBake, ASurfacePageReadsItsNeighborsHeightsForItsApronAndClampsItWhenTheyAreAbsent)
+{
+    SplatStoreTerrain terrain;
+    ASSERT_NE(terrain.Tiled, nullptr);
+    ASSERT_TRUE(terrain.Tiled->SplatBakeRangeValid);
+    TiledTerrainData& tiled = *terrain.Tiled;
+
+    // Page 8 owns samples 1024 to 1151, tile 1's first; its apron column is sample 1023, whose
+    // slope reads sample 1022 of height page 7.
+    const uint32 interior = tiled.Config.TileConfig.HeightmapWidth - 1u;
+    const PageStreaming::PageAddress boundary{0, 0, interior / PageStreaming::kPageOwnedSamples, 0};
+    ASSERT_EQ(boundary.X * PageStreaming::kPageOwnedSamples, interior);
+    const PageStreaming::PageAddress neighbor{0, 0, boundary.X - 1u, 0};
+    std::optional<PageStreaming::PageAddress> refused = neighbor;
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    ScopedStoreFolder folder("apron");
+    const PageStreaming::PageAddress batch[] = {boundary};
+
+    // The normal reads the slope at its apron: the clamped apron is the bake over edge-extended heights.
+    const PageStreaming::PageFieldKind normal = PageStreaming::PageFieldKind::Normal;
+    TerrainSurfacePageBaker refusedNormal(terrain.System, tiled, normal, GeneratedHeightPages(provider, tiled, &refused),
+                                          nullptr);
+    TerrainSurfacePageBaker extendedNormal(terrain.System, tiled, normal,
+                                           EdgeExtendedHeightPages(provider, tiled, neighbor, boundary), nullptr);
+    TerrainSurfacePageBaker wholeNormal(terrain.System, tiled, normal, GeneratedHeightPages(provider, tiled), nullptr);
+    const std::filesystem::path refusedFile = folder.Path / "refused.gepage";
+    const std::filesystem::path extendedFile = folder.Path / "extended.gepage";
+    const std::filesystem::path wholeFile = folder.Path / "whole.gepage";
+    for (const auto& [baker, file] : {std::pair{&refusedNormal, &refusedFile}, std::pair{&extendedNormal, &extendedFile},
+                                      std::pair{&wholeNormal, &wholeFile}})
+    {
+        ASSERT_EQ(baker->CreateStore(*file, 7u, 3u), "");
+        ASSERT_EQ(baker->BakeLevel0Pages(*file, batch), "") << "an absent neighbor clamps the apron";
+    }
+    const std::vector<uint8> clamped = StoredPageBytes(refusedFile, normal, boundary);
+    EXPECT_EQ(clamped, StoredPageBytes(extendedFile, normal, boundary)) << "the apron is not the clamped heights'";
+    EXPECT_NE(clamped, StoredPageBytes(wholeFile, normal, boundary)) << "the neighbor's heights never reached the apron";
+
+    // With the neighbor on hand, the splat apron is the tile bake's.
+    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+                                  GeneratedHeightPages(provider, tiled, &refused), nullptr);
+    const std::filesystem::path file = folder.Path / "splat.gepage";
+    ASSERT_EQ(baker.CreateStore(file, 7u, 3u), "");
+    refused.reset();
+    ASSERT_EQ(baker.BakeLevel0Pages(file, batch), "");
+    {
+        PageStreaming::PageStoreReader store;
+        ASSERT_EQ(store.Open(file, PageStreaming::PageFieldKind::Splat), "");
+        SplatPageComparison comparison;
+        ExpectSplatPageMatchesTiles(tiled, boundary.X, boundary.Z, StoreSplatPage(store, boundary), comparison);
+        EXPECT_GT(comparison.Compared, 16000u);
+    }
+
+    // Without its own height page, the page is not baked and the bake names it.
+    refused = boundary;
+    const PageStreaming::PageAddress unbaked[] = {PageStreaming::PageAddress{0, 0, boundary.X, 1u}, boundary};
+    const std::string reason = baker.BakeLevel0Pages(file, unbaked);
+    EXPECT_NE(reason.find("level 0 page (" + std::to_string(boundary.X) + ", 0) is not on hand"), std::string::npos)
+        << reason;
+}
+
+// The tile bake's normal map of every tile, as two bytes a texel the way a normal page stores them.
+std::vector<std::vector<uint8>> TileNormalBytes(TiledTerrainData& tiled)
+{
+    std::vector<std::vector<uint8>> tiles;
+    for (uint32 tz = 0; tz < tiled.Config.TilesPerAxisZ; ++tz)
+        for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX; ++tx)
+        {
+            const TerrainTileData* tile = Tile(&tiled, static_cast<int32>(tx), static_cast<int32>(tz));
+            std::vector<uint8> halves;
+            uint32 width = 0;
+            uint32 height = 0;
+            GenerateNormalmapFromHeightfield(tile->Heightfield, tiled.Config.TileWorldSize, tiled.Config.TileWorldSize,
+                                             tiled.Config.HeightScale, halves, width, height);
+            std::vector<uint8> bytes(static_cast<std::size_t>(width) * height * 2u);
+            const auto* half = reinterpret_cast<const uint16*>(halves.data());
+            for (std::size_t t = 0; t < static_cast<std::size_t>(width) * height; ++t)
+            {
+                const float32 x = Mathematics::HalfToFloat(half[t * 2u]);
+                const float32 z = Mathematics::HalfToFloat(half[t * 2u + 1u]);
+                PageStreaming::EncodeNormalSample(Mathematics::Vector3(x, 0.0f, z), &bytes[t * 2u]);
+            }
+            tiles.push_back(std::move(bytes));
+        }
+    return tiles;
+}
+
+// A Normal store's level-0 pages are the tile bake's normal map. Its samples cache holds the
+// unencoded samples within one step of the tile map (the tile map holds half floats); the Bc5 pages
+// decode within kBc5Error of the tile map. Deleting the store deletes its cache.
+TEST(TerrainRegionBake, ANormalStoresLevel0PagesAreTheTileNormalMapWithinTheBc5Error)
+{
+    // The stated bound for this terrain's smooth slopes: BC5 keeps 8 levels a block per channel.
+    constexpr int32 kBc5Error = 8;
+    SplatStoreTerrain terrain;
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    JobSystem::WorkStealingThreadPool pool(4);
+    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Normal,
+                           GeneratedHeightPages(provider, tiled), &pool);
+    ScopedStoreFolder folder("normal");
+    const std::filesystem::path file = folder.Path / "normal.gepage";
+    ASSERT_EQ(baker.CreateStore(file, 7u, 3u), "");
+    for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX; ++tx)
+        ASSERT_EQ(baker.BakeLevel0Pages(file, TilePageBatch(tiled, tx, 0u)), "");
+
+    PageStreaming::PageStoreReader store;
+    PageStreaming::PageStoreReader cache;
+    ASSERT_EQ(store.Open(file, PageStreaming::PageFieldKind::Normal), "");
+    ASSERT_EQ(cache.Open(SurfaceSamplesCachePath(file), PageStreaming::PageFieldKind::NormalSamples), "");
+    const std::vector<std::vector<uint8>> tileNormals = TileNormalBytes(tiled);
+    const uint32 interior = tiled.Config.TileConfig.HeightmapWidth - 1u;
+    const uint32 tileWidth = tiled.Config.TileConfig.HeightmapWidth;
+    const uint32 stride = PageStreaming::PageStrideTexels(PageStreaming::PageFieldFormat::Bc5);
+    const int64 apron = (stride - PageStreaming::kPageOwnedSamples) / 2u;
+    const PageStreaming::PageStoreLevel level0 = TileLatticeLevels(tiled).front();
+    std::vector<uint8> stored(static_cast<std::size_t>(stride) * stride * 2u);
+    // The cache holds the byte-format stride, the center of the Bc5 stride.
+    const uint32 cacheStride = PageStreaming::PageStrideTexels(PageStreaming::PageFieldFormat::Rg8);
+    const uint32 cacheInset = (stride - cacheStride) / 2u;
+    std::vector<uint8> samples(static_cast<std::size_t>(cacheStride) * cacheStride * 2u);
+    std::size_t compared = 0;
+    int32 worstBc5 = 0;
+    for (uint32 pz = 0; pz < level0.PagesZ; ++pz)
+        for (uint32 px = 0; px < level0.PagesX; ++px)
+        {
+            const PageStreaming::PageAddress address{0, 0, px, pz};
+            ASSERT_TRUE(store.ReadPageSamples(address, stored));
+            ASSERT_TRUE(cache.ReadPageSamples(address, samples));
+            for (uint32 j = 0; j < stride; ++j)
+                for (uint32 i = 0; i < stride; ++i)
+                {
+                    const int64 sx = static_cast<int64>(px) * PageStreaming::kPageOwnedSamples + i - apron;
+                    const int64 sz = static_cast<int64>(pz) * PageStreaming::kPageOwnedSamples + j - apron;
+                    if (sx < 0 || sz < 0 || sx >= level0.SamplesX || sz >= level0.SamplesZ)
+                        continue;
+                    const uint32 gx = static_cast<uint32>(sx);
+                    const uint32 gz = static_cast<uint32>(sz);
+                    // A tile clamps its difference at its edges (#5027); the page reads across them.
+                    if (gx % interior == 0u || gz % interior == 0u)
+                        continue;
+                    const uint32 tx = gx / interior;
+                    const uint32 tz = gz / interior;
+                    const uint8* expected =
+                        &tileNormals[tz * tiled.Config.TilesPerAxisX + tx]
+                                    [(static_cast<std::size_t>(gz - tz * interior) * tileWidth + (gx - tx * interior)) * 2u];
+                    const uint8* bc5 = &stored[(static_cast<std::size_t>(j) * stride + i) * 2u];
+                    for (uint32 c = 0; c < 2u; ++c)
+                        worstBc5 = std::max(worstBc5, std::abs(int32(bc5[c]) - int32(expected[c])));
+                    ++compared;
+                    if (i < cacheInset || j < cacheInset || i - cacheInset >= cacheStride || j - cacheInset >= cacheStride)
+                        continue;
+                    const uint8* unencoded =
+                        &samples[(static_cast<std::size_t>(j - cacheInset) * cacheStride + (i - cacheInset)) * 2u];
+                    for (uint32 c = 0; c < 2u; ++c)
+                        ASSERT_LE(std::abs(int32(unencoded[c]) - int32(expected[c])), 1)
+                            << "page (" << px << ", " << pz << ") stride texel (" << i << ", " << j << ")";
+                }
+        }
+    EXPECT_GT(compared, 2000000u);
+    EXPECT_LE(worstBc5, kBc5Error);
+
+    EXPECT_TRUE(RemoveSurfaceStore(file));
+    EXPECT_FALSE(std::filesystem::exists(file));
+    EXPECT_FALSE(std::filesystem::exists(SurfaceSamplesCachePath(file)));
+}
+
+// A GrassControl store's level-0 pages are the tile bake's grass control field (a terrain this size
+// has one unified field), within one step: the page places a texel from its tile's origin.
+TEST(TerrainRegionBake, AGrassControlStoresLevel0PagesAreTheTileGrassField)
+{
+    SplatStoreTerrain terrain;
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    // A grass region across the seam of tiles 0 and 1.
+    const ECS::EntityHandle region = terrain.World.CreateEntity();
+    Components::TerrainModifierVolume volume{};
+    volume.Shape = Components::TerrainVolumeShape::Circle;
+    volume.Radius = 250.0f;
+    volume.Falloff = 60.0f;
+    terrain.World.AddComponentImmediate<Components::TerrainModifierVolume>(region, volume);
+    Components::TerrainGrassEffect grass{};
+    grass.HeightScale = 0.3f;
+    grass.DensityScale = 0.5f;
+    terrain.World.AddComponentImmediate<Components::TerrainGrassEffect>(region, grass);
+    Components::WorldTransform transform{};
+    transform.matrix[12] = tiled.WorldOriginX + tiled.Config.TileWorldSize;
+    transform.matrix[14] = tiled.WorldOriginZ + 300.0f;
+    terrain.World.AddComponentImmediate<Components::WorldTransform>(region, transform);
+    // The grass compose runs as a job: each update swaps in the one before.
+    for (int32 settle = 0; settle < 3; ++settle)
+    {
+        terrain.World.SwapLifecycleEvents();
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        terrain.System.WaitForGrassComposeForTests();
+    }
+
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    JobSystem::WorkStealingThreadPool pool(4);
+    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::GrassControl,
+                           GeneratedHeightPages(provider, tiled), &pool);
+    ScopedStoreFolder folder("grass");
+    const std::filesystem::path file = folder.Path / "grass.gepage";
+    ASSERT_EQ(baker.CreateStore(file, 7u, 3u), "");
+    for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX; ++tx)
+        ASSERT_EQ(baker.BakeLevel0Pages(file, TilePageBatch(tiled, tx, 0u)), "");
+
+    PageStreaming::PageStoreReader store;
+    ASSERT_EQ(store.Open(file, PageStreaming::PageFieldKind::GrassControl), "");
+    constexpr uint32 kStride = PageStreaming::kPageStrideSamples;
+    const PageStreaming::PageStoreLevel level0 = TileLatticeLevels(tiled).front();
+    const TerrainGrassField& field = tiled.GrassUnifiedField;
+    ASSERT_EQ(field.Width, level0.SamplesX);
+    ASSERT_EQ(field.Height, level0.SamplesZ);
+    std::vector<uint8> page(static_cast<std::size_t>(PageStreaming::kPageSampleCount) * 2u);
+    std::size_t compared = 0;
+    std::size_t shaped = 0;
+    for (uint32 pz = 0; pz < level0.PagesZ; ++pz)
+        for (uint32 px = 0; px < level0.PagesX; ++px)
+        {
+            ASSERT_TRUE(store.ReadPageSamples(PageStreaming::PageAddress{0, 0, px, pz}, page));
+            for (uint32 j = 0; j < kStride; ++j)
+                for (uint32 i = 0; i < kStride; ++i)
+                {
+                    const int64 sx = static_cast<int64>(px) * PageStreaming::kPageOwnedSamples + i - 1;
+                    const int64 sz = static_cast<int64>(pz) * PageStreaming::kPageOwnedSamples + j - 1;
+                    if (sx < 0 || sz < 0 || sx >= level0.SamplesX || sz >= level0.SamplesZ)
+                        continue;
+                    const uint32 gx = static_cast<uint32>(sx);
+                    const uint32 gz = static_cast<uint32>(sz);
+                    const std::size_t at = (static_cast<std::size_t>(gz) * field.Width + gx) * 2u;
+                    const uint8* paged = &page[(static_cast<std::size_t>(j) * kStride + i) * 2u];
+                    for (uint32 c = 0; c < 2u; ++c)
+                    {
+                        const int32 expected = field.Pixels.empty() ? 255 : field.Pixels[at + c];
+                        ASSERT_LE(std::abs(int32(paged[c]) - expected), 1)
+                            << "page (" << px << ", " << pz << ") stride texel (" << i << ", " << j
+                            << ") channel " << c;
+                    }
+                    ++compared;
+                    if (paged[1] < 200u)
+                        ++shaped;
+                }
+        }
+    EXPECT_GT(compared, 2000000u);
+    EXPECT_GT(shaped, 10000u) << "the grass region never reached a compared texel";
+}
+
+// A Color store's level-0 pages are the tile bake's color map (a terrain this size has one unified
+// map), within two steps: the page samples the grass control on its own lattice. Tile seams are skipped
+// as for the splat.
+TEST(TerrainRegionBake, AColorStoresLevel0PagesAreTheTileColorMap)
+{
+    SplatStoreTerrain terrain;
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    // The grass's ground write reads the splat; a grass region and a color volume cross the tile seam.
+    Components::TerrainGrass terrainGrass{};
+    terrainGrass.GroundDarkening = 0.6f;
+    terrain.World.AddComponentImmediate<Components::TerrainGrass>(terrain.Entity, terrainGrass);
+    const ECS::EntityHandle region = terrain.World.CreateEntity();
+    Components::TerrainModifierVolume circle{};
+    circle.Shape = Components::TerrainVolumeShape::Circle;
+    circle.Radius = 250.0f;
+    circle.Falloff = 60.0f;
+    terrain.World.AddComponentImmediate<Components::TerrainModifierVolume>(region, circle);
+    Components::TerrainGrassEffect grass{};
+    grass.DensityScale = 0.4f;
+    terrain.World.AddComponentImmediate<Components::TerrainGrassEffect>(region, grass);
+    Components::WorldTransform regionAt{};
+    regionAt.matrix[12] = tiled.WorldOriginX + tiled.Config.TileWorldSize;
+    regionAt.matrix[14] = tiled.WorldOriginZ + 300.0f;
+    terrain.World.AddComponentImmediate<Components::WorldTransform>(region, regionAt);
+    const ECS::EntityHandle paintVolume = terrain.World.CreateEntity();
+    Components::TerrainModifierVolume rectangle{};
+    rectangle.Shape = Components::TerrainVolumeShape::Rectangle;
+    rectangle.RectHalfX = 200.0f;
+    rectangle.RectHalfZ = 120.0f;
+    rectangle.Falloff = 40.0f;
+    terrain.World.AddComponentImmediate<Components::TerrainModifierVolume>(paintVolume, rectangle);
+    Components::TerrainColorEffect color{};
+    color.Color.r = 0.8f;
+    color.Color.g = 0.3f;
+    color.Color.b = 0.1f;
+    color.Strength = 0.7f;
+    terrain.World.AddComponentImmediate<Components::TerrainColorEffect>(paintVolume, color);
+    Components::WorldTransform paintedAt{};
+    paintedAt.matrix[12] = tiled.WorldOriginX + tiled.Config.TileWorldSize;
+    paintedAt.matrix[14] = tiled.WorldOriginZ + 700.0f;
+    terrain.World.AddComponentImmediate<Components::WorldTransform>(paintVolume, paintedAt);
+    // The grass compose runs as a job and the color map follows the field it lands.
+    for (int32 settle = 0; settle < 4; ++settle)
+    {
+        terrain.World.SwapLifecycleEvents();
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        terrain.System.WaitForGrassComposeForTests();
+    }
+    const TerrainColorMap& map = tiled.ColorUnifiedMap;
+    const PageStreaming::PageStoreLevel level0 = TileLatticeLevels(tiled).front();
+    ASSERT_TRUE(map.IsActive());
+    ASSERT_EQ(map.Width, level0.SamplesX);
+    ASSERT_EQ(map.Height, level0.SamplesZ);
+
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    JobSystem::WorkStealingThreadPool pool(4);
+    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Color,
+                           GeneratedHeightPages(provider, tiled), &pool);
+    baker.SetGroundWrite(TerrainColorMapBaker::ResolveGroundWrite(terrain.World, terrain.Entity));
+    ScopedStoreFolder folder("color");
+    const std::filesystem::path file = folder.Path / "color.gepage";
+    ASSERT_EQ(baker.CreateStore(file, 7u, 3u), "");
+    for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX; ++tx)
+        ASSERT_EQ(baker.BakeLevel0Pages(file, TilePageBatch(tiled, tx, 0u)), "");
+
+    PageStreaming::PageStoreReader store;
+    ASSERT_EQ(store.Open(file, PageStreaming::PageFieldKind::Color), "");
+    constexpr uint32 kStride = PageStreaming::kPageStrideSamples;
+    const uint32 interior = tiled.Config.TileConfig.HeightmapWidth - 1u;
+    std::vector<uint8> page(static_cast<std::size_t>(PageStreaming::kPageSampleCount) * 4u);
+    std::size_t compared = 0;
+    std::size_t darkened = 0;
+    std::size_t painted = 0;
+    for (uint32 pz = 0; pz < level0.PagesZ; ++pz)
+        for (uint32 px = 0; px < level0.PagesX; ++px)
+        {
+            ASSERT_TRUE(store.ReadPageSamples(PageStreaming::PageAddress{0, 0, px, pz}, page));
+            for (uint32 j = 0; j < kStride; ++j)
+                for (uint32 i = 0; i < kStride; ++i)
+                {
+                    const int64 sx = static_cast<int64>(px) * PageStreaming::kPageOwnedSamples + i - 1;
+                    const int64 sz = static_cast<int64>(pz) * PageStreaming::kPageOwnedSamples + j - 1;
+                    if (sx < 0 || sz < 0 || sx >= level0.SamplesX || sz >= level0.SamplesZ)
+                        continue;
+                    const uint32 gx = static_cast<uint32>(sx);
+                    const uint32 gz = static_cast<uint32>(sz);
+                    if ((gx > 0u && gx % interior == 0u) || (gz > 0u && gz % interior == 0u))
+                        continue;
+                    const uint8* expected = &map.Pixels[(static_cast<std::size_t>(gz) * map.Width + gx) * 4u];
+                    const uint8* paged = &page[(static_cast<std::size_t>(j) * kStride + i) * 4u];
+                    for (uint32 c = 0; c < 4u; ++c)
+                        ASSERT_LE(std::abs(int32(paged[c]) - int32(expected[c])), 2)
+                            << "page (" << px << ", " << pz << ") stride texel (" << i << ", " << j
+                            << ") channel " << c;
+                    ++compared;
+                    // The color volume starts 540 m in: below that only the ground write writes.
+                    darkened += gz < 500u && paged[3] > 0u ? 1u : 0u;
+                    painted += paged[0] > paged[1] + 20u ? 1u : 0u;
+                }
+        }
+    EXPECT_GT(compared, 2000000u);
+    EXPECT_GT(darkened, 1000u) << "the ground write never reached a compared texel";
+    EXPECT_GT(painted, 10000u) << "the color volume never reached a compared texel";
+}
+
+// Bakes every page of `baker`'s store at `file`: the coarse levels, then level 0 tile by tile.
+std::string BakeWholeStore(TerrainSurfacePageBaker& baker, const TiledTerrainData& tiled, const std::filesystem::path& file)
+{
+    std::string failure = baker.CreateStore(file, 7u, 3u);
+    for (uint32 tz = 0; tz < tiled.Config.TilesPerAxisZ && failure.empty(); ++tz)
+        for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX && failure.empty(); ++tx)
+            failure = baker.BakeLevel0Pages(file, TilePageBatch(tiled, tx, tz));
+    return failure;
+}
+
+// The hash of every stored page of the store at `file`, level by level.
+std::vector<uint64> StorePageHashes(const std::filesystem::path& file,
+                                    std::span<const PageStreaming::PageStoreLevel> levels,
+                                    PageStreaming::PageFieldKind plane = PageStreaming::PageFieldKind::Splat)
+{
+    PageStreaming::PageStoreReader store;
+    EXPECT_EQ(store.Open(file, plane), "");
+    std::vector<uint64> hashes;
+    std::vector<uint8> bytes;
+    for (uint32 level = 0; level < levels.size(); ++level)
+        for (uint32 pz = 0; pz < levels[level].PagesZ; ++pz)
+            for (uint32 px = 0; px < levels[level].PagesX; ++px)
+            {
+                const PageStreaming::PageAddress address{0, static_cast<uint8>(level), px, pz};
+                const bool read = store.ReadPageBytes(address, bytes);
+                hashes.push_back(read ? Hashing::Fnv1a64(bytes.data(), bytes.size()) : 0u);
+            }
+    return hashes;
+}
+
+// A paint dab on layer 3 at radius 14 m on the corner of tiles (0, 0) and (1, 1).
+ECS::EntityHandle AddCornerPaintDab(SplatStoreTerrain& terrain)
+{
+    const ECS::EntityHandle dab = terrain.World.CreateEntity();
+    Components::TerrainModifierVolume volume{};
+    volume.Shape = Components::TerrainVolumeShape::Circle;
+    volume.Radius = 14.0f;
+    volume.Falloff = 4.0f;
+    terrain.World.AddComponentImmediate<Components::TerrainModifierVolume>(dab, volume);
+    Components::TerrainPaintLayerEffect paint{};
+    paint.LayerIndex = 3;
+    paint.Strength = 0.8f;
+    terrain.World.AddComponentImmediate<Components::TerrainPaintLayerEffect>(dab, paint);
+    Components::WorldTransform at{};
+    at.matrix[12] = terrain.Tiled->WorldOriginX + terrain.Tiled->Config.TileWorldSize;
+    at.matrix[14] = terrain.Tiled->WorldOriginZ + terrain.Tiled->Config.TileWorldSize;
+    terrain.World.AddComponentImmediate<Components::WorldTransform>(dab, at);
+    return dab;
+}
+
+// A brush dab on the corner of four tiles of a 3 by 3 tile terrain publishes its rect. The pages
+// that read the rect bake again with their ancestors, and the store is then the full bake of the
+// painted terrain. The undo returns every page to its hash before the dab.
+TEST(TerrainRegionBake, AStrokeRebakesThePagesItsRectReachesAndItsUndoRestoresThem)
+{
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    JobSystem::WorkStealingThreadPool pool(4);
+    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+                           GeneratedHeightPages(provider, tiled), &pool);
+    ScopedStoreFolder folder("stroke");
+    const std::filesystem::path file = folder.Path / "stroked.gepage";
+    ASSERT_EQ(BakeWholeStore(baker, tiled, file), "");
+    const std::vector<uint64> before = StorePageHashes(file, levels);
+
+    const ECS::EntityHandle dab = AddCornerPaintDab(terrain);
+    const uint64 unpainted = tiled.SurfaceVersion;
+    terrain.World.SwapLifecycleEvents();
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    ASSERT_GT(tiled.SurfaceVersion, unpainted) << "the dab published no surface rect";
+    const uint32 corner = tiled.Config.TileConfig.HeightmapWidth - 1u;
+    ASSERT_GT(TileSplatTexel(tiled, corner, corner)[3], 100u) << "the tile bake did not paint the dab";
+    EXPECT_EQ(tiled.SurfaceChangedSince, unpainted);
+    EXPECT_EQ(tiled.SurfaceRefresh, SurfaceRefreshReason::Edit);
+    EXPECT_LT(tiled.SurfaceChanged.Width(), 64u);
+    EXPECT_LT(tiled.SurfaceChanged.Height(), 64u);
+    const std::vector<PageStreaming::PageAddress> pages = baker.Level0PagesReading(tiled.SurfaceChanged);
+    ASSERT_FALSE(pages.empty());
+    EXPECT_LE(pages.size(), 4u);
+    const uint64 writtenBefore = baker.PagesWritten();
+    ASSERT_EQ(baker.BakeLevel0Pages(file, pages), "");
+    // The dab's pages and at most one ancestor each per coarser level.
+    EXPECT_GT(baker.PagesWritten(), writtenBefore);
+    EXPECT_LE(baker.PagesWritten() - writtenBefore, pages.size() * levels.size());
+
+    TerrainSurfacePageBaker fresh(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+                           GeneratedHeightPages(provider, tiled), &pool);
+    const std::filesystem::path full = folder.Path / "full.gepage";
+    ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+    const std::vector<uint64> painted = StorePageHashes(file, levels);
+    EXPECT_EQ(painted, StorePageHashes(full, levels));
+    EXPECT_NE(painted, before);
+
+    const uint64 paintedVersion = tiled.SurfaceVersion;
+    terrain.World.DestroyEntityImmediate(dab);
+    terrain.World.SwapLifecycleEvents();
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    ASSERT_GT(tiled.SurfaceVersion, paintedVersion) << "the undo published no surface rect";
+    ASSERT_EQ(baker.BakeLevel0Pages(file, baker.Level0PagesReading(tiled.SurfaceChanged)), "");
+    EXPECT_EQ(StorePageHashes(file, levels), before);
+}
+
+// Gives the terrain of `terrain` scene `scene`, a scene tag and the cache folder `folder`, then
+// runs one update: the driver opens the terrain's surface stores.
+void GiveSurfaceStores(SplatStoreTerrain& terrain, const std::filesystem::path& folder, const GUID& scene)
+{
+    HeightPageStoreLocation cache;
+    cache.CacheDirectory = folder;
+    TerrainService::Get().SetHeightPageStoreLocation(cache);
+    Components::SceneEntityTag tag{};
+    std::strncpy(tag.value, "terrain-near", sizeof(tag.value));
+    terrain.World.AddComponentImmediate<Components::SceneEntityTag>(terrain.Entity, tag);
+    terrain.World.GetComponentForWrite<Components::Terrain>(terrain.Entity)->BakeOriginScene = scene;
+    terrain.Tiled->PageOverlayByteCap = kDesktopHeightPages.OverlayByteCap;
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+}
+
+TiledTerrainHandle TiledHandleOf(const SplatStoreTerrain& terrain)
+{
+    const Components::Terrain& component = *terrain.World.GetComponent<Components::Terrain>(terrain.Entity);
+    return TiledTerrainHandle{component.TiledTerrainHandle, component.TiledTerrainGeneration};
+}
+
+// Updates `terrain` past the settle of an edit made before the call, then until its driver has no
+// level-0 page to bake, at most `frames` frames. False when pages stay.
+bool SettleSurfacePages(SplatStoreTerrain& terrain, uint32 frames)
+{
+    for (uint32 frame = 1; frame <= frames; ++frame)
+    {
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        if (frame > TerrainSurfacePageDriver::kSurfaceSettleFrames &&
+            terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)) == 0u)
+            return true;
+    }
+    return false;
+}
+
+// The level-0 pages of a terrain of `level0`, baked kLevel0PagesAFrame a frame, with the settle.
+uint32 FramesToSettle(const PageStreaming::PageStoreLevel& level0)
+{
+    const std::size_t pages = static_cast<std::size_t>(level0.PagesX) * level0.PagesZ;
+    return static_cast<uint32>((pages + TerrainSurfacePageDriver::kLevel0PagesAFrame - 1u) /
+                               TerrainSurfacePageDriver::kLevel0PagesAFrame) +
+           TerrainSurfacePageDriver::kSurfaceSettleFrames + 1u;
+}
+
+// A scene load makes the stores with the pinned levels whole and no level-0 page; the next frames bake
+// level 0, kLevel0PagesAFrame pages a frame. A stroke bakes again, at its settle, only the pages that read
+// its rect and their ancestors. Each settled store is the full bake of the terrain.
+TEST(TerrainRegionBake, ASceneLoadMakesTheSurfaceStoresAndAStrokeRebakesOnlyItsPages)
+{
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    ScopedStoreFolder folder("driver");
+    const GUID scene = GUID::Generate();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u) << "a terrain with no grass region and no color writer has Splat and Normal";
+    EXPECT_EQ(stores[0].Plane, PageStreaming::PageFieldKind::Splat);
+    EXPECT_EQ(stores[1].Plane, PageStreaming::PageFieldKind::Normal);
+    const std::filesystem::path* splatFile = &stores[0].File;
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    {
+        // The pinned levels are whole, from the top down; the levels below them hold no page yet.
+        PageStreaming::PageStoreReader store;
+        ASSERT_EQ(store.Open(*splatFile, PageStreaming::PageFieldKind::Splat), "");
+        uint32 firstWhole = static_cast<uint32>(levels.size());
+        for (uint32 level = static_cast<uint32>(levels.size()); level-- > 0u;)
+        {
+            std::size_t present = 0;
+            for (uint32 pz = 0; pz < levels[level].PagesZ; ++pz)
+                for (uint32 px = 0; px < levels[level].PagesX; ++px)
+                    present += store.Layout().FindPresent(PageStreaming::PageAddress{0, static_cast<uint8>(level), px,
+                                                                                     pz}) != nullptr;
+            const std::size_t pages = static_cast<std::size_t>(levels[level].PagesX) * levels[level].PagesZ;
+            if (present == pages && firstWhole == level + 1u)
+                firstWhole = level;
+            else
+                EXPECT_EQ(present, 0u) << "level " << level << " is neither pinned nor empty";
+        }
+        EXPECT_LT(firstWhole, levels.size()) << "the top level is pinned";
+        EXPECT_GT(firstWhole, 0u) << "the cold open bakes no level-0 page at once";
+    }
+    const Components::Terrain& component = *terrain.World.GetComponent<Components::Terrain>(terrain.Entity);
+    const TiledTerrainHandle handle{component.TiledTerrainHandle, component.TiledTerrainGeneration};
+    const std::size_t pages = static_cast<std::size_t>(levels.front().PagesX) * levels.front().PagesZ;
+    EXPECT_EQ(terrain.System.SurfacePages().PendingPages(handle), pages);
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    EXPECT_EQ(terrain.System.SurfacePages().PendingPages(handle), pages - TerrainSurfacePageDriver::kLevel0PagesAFrame)
+        << "the cold open bakes kLevel0PagesAFrame pages a frame";
+    ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
+
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    JobSystem::WorkStealingThreadPool pool(4);
+    const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-driver-full.gepage";
+    const auto expectFullBake = [&](const char* state) {
+        TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+                               GeneratedHeightPages(provider, tiled), &pool);
+        ASSERT_EQ(BakeWholeStore(baker, tiled, full), "");
+        EXPECT_EQ(StorePageHashes(*splatFile, levels), StorePageHashes(full, levels)) << state;
+        RemoveSurfaceStore(full);
+    };
+    expectFullBake("opened");
+    const std::vector<uint64> before = StorePageHashes(*splatFile, levels);
+
+    AddCornerPaintDab(terrain);
+    terrain.World.SwapLifecycleEvents();
+    ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
+    EXPECT_EQ(SceneSurfaceStores(folder.Path, scene), stores) << "a stroke patches the stores in place";
+    const std::vector<uint64> painted = StorePageHashes(*splatFile, levels);
+    const TerrainSurfacePageBaker reader(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+                                  GeneratedHeightPages(provider, tiled), nullptr);
+    const std::vector<PageStreaming::PageAddress> reading = reader.Level0PagesReading(tiled.SurfaceChanged);
+    std::size_t changed = 0;
+    std::size_t at = 0;
+    for (uint32 level = 0; level < levels.size(); ++level)
+        for (uint32 pz = 0; pz < levels[level].PagesZ; ++pz)
+            for (uint32 px = 0; px < levels[level].PagesX; ++px, ++at)
+            {
+                if (painted[at] == before[at])
+                    continue;
+                ++changed;
+                const bool readsRect = std::any_of(reading.begin(), reading.end(), [&](const auto& page) {
+                    return page.X >> level == px && page.Z >> level == pz;
+                });
+                EXPECT_TRUE(readsRect) << "level " << level << " page (" << px << ", " << pz << ") changed";
+            }
+    EXPECT_GT(changed, 0u) << "the stroke changed no page";
+    expectFullBake("painted");
+}
+
+// The surface pages read the terrain's height scale and its Y origin. A change of either makes the
+// stores again under a new key, and the store settles on the full bake at the new scale.
+TEST(TerrainRegionBake, AHeightScaleOrYOriginChangeMakesTheSurfaceStoresAgainUnderANewKey)
+{
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    ScopedStoreFolder folder("height-scale");
+    const GUID scene = GUID::Generate();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    const uint32 kSettleFrames = FramesToSettle(levels.front());
+    ASSERT_TRUE(SettleSurfacePages(terrain, kSettleFrames));
+    const std::vector<SceneSurfaceStore> opened = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(opened.size(), 2u);
+
+    terrain.World.GetComponentForWrite<Components::Terrain>(terrain.Entity)->HeightScale *= 2.0f;
+    tiled.Config.HeightScale *= 2.0f; // the extraction system's copy of the component's scale
+    ASSERT_TRUE(SettleSurfacePages(terrain, kSettleFrames));
+    const std::vector<SceneSurfaceStore> scaled = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(scaled.size(), 2u);
+    EXPECT_NE(scaled[0].File, opened[0].File) << "the splat store kept the key of the old height scale";
+    EXPECT_NE(scaled[1].File, opened[1].File) << "the normal store kept the key of the old height scale";
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    JobSystem::WorkStealingThreadPool pool(4);
+    TerrainSurfacePageBaker fresh(terrain.System, tiled, PageStreaming::PageFieldKind::Normal,
+                                  GeneratedHeightPages(provider, tiled), &pool);
+    const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-height-scale-full.gepage";
+    ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+    EXPECT_EQ(StorePageHashes(scaled[1].File, levels, PageStreaming::PageFieldKind::Normal),
+              StorePageHashes(full, levels, PageStreaming::PageFieldKind::Normal))
+        << "the normal store is not the bake at the new height scale";
+    RemoveSurfaceStore(full);
+
+    terrain.World.GetComponentForWrite<Components::WorldTransform>(terrain.Entity)->matrix[13] += 50.0f;
+    ASSERT_TRUE(SettleSurfacePages(terrain, kSettleFrames));
+    const std::vector<SceneSurfaceStore> raised = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(raised.size(), 2u);
+    EXPECT_NE(raised[0].File, scaled[0].File) << "the splat store kept the key of the old Y origin";
+}
+
+// The dabs of a stroke bake its pages once, at the stroke's settle: the stores hold their pages
+// from before the stroke while the dabs come, then the full bake of the painted terrain.
+TEST(TerrainRegionBake, AStrokesDabsBakeTheSurfacePagesOnceAtItsSettle)
+{
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    ScopedStoreFolder folder("stroke-settle");
+    const GUID scene = GUID::Generate();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u);
+    const std::vector<uint64> before = StorePageHashes(stores[0].File, levels);
+
+    const ECS::EntityHandle dab = AddCornerPaintDab(terrain);
+    terrain.World.SwapLifecycleEvents();
+    for (uint32 frame = 0; frame < 2u * TerrainSurfacePageDriver::kSurfaceSettleFrames; ++frame)
+    {
+        // One dab a frame: the stroke's paint grows.
+        terrain.World.GetComponentForWrite<Components::TerrainPaintLayerEffect>(dab)->Strength =
+            0.4f + 0.02f * static_cast<float32>(frame);
+        const uint64 version = tiled.SurfaceVersion;
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        ASSERT_GT(tiled.SurfaceVersion, version) << "frame " << frame << " published no dab";
+        ASSERT_EQ(terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)), 0u) << "frame " << frame;
+    }
+    EXPECT_EQ(StorePageHashes(stores[0].File, levels), before) << "a dab baked the store before the settle";
+
+    for (uint32 frame = 1; frame < TerrainSurfacePageDriver::kSurfaceSettleFrames; ++frame)
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    EXPECT_EQ(StorePageHashes(stores[0].File, levels), before) << "the stroke baked before its settle";
+    ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
+    EXPECT_EQ(SceneSurfaceStores(folder.Path, scene), stores) << "a stroke patches the stores in place";
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    JobSystem::WorkStealingThreadPool pool(4);
+    TerrainSurfacePageBaker fresh(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+                                  GeneratedHeightPages(provider, tiled), &pool);
+    const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-stroke-settle-full.gepage";
+    ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+    const std::vector<uint64> painted = StorePageHashes(stores[0].File, levels);
+    EXPECT_EQ(painted, StorePageHashes(full, levels));
+    EXPECT_NE(painted, before);
+    RemoveSurfaceStore(full);
+}
+
+// A drag of a global rule changes the whole surface on every preview bake. The stores keep their
+// names while the drag holds and through the settle frames, then are made again once.
+TEST(TerrainRegionBake, ARuleDragMakesTheSurfaceStoresAgainOnceAtItsSettle)
+{
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    ScopedStoreFolder folder("rule-drag");
+    const GUID scene = GUID::Generate();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
+    const std::vector<SceneSurfaceStore> opened = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(opened.size(), 2u);
+
+    TerrainService& service = TerrainService::Get();
+    service.SetInteractiveModifierEdit(TerrainService::InteractiveEditSource::InspectorDrag, true);
+    constexpr uint32 kDragFrames = 6;
+    for (uint32 frame = 0; frame < kDragFrames; ++frame)
+    {
+        terrain.World.GetComponentForWrite<Components::TerrainSurfaceRulesEffect>(terrain.Rules)->Rules[0].Conditions[0].Max =
+            0.8f - 0.02f * static_cast<float32>(frame + 1u);
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        ASSERT_EQ(SceneSurfaceStores(folder.Path, scene), opened) << "drag frame " << frame << " made the stores again";
+    }
+    service.SetInteractiveModifierEdit(TerrainService::InteractiveEditSource::InspectorDrag, false);
+    for (uint32 frame = 0; frame + 1u < TerrainSurfacePageDriver::kSurfaceSettleFrames; ++frame)
+    {
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        ASSERT_EQ(SceneSurfaceStores(folder.Path, scene), opened) << "settle frame " << frame;
+    }
+    // The release frame may publish the drag's last bake: the settle counts from it.
+    std::vector<SceneSurfaceStore> settled = opened;
+    for (uint32 frame = 0; frame < 2u && settled == opened; ++frame)
+    {
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        settled = SceneSurfaceStores(folder.Path, scene);
+    }
+    ASSERT_EQ(settled.size(), 2u);
+    EXPECT_NE(settled[0].File, opened[0].File) << "the settle did not make the splat store under the new rule";
+    EXPECT_EQ(terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)),
+              static_cast<std::size_t>(levels.front().PagesX) * levels.front().PagesZ);
+}
+
+// A publish of the whole surface under an unchanged key makes the stores again at its settle, with
+// every level-0 page to bake. A ground write turned on adds the Color store at its settle.
+TEST(TerrainRegionBake, AWholeSurfacePublishOrAGroundWriteMakesTheSurfaceStoresAgainAtItsSettle)
+{
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    ScopedStoreFolder folder("whole-surface");
+    const GUID scene = GUID::Generate();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
+    const std::vector<SceneSurfaceStore> opened = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(opened.size(), 2u);
+
+    const uint32 interior = tiled.Config.TileConfig.HeightmapWidth - 1u;
+    tiled.SurfaceChanged = PageStreaming::PageSampleRect{0u, 0u, tiled.Config.TilesPerAxisX * interior,
+                                                         tiled.Config.TilesPerAxisZ * interior};
+    ++tiled.SurfaceVersion;
+    std::size_t pending = 0;
+    for (uint32 frame = 0; frame <= TerrainSurfacePageDriver::kSurfaceSettleFrames && pending == 0u; ++frame)
+    {
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        pending = terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain));
+    }
+    EXPECT_EQ(SceneSurfaceStores(folder.Path, scene), opened) << "the key changed";
+    EXPECT_EQ(pending, static_cast<std::size_t>(levels.front().PagesX) * levels.front().PagesZ);
+    ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
+
+    Components::TerrainGrass grass{};
+    grass.GroundDarkening = 0.6f;
+    terrain.World.AddComponentImmediate<Components::TerrainGrass>(terrain.Entity, grass);
+    terrain.World.SwapLifecycleEvents();
+    ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
+    const std::vector<SceneSurfaceStore> written = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(written.size(), 3u);
+    EXPECT_TRUE(std::any_of(written.begin(), written.end(), [](const SceneSurfaceStore& store) {
+        return store.Plane == PageStreaming::PageFieldKind::Color;
+    }));
+}
+
 // The overlay is built only for a terrain that would page (the driver sets its cap), and a terrain
 // that starts to page under an unchanged modifier set (its cooked store opened) gets it at the next
 // update.
@@ -3012,10 +4114,45 @@ TEST(TerrainRegionBake, AnEditInsideTheHeightPageOverlayRebakesItInPlace)
               0.0f);
 }
 
+namespace
+{
+// Every sample of every level outside the reach of the reported changed rect holds the same delta in
+// `before` and `after`, bit for bit: the pages may skip it.
+void ExpectSameDeltasOutsideTheChangedRect(const TiledTerrainData& tiled, const PageStreaming::HeightPageOverlay& before,
+                                           const PageStreaming::HeightPageOverlay& after)
+{
+    const uint32 samplesX = tiled.Config.TilesPerAxisX * (tiled.Config.TileConfig.HeightmapWidth - 1u) + 1u;
+    const uint32 samplesZ = tiled.Config.TilesPerAxisZ * (tiled.Config.TileConfig.HeightmapHeight - 1u) + 1u;
+    const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(samplesX, samplesZ);
+    uint64 mismatched = 0;
+    for (uint32 level = 0; level < levels.size(); ++level)
+    {
+        const PageStreaming::PageSampleRect reach =
+            PageStreaming::Level0RectReach(levels, tiled.PageOverlayChanged, level);
+        const PageStreaming::PageSampleRect region =
+            PageStreaming::Union(PageStreaming::Level0RectReach(levels, before.Level0Rect(), level),
+                                 PageStreaming::Level0RectReach(levels, after.Level0Rect(), level));
+        for (uint32 z = region.MinZ; z <= region.MaxZ; ++z)
+            for (uint32 x = region.MinX; x <= region.MaxX; ++x)
+            {
+                const float32 previous = before.Delta(level, x, z);
+                const float32 current = after.Delta(level, x, z);
+                if (reach.Contains(x, z) || std::memcmp(&previous, &current, sizeof(float32)) == 0)
+                    continue;
+                ++mismatched;
+                EXPECT_LT(mismatched, 2u) << "level " << level << " sample (" << x << ", " << z << ") " << previous
+                                          << " -> " << current << " outside the changed rect";
+            }
+    }
+    EXPECT_EQ(mismatched, 0u);
+}
+} // namespace
+
 // Dragging a modifier at the edge of the overlay's reach rebuilds the overlay over its new rect but
 // composes only the dirty rect and the newly reached strip, keeping every other delta of the previous
 // overlay (a marker written into the previous overlay away from the drag survives it), and apart
-// from the marker the result equals a full rebuild.
+// from the marker the result equals a full rebuild. It reports only the dirty rect as changed (the
+// dragged stamp's old and new bounds), not the grown reach.
 TEST(TerrainRegionBake, DraggingAModifierAtTheReachsEdgeComposesOnlyWhatItMoved)
 {
     ScopedTerrainService scoped;
@@ -3039,6 +4176,7 @@ TEST(TerrainRegionBake, DraggingAModifierAtTheReachsEdgeComposesOnlyWhatItMoved)
     const uint32 markZ = (before.MinZ + before.MaxZ) / 2u;
     constexpr float32 kMarker = 999.0f;
     tiled->PageOverlay->Rebake({markX, markZ, markX, markZ}, std::span<const float32>(&kMarker, 1));
+    const auto previous = tiled->PageOverlay;
 
     world.GetComponentForWrite<Components::WorldTransform>(edge)->matrix[12] = 1520.0f;
     system.Update(world, 1.0f / 60.0f);
@@ -3047,6 +4185,10 @@ TEST(TerrainRegionBake, DraggingAModifierAtTheReachsEdgeComposesOnlyWhatItMoved)
     const PageStreaming::PageSampleRect reach = dragged->Level0Rect();
     EXPECT_GT(reach.MaxX, before.MaxX) << "the drag grows the reach";
     EXPECT_EQ(dragged->Delta(0, markX, markZ), kMarker) << "a drag at the reach's edge recomposed the whole overlay";
+    const PageStreaming::PageSampleRect& changed = tiled->PageOverlayChanged;
+    EXPECT_LT(changed.Width(), reach.Width()) << "the drag reported the whole reach";
+    EXPECT_LT(changed.Height(), reach.Height()) << "the drag reported the whole reach";
+    ExpectSameDeltasOutsideTheChangedRect(*tiled, *previous, *dragged);
 
     // The same modifiers baked from scratch.
     tiled->PageOverlayCurrent = false;
@@ -3066,6 +4208,161 @@ TEST(TerrainRegionBake, DraggingAModifierAtTheReachsEdgeComposesOnlyWhatItMoved)
                 ASSERT_NEAR(dragged->Delta(level, x, z), tiled->PageOverlay->Delta(level, x, z), 1.0e-6f)
                     << "level " << level << " sample (" << x << ", " << z << ")";
             }
+}
+
+// A dab beside the overlay grows it, and the grown overlay reports only the dab's samples as changed
+// (the rect the dab alone bakes), not the whole grown area: the pages rewrite the dab, not the stroke.
+TEST(TerrainRegionBake, ADabThatGrowsTheHeightPageOverlayReportsOnlyTheDabsSamples)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    const auto handle = CreateResidentTiledTerrain(svc, 2);
+    const auto aloneHandle = CreateResidentTiledTerrain(svc, 2);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    auto* alone = svc.GetTiledTerrainData(aloneHandle);
+    ASSERT_NE(tiled, nullptr);
+    ASSERT_NE(alone, nullptr);
+    tiled->PageOverlayByteCap = kDesktopHeightPages.OverlayByteCap;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 2);
+    CreateFlattenModifier(world, kTiledTileWorld, 500.0f, 35.0f, 20.0f);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_NE(tiled->PageOverlay, nullptr);
+    const PageStreaming::PageSampleRect first = tiled->PageOverlay->Level0Rect();
+    const uint64 version = tiled->PageOverlayVersion;
+
+    CreateFlattenModifier(world, kTiledTileWorld + 40.0f, 500.0f, 35.0f, 20.0f);
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_NE(tiled->PageOverlay, nullptr);
+    const PageStreaming::PageSampleRect grown = tiled->PageOverlay->Level0Rect();
+    ASSERT_GT(grown.MaxX, first.MaxX) << "the second dab grows the overlay";
+    EXPECT_EQ(tiled->PageOverlayChangedSince, version);
+
+    // The second dab alone, on a terrain of its own.
+    ECS::World aloneWorld;
+    RegisterModifierLifecycleEvents(aloneWorld);
+    CreateTiledTerrainEntity(aloneWorld, aloneHandle, 2);
+    CreateFlattenModifier(aloneWorld, kTiledTileWorld + 40.0f, 500.0f, 35.0f, 20.0f);
+    alone->PageOverlayByteCap = kDesktopHeightPages.OverlayByteCap;
+    TerrainModifierSystem aloneSystem;
+    aloneSystem.Update(aloneWorld, 1.0f / 60.0f);
+    ASSERT_NE(alone->PageOverlay, nullptr);
+    const PageStreaming::PageSampleRect dab = alone->PageOverlay->Level0Rect();
+
+    const PageStreaming::PageSampleRect& changed = tiled->PageOverlayChanged;
+    EXPECT_EQ(changed.MinX, dab.MinX);
+    EXPECT_EQ(changed.MinZ, dab.MinZ);
+    EXPECT_EQ(changed.MaxX, dab.MaxX);
+    EXPECT_EQ(changed.MaxZ, dab.MaxZ);
+    EXPECT_LT(changed.Width(), grown.Width()) << "the grown overlay reported its whole area";
+}
+
+// Deleting a modifier at the overlay's edge reports a rect that covers the deleted modifier's old
+// bounds, and its samples return to the base.
+TEST(TerrainRegionBake, DeletingAModifierAtTheHeightPageOverlaysEdgeReportsItsOldBounds)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    const auto handle = CreateResidentTiledTerrain(svc, 2);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    tiled->PageOverlayByteCap = kDesktopHeightPages.OverlayByteCap;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 2);
+    CreateFlattenModifier(world, kTiledTileWorld, 500.0f, 35.0f, 20.0f);
+    const auto edge = CreateFlattenModifier(world, kTiledTileWorld + 40.0f, 500.0f, 35.0f, 20.0f);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_NE(tiled->PageOverlay, nullptr);
+    const PageStreaming::PageSampleRect old = tiled->PageOverlay->Level0Rect();
+    // Each stamp (20 m radius) spans 59 level-0 samples: the first one starts at the overlay's MinX,
+    // the edge one ends at its MaxX.
+    constexpr uint32 kEdgeStampSamples = 59u;
+    const uint32 centerX = old.MaxX - 20u;
+    const uint32 centerZ = (old.MinZ + old.MaxZ) / 2u;
+    EXPECT_NE(tiled->PageOverlay->Delta(0, centerX, centerZ), 0.0f);
+
+    world.DestroyEntityImmediate(edge);
+    world.SwapLifecycleEvents();
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_NE(tiled->PageOverlay, nullptr);
+    const PageStreaming::PageSampleRect& changed = tiled->PageOverlayChanged;
+    EXPECT_GE(changed.MaxX, old.MaxX) << "the reported rect misses the deleted modifier's old bounds";
+    EXPECT_LE(changed.MinX, old.MaxX - (kEdgeStampSamples - 1u));
+    EXPECT_LE(changed.MinZ, centerZ);
+    EXPECT_GE(changed.MaxZ, centerZ);
+    for (uint32 x = old.MinX + kEdgeStampSamples; x <= old.MaxX; ++x)
+        EXPECT_EQ(tiled->PageOverlay->Delta(0, x, centerZ), 0.0f) << "sample " << x << " kept the deleted delta";
+}
+
+// Deleting the last height modifier releases the overlay and reports its whole area as changed: the
+// pages return to the base under all of it.
+TEST(TerrainRegionBake, DeletingTheLastHeightModifierReportsTheReleasedOverlaysWholeArea)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    const auto handle = CreateResidentTiledTerrain(svc, 2);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    tiled->PageOverlayByteCap = kDesktopHeightPages.OverlayByteCap;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 2);
+    const auto only = CreateFlattenModifier(world, kTiledTileWorld, 500.0f, 35.0f, 20.0f);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_NE(tiled->PageOverlay, nullptr);
+    const PageStreaming::PageSampleRect old = tiled->PageOverlay->Level0Rect();
+    const uint64 version = tiled->PageOverlayVersion;
+
+    world.DestroyEntityImmediate(only);
+    world.SwapLifecycleEvents();
+    system.Update(world, 1.0f / 60.0f);
+    EXPECT_EQ(tiled->PageOverlay, nullptr);
+    EXPECT_EQ(tiled->PageOverlayChangedSince, version);
+    const PageStreaming::PageSampleRect& changed = tiled->PageOverlayChanged;
+    EXPECT_EQ(changed.MinX, old.MinX);
+    EXPECT_EQ(changed.MinZ, old.MinZ);
+    EXPECT_EQ(changed.MaxX, old.MaxX);
+    EXPECT_EQ(changed.MaxZ, old.MaxZ);
+}
+
+// An overlay rebuilt from scratch (its modifiers' data is no longer current) reports its whole area
+// as changed: the pages hold no overlay it derives from.
+TEST(TerrainRegionBake, AHeightPageOverlayRebuiltFromScratchReportsItsWholeArea)
+{
+    ScopedTerrainService scoped;
+    auto& svc = TerrainService::Get();
+    const auto handle = CreateResidentTiledTerrain(svc, 2);
+    auto* tiled = svc.GetTiledTerrainData(handle);
+    ASSERT_NE(tiled, nullptr);
+    tiled->PageOverlayByteCap = kDesktopHeightPages.OverlayByteCap;
+
+    ECS::World world;
+    RegisterModifierLifecycleEvents(world);
+    CreateTiledTerrainEntity(world, handle, 2);
+    CreateFlattenModifier(world, kTiledTileWorld, 500.0f, 35.0f, 20.0f);
+    TerrainModifierSystem system;
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_NE(tiled->PageOverlay, nullptr);
+    const PageStreaming::PageSampleRect first = tiled->PageOverlay->Level0Rect();
+
+    CreateFlattenModifier(world, kTiledTileWorld + 40.0f, 500.0f, 35.0f, 20.0f);
+    tiled->PageOverlayCurrent = false;
+    system.Update(world, 1.0f / 60.0f);
+    ASSERT_NE(tiled->PageOverlay, nullptr);
+    const PageStreaming::PageSampleRect grown = tiled->PageOverlay->Level0Rect();
+    const PageStreaming::PageSampleRect& changed = tiled->PageOverlayChanged;
+    EXPECT_EQ(changed.MinX, std::min(first.MinX, grown.MinX));
+    EXPECT_EQ(changed.MinZ, std::min(first.MinZ, grown.MinZ));
+    EXPECT_EQ(changed.MaxX, std::max(first.MaxX, grown.MaxX));
+    EXPECT_EQ(changed.MaxZ, std::max(first.MaxZ, grown.MaxZ));
 }
 
 // Two terrains' data never publish the same overlay version: a scene load rebuilds a terrain's data

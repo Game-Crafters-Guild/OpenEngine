@@ -1,0 +1,8 @@
+[prefab name="Nest" version=1]
+[resource id="wheel" path="Blueprints/bp.prefab"]
+
+[entity id="root"]
+Name.value = "Nest"
+
+[prefab id="wheel_l" source="wheel" parent="root"]
+Transform.position = (-0.5, 0, 0)
