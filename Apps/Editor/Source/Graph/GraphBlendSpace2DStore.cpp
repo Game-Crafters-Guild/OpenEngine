@@ -1,5 +1,7 @@
 #include "Graph/GraphBlendSpace2DStore.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -48,7 +50,7 @@ float BlendSpace2DAxis::ClampedT(float value) const
     const float span = Max - Min;
     if (span == 0.f || !std::isfinite(span) || !std::isfinite(value))
         return 0.5f;
-    return std::clamp((value - Min) / span, 0.f, 1.f);
+    return Math::Clamp01((value - Min) / span);
 }
 
 bool GraphBlendSpace2DStore::TryLoad(const Graph::Node& host, std::vector<BlendSpace2DSampleDesc>& out)

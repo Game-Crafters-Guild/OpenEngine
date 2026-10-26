@@ -21,6 +21,7 @@
 
 #include "AssetCore/GUID.h"
 #include "AssetCore/NineSlice.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector2.h"
 #include "Rendering/Core/RenderGraph/RGFrameStamp.h"
 #include "Rendering/Core/RenderGraph/RGTypes.h"
@@ -414,7 +415,7 @@ class UIManager
     // Chrome ships 1.0 on Windows; 0 disables the boost entirely.
     // See Shaders/UI/text_mask_gamma.glsl for the model.
     float GetTextContrast() const { return m_TextContrast; }
-    void SetTextContrast(float contrast) { m_TextContrast = std::clamp(contrast, 0.0f, 1.0f); }
+    void SetTextContrast(float contrast) { m_TextContrast = Math::Clamp01(contrast); }
     // TextBlendGamma selects the TARGET space coverage should blend linearly
     // in, and is a policy switch rather than a taste knob — hence no Settings
     // UI. 0 (default) = linear, i.e. area-exact ink; this is the target Skia's

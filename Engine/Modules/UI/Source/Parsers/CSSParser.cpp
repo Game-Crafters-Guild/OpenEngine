@@ -2,6 +2,7 @@
 
 #include "UI/Parsers/CSSParser.h"
 #include "CSSParserDetail.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/ResolvedStyle.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIElement.h"
@@ -289,7 +290,7 @@ static void ApplyProperty(ResolvedStyle& rs,
         rs.Visual.BackgroundImage.HasTint = true;
         break;
     case StylePropertyId::BackgroundImageSaturation:
-        rs.Visual.BackgroundImage.Saturation = std::clamp(GetValue<float>(p), 0.0f, 1.0f);
+        rs.Visual.BackgroundImage.Saturation = Math::Clamp01(GetValue<float>(p));
         break;
     case StylePropertyId::BorderColor:
     {

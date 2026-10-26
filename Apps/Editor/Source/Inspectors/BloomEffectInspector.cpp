@@ -10,6 +10,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Mathematics/Interpolation.h"
 #include "Types/StringUtils.h"
 #include "UI/Controls/CurveField.h"
 #include "UI/Controls/EnumField.h"
@@ -51,7 +52,7 @@ uint32_t VignetteColorToArgb(const float (&color)[3])
 {
     const auto channel = [](float value)
     {
-        return static_cast<uint8_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+        return static_cast<uint8_t>(Math::Clamp01(value) * 255.0f + 0.5f);
     };
     return (0xFFu << 24) |
            (static_cast<uint32_t>(channel(color[0])) << 16) |
@@ -204,7 +205,7 @@ void AddBloomColorRow(
 float EvaluateBloomResponse(float brightness, float threshold, float knee)
 {
     const float safeKnee = std::max(knee, 1e-5f);
-    float soft = std::clamp((brightness - threshold + safeKnee) / (2.0f * safeKnee), 0.0f, 1.0f);
+    float soft = Math::Clamp01((brightness - threshold + safeKnee) / (2.0f * safeKnee));
     soft = soft * soft * safeKnee;
     return std::min(std::max(brightness - threshold, soft), 100.0f);
 }
@@ -212,7 +213,7 @@ float EvaluateBloomResponse(float brightness, float threshold, float knee)
 void UpdateBloomResponseCurve(CurveField& graph, float threshold, float knee)
 {
     threshold = std::max(threshold, 0.0f);
-    knee = std::clamp(knee, 0.0f, 1.0f);
+    knee = Math::Clamp01(knee);
     const float inputMax = std::max(2.0f, threshold * 2.0f + std::max(2.0f * knee, 0.5f));
     const float outputMax = std::max(1.0f, EvaluateBloomResponse(inputMax, threshold, knee));
 
@@ -298,7 +299,7 @@ void RegisterBloomEffectInspector()
         };
         auto response = std::make_shared<ResponseCurveState>();
         response->Threshold = std::max(effect->Threshold, 0.0f);
-        response->Knee = std::clamp(effect->Knee, 0.0f, 1.0f);
+        response->Knee = Math::Clamp01(effect->Knee);
         auto refreshResponse = [response]()
         {
             if (response->Graph)
@@ -326,17 +327,17 @@ void RegisterBloomEffectInspector()
 
             auto kneeHandlers = MakeComponentInteractiveHandlers<Bloom, float>(
                 w, e, n, undo, "Change Bloom Knee",
-                [](Bloom& u, float v) { u.Knee = std::clamp(v, 0.0f, 1.0f); }, {});
+                [](Bloom& u, float v) { u.Knee = Math::Clamp01(v); }, {});
             AddFloatRowWithDrag(ctx.Parent, "Knee", effect->Knee,
                 [response, refreshResponse, preview = std::move(kneeHandlers.first)](float value)
                 {
-                    response->Knee = std::clamp(value, 0.0f, 1.0f);
+                    response->Knee = Math::Clamp01(value);
                     refreshResponse();
                     preview(value);
                 },
                 [response, refreshResponse, commit = std::move(kneeHandlers.second)](float value)
                 {
-                    response->Knee = std::clamp(value, 0.0f, 1.0f);
+                    response->Knee = Math::Clamp01(value);
                     refreshResponse();
                     commit(value);
                 },
@@ -363,9 +364,9 @@ void RegisterBloomEffectInspector()
             w, e, n, undo, openPicker, effect->Tint);
 
         AddComponentFloatRowWithDrag<Bloom>(ctx.Parent, "Diffusion",
-            std::clamp(effect->ScatteringAmount, 0.0f, 1.0f), w, e, n, undo,
+            Math::Clamp01(effect->ScatteringAmount), w, e, n, undo,
             "Change Bloom Diffusion",
-            [](Bloom& u, float v) { u.ScatteringAmount = std::clamp(v, 0.0f, 1.0f); },
+            [](Bloom& u, float v) { u.ScatteringAmount = Math::Clamp01(v); },
             0.0f, "Mixes a soft, threshold-free haze of the frame over the whole image. Energy-conserving: it "
             "moves light rather than adding it. 0 turns it off and skips its passes. Independent of Intensity.",
             {}, 0.0f, 1.0f);
@@ -400,9 +401,9 @@ void RegisterBloomEffectInspector()
         });
 
         AddComponentFloatRowWithDrag<Bloom>(ctx.Parent, "Spread",
-            std::clamp(effect->Scatter, 0.0f, 1.0f), w, e, n,
+            Math::Clamp01(effect->Scatter), w, e, n,
             undo, "Change Bloom Spread",
-            [](Bloom& u, float v) { u.Scatter = std::clamp(v, 0.0f, 1.0f); },
+            [](Bloom& u, float v) { u.Scatter = Math::Clamp01(v); },
             0.5f, "How far highlight bloom reaches, from a tight glow to a wide halo; shapes the Diffusion haze the same way",
             {}, 0.0f, 1.0f);
         {
@@ -486,23 +487,23 @@ void RegisterBloomEffectInspector()
             "Suppress lens dirt at the image center and reveal it toward the edges");
 
         AddComponentFloatRowWithDrag<Bloom>(lensDirtVignetteControlsRaw, "Vignette Intensity",
-            std::clamp(effect->LensDirtVignetteIntensity, 0.0f, 1.0f), w, e, n,
+            Math::Clamp01(effect->LensDirtVignetteIntensity), w, e, n,
             undo, "Change Bloom Lens Dirt Vignette Intensity",
-            [](Bloom& u, float v) { u.LensDirtVignetteIntensity = std::clamp(v, 0.0f, 1.0f); },
+            [](Bloom& u, float v) { u.LensDirtVignetteIntensity = Math::Clamp01(v); },
             1.0f, "Strength of the clean-center suppression",
             {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Bloom>(lensDirtVignetteControlsRaw, "Vignette Radius",
-            std::clamp(effect->LensDirtVignetteRadius, 0.0f, 1.0f), w, e, n,
+            Math::Clamp01(effect->LensDirtVignetteRadius), w, e, n,
             undo, "Change Bloom Lens Dirt Vignette Radius",
-            [](Bloom& u, float v) { u.LensDirtVignetteRadius = std::clamp(v, 0.0f, 1.0f); },
+            [](Bloom& u, float v) { u.LensDirtVignetteRadius = Math::Clamp01(v); },
             0.25f, "Radius of the clean center before lens dirt begins",
             {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Bloom>(lensDirtVignetteControlsRaw, "Vignette Smoothness",
-            std::clamp(effect->LensDirtVignetteSmoothness, 0.0f, 1.0f), w, e, n,
+            Math::Clamp01(effect->LensDirtVignetteSmoothness), w, e, n,
             undo, "Change Bloom Lens Dirt Vignette Smoothness",
-            [](Bloom& u, float v) { u.LensDirtVignetteSmoothness = std::clamp(v, 0.0f, 1.0f); },
+            [](Bloom& u, float v) { u.LensDirtVignetteSmoothness = Math::Clamp01(v); },
             0.2f, "Falloff sharpness between the clean center and dirt-covered sides",
             {}, 0.0f, 1.0f);
 
@@ -552,9 +553,9 @@ void RegisterBloomEffectInspector()
         });
 
         AddComponentFloatRowWithDrag<Bloom>(lensDirtControlsRaw, "Lens Dirt Spread",
-            std::clamp(effect->LensDirtScatter, 0.0f, 1.0f), w, e, n,
+            Math::Clamp01(effect->LensDirtScatter), w, e, n,
             undo, "Change Bloom Lens Dirt Spread",
-            [](Bloom& u, float v) { u.LensDirtScatter = std::clamp(v, 0.0f, 1.0f); },
+            [](Bloom& u, float v) { u.LensDirtScatter = Math::Clamp01(v); },
             0.5f, "Biases lens dirt illumination toward narrow or broad bloom octaves",
             {}, 0.0f, 1.0f);
 

@@ -1,4 +1,5 @@
 #include "Ocean/OceanSplineRaster.h"
+#include "Mathematics/Interpolation.h"
 #include "Ocean/OceanShaderProgram.h"
 #include "Rendering/Materials/ShaderLayoutShape.h"
 #include "OceanShaderDirectory.h"
@@ -123,7 +124,7 @@ static float RibbonFlowWeight(const OceanRibbonTriangleGPU &t, float edge)
 {
     if (t.Values[2] <= 1e-5f)
         return 1;
-    const float w = std::clamp(edge / t.Values[2], 0.0f, 1.0f);
+    const float w = Math::Clamp01(edge / t.Values[2]);
     return w * w * (3 - 2 * w);
 }
 // The innermost triangle of one ribbon at a query point.

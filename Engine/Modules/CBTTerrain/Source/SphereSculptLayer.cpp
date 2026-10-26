@@ -2,6 +2,7 @@
 
 #include "CBTTerrain/SphereAnalyticModifiers.h" // the tangent-plane dab falloff (S3 preview form)
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -790,7 +791,7 @@ SphereEditRegions SphereSculptLayer::ApplyDab(float cx, float cy, float cz, floa
         if (cosd < cosR)
             return 0.0f; // outside the cap
         const float ang = std::acos(std::clamp(cosd, -1.0f, 1.0f));
-        const float t = std::clamp(1.0f - ang / angularRadius, 0.0f, 1.0f);
+        const float t = Math::Clamp01(1.0f - ang / angularRadius);
         return sign * strength * (t * t * (3.0f - 2.0f * t)); // smoothstep
     };
     // Fine (per-page) writes are needed as soon as escalated pages can be involved — either this
@@ -831,7 +832,7 @@ SphereEditRegions SphereSculptLayer::ApplyDab(float cx, float cy, float cz, floa
                     if (cosd < cosR)
                         continue; // texel outside the cap
                     const float ang = std::acos(std::clamp(cosd, -1.0f, 1.0f));
-                    const float t = std::clamp(1.0f - ang / angularRadius, 0.0f, 1.0f);
+                    const float t = Math::Clamp01(1.0f - ang / angularRadius);
                     const float falloff = t * t * (3.0f - 2.0f * t); // smoothstep
                     const float delta = sign * strength * falloff;
                     WriteDab(r.Face, static_cast<uint32_t>(tx), static_cast<uint32_t>(tz), delta);

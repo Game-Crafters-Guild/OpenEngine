@@ -1,5 +1,6 @@
 #include "Particles/Processors/ParticlePropertyProcessor.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Processors/ParticleBuiltInProcessors.h"
 #include "Processors/ParticleProcessorOptions.h"
 #include "Processors/ParticleValueSamples.h"
@@ -211,7 +212,7 @@ void Execute(ParticleProcessorContext& context)
             else
                 for (uint32 component = 0; component < 4; ++component)
                     out[i][component] = Combine(property.Operation, from[component], samples.Get(component, k));
-            out[i].w = std::clamp(out[i].w, 0.0f, 1.0f);
+            out[i].w = Math::Clamp01(out[i].w);
         }
         break;
     }

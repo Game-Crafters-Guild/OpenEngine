@@ -3,6 +3,7 @@
 #include "Editor/Settings/CurveEditorSettings.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "UI/Controls/CurveTangents.h"
@@ -352,7 +353,7 @@ float CurveField::EffectiveValueMax() const
 float CurveField::ToScreenX(const GraphRect& r, float time) const
 {
     const float n = (time - m_Config.TimeMin) / SpanOrEpsilon(m_Config.TimeMin, m_Config.TimeMax);
-    return r.X + std::clamp(n, 0.0f, 1.0f) * r.W;
+    return r.X + Math::Clamp01(n) * r.W;
 }
 
 float CurveField::ToScreenY(const GraphRect& r, float value) const
@@ -363,22 +364,22 @@ float CurveField::ToScreenY(const GraphRect& r, float value) const
         const float logLo = std::log2(lo);
         const float logValue = std::log2(std::max(value, lo));
         const float n = (logValue - logLo) / SpanOrEpsilon(logLo, std::log2(std::max(EffectiveValueMax(), lo)));
-        return r.Y + (1.0f - std::clamp(n, 0.0f, 1.0f)) * r.H;
+        return r.Y + (1.0f - Math::Clamp01(n)) * r.H;
     }
     const float n = (value - lo) / SpanOrEpsilon(lo, EffectiveValueMax());
-    return r.Y + (1.0f - std::clamp(n, 0.0f, 1.0f)) * r.H;
+    return r.Y + (1.0f - Math::Clamp01(n)) * r.H;
 }
 
 float CurveField::FromScreenTime(const GraphRect& r, float px) const
 {
-    const float n = std::clamp((px - r.X) / r.W, 0.0f, 1.0f);
+    const float n = Math::Clamp01((px - r.X) / r.W);
     return m_Config.TimeMin + n * SpanOrEpsilon(m_Config.TimeMin, m_Config.TimeMax);
 }
 
 float CurveField::FromScreenValue(const GraphRect& r, float py) const
 {
     const float lo = EffectiveValueMin();
-    const float n = std::clamp(1.0f - (py - r.Y) / r.H, 0.0f, 1.0f);
+    const float n = Math::Clamp01(1.0f - (py - r.Y) / r.H);
     if (m_Config.LogarithmicValues)
     {
         const float logLo = std::log2(lo);

@@ -10,6 +10,7 @@
 
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <charconv>
@@ -204,8 +205,8 @@ void RegisterShadowSettingsEffectInspector()
             {}, 0.0f, Shadow::kDistanceFadeFractionMax);
 
         AddComponentFloatRowWithDrag<Shadow>(ctx.Parent, "Split Lambda",
-            std::clamp(effect->SplitLambda, 0.0f, 1.0f), w, e, n, undo, "Change Shadow Split Lambda",
-            [](Shadow& u, float v) { u.SplitLambda = std::clamp(v, 0.0f, 1.0f); },
+            Math::Clamp01(effect->SplitLambda), w, e, n, undo, "Change Shadow Split Lambda",
+            [](Shadow& u, float v) { u.SplitLambda = Math::Clamp01(v); },
             0.75f,
             "Cascade split blend: 0 = uniform, 1 = logarithmic (packs resolution nearer the camera).",
             {}, 0.0f, 1.0f);

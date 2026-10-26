@@ -1,4 +1,5 @@
 #include "Panels/ColorPicker.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 
 #include "Editor/Settings/SettingsStore.h"
@@ -136,7 +137,7 @@ void ColorWheelElement::SetHue(float h)
 
 void ColorWheelElement::SetSaturation(float s)
 {
-    s = std::clamp(s, 0.0f, 1.0f);
+    s = Math::Clamp01(s);
     if (m_Saturation != s)
     {
         m_Saturation = s;
@@ -296,7 +297,7 @@ void ColorSVBoxElement::SetHue(float h)
 
 void ColorSVBoxElement::SetSaturation(float s)
 {
-    s = std::clamp(s, 0.0f, 1.0f);
+    s = Math::Clamp01(s);
     if (m_Saturation != s)
     {
         m_Saturation = s;
@@ -307,7 +308,7 @@ void ColorSVBoxElement::SetSaturation(float s)
 
 void ColorSVBoxElement::SetValue(float v)
 {
-    v = std::clamp(v, 0.0f, 1.0f);
+    v = Math::Clamp01(v);
     if (m_Value != v)
     {
         m_Value = v;
@@ -349,8 +350,8 @@ void ColorSVBoxElement::OnEvent(UIEvent& e)
 
     auto updateFromPos = [this, W, H, lx, ly](float mx, float my)
     {
-        float s = std::clamp((mx - lx) / W, 0.0f, 1.0f);
-        float v = std::clamp(1.0f - (my - ly) / H, 0.0f, 1.0f); // Top = 1, Bottom = 0
+        float s = Math::Clamp01((mx - lx) / W);
+        float v = Math::Clamp01(1.0f - (my - ly) / H); // Top = 1, Bottom = 0
         SetSaturation(s);
         SetValue(v);
         if (m_OnChange)
@@ -471,7 +472,7 @@ void HueBarElement::OnEvent(UIEvent& e)
 
     auto updateFromPos = [this, H, ly](float my)
     {
-        float t = std::clamp((my - ly) / H, 0.0f, 1.0f);
+        float t = Math::Clamp01((my - ly) / H);
         float h = t * 360.0f; // Top = 0, Bottom = 360
         SetHue(h);
         if (m_OnChange)
@@ -556,7 +557,7 @@ void ValueBarElement::SetHue(float h)
 
 void ValueBarElement::SetSaturation(float s)
 {
-    s = std::clamp(s, 0.0f, 1.0f);
+    s = Math::Clamp01(s);
     if (m_Saturation != s)
     {
         m_Saturation = s;
@@ -566,7 +567,7 @@ void ValueBarElement::SetSaturation(float s)
 
 void ValueBarElement::SetValue(float v)
 {
-    v = std::clamp(v, 0.0f, 1.0f);
+    v = Math::Clamp01(v);
     if (m_Value != v)
     {
         m_Value = v;
@@ -604,7 +605,7 @@ void ValueBarElement::OnEvent(UIEvent& e)
 
     auto updateFromPos = [this, H, ly](float my)
     {
-        float t = std::clamp((my - ly) / H, 0.0f, 1.0f);
+        float t = Math::Clamp01((my - ly) / H);
         float v = 1.0f - t;
         SetValue(v);
         if (m_OnChange)
@@ -753,9 +754,9 @@ void ColorPicker::SetValue(const ColorPickerValue& value)
     m_Value.hsv.h = std::fmod(m_Value.hsv.h, 360.0f);
     if (m_Value.hsv.h < 0)
         m_Value.hsv.h += 360.0f;
-    m_Value.hsv.s = std::clamp(m_Value.hsv.s, 0.0f, 1.0f);
-    m_Value.hsv.v = std::clamp(m_Value.hsv.v, 0.0f, 1.0f);
-    m_Value.hsv.a = std::clamp(m_Value.hsv.a, 0.0f, 1.0f);
+    m_Value.hsv.s = Math::Clamp01(m_Value.hsv.s);
+    m_Value.hsv.v = Math::Clamp01(m_Value.hsv.v);
+    m_Value.hsv.a = Math::Clamp01(m_Value.hsv.a);
     if (m_Value.intensity < 1.0f)
         m_Value.intensity = 1.0f;
     SyncFromValue();
@@ -1332,15 +1333,15 @@ void ColorPicker::UpdateSwatchAndFields()
 {
     float r, g, b;
     HsvToRgb(m_Value.hsv.h, m_Value.hsv.s, m_Value.hsv.v, r, g, b);
-    uint8_t aInt = static_cast<uint8_t>(std::clamp(m_Value.hsv.a, 0.0f, 1.0f) * 255.0f);
-    uint8_t rInt = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255.0f);
-    uint8_t gInt = static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255.0f);
-    uint8_t bInt = static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255.0f);
+    uint8_t aInt = static_cast<uint8_t>(Math::Clamp01(m_Value.hsv.a) * 255.0f);
+    uint8_t rInt = static_cast<uint8_t>(Math::Clamp01(r) * 255.0f);
+    uint8_t gInt = static_cast<uint8_t>(Math::Clamp01(g) * 255.0f);
+    uint8_t bInt = static_cast<uint8_t>(Math::Clamp01(b) * 255.0f);
     
     // Apply HDR intensity to swatch color (clamped to displayable range)
-    float hdrR = std::clamp(r * m_Value.intensity, 0.0f, 1.0f);
-    float hdrG = std::clamp(g * m_Value.intensity, 0.0f, 1.0f);
-    float hdrB = std::clamp(b * m_Value.intensity, 0.0f, 1.0f);
+    float hdrR = Math::Clamp01(r * m_Value.intensity);
+    float hdrG = Math::Clamp01(g * m_Value.intensity);
+    float hdrB = Math::Clamp01(b * m_Value.intensity);
     uint8_t hdrRInt = static_cast<uint8_t>(hdrR * 255.0f);
     uint8_t hdrGInt = static_cast<uint8_t>(hdrG * 255.0f);
     uint8_t hdrBInt = static_cast<uint8_t>(hdrB * 255.0f);
@@ -1474,8 +1475,8 @@ void ColorPicker::OnHsvFieldChange()
         m_Value.hsv.h = std::fmod(h, 360.0f);
         if (m_Value.hsv.h < 0)
             m_Value.hsv.h += 360.0f;
-        m_Value.hsv.s = std::clamp(s, 0.0f, 1.0f);
-        m_Value.hsv.v = std::clamp(v, 0.0f, 1.0f);
+        m_Value.hsv.s = Math::Clamp01(s);
+        m_Value.hsv.v = Math::Clamp01(v);
         SyncFromValue();
         NotifyChange();
     }
@@ -1489,7 +1490,7 @@ void ColorPicker::OnAlphaFieldChange()
     try
     {
         int ai = std::stoi(m_AField->GetValue());
-        m_Value.hsv.a = std::clamp(ai / 255.0f, 0.0f, 1.0f);
+        m_Value.hsv.a = Math::Clamp01(ai / 255.0f);
         SyncFromValue();
         NotifyChange();
     }
@@ -1562,9 +1563,9 @@ void ColorPicker::OnRgbFieldChange()
         int ri = std::stoi(m_RField->GetValue());
         int gi = std::stoi(m_GField->GetValue());
         int bi = std::stoi(m_BField->GetValue());
-        float r = std::clamp(ri / 255.0f, 0.0f, 1.0f);
-        float g = std::clamp(gi / 255.0f, 0.0f, 1.0f);
-        float b = std::clamp(bi / 255.0f, 0.0f, 1.0f);
+        float r = Math::Clamp01(ri / 255.0f);
+        float g = Math::Clamp01(gi / 255.0f);
+        float b = Math::Clamp01(bi / 255.0f);
         float h, s, v;
         RgbToHsv(r, g, b, h, s, v);
         m_Value.hsv.h = h;

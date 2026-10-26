@@ -1,8 +1,8 @@
 #pragma once
 
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector3.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -24,7 +24,7 @@ inline float32 PointToSegmentDistSq(const Mathematics::Vector3& p,
     float32 abLenSq = Mathematics::Vector3::Dot(ab, ab);
     if (abLenSq < 1e-12f)
         return Mathematics::Vector3::Dot(p - a, p - a);
-    float32 t = std::clamp(Mathematics::Vector3::Dot(p - a, ab) / abLenSq, 0.0f, 1.0f);
+    float32 t = Math::Clamp01(Mathematics::Vector3::Dot(p - a, ab) / abLenSq);
     Mathematics::Vector3 proj = a + ab * t;
     Mathematics::Vector3 diff = p - proj;
     return Mathematics::Vector3::Dot(diff, diff);

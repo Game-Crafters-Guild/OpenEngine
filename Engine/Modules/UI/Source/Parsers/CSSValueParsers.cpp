@@ -1,6 +1,7 @@
 // CSS value/keyword parsers and declaration expansion. Split out of
 // CSSParser.cpp (P4f); cold parse-time code, not on the per-frame cascade path.
 
+#include "Mathematics/Interpolation.h"
 #include "UI/Parsers/CSSParser.h"
 #include "CSSParserDetail.h"
 #include "UI/StyleProperties.h"
@@ -185,7 +186,7 @@ std::optional<uint32_t> TryParseColorValue(const std::string& v)
         auto sf = parseFloat(t);
         if (!sf)
             return std::nullopt;
-        return (int)std::round(std::clamp(*sf, 0.0f, 1.0f) * 255.0f);
+        return (int)std::round(Math::Clamp01(*sf) * 255.0f);
     };
 
     auto splitArgs = [](std::string inner) -> std::vector<std::string>
@@ -271,8 +272,8 @@ std::optional<uint32_t> TryParseColorValue(const std::string& v)
                 auto Lopt = parseFloat(Lp);
                 if (Sopt && Lopt)
                 {
-                    float S = std::clamp(*Sopt / 100.0f, 0.0f, 1.0f);
-                    float L = std::clamp(*Lopt / 100.0f, 0.0f, 1.0f);
+                    float S = Math::Clamp01(*Sopt / 100.0f);
+                    float L = Math::Clamp01(*Lopt / 100.0f);
                     float A = 1.0f;
                     if (args.size() >= 4)
                     {
@@ -498,7 +499,7 @@ static StyleValue ParseFloatPxValue(const std::string& value)
 
 static StyleValue ParseFloat01Value(const std::string& value)
 {
-    return std::clamp(ParseFloatPx(value), 0.0f, 1.0f);
+    return Math::Clamp01(ParseFloatPx(value));
 }
 
 static StyleValue ParseColorValue(const std::string& value)

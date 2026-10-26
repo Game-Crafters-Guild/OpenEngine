@@ -18,6 +18,7 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/RenderLayersRow.h"
+#include "Mathematics/Interpolation.h"
 #include "SceneView/PostProcessVolumeGizmo.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/SearchDialog.h"
@@ -389,7 +390,7 @@ void RegisterPostProcessVolumeInspector()
 
         AddComponentFloatRowWithDrag<PP>(ctx.Parent, "Weight", vol->Weight, w, e, n,
             undo, "Change PP Weight",
-            [](PP& u, float v) { u.Weight = std::clamp(v, 0.0f, 1.0f); },
+            [](PP& u, float v) { u.Weight = Math::Clamp01(v); },
             1.0f, "Blend weight [0..1]");
 
         AddComponentRenderLayersRow<PP>(ctx.Parent, "Volume Layers", &PP::VolumeLayers, w, e, n, undo,
@@ -436,7 +437,7 @@ void RegisterPostProcessVolumeInspector()
         // --- Night tint (artistic) ---
         InspectorUI::AddTextBlock(ctx.Parent, "Night tint (artistic)", "inspector-section-subheader");
         AddComponentSliderWithValueRow<PP>(ctx.Parent, "Strength", vol->NightTintStrength, 0.0f, 1.0f, w, e, n,
-            [](PP& u, float v) { u.NightTintStrength = std::clamp(v, 0.0f, 1.0f); },
+            [](PP& u, float v) { u.NightTintStrength = Math::Clamp01(v); },
             "Night tint strength, artistic: the film convention of a blue night. 1 gives the dark field of a "
             "night image exactly the color's hue; 0 is physical. It follows the exposure: in full when the "
             "view adapts to a night below 0.005 cd/m2, gone above 3 cd/m2, so a day image is untouched.");

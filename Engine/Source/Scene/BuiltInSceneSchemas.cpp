@@ -1,3 +1,4 @@
+#include "Mathematics/Interpolation.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneValue.h"
 #include "Scene/RenderLayerMaskText.h"
@@ -2098,9 +2099,9 @@ static bool ParseSkyScalarBezier(std::string_view value, Components::SkyScalarCu
     if (parsedCount < 6)
         return false;
 
-    out.Control1X = std::clamp(fields[0], 0.0f, 1.0f);
+    out.Control1X = Math::Clamp01(fields[0]);
     out.Control1Y = fields[1];
-    out.Control2X = std::clamp(fields[2], 0.0f, 1.0f);
+    out.Control2X = Math::Clamp01(fields[2]);
     out.Control2Y = fields[3];
     out.AnchorStartY = fields[4];
     out.AnchorEndY = fields[5];
@@ -2925,13 +2926,13 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         {
             if (!ParseF32(value, c.MoonArcPosition, outError))
                 return false;
-            c.MoonArcPosition = std::clamp(c.MoonArcPosition, 0.0f, 1.0f);
+            c.MoonArcPosition = Math::Clamp01(c.MoonArcPosition);
         }
         else if (property == "mooncycle01")
         {
             if (!ParseF32(value, c.MoonArcPosition, outError))
                 return false;
-            c.MoonArcPosition = std::clamp(c.MoonArcPosition, 0.0f, 1.0f);
+            c.MoonArcPosition = Math::Clamp01(c.MoonArcPosition);
         }
         else if (property == "automoonarc")
         {
@@ -2976,7 +2977,7 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
         {
             if (!ParseF32(value, c.FallingStarAmount, outError))
                 return false;
-            c.FallingStarAmount = std::clamp(c.FallingStarAmount, 0.0f, 1.0f);
+            c.FallingStarAmount = Math::Clamp01(c.FallingStarAmount);
         }
         else if (property == "fallingstarfrequency")
         {
@@ -3892,7 +3893,7 @@ class SkyboxSchema final : public ISceneComponentSchema
         {
             if (!ParseF32(value, c.IblLowerHemisphereDarkness, outError))
                 return false;
-            c.IblLowerHemisphereDarkness = std::clamp(c.IblLowerHemisphereDarkness, 0.0f, 1.0f);
+            c.IblLowerHemisphereDarkness = Math::Clamp01(c.IblLowerHemisphereDarkness);
         }
         else if (property == "rotationdegrees")
         {
@@ -4264,7 +4265,7 @@ class CameraSchema final : public ISceneComponentSchema
         {
             if (!ParseF32(value, c.FocusDebugAlpha, outError))
                 return false;
-            c.FocusDebugAlpha = std::clamp(c.FocusDebugAlpha, 0.0f, 1.0f);
+            c.FocusDebugAlpha = Math::Clamp01(c.FocusDebugAlpha);
         }
         else if (property == "aperturebladecount")
         {
@@ -4278,7 +4279,7 @@ class CameraSchema final : public ISceneComponentSchema
         {
             if (!ParseF32(value, c.ApertureRoundness, outError))
                 return false;
-            c.ApertureRoundness = std::clamp(c.ApertureRoundness, 0.0f, 1.0f);
+            c.ApertureRoundness = Math::Clamp01(c.ApertureRoundness);
         }
         else if (property == "aperturerotation")
         {
@@ -5386,8 +5387,7 @@ class ValueCurveSchema final : public ISceneComponentSchema
         {
             if (entry.Value == Math::TweenEasing::Custom)
                 continue;
-            if (normalized == NormalizeLooseIdentifier(entry.Name) ||
-                normalized == NormalizeLooseIdentifier(Math::FormatTweenEasingDisplayName(entry.Name)))
+            if (normalized == NormalizeLooseIdentifier(entry.Name))
             {
                 out = entry.Value;
                 return true;
@@ -6204,7 +6204,7 @@ class WindVolumeSchema final : public ISceneComponentSchema
         {
             if (!ParseF32(value, c.Weight, outError))
                 return false;
-            c.Weight = std::clamp(c.Weight, 0.0f, 1.0f);
+            c.Weight = Math::Clamp01(c.Weight);
         }
         else if (property == "priority")
         {
@@ -6378,7 +6378,7 @@ class BloomEffectSchema final : public ISceneComponentSchema
         {
             if (!ParseF32(value, c.ScatteringAmount, outError)) return false;
             c.ScatteringAmount = std::isfinite(c.ScatteringAmount)
-                ? std::clamp(c.ScatteringAmount, 0.0f, 1.0f) : 0.0f;
+                ? Math::Clamp01(c.ScatteringAmount) : 0.0f;
         }
         else if (property == "tintr")
         {
@@ -6534,21 +6534,21 @@ class BloomEffectSchema final : public ISceneComponentSchema
 
         c.Radius = std::clamp(c.Radius, 1.0f, 7.0f);
         for (float32& channel : c.Tint)
-            channel = std::clamp(channel, 0.0f, 1.0f);
+            channel = Math::Clamp01(channel);
         c.Octaves = std::clamp(c.Octaves, 3, 8);
-        c.Scatter = std::clamp(c.Scatter, 0.0f, 1.0f);
+        c.Scatter = Math::Clamp01(c.Scatter);
         c.DepthVeilIntensity = std::clamp(c.DepthVeilIntensity, 0.0f, 10.0f);
         c.DepthVeilStart = std::clamp(c.DepthVeilStart, 0.0f, 100000.0f);
         c.DepthVeilEnd = std::clamp(c.DepthVeilEnd, 0.0f, 100000.0f);
         for (float32& channel : c.DepthVeilTint)
-            channel = std::clamp(channel, 0.0f, 1.0f);
-        c.LensDirtVignetteIntensity = std::clamp(c.LensDirtVignetteIntensity, 0.0f, 1.0f);
-        c.LensDirtVignetteRadius = std::clamp(c.LensDirtVignetteRadius, 0.0f, 1.0f);
-        c.LensDirtVignetteSmoothness = std::clamp(c.LensDirtVignetteSmoothness, 0.0f, 1.0f);
+            channel = Math::Clamp01(channel);
+        c.LensDirtVignetteIntensity = Math::Clamp01(c.LensDirtVignetteIntensity);
+        c.LensDirtVignetteRadius = Math::Clamp01(c.LensDirtVignetteRadius);
+        c.LensDirtVignetteSmoothness = Math::Clamp01(c.LensDirtVignetteSmoothness);
         for (float32& channel : c.LensDirtVignetteColor)
-            channel = std::clamp(channel, 0.0f, 1.0f);
+            channel = Math::Clamp01(channel);
         c.LensDirtIntensity = std::clamp(c.LensDirtIntensity, 0.0f, 10.0f);
-        c.LensDirtScatter = std::clamp(c.LensDirtScatter, 0.0f, 1.0f);
+        c.LensDirtScatter = Math::Clamp01(c.LensDirtScatter);
 
         world.AddComponentImmediate(entity, c);
         return true;
@@ -6654,7 +6654,7 @@ class CubeLutEffectSchema final : public ISceneComponentSchema
             return ReportUnknownField(ctx, GetComponentName(), property, outError);
         }
 
-        c.Intensity = std::clamp(c.Intensity, 0.0f, 1.0f);
+        c.Intensity = Math::Clamp01(c.Intensity);
         world.AddComponentImmediate(entity, c);
         return true;
     }

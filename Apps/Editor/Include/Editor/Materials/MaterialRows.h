@@ -71,10 +71,8 @@ inline constexpr const char* kEmissiveExposureWeightTooltip =
 bool IsColorProperty(const std::string& name);
 bool IsSlider01Property(const std::string& name);
 
-// camelCase key -> display label ("baseColor" -> "Base Color", "ao" -> "AO";
-// texture slots drop a trailing "Map": "metallicRoughnessMap" -> "Metallic
-// Roughness").
-std::string PropertyLabel(const std::string& key);
+// A texture slot as its row label: the slot without its trailing "Map", read as a material
+// property key ("metallicRoughnessMap" reads "Metallic Roughness", "aoMap" reads "AO").
 std::string TextureSlotLabel(const std::string& slot);
 
 } // namespace Editor::MaterialRows

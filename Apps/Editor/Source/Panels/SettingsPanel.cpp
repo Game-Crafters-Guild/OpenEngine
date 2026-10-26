@@ -1,4 +1,5 @@
 #include "Panels/SettingsPanel.h"
+#include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Panels/BuildPanel.h"
@@ -2053,7 +2054,7 @@ namespace
         if (!root)
             return;
 
-        const float opacity = std::clamp(g_PopupShadow.opacity, 0.0f, 1.0f);
+        const float opacity = Math::Clamp01(g_PopupShadow.opacity);
         char shadow[96];
         std::snprintf(shadow, sizeof(shadow), "%.1fpx %.1fpx %.1fpx rgba(0, 0, 0, %.3f)",
                       g_PopupShadow.offsetX, g_PopupShadow.offsetY,
@@ -4996,7 +4997,7 @@ void SettingsPanel::CreateUIFontSizesContent()
             prefs.Save(&err);
         });
         valueField->SetOnValueChanged([sliderPtr, applyContrast](const float& value) {
-            float clamped = std::clamp(value, 0.0f, 1.0f);
+            float clamped = Math::Clamp01(value);
             sliderPtr->SetValue(clamped);
             applyContrast(clamped);
             auto prefs = Editor::OpenEditorPreferences();

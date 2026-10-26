@@ -36,6 +36,7 @@
 #include <cstdint>
 
 #include "CBTTerrain/CBTSphereRoots.h" // kCubeFaces, kCubeFaceCount, CBTCubeCorner
+#include "Mathematics/Interpolation.h"
 
 namespace GameEngine::CBTTerrain
 {
@@ -242,8 +243,8 @@ inline SphereEditRegions ClassifySphereCapEdit(float cx, float cy, float cz, flo
             float u, v;
             if (!ProjectDirOntoFace(f, dx, dy, dz, kProjEps, u, v))
                 continue;
-            u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
-            v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            u = Math::Clamp01(u);
+            v = Math::Clamp01(v);
             touched[f] = true;
             minU[f] = std::fmin(minU[f], u);
             minV[f] = std::fmin(minV[f], v);

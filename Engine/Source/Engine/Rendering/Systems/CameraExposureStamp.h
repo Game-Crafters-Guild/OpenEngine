@@ -7,6 +7,7 @@
 #include "Engine/Rendering/Exposure.h"
 #include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/ViewRegistry.h"
+#include "Mathematics/Interpolation.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -55,11 +56,11 @@ inline void ApplyCameraExposure(PostProcessSettings& s, const ViewRegistry::Came
         ce.ApertureBladeCount,
         static_cast<int32>(Components::Camera::kApertureBladeCountMin),
         static_cast<int32>(Components::Camera::kApertureBladeCountMax));
-    s.DofApertureRoundness = std::clamp(ce.ApertureRoundness, 0.0f, 1.0f);
+    s.DofApertureRoundness = Math::Clamp01(ce.ApertureRoundness);
     s.DofApertureRotation = std::clamp(ce.ApertureRotation, 0.0f, 360.0f);
     s.DofAnamorphicSqueeze = std::clamp(ce.AnamorphicSqueeze, 1.0f, 4.0f);
     s.DofDebugMode = ce.FocusDebugMode != 0 ? 1 : 0;
-    s.DofDebugAlpha = std::clamp(ce.FocusDebugAlpha, 0.0f, 1.0f);
+    s.DofDebugAlpha = Math::Clamp01(ce.FocusDebugAlpha);
     // Volume exposure modifiers (ExposureAdjustmentEffect) ride the blended settings and
     // stack on the sensor resolve above: compensation in log space (added to the post-clamp
     // metering bias in Auto, like the camera's own compensation); the clamps only narrow

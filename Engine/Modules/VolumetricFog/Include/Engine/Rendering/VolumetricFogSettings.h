@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Rendering/VolumetricFogTypes.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -82,7 +83,7 @@ inline VolumetricFogGrid ComputeVolumetricFogGrid(
 
 inline float VolumetricFogSliceToDistance(float normalizedSlice, const VolumetricFogSettings& settings)
 {
-    const float s = std::clamp(normalizedSlice, 0.0f, 1.0f);
+    const float s = Math::Clamp01(normalizedSlice);
     const float exponent = std::max(settings.depthDistribution, 0.05f);
     return std::max(settings.maxDistance, 0.01f) * std::pow(s, exponent);
 }
@@ -91,7 +92,7 @@ inline float VolumetricFogDistanceToSlice(float distance, const VolumetricFogSet
 {
     const float maxDistance = std::max(settings.maxDistance, 0.01f);
     const float exponent = std::max(settings.depthDistribution, 0.05f);
-    return std::pow(std::clamp(distance / maxDistance, 0.0f, 1.0f), 1.0f / exponent);
+    return std::pow(Math::Clamp01(distance / maxDistance), 1.0f / exponent);
 }
 
 } // namespace GameEngine::Engine::Renderer

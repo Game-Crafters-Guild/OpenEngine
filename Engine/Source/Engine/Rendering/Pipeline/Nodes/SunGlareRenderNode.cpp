@@ -6,6 +6,7 @@
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "Engine/Rendering/SunGlareRenderFeature.h"
 #include "Engine/Rendering/SunScreenProjection.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
@@ -84,7 +85,7 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
     if (!sky.showSunDisk || !(sky.primarySunIntensity > 0.0f))
         return;
 
-    const float nightAmount = std::clamp(sky.nightSkyBlend, 0.0f, 1.0f);
+    const float nightAmount = Math::Clamp01(sky.nightSkyBlend);
     if (nightAmount >= kNightFadeCutoff)
         return;
 
@@ -193,9 +194,7 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
     const float upX = dx / r, upY = dy / r, upZ = dz / r;
     pc.Params[1] =
         std::clamp(sunDir[0] * upX + sunDir[1] * upY + sunDir[2] * upZ, -1.0f, 1.0f);
-    pc.Params[2] = std::clamp(
-        (r - atmo.planetRadius) / std::max(atmo.atmosphereRadius - atmo.planetRadius, 1e-3f), 0.0f,
-        1.0f);
+    pc.Params[2] = Math::Clamp01((r - atmo.planetRadius) / std::max(atmo.atmosphereRadius - atmo.planetRadius, 1e-3f));
 
     // Where the sun lands on screen, for the occlusion probe. Off-screen the probe has
     // nothing to ask about, so it is skipped and the halo continues from beyond the frame
@@ -251,9 +250,7 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
                 std::sqrt(std::max(sunDir[0] * sunDir[0] + sunDir[2] * sunDir[2], 1e-12f));
             const float sunTangent = sunDir[1] / sunHoriz;
             const float radiusTangent = kSunAngularRadiusRad; // tan(r) == r at this size
-            const float t = std::clamp(
-                (sunTangent - (horizonTangent - radiusTangent)) / (2.0f * radiusTangent), 0.0f,
-                1.0f);
+            const float t = Math::Clamp01((sunTangent - (horizonTangent - radiusTangent)) / (2.0f * radiusTangent));
             horizonVisibility = t * t * (3.0f - 2.0f * t); // smoothstep over the disc's diameter
         }
     }

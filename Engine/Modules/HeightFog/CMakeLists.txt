@@ -21,6 +21,8 @@ target_include_directories(HeightFog
 target_link_libraries(HeightFog
     PUBLIC
         Types
+    PRIVATE
+        Mathematics
 )
 
 if(MSVC)

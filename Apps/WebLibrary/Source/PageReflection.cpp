@@ -5,6 +5,7 @@
 #include "ECS/ComponentFieldRegistry.h"
 #include "ECS/ComponentRegistry.h"
 #include "Types/FlatMap.h"
+#include "Types/StringUtils.h"
 
 #include <nlohmann/json.hpp>
 
@@ -23,12 +24,6 @@ bool IsPageField(const ECS::FieldInfo& field)
 {
     return field.Type != ECS::FieldTypeId::Unknown &&
            !ECS::HasAnyFlag(field.Flags, ECS::FieldFlags::Hidden | ECS::FieldFlags::Transient);
-}
-
-std::string_view UnqualifiedName(std::string_view canonicalName)
-{
-    const size_t separator = canonicalName.rfind("::");
-    return separator == std::string_view::npos ? canonicalName : canonicalName.substr(separator + 2);
 }
 
 // The member name as the generated components.d.ts spells it: the leading capitals lowered,

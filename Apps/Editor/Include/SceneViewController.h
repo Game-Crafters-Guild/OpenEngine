@@ -3,6 +3,7 @@
 #include "ECS/ECS.h"
 #include "Editor/Settings/ProjectUIScaleBinding.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Ray.h"
 #include "Rendering/CameraTypes.h"
 #include "Rendering/Core/Device.h"
@@ -322,7 +323,7 @@ class SceneViewController
 
     // Grid opacity.
     float GetGridOpacity() const { return m_GridOpacity; }
-    void SetGridOpacity(float opacity) { m_GridOpacity = std::clamp(opacity, 0.0f, 1.0f); }
+    void SetGridOpacity(float opacity) { m_GridOpacity = Math::Clamp01(opacity); }
 
     // 2D/3D mode: orthographic side view (looking along +Z, Y up) vs perspective.
     // Switching tweens the camera to/from the locked 2D pose and flips projection.

@@ -21,6 +21,7 @@
 #include "Engine/Rendering/ProjectMaterialPrewarmService.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Engine/Rendering/TextureService.h"
+#include "Mathematics/Interpolation.h"
 #include "SceneDrawWarm.h"
 
 #include "AssetCore/AssetEvents.h"
@@ -38,6 +39,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/GPUDrawStreamBuilder.h"
+#include "Rendering/Core/HotReloadIntegration.h"
 #include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialBlendDerive.h"
@@ -529,6 +531,9 @@ void MaterialSystem::OnProjectSwitched()
     m_MaterialBuildContext = Rendering::MaterialBuildContext{};
     m_AdapterShaderDirVerified = false;
     m_MaterialBuildContextSourceVersion = 0;
+    // Held shader sources: the new project's files may sit at the old ones' paths
+    // and may have been edited while no watcher reported them.
+    Rendering::NotifyShaderSourcesChanged();
 
     // Compiled SPIR-V: entries are keyed by PATH, not by content. An identity
     // with a material asset path cannot collide across projects, so for those
@@ -618,6 +623,12 @@ void MaterialSystem::InstallReloadInvalidator(AssetEventDispatcher& dispatcher)
         dispatcher, AssetType::Shader,
         [this](const GUID& guid)
         {
+            // Here on the watcher thread, before the frame's drain: a prewarm job
+            // or a shader-program reload that runs in between must already read the
+            // edited bytes. Every content event empties the whole source cache --
+            // a create or delete can change where any directive resolves, and a
+            // deleted file's GUID no longer names a path.
+            Rendering::NotifyShaderSourcesChanged();
             std::lock_guard<std::mutex> lk(m_PendingShaderEditsMutex);
             m_PendingShaderEditGuids.push_back(guid);
         },
@@ -626,8 +637,10 @@ void MaterialSystem::InstallReloadInvalidator(AssetEventDispatcher& dispatcher)
 
 void MaterialSystem::NotifyShaderSourceEdited(const std::filesystem::path& sourcePath)
 {
-    if (sourcePath.empty())
-        return;
+    // The editor's Recompile button names the material's surface, which is empty for
+    // the default surface, but the edit it recovers may be in any include the watcher
+    // did not report: re-read every source, whatever the path.
+    Rendering::NotifyShaderSourcesChanged();
     std::lock_guard<std::mutex> lk(m_PendingShaderEditsMutex);
     m_PendingShaderEditPaths.push_back(sourcePath);
 }
@@ -692,7 +705,10 @@ void MaterialSystem::DrainPendingShaderSourceEdits()
     std::vector<std::string> fileNames;
     for (const auto& p : paths)
     {
-        std::string name = toLower(p.filename().string());
+        // An empty path is the Recompile button of a material that authors no
+        // surface: it names the default surface that material composes with.
+        const std::filesystem::path named = p.empty() ? ResolveSurfacePath(MaterialDocument{}, {}) : p;
+        std::string name = toLower(named.filename().string());
         if (!name.empty()
             && std::find(fileNames.begin(), fileNames.end(), name) == fileNames.end())
             fileNames.push_back(std::move(name));
@@ -1653,7 +1669,7 @@ ProvenAlwaysDiscardingMask(const MaterialDocument& doc)
     if (!std::isfinite(*baseAlpha) || !std::isfinite(*authoredCutoff))
         return std::nullopt;
 
-    const float cutoff = std::clamp(*authoredCutoff, 0.0f, 1.0f);
+    const float cutoff = Math::Clamp01(*authoredCutoff);
     if (*baseAlpha >= cutoff)
         return std::nullopt;
     return AlwaysDiscardingMask{*baseAlpha, cutoff};
@@ -1984,6 +2000,7 @@ bool MaterialSystem::EnsureMaterialBuildContextReady()
                 m_MaterialBuildContext.AdapterShaderDir = std::move(adapterDir);
                 m_AdapterShaderDirVerified = false;
                 m_ShaderCompilationCache.Clear();
+                Rendering::NotifyShaderSourcesChanged();
             }
 
             // After the re-derive, never before: the staged module roots hang off

@@ -31,7 +31,7 @@ void AddPathRows(const InspectorContext& ctx, const MarkupEditorBridge& bridge)
             ? splines->GetSplineData(SplineECS::SplineHandle(spline->SplineDataIndex, spline->SplineDataGeneration))
             : nullptr;
     AddValueRow(ctx.Parent, "Points", std::to_string(data ? data->Points.size() : 0u),
-                "The path's knots; Edit path moves, adds and deletes them");
+                "The path's knots; Edit Path moves, adds and deletes them");
     const MarkupECS::MarkupRegionDisplayCache::Entry* display = ResolveMarkupDisplayNow(*ctx.World, bridge, ctx.Entity);
     AddValueRow(ctx.Parent, "Length", FormatMeters(display ? MarkupECS::PolylineLength(display->Ground.Outline) : 0.0f),
                 "The path's length along the ground, as the Scene View draws it");
@@ -48,7 +48,7 @@ void AddMarkupPathBlock(const InspectorContext& ctx, MarkupEditorBridge& bridge)
     heading->SetText("Path");
     ctx.Parent->AddChild(std::move(heading));
     AddPathRows(ctx, bridge);
-    AddEditKnotsRow(ctx, bridge, "Edit path", "markup-path-edit",
+    AddEditKnotsRow(ctx, bridge, "Edit Path", "markup-path-edit",
                     "Drag, add and delete the path's points in the Scene View");
     FollowMarkupShapeChanges(ctx, {});
 }

@@ -19,7 +19,7 @@ class UndoRedoService;
 
 // The Mark-up section's Region block on a region mark-up, above the thread (nothing on another
 // entity): the outline's problem (if any) with its fix, the height (previewed while dragged, one
-// undo step on release), the outline's points, perimeter and outline area, Edit outline (the
+// undo step on release), the outline's points, perimeter and outline area, Edit Outline (the
 // spline tool on the region's knots), and the member list: every other mark-up whose footprint
 // overlaps the region, and every member, each with a member checkbox and an Include | Exclude
 // choice, each change one undo step. Edits refuse in play mode.
@@ -29,7 +29,7 @@ void AddMarkupRegionBlock(const InspectorContext& ctx, MarkupEditorBridge& bridg
 // Region block), and the move gizmo at the entity's origin.
 void RegisterMarkupRegionTraits();
 
-// The volume section's Convert to region row, on a box mark-up only.
+// The volume section's Convert to Region row, on a box mark-up only.
 void AddConvertToRegionRow(const InspectorContext& ctx, MarkupEditorBridge& bridge);
 
 // Turns the box mark-up `entity` into a region, one way, as one undo step

@@ -7,6 +7,7 @@
 
 #include "Components/Rendering/SkyEnvironment.h" // Components::SkyMode
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
@@ -194,7 +195,7 @@ void SkyEnvironmentSource::SetProbeOverrides(const SkyEnvironmentProbeOverrides&
 {
     SkyEnvironmentProbeOverrides clamped = overrides;
     clamped.Intensity = std::max(0.0f, clamped.Intensity);
-    clamped.LowerHemisphereDarkness = std::clamp(clamped.LowerHemisphereDarkness, 0.0f, 1.0f);
+    clamped.LowerHemisphereDarkness = Math::Clamp01(clamped.LowerHemisphereDarkness);
     m_ProbeOverrides = clamped;
 }
 
@@ -231,7 +232,7 @@ float SkyEnvironmentSource::LowerHemisphereDarkness() const
 {
     if (!HasActiveSky())
         return 0.0f;
-    return std::clamp(GetEffectiveSettings().iblLowerHemisphereDarkness, 0.0f, 1.0f);
+    return Math::Clamp01(GetEffectiveSettings().iblLowerHemisphereDarkness);
 }
 
 void SkyEnvironmentSource::AmbientGradientTint(float outSky[3], float outEquator[3], float outGround[3]) const

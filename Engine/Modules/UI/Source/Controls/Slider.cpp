@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "Input/KeyCodes.h"
+#include "Mathematics/Interpolation.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "UI/Internal/LayoutAccess.h"
 #include "UI/Registration/ElementRegistration.h"
@@ -507,7 +508,7 @@ void Slider::UpdateThumbLayout()
             float thumbH = fallbackThumbSize;
             resolveThumbSize(thumb, fallbackThumbSize, fallbackThumbSize, thumbW, thumbH);
 
-            const float clampedNorm = std::clamp(norm, 0.0f, 1.0f);
+            const float clampedNorm = Math::Clamp01(norm);
             const float thumbCenterY = trackY0 + trackH * (1.0f - clampedNorm);
             CommitThumbRect(thumb, thumbCenterX - thumbW * 0.5f,
                             thumbCenterY - thumbH * 0.5f, thumbW, thumbH, x, y);
@@ -537,7 +538,7 @@ void Slider::UpdateThumbLayout()
         float thumbH = fallbackThumbSize;
         resolveThumbSize(thumb, fallbackThumbSize, fallbackThumbSize, thumbW, thumbH);
 
-        const float clampedNorm = std::clamp(norm, 0.0f, 1.0f);
+        const float clampedNorm = Math::Clamp01(norm);
         const float thumbCenterX = trackX + trackW * clampedNorm;
         CommitThumbRect(thumb, thumbCenterX - thumbW * 0.5f,
                         thumbCenterY - thumbH * 0.5f, thumbW, thumbH, x, y);
@@ -636,8 +637,8 @@ void Slider::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
         }
         else if (m_Centered)
         {
-            const float centerNorm = std::clamp(normalize(0.0f), 0.0f, 1.0f);
-            const float valueNorm = std::clamp(normalize(highValue), 0.0f, 1.0f);
+            const float centerNorm = Math::Clamp01(normalize(0.0f));
+            const float valueNorm = Math::Clamp01(normalize(highValue));
             float a0 = trackY0 + trackH * (1.0f - valueNorm);
             float a1 = trackY0 + trackH * (1.0f - centerNorm);
             if (a1 < a0)
@@ -647,8 +648,8 @@ void Slider::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
         }
         else
         {
-            activeYStart = trackY0 + trackH * (1.0f - std::clamp(tHigh, 0.0f, 1.0f));
-            activeH = trackH * std::clamp(tHigh, 0.0f, 1.0f);
+            activeYStart = trackY0 + trackH * (1.0f - Math::Clamp01(tHigh));
+            activeH = trackH * Math::Clamp01(tHigh);
         }
 
         if (activeH > 0.0f)
@@ -715,8 +716,8 @@ void Slider::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
     }
     else if (m_Centered)
     {
-        const float centerNorm = std::clamp(normalize(0.0f), 0.0f, 1.0f);
-        const float valueNorm = std::clamp(normalize(highValue), 0.0f, 1.0f);
+        const float centerNorm = Math::Clamp01(normalize(0.0f));
+        const float valueNorm = Math::Clamp01(normalize(highValue));
         float a0 = trackX + trackW * centerNorm;
         float a1 = trackX + trackW * valueNorm;
         if (a1 < a0)
@@ -727,7 +728,7 @@ void Slider::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
     else
     {
         float a0 = trackX;
-        float a1 = trackX + trackW * std::clamp(tHigh, 0.0f, 1.0f);
+        float a1 = trackX + trackW * Math::Clamp01(tHigh);
         if (a1 < a0)
             std::swap(a0, a1);
         activeX = a0;
@@ -776,7 +777,7 @@ void Slider::OnPointerDown(float mouseX, float mouseY,
         trackW = std::min(vertThickness, W * 0.5f);
         trackX = x + W * 0.5f - trackW * 0.5f;
         t = 1.0f - (mouseY - trackY) / trackH;
-        t = std::clamp(t, 0.0f, 1.0f);
+        t = Math::Clamp01(t);
         thumbCenterX = x + W * 0.5f;
     }
     else
@@ -788,7 +789,7 @@ void Slider::OnPointerDown(float mouseX, float mouseY,
         trackY = y + H * 0.5f;
         trackH = 0.0f;
         t = (mouseX - trackX) / trackW;
-        t = std::clamp(t, 0.0f, 1.0f);
+        t = Math::Clamp01(t);
     }
 
     float valueAtPointer = lo + t * (hi - lo);
@@ -810,10 +811,10 @@ void Slider::OnPointerDown(float mouseX, float mouseY,
         float lowHitRadius = fallbackThumbRadius * 1.75f;
         float highHitRadius = fallbackThumbRadius * 1.75f;
 
-        float lowCenterXPos = m_Vertical ? thumbCenterX : (trackX + trackW * std::clamp(tLow, 0.0f, 1.0f));
-        float highCenterXPos = m_Vertical ? thumbCenterX : (trackX + trackW * std::clamp(tHigh, 0.0f, 1.0f));
-        float lowCenterYPos = m_Vertical ? (trackY + trackH * (1.0f - std::clamp(tLow, 0.0f, 1.0f))) : (y + H * 0.5f);
-        float highCenterYPos = m_Vertical ? (trackY + trackH * (1.0f - std::clamp(tHigh, 0.0f, 1.0f))) : (y + H * 0.5f);
+        float lowCenterXPos = m_Vertical ? thumbCenterX : (trackX + trackW * Math::Clamp01(tLow));
+        float highCenterXPos = m_Vertical ? thumbCenterX : (trackX + trackW * Math::Clamp01(tHigh));
+        float lowCenterYPos = m_Vertical ? (trackY + trackH * (1.0f - Math::Clamp01(tLow))) : (y + H * 0.5f);
+        float highCenterYPos = m_Vertical ? (trackY + trackH * (1.0f - Math::Clamp01(tHigh))) : (y + H * 0.5f);
 
         auto useThumbLayout = [](const UIElement* thumb, float& centerX, float& centerY, float& hitRadius)
         {
@@ -991,7 +992,7 @@ void Slider::OnPointerDrag(float mouseX, float mouseY,
         if (trackH <= 0.0f)
             return;
         t = 1.0f - (mouseY - trackY) / trackH;
-        t = std::clamp(t, 0.0f, 1.0f);
+        t = Math::Clamp01(t);
     }
     else
     {
@@ -1000,7 +1001,7 @@ void Slider::OnPointerDrag(float mouseX, float mouseY,
         if (trackW <= 0.0f)
             return;
         t = (mouseX - trackX) / trackW;
-        t = std::clamp(t, 0.0f, 1.0f);
+        t = Math::Clamp01(t);
     }
 
     float valueAtPointer = lo + t * (hi - lo);

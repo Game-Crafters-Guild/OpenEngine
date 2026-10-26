@@ -2,6 +2,7 @@
 
 #include "CBTTerrain/CBTPlanetShading.h" // SampleSphereSculptByDir (brush cursor sculpt sample)
 #include "CBTTerrain/SphereSculptSerialization.h" // .tsculpt blob codec (persistence)
+#include "Mathematics/Interpolation.h"
 #include "PhysicsECS/HeightFieldDataProvider.h"
 #include "Physics/PhysicsShapes.h"
 #include "Terrain/CDLODSelection.h"
@@ -1033,12 +1034,12 @@ void FillTiledBaseRegion(Terrain::HeightfieldData& field, const TiledTerrainConf
             for (int32 z = minZ; z <= maxZ; ++z)
             {
                 const float32 worldZ = fieldOriginZ + static_cast<float32>(z) * spacingZ;
-                const float32 v = std::clamp((worldZ - terrainOriginZ) / config.WorldSizeZ, 0.0f, 1.0f);
+                const float32 v = Math::Clamp01((worldZ - terrainOriginZ) / config.WorldSizeZ);
                 for (int32 x = minX; x <= maxX; ++x)
                 {
                     const float32 worldX = fieldOriginX + static_cast<float32>(x) * spacingX;
                     const float32 u =
-                        std::clamp((worldX - terrainOriginX) / config.WorldSizeX, 0.0f, 1.0f);
+                        Math::Clamp01((worldX - terrainOriginX) / config.WorldSizeX);
                     field.SetSample(static_cast<uint32>(x), static_cast<uint32>(z),
                                     heightmap.SampleBilinear(u, v));
                 }

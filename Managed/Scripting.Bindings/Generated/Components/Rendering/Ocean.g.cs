@@ -262,7 +262,7 @@ namespace GameEngine.Scripting
         public float RefractionStrength;
 
         [FieldOffset(396)]
-        public float ShallowRefractionReflectionSuppression;
+        public float ShallowReflectionSuppression;
 
         [FieldOffset(400)]
         public float ShallowClarityDistance;
@@ -459,7 +459,7 @@ namespace GameEngine.Scripting
         public bool RasterDepthCapture;
 
         [FieldOffset(84)]
-        public uint RasterDepthCaptureResolution;
+        public uint RasterDepthResolution;
 
         [FieldOffset(88)]
         public RenderLayerMask RasterDepthCaptureLayers;
@@ -510,7 +510,7 @@ namespace GameEngine.Scripting
         public AssetGuid ShadowSettings;
 
         [FieldOffset(224)]
-        public bool CombineDisplacementCascade;
+        public bool CombineCascade;
     }
 
     [StructLayout(LayoutKind.Explicit, Size = 8)]

@@ -21,6 +21,7 @@
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/ModelSettingsReload.h"
 #include "Inspectors/SubmeshLodProvenance.h"
+#include "Mathematics/Interpolation.h"
 #include "Thumbnails/IThumbnailProvider.h"
 #include "Thumbnails/ModelThumbnailHandler.h"
 #include "UI/Controls/Button.h"
@@ -623,7 +624,7 @@ void BuildLodSection(UIElement* root, ModelAsset* model, std::function<void()> r
         {
             InspectorDrag::AddFloatRowWithDrag(root, "LOD" + std::to_string(lod) + " target %",
                 settings.TargetRatios[lod], [](float) {},
-                [persist, lod](float v) { persist([v, lod](LodAssetSettings& s) { s.TargetRatios[lod] = std::clamp(v, 0.0f, 1.0f); }); },
+                [persist, lod](float v) { persist([v, lod](LodAssetSettings& s) { s.TargetRatios[lod] = Math::Clamp01(v); }); },
                 settings.TargetRatios[lod], "Target fraction of LOD0 triangles", 0.0f, 1.0f);
             InspectorDrag::AddFloatRowWithDrag(root, "LOD" + std::to_string(lod) + " max error",
                 settings.TargetError[lod], [](float) {},

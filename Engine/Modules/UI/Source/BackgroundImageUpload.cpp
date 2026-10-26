@@ -6,6 +6,7 @@
 #include "Engine/Rendering/TextureMipUpload.h"
 #include "Image/Decode.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -148,7 +149,7 @@ Rendering::TextureHandle UploadBackgroundImageFromAsset(Rendering::IDevice* devi
             v = std::max(0.0f, v);
             v = v / (1.0f + v);
             v = std::pow(v, 1.0f / 2.2f);
-            v = std::clamp(v, 0.0f, 1.0f);
+            v = Math::Clamp01(v);
             return static_cast<unsigned char>(v * 255.0f + 0.5f);
         };
 
@@ -156,7 +157,7 @@ Rendering::TextureHandle UploadBackgroundImageFromAsset(Rendering::IDevice* devi
         {
             if (!std::isfinite(v))
                 v = 1.0f;
-            v = std::clamp(v, 0.0f, 1.0f);
+            v = Math::Clamp01(v);
             return static_cast<unsigned char>(v * 255.0f + 0.5f);
         };
 

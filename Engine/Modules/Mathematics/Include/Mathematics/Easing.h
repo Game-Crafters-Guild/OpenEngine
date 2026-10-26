@@ -7,7 +7,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <string>
 #include <string_view>
 
 namespace GameEngine::Math
@@ -203,41 +202,6 @@ inline std::string_view ToTweenEasingName(TweenEasing easing)
             return e.Name;
     }
     return "Linear";
-}
-
-/// UI label: inserts spaces at camel-case boundaries (e.g. QuadOut -> "Quad Out"). Parsing uses compact
-/// names from ToTweenEasingName / kTweenEasingEntries.
-inline std::string FormatTweenEasingDisplayName(std::string_view compactName)
-{
-    std::string out;
-    if (compactName.empty())
-        return out;
-    out.reserve(compactName.size() + compactName.size() / 4);
-    out.push_back(static_cast<char>(compactName[0]));
-    for (size_t i = 1; i < compactName.size(); ++i)
-    {
-        const unsigned char c = static_cast<unsigned char>(compactName[i]);
-        const unsigned char p = static_cast<unsigned char>(compactName[i - 1]);
-        const bool isCap = (c >= 'A' && c <= 'Z');
-        if (isCap)
-        {
-            const bool prevLower = (p >= 'a' && p <= 'z');
-            const bool prevUpper = (p >= 'A' && p <= 'Z');
-            const bool nextLower =
-                (i + 1 < compactName.size()) &&
-                static_cast<unsigned char>(compactName[i + 1]) >= 'a' &&
-                static_cast<unsigned char>(compactName[i + 1]) <= 'z';
-            if (prevLower || (prevUpper && nextLower))
-                out.push_back(' ');
-        }
-        out.push_back(static_cast<char>(c));
-    }
-    return out;
-}
-
-inline std::string FormatTweenEasingDisplayName(TweenEasing easing)
-{
-    return FormatTweenEasingDisplayName(ToTweenEasingName(easing));
 }
 
 inline bool TryParseTweenEasingName(std::string_view name, TweenEasing& out)

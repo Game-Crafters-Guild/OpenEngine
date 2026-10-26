@@ -1,5 +1,7 @@
 #include "Engine/Rendering/DynamicResolutionController.h"
 
+#include "Mathematics/Interpolation.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -127,15 +129,15 @@ void DynamicResolutionController::Configure(const DynamicResolutionConfig& confi
     m_Config.MinScale = std::clamp(m_Config.MinScale, 0.5f, 1.0f);
     m_Config.MaxScale = std::clamp(m_Config.MaxScale, m_Config.MinScale, 1.0f);
     m_Config.DeadbandFraction = std::clamp(m_Config.DeadbandFraction, 0.0f, 0.9f);
-    m_Config.DropGain = std::clamp(m_Config.DropGain, 0.0f, 1.0f);
-    m_Config.RaiseGain = std::clamp(m_Config.RaiseGain, 0.0f, 1.0f);
+    m_Config.DropGain = Math::Clamp01(m_Config.DropGain);
+    m_Config.RaiseGain = Math::Clamp01(m_Config.RaiseGain);
     m_Config.MaxDropPerSecond = std::max(m_Config.MaxDropPerSecond, 0.0f);
     m_Config.MaxRisePerSecond = std::max(m_Config.MaxRisePerSecond, 0.0f);
     m_Config.DwellSeconds = std::max(m_Config.DwellSeconds, 0.0f);
     m_Config.QuantizeStep = std::clamp(m_Config.QuantizeStep, 0.001f, 0.5f);
     m_Config.SampleSmoothing = std::clamp(m_Config.SampleSmoothing, 0.01f, 1.0f);
     m_Config.EmergencyFraction = std::max(m_Config.EmergencyFraction, 1.0f);
-    m_Config.MinUsefulSavingFraction = std::clamp(m_Config.MinUsefulSavingFraction, 0.0f, 1.0f);
+    m_Config.MinUsefulSavingFraction = Math::Clamp01(m_Config.MinUsefulSavingFraction);
     m_Config.ResponseDecay = std::clamp(m_Config.ResponseDecay, 0.5f, 0.999f);
     m_Config.RelatchCostFraction = std::max(m_Config.RelatchCostFraction, 0.01f);
 

@@ -29,7 +29,7 @@ Engine/Modules/CBTTerrainECS/Source/TerrainShadowFieldLit.cpp:destroy_resource:1
 Engine/Modules/CBTTerrainECS/Source/TerrainShadowFieldLit.cpp:manual_barrier:1            # the CBT shadow chain's resources and passes move into the render graph (#4809)
 Engine/Modules/FileWatcher/Include/FileWatcher/FileWatcher.h:condition_variable:1         # a file watcher (OS blocking wait)
 Engine/Modules/FileWatcher/Include/FileWatcher/FileWatcher.h:std_thread:1                 # a file watcher (OS blocking wait)
-Engine/Modules/FileWatcher/Source/FileWatcher.cpp:atomic_spin:3                           # a file watcher (OS blocking wait)
+Engine/Modules/FileWatcher/Source/FileWatcher.cpp:atomic_spin:4                           # a file watcher (OS blocking wait and its stop checks)
 Engine/Modules/FileWatcher/Source/FileWatcher.cpp:native_thread:1                         # a file watcher (OS blocking wait)
 Engine/Modules/FileWatcher/Source/FileWatcher.cpp:std_thread:1                            # a file watcher (OS blocking wait)
 Engine/Modules/JobSystem/Include/JobSystem/ConcurrentQueue.h:malloc_free:2                # the job system's own allocator (task slabs, queues, job records)

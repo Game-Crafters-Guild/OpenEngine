@@ -148,7 +148,7 @@ namespace GameEngine.Scripting
         public float ClassifyStrength;
 
         [FieldOffset(28)]
-        public int ProbesLongAxis;
+        public int Divisions;
 
         [FieldOffset(32)]
         public int RaysPerProbe;

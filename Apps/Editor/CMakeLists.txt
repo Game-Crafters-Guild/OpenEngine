@@ -366,6 +366,7 @@ set(EDITOR_SOURCES
 	Source/Terrain/TerrainInspector.cpp
 	Source/Terrain/TerrainPageCookOverlay.cpp
 	Source/Terrain/TerrainModifierInspectors.cpp
+	Source/Terrain/TerrainGrassPresetRow.cpp
 	Source/Terrain/TerrainGrassRegionRows.cpp
 	Source/Terrain/TerrainColorZoneInspector.cpp
 	Source/Terrain/TerrainMaterialLibraryMint.cpp

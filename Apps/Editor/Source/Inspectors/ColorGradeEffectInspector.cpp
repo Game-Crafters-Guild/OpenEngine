@@ -8,6 +8,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Panels/ColorPicker.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Label.h"
@@ -55,7 +56,7 @@ void OffsetToHueSat(const float32 offset[3], float& hue, float& sat)
     const float g = offset[1] - mean;
     const float b = offset[2] - mean;
     const float peak = std::max({std::abs(r), std::abs(g), std::abs(b)});
-    sat = std::clamp(peak, 0.0f, 1.0f);
+    sat = Math::Clamp01(peak);
     if (peak <= 1e-6f)
     {
         hue = 0.0f;
@@ -87,7 +88,7 @@ void HueSatToOffset(float hue, float sat, float& or_, float& og, float& ob)
     g -= mean;
     b -= mean;
     const float peak = std::max({std::abs(r), std::abs(g), std::abs(b)});
-    const float scale = peak > 1e-6f ? std::clamp(sat, 0.0f, 1.0f) / peak : 0.0f;
+    const float scale = peak > 1e-6f ? Math::Clamp01(sat) / peak : 0.0f;
     or_ = r * scale;
     og = g * scale;
     ob = b * scale;
@@ -108,7 +109,7 @@ Offset3 HueSatToOffset3(float hue, float sat)
 
 float ClampUnit(float v)
 {
-    return std::clamp(v, 0.0f, 1.0f);
+    return Math::Clamp01(v);
 }
 
 // Hex remains a conventional value-1 tint view of the balanced wheel vector.

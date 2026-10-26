@@ -9,6 +9,7 @@
 #include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "ECS/World.h"
+#include "Mathematics/Interpolation.h"
 #include "JobSystem/JobChannel.h"
 #include "Editor/Settings/FbxImportSettings.h"
 #include "Editor/Entities/SpriteEntityFactory.h"
@@ -684,7 +685,7 @@ bool PolyhavenDownloadManager::GetDownloadProgress(const std::string& slug, floa
     if (it == m_Shared->Progress.end() || it->second.second == 0)
         return false;
     const float f = static_cast<float>(it->second.first) / static_cast<float>(it->second.second);
-    outFraction = f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+    outFraction = Math::Clamp01(f);
     return true;
 }
 

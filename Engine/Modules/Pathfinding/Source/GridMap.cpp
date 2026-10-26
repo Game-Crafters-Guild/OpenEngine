@@ -2,6 +2,7 @@
 #include "AStarSolver.h"
 #include "HexGridHelpers.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
 #include "PathSmoother.h"
 #include "Pathfinding/PathBuffer.h"
 
@@ -57,7 +58,7 @@ float32 PointSegmentDistanceSq(float32 x, float32 z, float32 ax, float32 az, flo
 {
     const float32 dx = bx - ax, dz = bz - az;
     const float32 lengthSq = dx * dx + dz * dz;
-    const float32 t = lengthSq > 0.0f ? std::clamp(((x - ax) * dx + (z - az) * dz) / lengthSq, 0.0f, 1.0f) : 0.0f;
+    const float32 t = lengthSq > 0.0f ? Math::Clamp01(((x - ax) * dx + (z - az) * dz) / lengthSq) : 0.0f;
     const float32 ex = ax + dx * t - x, ez = az + dz * t - z;
     return ex * ex + ez * ez;
 }

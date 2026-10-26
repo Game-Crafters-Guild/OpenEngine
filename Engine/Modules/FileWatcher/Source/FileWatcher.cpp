@@ -1,6 +1,7 @@
 #include "FileWatcher/FileWatcher.h"
 #include "Logger/Logger.h"
 #include "Platform/Thread.h"
+#include "Types/PathUtils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -50,7 +51,10 @@ bool FileWatcher::StartChangeSignal()
     context.info = this;
     // The callback is a wake, not a source of events: it deliberately ignores
     // the reported paths and flags, because the rescan below it is what decides
-    // what actually changed (and applies the extension/exclusion filters).
+    // what actually changed (and applies the extension/exclusion filters). That
+    // covers a report of dropped events too (kFSEventStreamEventFlagMustScanSubDirs,
+    // UserDropped, KernelDropped): it arrives through this callback like any
+    // other, and the rescan it wakes walks the whole tree.
     auto onEvent = [](ConstFSEventStreamRef, void* info, size_t, void*,
                       const FSEventStreamEventFlags*, const FSEventStreamEventId*)
     {
@@ -164,6 +168,7 @@ void FileWatcher::StopWatching()
     if (!m_WatchThread.joinable())
     {
         m_PendingEvents.clear();
+        m_LostEventsRescanOwed = false;
 #ifdef PLATFORM_WINDOWS
         m_PendingRenameOldPath.clear();
         m_HasPendingRenameOldPath = false;
@@ -176,9 +181,10 @@ void FileWatcher::StopWatching()
     // join() has no timeout because no wait in the watch loop outlasts
     // kWatchLoopSliceMs: the polling loop waits on m_WakeCv, which RequestStop
     // ends at once, and the Windows loop rechecks m_ShouldStop after each
-    // WaitForSingleObject slice. Stop returns within one slice plus any scan or
-    // callback already running. A new blocking call in either loop must keep
-    // that bound (a timed slice, or a wake from RequestStop), or stop hangs.
+    // WaitForSingleObject slice, and a scan ends at its next entry. Stop returns
+    // within one slice plus any callback already running. A new blocking call in
+    // either loop must keep that bound (a timed slice, or a wake from
+    // RequestStop), or stop hangs.
     RequestStop();
     m_WatchThread.join();
 
@@ -186,6 +192,7 @@ void FileWatcher::StopWatching()
 
     // The watch thread has exited, so its pending state is safe to clear.
     m_PendingEvents.clear();
+    m_LostEventsRescanOwed = false;
 #ifdef PLATFORM_WINDOWS
     m_PendingRenameOldPath.clear();
     m_HasPendingRenameOldPath = false;
@@ -406,6 +413,50 @@ void FileWatcher::NotifyFileChange(const FileChangeEvent& event)
 }
 
 #ifdef PLATFORM_WINDOWS
+uint32 FileWatcher::IssueDirectoryRead(void* directory, OVERLAPPED& overlapped, std::vector<uint8>& buffer)
+{
+    // Reset overlapped state (except for the event handle) before re-issuing.
+    HANDLE evt = overlapped.hEvent;
+    overlapped = {};
+    overlapped.hEvent = evt;
+    ResetEvent(overlapped.hEvent);
+
+    // Start async directory change monitoring. When using OVERLAPPED, lpBytesReturned is ignored.
+    BOOL result = ReadDirectoryChangesW(
+        directory,
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()),
+        m_Recursive ? TRUE : FALSE,
+        FILE_NOTIFY_CHANGE_FILE_NAME |
+            FILE_NOTIFY_CHANGE_DIR_NAME |
+            FILE_NOTIFY_CHANGE_LAST_WRITE |
+            FILE_NOTIFY_CHANGE_SIZE,
+        nullptr,
+        &overlapped,
+        nullptr);
+
+    if (result)
+    {
+        return ERROR_SUCCESS;
+    }
+
+    const DWORD error = GetLastError();
+    if (error == ERROR_IO_PENDING)
+    {
+        return ERROR_SUCCESS; // Expected for overlapped I/O
+    }
+    if (error == ERROR_OPERATION_ABORTED || m_ShouldStop.load())
+    {
+        Logger::Log::Debug("ReadDirectoryChangesW operation aborted (shutdown)");
+        return error;
+    }
+    if (error != ERROR_NOTIFY_ENUM_DIR)
+    {
+        Logger::Log::Error("ReadDirectoryChangesW failed: {}", error);
+    }
+    return error;
+}
+
 void FileWatcher::WatchWindows()
 {
     // Open directory handle
@@ -441,49 +492,8 @@ void FileWatcher::WatchWindows()
 
     Logger::Log::Debug("FileWatcher: ReadDirectoryChangesW armed for {}", m_WatchDirectory.string());
 
-    auto issueRead = [&]() -> bool
-    {
-        // Reset overlapped state (except for the event handle) before re-issuing.
-        HANDLE evt = overlapped.hEvent;
-        overlapped = {};
-        overlapped.hEvent = evt;
-        ResetEvent(overlapped.hEvent);
-
-        // Start async directory change monitoring. When using OVERLAPPED, lpBytesReturned is ignored.
-        BOOL result = ReadDirectoryChangesW(
-            hDir,
-            buffer.data(),
-            bufferSize,
-            m_Recursive ? TRUE : FALSE,
-            FILE_NOTIFY_CHANGE_FILE_NAME |
-                FILE_NOTIFY_CHANGE_DIR_NAME |
-                FILE_NOTIFY_CHANGE_LAST_WRITE |
-                FILE_NOTIFY_CHANGE_SIZE,
-            nullptr,
-            &overlapped,
-            nullptr);
-
-        if (result)
-        {
-            return true;
-        }
-
-        DWORD error = GetLastError();
-        if (error == ERROR_IO_PENDING)
-        {
-            return true; // Expected for overlapped I/O
-        }
-        if (error == ERROR_OPERATION_ABORTED || m_ShouldStop.load())
-        {
-            Logger::Log::Debug("ReadDirectoryChangesW operation aborted (shutdown)");
-            return false;
-        }
-        Logger::Log::Error("ReadDirectoryChangesW failed: {}", error);
-        return false;
-    };
-
     // Issue the first async read; then only re-issue after we have processed a completion.
-    if (!issueRead())
+    if (IssueDirectoryRead(hDir, overlapped, buffer) != ERROR_SUCCESS)
     {
         // Cleanup below
         CancelIoEx(hDir, &overlapped);
@@ -491,6 +501,19 @@ void FileWatcher::WatchWindows()
         CloseHandle(hDir);
         Logger::Log::Debug("Windows file watching stopped");
         return;
+    }
+
+    // The snapshot a lost-events rescan diffs against. Taken after the first
+    // request is armed, so a change made during the walk is either in the
+    // snapshot or reported by an event.
+    try
+    {
+        SnapshotWatchedFiles();
+    }
+    catch (const std::filesystem::filesystem_error& e)
+    {
+        // A rescan then reports the files this walk missed as created.
+        Logger::Log::Error("FileWatcher: initial scan of '{}' failed: {}", m_WatchDirectory.string(), e.what());
     }
 
     bool hasPendingRead = true;
@@ -505,6 +528,9 @@ void FileWatcher::WatchWindows()
 
         if (waitResult == WAIT_TIMEOUT)
         {
+            // A quiet slice: the burst a failed rescan walk ran into has likely
+            // landed, so an owed rescan walks again, at most once per poll interval.
+            RetryOwedLostEventsRescan();
             continue; // keep waiting on the same pending read
         }
 
@@ -520,17 +546,31 @@ void FileWatcher::WatchWindows()
             break;
         }
 
+        // The platform reports lost events in two shapes: the request fails with
+        // ERROR_NOTIFY_ENUM_DIR, or it completes with no records because its
+        // buffer overflowed and was discarded. Either way the changes it held are
+        // reported by a rescan.
         DWORD bytesReturned = 0;
         if (!GetOverlappedResult(hDir, &overlapped, &bytesReturned, FALSE))
         {
-            DWORD error = GetLastError();
+            const DWORD error = GetLastError();
             if (error == ERROR_OPERATION_ABORTED || m_ShouldStop.load())
             {
                 Logger::Log::Debug("GetOverlappedResult operation aborted (shutdown)");
                 break;
             }
-            // NOTE: ERROR_NOTIFY_ENUM_DIR indicates overflow/lost events; we keep going.
-            Logger::Log::Error("GetOverlappedResult failed: {}", error);
+            if (error == ERROR_NOTIFY_ENUM_DIR)
+            {
+                RescanAfterLostEvents();
+            }
+            else
+            {
+                Logger::Log::Error("GetOverlappedResult failed: {}", error);
+            }
+        }
+        else if (bytesReturned == 0)
+        {
+            RescanAfterLostEvents();
         }
         else
         {
@@ -544,8 +584,15 @@ void FileWatcher::WatchWindows()
             break;
         }
 
-        // Re-issue for the next set of changes
-        if (!issueRead())
+        // Re-issue for the next set of changes. A request refused because events
+        // were already lost is answered the same way, then issued again.
+        DWORD issueError = IssueDirectoryRead(hDir, overlapped, buffer);
+        while (issueError == ERROR_NOTIFY_ENUM_DIR && !m_ShouldStop.load())
+        {
+            RescanAfterLostEvents();
+            issueError = IssueDirectoryRead(hDir, overlapped, buffer);
+        }
+        if (issueError != ERROR_SUCCESS)
         {
             break;
         }
@@ -616,7 +663,7 @@ void FileWatcher::ProcessWindowsFileChanges(uint8* buffer, uint32 bufferSize)
             {
                 Logger::Log::Debug("Windows file change detected: {} ({})",
                                    event.Path.string(), static_cast<int>(event.Type));
-                NotifyFileChange(event);
+                NotifyReportedChange(event);
             };
 
             const auto nowTs = std::filesystem::file_time_type::clock::now();
@@ -725,14 +772,18 @@ void FileWatcher::ProcessWindowsFileChanges(uint8* buffer, uint32 bufferSize)
 }
 #endif
 
-void FileWatcher::ForEachWatchedFile(const Function<void(const std::filesystem::directory_entry&)>& visit)
+bool FileWatcher::ForEachWatchedFile(const Function<void(const std::filesystem::directory_entry&)>& visit)
 {
+    // A stop is checked at every entry: a walk of a large tree takes hundreds of
+    // milliseconds, and StopWatching waits for the walk.
     if (m_Recursive)
     {
         std::filesystem::recursive_directory_iterator iter(m_WatchDirectory);
         const std::filesystem::recursive_directory_iterator end;
         for (; iter != end; ++iter)
         {
+            if (m_ShouldStop.load(std::memory_order_relaxed))
+                return false;
             const auto& entry = *iter;
             if (entry.is_directory() && ShouldExcludeDirectory(entry.path()))
             {
@@ -742,14 +793,139 @@ void FileWatcher::ForEachWatchedFile(const Function<void(const std::filesystem::
             if (entry.is_regular_file() && ShouldWatchFile(entry.path()))
                 visit(entry);
         }
-        return;
+        return true;
     }
 
     for (const auto& entry : std::filesystem::directory_iterator(m_WatchDirectory))
     {
+        if (m_ShouldStop.load(std::memory_order_relaxed))
+            return false;
         if (entry.is_regular_file() && ShouldWatchFile(entry.path()))
             visit(entry);
     }
+    return true;
+}
+
+void FileWatcher::SnapshotWatchedFiles()
+{
+    ForEachWatchedFile([this](const std::filesystem::directory_entry& entry) {
+        m_PolledFiles[entry.path()] = PolledFile{entry.last_write_time(), ReadFileIdentity(entry.path())};
+    });
+}
+
+void FileWatcher::NotifyReportedChange(const FileChangeEvent& event)
+{
+    // The snapshot holds what subscribers have been told, recorded before they
+    // are told: a write that lands after the record moves the timestamp, so a
+    // later rescan still reports it. A path with no entry of its own is, in the
+    // common case, a directory: the platform reports a directory renamed or
+    // deleted as one event, and the files under it move or go with it.
+    if (!event.OldPath.empty() && m_PolledFiles.erase(event.OldPath) == 0)
+        MoveSnapshotEntriesUnder(event.OldPath, event.Path);
+    if (event.Type == FileChangeType::Deleted)
+    {
+        if (m_PolledFiles.erase(event.Path) == 0)
+            EraseSnapshotEntriesUnder(event.Path);
+    }
+    else
+    {
+        std::error_code ec;
+        const std::filesystem::file_status status = std::filesystem::status(event.Path, ec);
+        if (!std::filesystem::exists(status))
+        {
+            // Gone again already. Subscribers are about to hear the path exists,
+            // so it keeps an entry with no timestamp, and a rescan that finds it
+            // missing reports the deletion.
+            m_PolledFiles[event.Path] = PolledFile{std::filesystem::file_time_type::min(), FileIdentity{}};
+        }
+        else if (std::filesystem::is_regular_file(status))
+        {
+            const auto lastWrite = std::filesystem::last_write_time(event.Path, ec);
+            m_PolledFiles[event.Path] =
+                PolledFile{ec ? std::filesystem::file_time_type::min() : lastWrite, ReadFileIdentity(event.Path)};
+        }
+        // A directory gets no entry: a scan sees files only. So the files in a
+        // directory that appears are reported by a rescan as created.
+    }
+    NotifyFileChange(event);
+}
+
+void FileWatcher::MoveSnapshotEntriesUnder(const std::filesystem::path& oldDirectory,
+                                           const std::filesystem::path& newDirectory)
+{
+    std::vector<std::pair<std::filesystem::path, PolledFile>> moved;
+    for (auto it = m_PolledFiles.begin(); it != m_PolledFiles.end();)
+    {
+        const std::filesystem::path relative = RelativePathUnderRoot(it->first, oldDirectory);
+        if (relative.empty())
+        {
+            ++it;
+            continue;
+        }
+        // Renaming a directory keeps its files' timestamps and identities.
+        moved.emplace_back(newDirectory / relative, it->second);
+        it = m_PolledFiles.erase(it);
+    }
+    for (auto& [path, polled] : moved)
+        m_PolledFiles[std::move(path)] = polled;
+}
+
+void FileWatcher::EraseSnapshotEntriesUnder(const std::filesystem::path& directory)
+{
+    erase_if(m_PolledFiles, [&directory](const auto& entry)
+             { return !RelativePathUnderRoot(entry.first, directory).empty(); });
+}
+
+void FileWatcher::RescanAfterLostEvents()
+{
+    Logger::Log::Warning("FileWatcher: change events under '{}' were lost; rescanning to report what changed",
+                         m_WatchDirectory.string());
+#ifdef PLATFORM_WINDOWS
+    // An old name still waiting for its new one may have lost it. The rescan
+    // reports that rename, or the deletion, itself.
+    m_PendingRenameOldPath.clear();
+    m_HasPendingRenameOldPath = false;
+#endif
+    try
+    {
+        PollOnce();
+        m_LostEventsRescanOwed = false;
+    }
+    catch (const std::filesystem::filesystem_error& e)
+    {
+        // A walk fails when a directory vanishes or cannot be read under it,
+        // which is likely while the burst of changes that overflowed the
+        // platform's buffer is still landing. A failed walk reports nothing, so
+        // walking again reports every change once.
+        m_LostEventsRescanOwed = true;
+        m_LastOwedRescanWalk = std::chrono::steady_clock::now();
+        Logger::Log::Warning("FileWatcher: rescan of '{}' failed ({}); while the watcher is idle it walks again "
+                             "once per poll interval, until a walk succeeds",
+                             m_WatchDirectory.string(), e.what());
+    }
+}
+
+void FileWatcher::RetryOwedLostEventsRescan()
+{
+    if (!m_LostEventsRescanOwed)
+        return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - m_LastOwedRescanWalk < std::chrono::milliseconds(m_PollingInterval))
+        return;
+    m_LastOwedRescanWalk = now;
+    try
+    {
+        PollOnce();
+    }
+    catch (const std::filesystem::filesystem_error&)
+    {
+        // Still owed. The failure was logged when the rescan fell due; a walk
+        // that keeps failing would repeat it every poll interval.
+        return;
+    }
+    m_LostEventsRescanOwed = false;
+    Logger::Log::Info("FileWatcher: the rescan of '{}' owed since events were lost has reported what changed",
+                      m_WatchDirectory.string());
 }
 
 void FileWatcher::WatchPolling()
@@ -758,9 +934,7 @@ void FileWatcher::WatchPolling()
 
     try
     {
-        ForEachWatchedFile([this](const std::filesystem::directory_entry& entry) {
-            m_PolledFiles[entry.path()] = PolledFile{entry.last_write_time(), ReadFileIdentity(entry.path())};
-        });
+        SnapshotWatchedFiles();
     }
     catch (const std::filesystem::filesystem_error& e)
     {
@@ -835,15 +1009,19 @@ void FileWatcher::WaitForNextPoll()
 
 void FileWatcher::PollOnce()
 {
-    HashMap<std::filesystem::path, PolledFile> current;
+    // Nothing is reported until the walk completes: a walk that throws or stops
+    // reports nothing and leaves the snapshot as it was, so the next walk reports
+    // each change once.
+    FastHashMap<std::filesystem::path, PolledFile> current;
+    std::vector<FileChangeEvent> modified;
     // Paths seen for the first time in this scan, keyed by identity. Their
     // Created events wait until the scan is complete: one that carries the
     // identity of a path that vanished in the same scan is that file's new
     // name, not a new file.
-    HashMap<FileIdentity, std::filesystem::path> appearedByIdentity;
+    FastHashMap<FileIdentity, std::filesystem::path> appearedByIdentity;
     std::vector<std::filesystem::path> appeared;
 
-    ForEachWatchedFile([&](const std::filesystem::directory_entry& entry) {
+    const bool walked = ForEachWatchedFile([&](const std::filesystem::directory_entry& entry) {
         const auto lastWrite = entry.last_write_time();
         const auto previous = m_PolledFiles.find(entry.path());
         if (previous == m_PolledFiles.end())
@@ -867,8 +1045,13 @@ void FileWatcher::PollOnce()
         event.Path = entry.path();
         event.Type = FileChangeType::Modified;
         event.Timestamp = lastWrite;
-        NotifyFileChange(event);
+        modified.push_back(std::move(event));
     });
+    if (!walked)
+        return;
+
+    for (const FileChangeEvent& event : modified)
+        NotifyFileChange(event);
 
     // Every path the previous scan saw that is gone now. Its identity showing
     // up under a new path in this scan, with the timestamp it had, is a

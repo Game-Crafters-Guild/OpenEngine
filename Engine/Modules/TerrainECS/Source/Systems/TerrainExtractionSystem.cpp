@@ -1,4 +1,5 @@
 #include "TerrainECS/Systems/TerrainExtractionSystem.h"
+#include "Mathematics/Interpolation.h"
 #include "TerrainECS/TerrainHandleHygiene.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainFieldUploader.h"
@@ -222,7 +223,7 @@ void ApplyGrassTextureParams(Terrain::TerrainGPUParams& params,
         std::max(1u, grass->AtlasTileCount),
         1u,
         std::max(1u, params.GrassAtlasColumns * params.GrassAtlasRows));
-    params.GrassAlphaCutoff = std::clamp(grass->AlphaCutoff, 0.0f, 1.0f);
+    params.GrassAlphaCutoff = Math::Clamp01(grass->AlphaCutoff);
     params.GrassNormalStrength = std::max(0.0f, grass->NormalStrength);
     params.GrassTextureCardsPerSquareMeter = std::max(0.0f, grass->TextureCardsPerSquareMeter);
     params.GrassTextureSize = std::max(0.0f, grass->TextureSize);
@@ -310,14 +311,14 @@ void WriteGrassParams(Terrain::TerrainGPUParams& params,
     params.GrassBladeSegments = grass ? std::clamp(grass->BladeSegments,
         Components::kMinTerrainGrassBladeSegments,
         Components::kMaxTerrainGrassBladeSegments) : 5u;
-    params.GrassMaskThreshold = grass ? std::clamp(grass->MaskThreshold, 0.0f, 1.0f) : 1.0f;
+    params.GrassMaskThreshold = grass ? Math::Clamp01(grass->MaskThreshold) : 1.0f;
     params.GrassDensityFalloff = grass ? std::max(0.0f, grass->DensityFalloff) : 0.0f;
     params.GrassRange = grass ? std::max(0.0f, grass->Range) : 0.0f;
     params.GrassPlacementSeed = grass ? grass->PlacementSeed : 0.0f;
     params.GrassWindStrength = grass ? std::max(0.0f, grass->WindStrength) : 0.0f;
     params.GrassLayerIndex = grass ? std::min(grass->LayerIndex, Terrain::kMaxTerrainMaterialLayers - 1u) : 0u;
     params.GrassBrightness = grass ? std::max(0.0f, grass->Brightness) : 1.0f;
-    params.GrassGroundingStrength = grass ? std::clamp(grass->GroundingStrength, 0.0f, 1.0f) : 0.0f;
+    params.GrassGroundingStrength = grass ? Math::Clamp01(grass->GroundingStrength) : 0.0f;
     params.GrassGroundTintHeight =
         grass ? std::clamp(grass->GroundTintHeight, Components::kMinTerrainGrassGroundTintHeight, 1.0f) : 1.0f;
     params.GrassRandomScale = grass ? std::max(0.0f, grass->RandomScale) : 0.0f;
@@ -334,10 +335,10 @@ void WriteGrassParams(Terrain::TerrainGPUParams& params,
     params.GrassWindFlutterSpeed = grass ? grass->WindFlutterSpeed : 2.2f;
     params.GrassWindSeed = grass ? grass->WindSeed : 3.0f;
     params.GrassClumpSize = grass ? std::max(0.0f, grass->ClumpSize) : 0.0f;
-    params.GrassClumpHeightVariance = grass ? std::clamp(grass->ClumpHeightVariance, 0.0f, 1.0f) : 0.0f;
-    params.GrassClumpAlignment = grass ? std::clamp(grass->ClumpAlignment, 0.0f, 1.0f) : 0.0f;
-    params.GrassClumpTaper = grass ? std::clamp(grass->ClumpTaper, 0.0f, 1.0f) : 0.0f;
-    params.GrassHueVariation = grass ? std::clamp(grass->HueVariation, 0.0f, 1.0f) : 0.0f;
+    params.GrassClumpHeightVariance = grass ? Math::Clamp01(grass->ClumpHeightVariance) : 0.0f;
+    params.GrassClumpAlignment = grass ? Math::Clamp01(grass->ClumpAlignment) : 0.0f;
+    params.GrassClumpTaper = grass ? Math::Clamp01(grass->ClumpTaper) : 0.0f;
+    params.GrassHueVariation = grass ? Math::Clamp01(grass->HueVariation) : 0.0f;
     params.GrassRootFadeStart = grass ? std::clamp(grass->RootFadeStart, Components::kMinTerrainGrassRootFadeStart, 1.0f - Components::kMinTerrainGrassRootFadeSpan) : 0.0f;
     params.GrassRootFadeEnd = grass ? std::clamp(grass->RootFadeEnd, params.GrassRootFadeStart + Components::kMinTerrainGrassRootFadeSpan, 1.0f) : 1.0f;
     ApplyGrassTextureParams(params, grass, renderServices);

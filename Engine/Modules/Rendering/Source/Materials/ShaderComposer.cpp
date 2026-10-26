@@ -9,6 +9,7 @@
 #include "Rendering/Materials/UserKeyword.h"
 #include "Rendering/ShaderGraph/SgTagParser.h"
 #include "Rendering/Materials/MaterialShaderIncludeRoots.h"
+#include "ShaderSourceCache.h"
 
 #include "Logger/Logger.h"
 #include "Types/NearestName.h"
@@ -18,7 +19,6 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
-#include <fstream>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -277,12 +277,14 @@ std::vector<std::string> DiagnoseUnreadDeclaredProperties(const ShaderPropertyTa
     return lines;
 }
 
+// Through the shared source cache: every variant of every material composes from the same
+// adapters and surfaces, and the compile that follows reads the same held bytes.
 static bool ReadFile(const std::filesystem::path& p, std::string& out)
 {
-    std::ifstream in(p, std::ios::binary);
-    if (!in.is_open())
+    const ShaderSourceCache::EntryPtr entry = ShaderSourceCache::Get().Read(p, ShaderSourceCache::NormalizedKey(p));
+    if (!entry)
         return false;
-    out.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    out = entry->Bytes;
     return true;
 }
 

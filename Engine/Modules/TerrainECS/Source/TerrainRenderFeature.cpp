@@ -1,4 +1,5 @@
 #include "TerrainECS/TerrainRenderFeature.h"
+#include "Mathematics/Interpolation.h"
 #include "TerrainECS/TerrainAtlas.h"
 #include "TerrainECS/TerrainColorMap.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -1371,10 +1372,10 @@ void TerrainRenderFeature::AccumulateAtlasHeightDirtyUV(TerrainHandle handle, fl
     if (handle.Index >= m_UnifiedHeightDirty.size())
         m_UnifiedHeightDirty.resize(handle.Index + 1);
     auto& d = m_UnifiedHeightDirty[handle.Index];
-    const float32 u0 = std::clamp(minU, 0.0f, 1.0f);
-    const float32 v0 = std::clamp(minV, 0.0f, 1.0f);
-    const float32 u1 = std::clamp(maxU, 0.0f, 1.0f);
-    const float32 v1 = std::clamp(maxV, 0.0f, 1.0f);
+    const float32 u0 = Math::Clamp01(minU);
+    const float32 v0 = Math::Clamp01(minV);
+    const float32 u1 = Math::Clamp01(maxU);
+    const float32 v1 = Math::Clamp01(maxV);
     if (!d.HasRect)
     {
         d.MinU = u0;
@@ -1415,10 +1416,10 @@ void TerrainRenderFeature::AccumulateUnifiedHeightDirty(TerrainHandle handle, ui
     // footprint) closes it; the clamp keeps an edge-touching rect inside [0,1].
     const float32 invW = 1.0f / static_cast<float32>(texW);
     const float32 invH = 1.0f / static_cast<float32>(texH);
-    const float32 u0 = std::clamp((static_cast<float32>(dstX) - 1.0f) * invW, 0.0f, 1.0f);
-    const float32 v0 = std::clamp((static_cast<float32>(dstY) - 1.0f) * invH, 0.0f, 1.0f);
-    const float32 u1 = std::clamp((static_cast<float32>(dstX + srcW) + 1.0f) * invW, 0.0f, 1.0f);
-    const float32 v1 = std::clamp((static_cast<float32>(dstY + srcH) + 1.0f) * invH, 0.0f, 1.0f);
+    const float32 u0 = Math::Clamp01((static_cast<float32>(dstX) - 1.0f) * invW);
+    const float32 v0 = Math::Clamp01((static_cast<float32>(dstY) - 1.0f) * invH);
+    const float32 u1 = Math::Clamp01((static_cast<float32>(dstX + srcW) + 1.0f) * invW);
+    const float32 v1 = Math::Clamp01((static_cast<float32>(dstY + srcH) + 1.0f) * invH);
 
     if (!d.HasRect)
     {

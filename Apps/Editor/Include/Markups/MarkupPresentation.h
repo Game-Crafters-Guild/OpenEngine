@@ -15,6 +15,7 @@
 
 namespace GameEngine
 {
+struct ColorSRGB;
 class SceneViewController;
 struct SceneViewCameraPose;
 class UIElement;
@@ -37,8 +38,8 @@ std::optional<uint32_t> MarkupTagArgb(uint32 tagId);
 // black and white): a pill filled with the tag's color then takes the dark-text class.
 bool MarkupTagReadsDarkText(uint32 tagId);
 // The tag's name as the user reads it, empty for an unknown id. The vocabulary keeps the
-// name the agent API uses ("InProgress"); every surface shows it with a lowercase word
-// break at each lower-to-upper case step ("In progress"). Names without one show as named.
+// name the agent API uses ("InProgress"); every surface shows it as words in title case
+// through IdentifierToWords ("In Progress"). A name that holds a space shows as named.
 std::string MarkupTagLabel(uint32 tagId);
 // What every surface calls a mark-up with no name: the Mark-ups panel's row, the Scene View's
 // label, the inspector's header and the Hierarchy (EditorComponentTraits::UntitledName).
@@ -54,7 +55,7 @@ std::vector<std::string> MarkupTagNames(const ECS::World& world, ECS::EntityHand
 bool MarkupHasOwnColor(const Components::Markup& markup);
 // The color a mark-up draws in: its own (Markup::Color), else its status tag's, else the
 // theme's grey for a status the vocabulary does not hold (--ui_color_markup_unknown_status).
-std::array<float32, 3> MarkupDisplayRgb(const Components::Markup& markup);
+ColorSRGB MarkupDisplayRgb(const Components::Markup& markup);
 // MarkupDisplayRgb as opaque 0xAARRGGBB.
 uint32_t MarkupDisplayArgb(const Components::Markup& markup);
 // Makes `argb` (0xAARRGGBB, as the color picker gives it) the mark-up's own color, opaque.
@@ -70,7 +71,7 @@ const char* MarkupAuthorText(Components::MarkupAuthor author);
 // Activity tab alike.
 bool MarkupEntryIsAction(const MarkupECS::MarkupEntry& entry);
 // What an action entry did, as its line reads after the author: "created it", "set it to
-// In progress", "moved and resized it", "renamed it to The Docks and changed its color to" (a
+// In Progress", "moved and resized it", "renamed it to The Docks and changed its color to" (a
 // recolor that kept its color ends the line, its swatch after it: BuildMarkupEntryColorSwatch).
 // A comment's text.
 std::string MarkupEntryText(const MarkupECS::MarkupEntry& entry);

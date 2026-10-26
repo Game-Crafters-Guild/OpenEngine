@@ -68,6 +68,16 @@ using MarkupECS::MarkupService;
 namespace
 {
 
+// The start tag of the element of `layout` (XML text) whose id is `id`; empty when none has it.
+std::string LayoutElement(const std::string& layout, const std::string& id)
+{
+    const std::size_t at = layout.find("id=\"" + id + "\"");
+    if (at == std::string::npos)
+        return std::string();
+    const std::size_t start = layout.rfind('<', at);
+    return layout.substr(start, layout.find('>', at) - start);
+}
+
 // Every element of type T under `root`, depth first.
 template <typename T>
 void CollectAll(UIElement& root, std::vector<T*>& found)
@@ -219,7 +229,7 @@ class MarkupEditorBridgeTest : public ::testing::Test
         return BuildSection<Markup>(entity, undo);
     }
 
-    // Writes `text` into the section's comment field and presses Add comment.
+    // Writes `text` into the section's comment field and presses Add Comment.
     static void AddCommentThroughSection(UIElement& section, const std::string& text)
     {
         for (TextArea* area : FindAll<TextArea>(section))
@@ -229,7 +239,7 @@ class MarkupEditorBridgeTest : public ::testing::Test
         }
         for (Button* button : FindAll<Button>(section))
         {
-            if (button->GetText() == "Add comment")
+            if (button->GetText() == "Add Comment")
                 button->TriggerClick();
         }
     }
@@ -768,7 +778,32 @@ TEST_F(MarkupEditorBridgeTest, AnUnknownStatusPillTakesTheThemesClass)
     EXPECT_FALSE(pill.Overrides().Get(Style::BackgroundColor).has_value());
 }
 
-// The inspector section's Add comment is one undo step, made for the user: undo takes the
+// The status words read as the rest of the editor's labels, in title case, on the pills, in both
+// status dropdowns and in the thread's status line; the vocabulary keeps the names the agent sends.
+TEST_F(MarkupEditorBridgeTest, TheStatusWordsReadInTitleCase)
+{
+    EXPECT_EQ(Editor::MarkupTagLabel(Components::kMarkupStatusProposed), "Proposed");
+    EXPECT_EQ(Editor::MarkupTagLabel(Components::kMarkupStatusInProgress), "In Progress");
+    EXPECT_EQ(Editor::MarkupTagLabel(Components::kMarkupStatusProblem), "Problem");
+    EXPECT_EQ(MarkupService::Get().FindTag("InProgress"), Components::kMarkupStatusInProgress);
+
+    const ECS::EntityHandle lake = CreateMarkup();
+    ASSERT_TRUE(MarkupService::Get().SetStatus(World, lake, Components::kMarkupStatusInProgress, MarkupAuthor::Agent, m_Now));
+    EXPECT_EQ(Editor::MarkupEntryText(MarkupService::Get().FindNotes(World, lake)->Entries.back()),
+              "set it to In Progress");
+}
+
+// The Mark-ups panel's own buttons read in title case, as the status words beside them do.
+TEST_F(MarkupEditorBridgeTest, TheMarkupsPanelsButtonsReadInTitleCase)
+{
+    std::ifstream in(std::filesystem::path(GE_EDITOR_SOURCE_DIR) / "Assets/UI/panels/MarkupsPanel.uxml");
+    const std::string layout((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    ASSERT_FALSE(layout.empty());
+    EXPECT_NE(LayoutElement(layout, "MarkupsShowAll").find("text=\"Show All\""), std::string::npos);
+    EXPECT_NE(LayoutElement(layout, "MarkupsHideAll").find("text=\"Hide All\""), std::string::npos);
+}
+
+// The inspector section's Add Comment is one undo step, made for the user: undo takes the
 // comment out again and redo puts it back.
 TEST_F(MarkupEditorBridgeTest, TheInspectorSectionCommitsAnAddedCommentAsOneUndoStep)
 {
@@ -807,7 +842,7 @@ TEST_F(MarkupEditorBridgeTest, TheInspectorSectionIsReadOnlyInPlay)
     EXPECT_FALSE(undo.CanUndo());
     for (Button* button : FindAll<Button>(*section))
     {
-        if (button->GetText() == "Add comment")
+        if (button->GetText() == "Add Comment")
         {
             EXPECT_FALSE(button->IsEnabled());
         }

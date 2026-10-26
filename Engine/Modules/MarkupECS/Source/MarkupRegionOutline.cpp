@@ -1,6 +1,7 @@
 #include "MarkupECS/MarkupRegionOutline.h"
 
 #include "Mathematics/Geometry.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector3.h"
 #include "Spline/SplineUtility.h"
 
@@ -38,7 +39,7 @@ float32 DistanceToSegment(const Vector2& p, const Vector2& a, const Vector2& b)
     const float32 aby = b.y - a.y;
     const float32 lengthSquared = abx * abx + aby * aby;
     float32 t = lengthSquared > 0.0f ? ((p.x - a.x) * abx + (p.y - a.y) * aby) / lengthSquared : 0.0f;
-    t = std::clamp(t, 0.0f, 1.0f);
+    t = Math::Clamp01(t);
     const float32 dx = p.x - (a.x + abx * t);
     const float32 dy = p.y - (a.y + aby * t);
     return std::sqrt(dx * dx + dy * dy);
