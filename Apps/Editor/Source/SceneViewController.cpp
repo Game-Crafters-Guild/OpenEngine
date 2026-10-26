@@ -58,6 +58,7 @@
 #include "Logger/Logger.h"
 #include "Picking/ScenePick.h"
 #include "Picking/PickRootResolver.h"
+#include "Editor/Entities/EditorComponentTraits.h"
 #include "UI/Controls/Widgets/CameraBookmarksWidget.h"
 #include "Editor/Settings/SceneViewSettings.h"
 #include "SceneView/SceneViewFraming.h"
@@ -1141,6 +1142,13 @@ std::string_view SceneViewController::GetActiveRegisteredToolId() const
 void SceneViewController::ActivateRegisteredToolForSelection(ECS::EntityHandle primary)
 {
     ECS::World* world = &GetWorld();
+    if (!world->IsValid(primary))
+        return;
+    for (const auto& [type, traits] : Editor::EditorComponentTraitsRegistry::Get().Snapshot())
+    {
+        if (traits.PreserveSceneToolOnSelection && world->HasComponent(primary, type))
+            return;
+    }
     for (const Editor::SceneViewToolStripEntry& entry : Editor::SceneViewToolStripRegistry::Get().Entries())
     {
         if (entry.ActivatesForSelection && entry.ActivatesForSelection(*world, primary, m_SelectedEntities))

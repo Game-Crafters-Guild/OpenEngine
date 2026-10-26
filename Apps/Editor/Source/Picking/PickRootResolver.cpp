@@ -6,6 +6,7 @@
 
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Components/RuntimeOnlyEntity.h"
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "Editor/Entities/EditorComponentTraits.h"
@@ -80,6 +81,20 @@ ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity)
     if (!entity.IsValid() || !world.IsValid(entity))
         return entity;
 
+    // Generated pieces select the authoring root registered through entity traits.
+    if (world.HasComponent<Components::RuntimeOnlyEntity>(entity))
+    {
+        const auto* parent = world.GetComponent<Components::Parent>(entity);
+        if (parent && world.IsValid(parent->Entity))
+        {
+            for (const auto& [type, traits] : EditorComponentTraitsRegistry::Get().Snapshot())
+            {
+                if (traits.IsPickInstanceRoot && world.HasComponent(parent->Entity, type))
+                    return parent->Entity;
+            }
+        }
+    }
+
     const auto* mr = world.GetComponent<Components::MeshRenderer>(entity);
     if (!mr)
         return entity;
@@ -145,8 +160,10 @@ void BuildPickCandidates(ECS::World& world,
     }
     for (const Scene::PickHit& hit : sortedHits)
     {
-        if (std::find(outCandidates.begin(), outCandidates.end(), hit.Entity) == outCandidates.end())
-            outCandidates.push_back(hit.Entity);
+        const auto entity = !exactPick && world.HasComponent<Components::RuntimeOnlyEntity>(hit.Entity)
+            ? ResolvePickRoot(world, hit.Entity) : hit.Entity;
+        if (std::find(outCandidates.begin(), outCandidates.end(), entity) == outCandidates.end())
+            outCandidates.push_back(entity);
     }
 }
 
