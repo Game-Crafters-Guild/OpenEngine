@@ -209,7 +209,7 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
     const float32 handleThickness = settings.GetHandleThickness();
     const bool constantScreen = settings.GetConstantScreenSize();
     const bool smartDist = settings.GetSmartDistanceScaling();
-    const bool drapeToSurface = settings.GetDrapeToSurface();
+    const bool drapeToSurface = settings.GetDrapeToSurface() && !context.IsEditor2DMode();
     const bool showWidthEnvelope = settings.GetShowWidthEnvelope();
     const bool lineSmart = constantScreen && smartDist;
     const bool canBatchThickTriangles =
@@ -398,7 +398,7 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
             // one cache entry serves both, so the drawn centerline and the
             // envelope cannot disagree. The band's edge rays are the expensive
             // two-thirds, so the setting gates the cast, not just the draw.
-            const bool wantEnvelope = isSelectedEntity && showWidthEnvelope;
+            const bool wantEnvelope = isSelectedEntity && showWidthEnvelope && comp.ShowWidthEnvelope;
             const DrapeCache* drape = nullptr;
             if (!claim.Claimed && (drapeToSurface || wantEnvelope))
                 drape = &refreshDrapeCache(e, comp, *data, xf, worldM,

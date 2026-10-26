@@ -63,6 +63,7 @@
 #include "Components/SceneEntityTag.h"
 #include "Components/SceneViewHidden.h"
 #include "Components/Spline/SplineExtrude.h"
+#include "Components/Spline/SplineComponent.h"
 #include "Components/Spline/SplineFence.h"
 #include "Components/Spline/SplineWall.h"
 #include "Components/Spline/SplinePlacement.h"
@@ -12182,3 +12183,22 @@ TEST(SceneIO, CameraExposureCompensationCurveDropsNonFiniteKeys)
     EXPECT_EQ(flat->AutoExposureCompensationCurve.KeyCount, 0u);
 }
 
+
+TEST(SceneIO, SplineWidthEnvelopeVisibilitySurvivesSceneReload)
+{
+    const auto path = MakeTempPath("spline_width_envelope.scene");
+    ECS::World source;
+    const auto entity = source.CreateEntity();
+    source.AddComponentImmediate(entity, Components::SceneEntityTag{{'w', 'i', 'd', 't', 'h', '\0'}});
+    Components::SplineComponent spline{};
+    spline.ShowWidthEnvelope = false;
+    source.AddComponentImmediate(entity, spline);
+    ASSERT_TRUE(Scene::SaveSceneToFile(source, path, Scene::SaveOptions{}));
+    ECS::World loaded;
+    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    const auto restored = FindByTag(loaded, "width");
+    ASSERT_TRUE(restored.IsValid());
+    const auto* value = loaded.GetComponent<Components::SplineComponent>(restored);
+    ASSERT_NE(value, nullptr);
+    EXPECT_FALSE(value->ShowWidthEnvelope);
+}

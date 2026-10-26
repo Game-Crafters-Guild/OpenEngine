@@ -3656,6 +3656,7 @@ void SceneViewController::FrameAll()
 void SceneViewController::PopulatePointerCameraState(Editor::SceneTools::ScenePointerEvent& ev) const
 {
     ev.cameraPos = GetCameraWorldPos();
+    ev.IsEditor2D = m_Is2DMode;
 
     const float yawR = m_CamYawDeg * 3.1415926535f / 180.0f;
     const float pitR = m_CamPitchDeg * 3.1415926535f / 180.0f;
