@@ -377,6 +377,8 @@ struct SceneTlasImpl
     // Diagnostics: leaves refit by any path, and reconciles run.
     uint64                                                   RefitLeafCount = 0u;
     uint64                                                   ReconcileCount = 0u;
+    // SceneTlas::Version. Written under the unique lock; read without a lock.
+    std::atomic<uint64>                                      Version{0u};
 
     // ---- RequestCurrent (SceneTlasRequest.cpp) -------------------------
     // The moved renderables as of the kick: entity, version, world bounds.

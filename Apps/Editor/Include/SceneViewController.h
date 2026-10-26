@@ -38,7 +38,7 @@
 namespace GameEngine
 {
 
-namespace Editor::Picking
+namespace Scene
 {
 struct PickHit;
 }
@@ -789,7 +789,7 @@ class SceneViewController
     std::size_t m_PickCacheStructuralVersion = 0;
     bool m_PickCacheExactMode = false;
     bool m_PickCacheValid = false;
-    std::vector<Editor::Picking::PickHit> m_PickHits;
+    std::vector<Scene::PickHit> m_PickHits;
     std::vector<ECS::EntityHandle> m_PickCandidates;
     bool m_SuppressHoverNamePill = false;
     std::vector<ECS::EntityHandle> m_HoveredDescendants;

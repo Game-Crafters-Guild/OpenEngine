@@ -22,7 +22,7 @@ enum class NavigationSourcePolicy : uint8
 };
 
 // The navigation bake's policy for the meshes of this entity and of every descendant that has no
-// NavigationSource of its own: blueprint children and the submesh entities a model loads under it.
+// NavigationSource of its own: prefab children and the submesh entities a model loads under it.
 // An entity with no NavigationSource on itself or an ancestor bakes as Auto.
 struct NavigationSource
 {

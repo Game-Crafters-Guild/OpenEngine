@@ -2209,7 +2209,7 @@
         "Storage",
         "CopySrc"
       ],
-      "zeroOnCreate": true
+      "perFrameCopies": true
     },
     "BloomA": {
       "preExposed": true,

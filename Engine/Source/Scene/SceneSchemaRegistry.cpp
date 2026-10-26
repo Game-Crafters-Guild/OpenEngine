@@ -295,5 +295,19 @@ std::vector<const ISceneComponentSchema*> SceneSchemaRegistry::GetAllSorted()
     return out;
 }
 
+std::vector<ECS::ComponentTypeId> SceneSchemaRegistry::GetSavedComponentTypes()
+{
+    std::vector<ECS::ComponentTypeId> types;
+    for (const ISceneComponentSchema* schema : GetAllSorted())
+        if (const ECS::ComponentTypeId typeId = ComponentTypeForSchema(*schema); typeId != 0)
+            types.push_back(typeId);
+    for (const auto& [typeId, handler] : ECS::ComponentRegistry::GetAllHandlers())
+        if (ReflectionSchemaForUnhandledType(typeId) != nullptr)
+            types.push_back(typeId);
+    std::sort(types.begin(), types.end());
+    types.erase(std::unique(types.begin(), types.end()), types.end());
+    return types;
+}
+
 } // namespace GameEngine::Scene
 

@@ -67,7 +67,7 @@ Read the diff against every section of the style guide, not from memory. The one
 - **Control flow and errors.** Early returns over nesting; a hot path straight-line; no exceptions on a hot path, validation and early returns instead; the project's assert macro, never with a side effect inside it.
 - **Concurrency.** Thread affinity and ownership stated on a public API; the job system (`Query::Parallel`, `JobCounter`) over a thread of the change's own; immutability first, then a named synchronization primitive.
 - **Templates and copies.** A public template constrained by a concept or a `requires` clause; a large template body in an `.inl`; move operations for a heavy type, copy semantics deleted or defined on purpose.
-- **Logging and comments.** Nothing verbose on a hot path, warnings and errors only, no enter and exit lines; Doxygen on public APIs; a comment states the invariant, the unit, the convention or the trap as it is now, never history, never what a value used to be, never a word to a reviewer, no author or date stamp; no commented-out code, no vague TODO.
+- **Logging and comments.** Nothing verbose on a hot path, warnings and errors only, no enter and exit lines; Doxygen on public APIs; a comment states the invariant, the unit, the convention or the trap as it is now, never history, never what a value used to be, never a word to a reviewer, no author or date stamp; no commented-out code, no vague TODO. Every comment the diff adds or touches is one to three lines of Simplified Technical English (the `writing-simplified-technical-english` skill) and says what the code is, not what changed: a comment that narrates a change, a former value, a removed path or the review that asked for it is deleted; a comment over three lines is cut to its invariant.
 - **Tests.** A test name states the behavior; the file sized like its neighbors; scratch checks not committed.
 - **Migrate on contact.** Old-style code in a function the change edits is brought to these rules in the same change; an untouched neighbor is left alone (that is a sweep, asked for separately).
 
@@ -80,7 +80,8 @@ grep -n -E '\bfloat\s+\w+\[(3|4|9|16)\]|std::array<float,\s*(3|4|9|16)>' $(cat /
 grep -n -E '^#include' $(cat /tmp/touched.txt)                                                                     # the order: own header, module headers, standard library, third-party
 grep -n -E '\b(std::thread|std::async|std::jthread|CreateThread|_beginthread)\b' $(cat /tmp/touched.txt)            # a thread of the change's own
 grep -n -E '\[&\]' $(cat /tmp/touched.txt)                                                                        # a lambda capturing everything: a named function instead
-grep -n -E '\bTODO\b|\bFIXME\b|^\s*//\s*(was|previously|used to)' $(cat /tmp/touched.txt)                        # vague TODOs and history in comments
+grep -n -E '\bTODO\b|\bFIXME\b' $(cat /tmp/touched.txt)                                                          # vague TODOs
+grep -n -i -E "^\s*(//|\*|#).*\b($(paste -sd'|' Tools/CleanupGate/history_words.txt))\b" $(cat /tmp/touched.txt)   # change narration in comments: the word list of the cleanup gate's history_comment
 ```
 
 Fix what the pass and the greps find before the pull request opens. A reviewer walks the same list and runs the same greps, and a style item it finds is a should-fix, not taste. The "Reuse and surface" section of the body ends with one line that names what was checked: `Style pass: names, raw arrays, include order, threads, lambdas, comments checked over N files; nothing left`, or the items left with their reason (a layout a boundary pins, a third-party signature). A line that claims nothing left over a diff with a miss is the finding at the top of the review.

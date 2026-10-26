@@ -82,7 +82,7 @@ NavigationStaticGeometry GatherNavigationStaticGeometry(ECS::World& world);
 // each once. Primitives have no asset behind them and are never listed.
 std::vector<GUID> FindUnloadedNavigationModels(ECS::World& world);
 
-// The terrain a surface bakes: the first enabled planar terrain, as TerrainECS resolves it.
+// The terrain a surface bakes: the planar terrain under the surface's origin, as TerrainECS resolves it.
 struct NavigationTerrainSource
 {
     TerrainECS::SurfaceHeightQuery Query;
@@ -94,7 +94,9 @@ struct NavigationTerrainSource
     bool OverlapsXZ(float32 minX, float32 minZ, float32 maxX, float32 maxZ) const;
 };
 
-NavigationTerrainSource ResolveNavigationTerrainSource(ECS::World& world);
+// `surfaceTransform` is the navigation surface's transform; null reads the terrain under the world origin.
+NavigationTerrainSource ResolveNavigationTerrainSource(ECS::World& world,
+                                                       const Components::WorldTransform* surfaceTransform);
 
 // Appends the terrain's lattice quads touching the XZ rectangle to `out`, taking every
 // `stride`-th lattice corner, each corner at the finest height the terrain has (RequireFinest:

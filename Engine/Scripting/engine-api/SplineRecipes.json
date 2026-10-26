@@ -1,0 +1,142 @@
+{
+  "format": 1,
+  "name": "SplineRecipes",
+  "hash": "0xe32c85c1a9c247d5",
+  "constants": [],
+  "enums": [
+    {
+      "id": "SplineRecipes.BuildState",
+      "name": "BuildState",
+      "cpp": "GameEngine::SplineRecipes::BuildState",
+      "header": "SplineRecipes/SplineRecipesScriptApi.h",
+      "line": 24,
+      "doc": "Where a spline recipe's build stands.",
+      "underlying": "UInt8",
+      "values": [
+        {
+          "name": "Pending",
+          "value": 0
+        },
+        {
+          "name": "Held",
+          "value": 1
+        },
+        {
+          "name": "Built",
+          "value": 2
+        },
+        {
+          "name": "Failed",
+          "value": 3
+        }
+      ]
+    }
+  ],
+  "events": [],
+  "functions": [
+    {
+      "id": "SplineRecipes.Failures",
+      "name": "Failures",
+      "cpp": "GameEngine::SplineRecipes::Failures",
+      "header": "SplineRecipes/SplineRecipesScriptApi.h",
+      "line": 59,
+      "doc": "Writes every Failed recipe into `failures` and returns how many there are, also when that is more than `failures` holds.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "Int32"
+      },
+      "params": [
+        {
+          "name": "failures",
+          "kind": "Span",
+          "element": {
+            "kind": "Record",
+            "type": "SplineRecipes.RecipeStatus"
+          },
+          "out": true
+        }
+      ]
+    },
+    {
+      "id": "SplineRecipes.IsSceneSettled",
+      "name": "IsSceneSettled",
+      "cpp": "GameEngine::SplineRecipes::IsSceneSettled",
+      "header": "SplineRecipes/SplineRecipesScriptApi.h",
+      "line": 54,
+      "doc": "True when no recipe in the world is Pending or Held: every recipe is Built or Failed. A world with no recipe is settled. Poll it each frame: an edit or a late asset can unsettle it again.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": []
+    },
+    {
+      "id": "SplineRecipes.ReasonOf",
+      "name": "ReasonOf",
+      "cpp": "GameEngine::SplineRecipes::ReasonOf",
+      "header": "SplineRecipes/SplineRecipesScriptApi.h",
+      "line": 64,
+      "doc": "Why `recipe` is Held or Failed, or why a Built recipe made nothing, in words that name the fix. Empty for a recipe that is Pending, or Built with output.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "String"
+      },
+      "params": [
+        {
+          "name": "recipe",
+          "kind": "Entity"
+        }
+      ]
+    },
+    {
+      "id": "SplineRecipes.StateOf",
+      "name": "StateOf",
+      "cpp": "GameEngine::SplineRecipes::StateOf",
+      "header": "SplineRecipes/SplineRecipesScriptApi.h",
+      "line": 49,
+      "doc": "The build state of `recipe`. A recipe the recipe system has not updated yet is Pending. An entity with no recipe is Built: it has nothing to build.",
+      "thread": "main",
+      "context": "ECS::World",
+      "returns": {
+        "kind": "Record",
+        "type": "SplineRecipes.RecipeStatus"
+      },
+      "params": [
+        {
+          "name": "recipe",
+          "kind": "Entity"
+        }
+      ]
+    }
+  ],
+  "handles": [],
+  "records": [
+    {
+      "id": "SplineRecipes.RecipeStatus",
+      "name": "RecipeStatus",
+      "cpp": "GameEngine::SplineRecipes::RecipeStatus",
+      "header": "SplineRecipes/SplineRecipesScriptApi.h",
+      "line": 38,
+      "doc": "A recipe entity and its build state.",
+      "size": 8,
+      "align": 4,
+      "fields": [
+        {
+          "name": "Recipe",
+          "kind": "Entity",
+          "offset": 0
+        },
+        {
+          "name": "State",
+          "kind": "Enum",
+          "type": "SplineRecipes.BuildState",
+          "offset": 4,
+          "default": "Pending"
+        }
+      ]
+    }
+  ]
+}

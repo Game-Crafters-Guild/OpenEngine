@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -206,7 +207,8 @@ std::string FirstRepeatedKey(std::string_view text)
         }
         return true;
     };
-    (void)nlohmann::json::parse(text, callback, false);
+    // Only the callback is wanted. GCC does not let a void cast drop a warn_unused_result value.
+    std::ignore = nlohmann::json::parse(text, callback, false);
     return repeated;
 }
 

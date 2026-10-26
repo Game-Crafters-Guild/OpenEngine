@@ -145,6 +145,8 @@ target_include_directories(UI PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Include)
 # AssetManager.h includes FileWatcher/FileWatcher.h. Headers only: the
 # FileWatcher objects reach the binary through the Engine module splice.
 target_include_directories(UI PRIVATE $<TARGET_PROPERTY:FileWatcher,INTERFACE_INCLUDE_DIRECTORIES>)
+# AssetManager.h includes Events/Event.h (header-only).
+target_link_libraries(UI PRIVATE Events)
 
 # Third-party dependencies via vcpkg (optional for now; linked when present)
 find_package(pugixml CONFIG QUIET)
@@ -613,6 +615,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextFieldPointerTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FieldCaptionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FloatFieldDragToChangeTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PointerLockTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextInputSelectionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ReleaseFocusHandoffTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextInputCursorTests.cpp

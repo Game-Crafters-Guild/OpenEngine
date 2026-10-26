@@ -451,7 +451,7 @@ void RegisterPostProcessVolumeInspector()
         tintColor.ChangeLabel = "Change Night Tint Color";
         InspectorUI::AddComponentColorRow<PP>(ctx.Parent, "Color",
             "Night tint color: the hue the dark field takes. Only its hue is used; the image keeps its "
-            "brightness.", std::move(tintColor));
+            "brightness. Double-click the label to reset to the default.", std::move(tintColor));
 
         // The button is owned and mounted by the volume inspector. Nested effect
         // sections are appended later, and the button's flex order keeps it last.

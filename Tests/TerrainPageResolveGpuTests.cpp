@@ -43,6 +43,7 @@ struct FieldShape
     const char* Name;
     uint32 SamplesX;
     uint32 SamplesZ;
+    PageTableBudget Budget = kDenseFieldTable;
 };
 
 // The CBTPageField and CBTPageLevel of cbt_page.glsl, std430.
@@ -52,6 +53,10 @@ struct GpuPageField
     uint32 Level0SamplesZ;
     uint32 LevelCount;
     uint32 SlotsPerRow;
+    uint32 FloorLevel;
+    uint32 TierCount;
+    uint32 DirectoryOffset;
+    uint32 Pad;
 };
 
 struct GpuPageLevel
@@ -236,18 +241,27 @@ protected:
     std::vector<float32> Dispatch(const PagedField& field, const std::vector<QueryPoint>& points)
     {
         std::vector<GpuPageLevel> levels;
-        for (const PageStreaming::PageStoreLevel& level : field.Table.Levels)
-            levels.push_back({level.FirstEntry, level.PagesX, level.PagesZ, 0u});
-        const GpuPageField shape{field.Table.Levels.front().SamplesX, field.Table.Levels.front().SamplesZ,
-                                 uint32(field.Table.Levels.size()), field.Geometry.SlotsPerRow};
+        const std::span<const PageStreaming::PageStoreLevel> tableLevels = field.Table.Levels();
+        for (std::size_t level = 0; level < tableLevels.size(); ++level)
+            levels.push_back({field.Table.LevelOffsets()[level], tableLevels[level].PagesX, tableLevels[level].PagesZ, 0u});
+        const GpuPageField shape{tableLevels.front().SamplesX,
+                                 tableLevels.front().SamplesZ,
+                                 uint32(tableLevels.size()),
+                                 field.Geometry.SlotsPerRow,
+                                 field.Table.FloorLevel(),
+                                 field.Table.TierCount(),
+                                 field.Table.DirectoryOffset(),
+                                 0u};
         std::vector<uint8_t> queries(sizeof(GpuPageField) + 16u + points.size() * sizeof(QueryPoint));
         const uint32 count[4] = {uint32(points.size()), 0u, 0u, 0u};
         std::memcpy(queries.data(), &shape, sizeof(shape));
         std::memcpy(queries.data() + sizeof(shape), count, sizeof(count));
         std::memcpy(queries.data() + sizeof(shape) + 16u, points.data(), points.size() * sizeof(QueryPoint));
 
-        const BufferHandle entries = MakeBuffer(field.Table.Entries.data(), field.Table.Entries.size() * sizeof(uint32), "Probe.Entries");
-        const BufferHandle fades = MakeBuffer(field.Table.SlotFade.data(), field.Table.SlotFade.size() * sizeof(float32), "Probe.Fades");
+        const std::span<const uint32> words = field.Table.Words();
+        const std::span<const float32> slotFades = field.Table.SlotFades();
+        const BufferHandle entries = MakeBuffer(words.data(), words.size_bytes(), "Probe.Entries");
+        const BufferHandle fades = MakeBuffer(slotFades.data(), slotFades.size_bytes(), "Probe.Fades");
         const BufferHandle shapes = MakeBuffer(levels.data(), levels.size() * sizeof(GpuPageLevel), "Probe.Levels");
         const BufferHandle query = MakeBuffer(queries.data(), queries.size(), "Probe.Queries");
         const size_t resultBytes = points.size() * sizeof(float32);
@@ -259,8 +273,8 @@ protected:
         setDesc.debugName = "TerrainPageResolveProbe.Set";
         const DescriptorSetHandle set = m_Device->CreateDescriptorSet(setDesc);
         m_Device->UpdateCombinedImageSamplerBinding(set, 0, m_Texture, m_Sampler);
-        m_Device->UpdateStorageBufferBinding(set, 1, entries, 0, field.Table.Entries.size() * sizeof(uint32));
-        m_Device->UpdateStorageBufferBinding(set, 2, fades, 0, field.Table.SlotFade.size() * sizeof(float32));
+        m_Device->UpdateStorageBufferBinding(set, 1, entries, 0, words.size_bytes());
+        m_Device->UpdateStorageBufferBinding(set, 2, fades, 0, slotFades.size_bytes());
         m_Device->UpdateStorageBufferBinding(set, 3, shapes, 0, levels.size() * sizeof(GpuPageLevel));
         m_Device->UpdateStorageBufferBinding(set, 4, query, 0, queries.size());
         m_Device->UpdateStorageBufferBinding(set, 5, results, 0, resultBytes);
@@ -295,7 +309,7 @@ protected:
 TEST_P(TerrainPageResolveGpu, TheDeviceResolveIsTheMirrorWithinTheSubTexelQuantum)
 {
     const FieldShape shape = GetParam();
-    PagedField field(640, 0.4f, shape.SamplesX, shape.SamplesZ);
+    PagedField field(640, 0.4f, shape.SamplesX, shape.SamplesZ, shape.Budget);
     DriveToMixedResidency(field);
     ASSERT_NE(field.Cache.SlotOf(PagedField::Page(PageAddress{0, 0, 3, 2})), PageStreaming::kNoResidentSlot);
     ASSERT_LT(field.Cache.FadeOf(PagedField::Page(PageAddress{0, 1, 1, 1})), 1.0f) << "the fade chain is not mid-fade";
@@ -325,5 +339,7 @@ TEST_P(TerrainPageResolveGpu, TheDeviceResolveIsTheMirrorWithinTheSubTexelQuantu
 
 INSTANTIATE_TEST_SUITE_P(FieldShapes, TerrainPageResolveGpu,
                          ::testing::Values(FieldShape{"UnifiedTiled8193x2049", 8193u, 2049u},
-                                           FieldShape{"AtlasTiled16385x4097", 16385u, 4097u}),
+                                           FieldShape{"AtlasTiled16385x4097", 16385u, 4097u},
+                                           // Only the top level dense: two tiers of blocks below it (six levels, then two).
+                                           FieldShape{"TieredTwoTiers16385x4097", 16385u, 4097u, PageTableBudget{4u, 640u, 640u}}),
                          [](const ::testing::TestParamInfo<FieldShape>& info) { return std::string(info.param.Name); });

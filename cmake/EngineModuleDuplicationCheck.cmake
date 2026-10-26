@@ -211,7 +211,7 @@ function(ge_check_engine_module_duplication)
             "second copy of their state (two allocation counters and stats registries, two of "
             "every module singleton):${_violations}\n"
             "Link Engine alone: it re-exports every module's include directories and compile "
-            "definitions. A module Engine does not contain (Apps/Editor splices MeshPicking) "
+            "definitions. A module Engine does not contain (EditorSDK carries VCSIntegration) "
             "may still be linked or spliced beside it.")
     endif()
 endfunction()

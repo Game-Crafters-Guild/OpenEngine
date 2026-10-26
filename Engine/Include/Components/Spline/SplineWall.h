@@ -84,7 +84,7 @@ struct SplineWall
     // hand-written comparison that missed a field would silently stop rebuilds
     // for edits to that field. A NaN float would make a recipe unequal to itself
     // and re-arm the rebuild forever, so the controller compares sanitized
-    // recipes only (SanitizeWallRecipe, Placement/SplineWallSanitize.h).
+    // recipes only (SanitizeWallRecipe, SplineRecipes/SplineWallSanitize.h).
     bool operator==(const SplineWall&) const = default;
 };
 

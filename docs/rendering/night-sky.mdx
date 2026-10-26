@@ -97,6 +97,19 @@ The **Preset** list sets the star settings and the night tint together, with one
 
 The presets do not change **Seen by**, the sky's exposure trim or any other sky setting. Physical with the default **Seen by: Camera** is the sky as a camera records it. The field shows the preset that the star settings and the night tint match. After you change a star setting or the night tint by hand, the field reads **Custom**. When only the night tint differs from every preset, the row says so under the field. Custom is not in the list: pick a preset to go back to one. The night tint is on each global **Post Process Volume**, and a preset sets it on all of them. If the world has no global Post Process Volume, the row says so, and a preset sets the star settings only. Add a global Post Process Volume to control the night tint.
 
+## Falling stars
+
+A falling star (a meteor) is one of the night sky's stars that moves: the same brightness scale and color, the same dimming and reddening near the horizon, hidden by a bright sky the same way, and seen by the same eye or camera (**Seen by**). The 2D backdrop shows falling stars too. A falling star burns in the upper air, far in front of the moon, so it draws over the moon's disk. Each falling star has its own path, speed and brightness, and no two are the same:
+
+- It starts at least 15 degrees above the horizon and moves down the sky on a great circle, at 8 to 30 degrees a second, for 0.3 to 1 second. Its light rises and falls during the flight.
+- Its brightest magnitude is between +1 and -3. Each magnitude brighter is 2.5 times rarer, as in a real meteor count, so most falling stars peak near +1 and a few are brighter than any star. At its brightest, each one is at least as bright as the brighter stars.
+- It shows as a streak: about a tenth of a second of light adds up, so the streak is the path that the head moved through in that time. The streak has the whole star's light, spread over its length. The head is brightest and the trail fades behind it, as the eye's afterimage fades, Seen by **Eye** or by **Camera**. A quarter of the core's light stays at the head as a small still point, so a still frame shows which end is the head. The streak is the same at every frame rate and its width is the star's core in pixels. A falling star has a round core and no spikes: **Spikes** and **Shape** apply to the stars only, and a falling star keeps the spikes' share of the light in its glow.
+
+| Setting | Scene key | Default | What it does |
+|---|---|---|---|
+| Show falling stars | `FallingStarsEnabled` | On | Draws falling stars at night, where the stars show. |
+| Interval (seconds) | `FallingStarIntervalSeconds` | 5 | The average time between two falling stars anywhere in the sky, in seconds. The range is 0.5 to 600. At the default of 5, a 60-degree view tilted up 20 degrees or more shows about one every 15 to 25 seconds, and a level view about one every 45 seconds. A clear night shows about one every 5 minutes, a strong meteor shower about one every 40 seconds. At most four falling stars are in the sky at the same time. |
+
 ## The night tint
 
 The night tint is an artistic setting on the **Post Process Volume**. It gives a night image the blue color that films use for night scenes.

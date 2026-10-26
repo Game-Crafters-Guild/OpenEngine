@@ -1,7 +1,7 @@
 #version 450
 
-// Test-only probe for the night sky's star model (StarModelTests): evaluates sky_star_model.glsl on
-// the device, so the tests measure the shipped GLSL.
+// Test-only probe for the night sky's star model and its falling stars (StarModelTests): evaluates
+// sky_star_model.glsl and sky_meteor.glsl on the device, so the tests measure the shipped GLSL.
 //
 // Each query is six vec4 slots: three in, three out. in0.x selects the function; in2 is the artistic
 // shape for the GE_StarShade ops (Star core, Star spikes, Spike length, shape). The observer is the eye
@@ -32,7 +32,22 @@
 //  14 op 13's star (the camera observer) centred at the sub-pixel position (in0.z, in0.w) of a pixel grid:
 //     GE_StarRadianceAt summed over the centres of the pixels its quad draws, as a share of the core's
 //     energy, and the brightest pixel's share                         -> out0 = (sum, brightest, 0, 0)
+//  15 a falling star: GE_MeteorAt(slot in0.y, 4 slots, time in0.z, interval in0.w, up +Y), and its head
+//     drawn by GE_StarShade at the flight's peak for a view of tanHalfFovY in1.x over in1.y rows, Star
+//     core in1.z  -> out0 = (start direction, peak magnitude), out1 = (head direction, 1 when active),
+//                    out2 = (speed in degrees per second, duration in seconds, the head's core radius
+//                            in pixels, the angle from the head to the tail in degrees)
+//  16 a white falling star of magnitude in0.y, its streak in0.z pixels long at in0.w radians, its head
+//     at the sub-pixel position (in1.x, in1.y) of a pixel grid, the eye (in1.z = 1) or a camera, Star
+//     glow in1.w, shape in2 (through GE_MeteorShape: no spikes), at 1080 rows over a 60 degree view
+//       -> out0 = (GE_StarShade's total energy, GE_MeteorRadianceAt summed over the centers of the pixels
+//                  the billboard draws, its integral on a 0.25 px grid, all in scene-linear x pixels^2;
+//                  the cut radius), out1 = (the brightest pixel's radiance in scene-linear, 0, 0, 0)
+//  17 op 16's falling star with its head at the origin: GE_MeteorRadianceAt's luminance on the streak's
+//     axis a quarter and three quarters of the way from the head to the tail, the trail's decay length,
+//     and the luminance at the head      -> out0 = (at a quarter, at three quarters, tau, at the head)
 
+#include "Includes/sky_meteor.glsl"
 #include "Includes/sky_star_model.glsl"
 
 layout(local_size_x = 64) in;
@@ -56,6 +71,70 @@ GE_StarShapeDials ShapeFrom(vec4 v, float eye)
     shape.Shape = v.w;
     shape.Eye = eye;
     return shape;
+}
+
+const uint kMeteorProbeSlots = 4u;
+const float kProbeDegreesPerRadian = 57.29577951;
+// One pixel at 1080 rows and a vertical field of view of 60 degrees, on the view axis.
+const float kPixelSolidAngle1080 = (2.0 * 0.57735027 / 1080.0) * (2.0 * 0.57735027 / 1080.0);
+
+GE_StarDrawn ShadeWhite(float magnitude, float pixelSolidAngle, GE_StarShapeDials shape, float glow)
+{
+    return GE_StarShade(magnitude, vec3(1.0), vec3(1.0), 0.0, 6.5, 1.0, glow, shape, 1.0, pixelSolidAngle);
+}
+
+void MeteorFlight(vec4 in0, vec4 in1, out vec4 out0, out vec4 out1, out vec4 out2)
+{
+    GE_Meteor m = GE_MeteorAt(uint(in0.y), kMeteorProbeSlots, in0.z, in0.w, vec3(0.0, 1.0, 0.0));
+    float pixelAngle = 2.0 * in1.x / max(in1.y, 1.0);
+    GE_StarDrawn head = ShadeWhite(m.PeakMagnitude, pixelAngle * pixelAngle,
+                                   ShapeFrom(vec4(in1.z, 0.0, 2.0, kStarShapePoint), 1.0), 0.0);
+    float tailAngle = acos(clamp(dot(m.Head, m.Tail), -1.0, 1.0));
+    out0 = vec4(m.Start, m.PeakMagnitude);
+    out1 = vec4(m.Head, m.Active ? 1.0 : 0.0);
+    out2 = vec4(m.Speed * kProbeDegreesPerRadian, m.Duration, head.CoreRadius, tailAngle * kProbeDegreesPerRadian);
+}
+
+float MeteorLuminanceAt(vec2 o, GE_StarDrawn star, vec2 streak)
+{
+    if (GE_MeteorStreakDistance(o, streak) >= GE_MeteorCutRadius(star))
+        return 0.0;
+    return dot(GE_MeteorRadianceAt(o, star, streak), vec3(0.2126, 0.7152, 0.0722));
+}
+
+void MeteorStreak(vec4 in0, vec4 in1, vec4 in2, out vec4 out0, out vec4 out1)
+{
+    GE_StarDrawn star = ShadeWhite(in0.y, kPixelSolidAngle1080, GE_MeteorShape(ShapeFrom(in2, in1.z)), in1.w);
+    vec2 streak = in0.z * vec2(cos(in0.w), sin(in0.w));
+    float reach = GE_MeteorCutRadius(star) + in0.z;
+    // The pixel centers sit at (i + 0.5) on the grid; the head at in1.xy inside its pixel.
+    float pixelSum = 0.0;
+    float brightest = 0.0;
+    int pixels = int(ceil(reach)) + 1;
+    for (int y = -pixels; y <= pixels; ++y)
+        for (int x = -pixels; x <= pixels; ++x)
+        {
+            float pixel = MeteorLuminanceAt(vec2(float(x), float(y)) + 0.5 - in1.xy, star, streak);
+            pixelSum += pixel;
+            brightest = max(brightest, pixel);
+        }
+    float integral = 0.0;
+    int steps = int(ceil(reach * 4.0));
+    for (int y = -steps; y < steps; ++y)
+        for (int x = -steps; x < steps; ++x)
+            integral += MeteorLuminanceAt((vec2(float(x), float(y)) + 0.5) * 0.25, star, streak) * 0.0625;
+    out0 = vec4(star.TotalEnergy / kStarSceneLinearNits, pixelSum, integral, star.CutRadius);
+    out1 = vec4(brightest, 0.0, 0.0, 0.0);
+}
+
+vec4 MeteorProfile(vec4 in0, vec4 in1, vec4 in2)
+{
+    GE_StarDrawn star = ShadeWhite(in0.y, kPixelSolidAngle1080, GE_MeteorShape(ShapeFrom(in2, in1.z)), in1.w);
+    vec2 axis = vec2(cos(in0.w), sin(in0.w));
+    vec2 streak = in0.z * axis;
+    return vec4(MeteorLuminanceAt(0.25 * streak, star, streak), MeteorLuminanceAt(0.75 * streak, star, streak),
+                GE_MeteorTrailDecayPixels(in0.z, GE_MeteorStreakRadius(star.CoreRadius)),
+                MeteorLuminanceAt(vec2(0.0), star, streak));
 }
 
 void main()
@@ -179,6 +258,18 @@ void main()
     else if (op == 5)
     {
         out0.x = GE_StarColourSaturation(in0.y);
+    }
+    else if (op == 15)
+    {
+        MeteorFlight(in0, in1, out0, out1, out2);
+    }
+    else if (op == 16)
+    {
+        MeteorStreak(in0, in1, in2, out0, out1);
+    }
+    else if (op == 17)
+    {
+        out0 = MeteorProfile(in0, in1, in2);
     }
     uData.slots[q * 6u + 3u] = out0;
     uData.slots[q * 6u + 4u] = out1;

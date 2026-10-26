@@ -4,12 +4,17 @@
 // the table versions; and the GPU side's latch (TerrainHeightPageFeature): a table is readable only
 // with the upload pass of its pages, and the cache texture only from the latch after its clear.
 
+#include "CBTTerrain/CBTLayout.h"
+#include "TerrainECS/PageTable.h"
 #include "TerrainECS/TerrainHeightPageFeature.h"
 #include "TerrainECS/TerrainHeightPages.h"
 #include "TerrainECS/TerrainHeightSource.h"
+#include "TerrainPagedField.h"
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/HeightPageOverlay.h"
+#include "PageStreaming/PageResidency.h"
+#include "PageStreaming/PageSampleRect.h"
 #include "PageStreaming/PageStoreFormat.h"
 #include "PageStreaming/PageTableEntry.h"
 #include "Rendering/Core/CommandList.h"
@@ -17,6 +22,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <bit>
 #include <format>
 #include <memory>
@@ -25,43 +31,22 @@
 
 using namespace GameEngine;
 using namespace GameEngine::TerrainECS;
+using GameEngine::TerrainECS::Test::FlatTileRequest;
 
 namespace
 {
 
-// A terrain whose modifiers are baked into its page overlay, whose page source exists and whose
-// table fits.
+// A terrain whose modifiers are baked into its page overlay and whose page source exists on the
+// tile lattice.
 TerrainHeightSourceInputs BakedPageable()
 {
     TerrainHeightSourceInputs inputs;
     inputs.ModifiersPending = false;
     inputs.GeneratedBase = false;
     inputs.CookedStoreOpen = true;
-    inputs.PageTableFits = true;
+    inputs.PagesOnLattice = true;
     inputs.GpuReadsPages = true;
     return inputs;
-}
-
-// One flat tile of 257 samples: a pyramid of 3 x 3, 2 x 2 and 1 pages, all pinned in 64 slots.
-PagedTerrainRequest FlatTileRequest()
-{
-    PageStreaming::GeneratedHeightLattice lattice;
-    lattice.Source = PageStreaming::GeneratedHeightSource::Flat;
-    lattice.TileWorldSize = 256.0f;
-    lattice.TileSamples = 257;
-    lattice.TilesX = 1;
-    lattice.TilesZ = 1;
-    PagedTerrainRequest request;
-    request.Terrain = 3;
-    request.TerrainGeneration = 7;
-    request.SourceIdentity = 11;
-    request.Source.Generated = std::make_shared<const PageStreaming::GeneratedHeightPageProvider>(lattice);
-    request.Shape.Level0TexelX = 1.0f;
-    request.Shape.Level0TexelZ = 1.0f;
-    request.Shape.SamplesX = 257;
-    request.Shape.SamplesZ = 257;
-    request.Shape.MaxHeight = 1.0f;
-    return request;
 }
 
 bool CoversWholeTerrain(const HeightPageDirtyRect& rect)
@@ -86,8 +71,8 @@ TEST(TerrainHeightSource, AHeightmapWithoutAnOpenStoreKeepsItsTexture)
     inputs.CookedStoreOpen = false;
     EXPECT_FALSE(TerrainHeightIsPaged(inputs));
     inputs.CookedStoreOpen = true;
-    inputs.PageTableFits = false;
-    EXPECT_FALSE(TerrainHeightIsPaged(inputs)) << "a table past the GPU ring slot keeps the texture";
+    inputs.PagesOnLattice = false;
+    EXPECT_FALSE(TerrainHeightIsPaged(inputs)) << "a pyramid off the tile lattice keeps the texture";
 }
 
 TEST(TerrainHeightSource, TheNarrowCbtArmKeepsTheTexture)
@@ -118,8 +103,6 @@ TEST(TerrainHeightSource, EveryTerrainWithAPageSourceOnTheLatticeHasCpuPages)
     EXPECT_TRUE(TerrainHeightHasCpuPages(inputs)) << "the narrow arm draws the texture; the CPU reads the pages";
     inputs.ModifiersPending = true;
     EXPECT_TRUE(TerrainHeightHasCpuPages(inputs)) << "pending modifiers: the CPU pages wait for the overlay";
-    inputs.PageTableFits = false;
-    EXPECT_TRUE(TerrainHeightHasCpuPages(inputs)) << "the GPU page table's cap is not the CPU's";
     inputs.CookedStoreOpen = false;
     EXPECT_FALSE(TerrainHeightHasCpuPages(inputs)) << "no page source";
     inputs.GeneratedBase = true;
@@ -131,42 +114,87 @@ TEST(TerrainHeightSource, EveryTerrainWithAPageSourceOnTheLatticeHasCpuPages)
 TEST(TerrainHeightPages, PackedWordsCarryTheShapeFadesAndEntriesWhereTheResolveReadsThem)
 {
     PageTable table;
-    table.Reset(257, 257, 4);
+    table.Reset(257, 257, 4, PageTableBudget{kDesktopHeightPages.DenseTableWords, 1u, 1u});
     table.SetEntry(0, 1, 2, PageStreaming::PackPageEntry(2, 0));
-    table.SlotFade[2] = 0.25f;
+    table.SetSlotFade(2, 0.25f);
     const PageCacheGeometry geometry = MakePageCacheGeometry(4);
 
     std::vector<uint32> words;
     PackPageTableWords(table, geometry, words);
-    ASSERT_EQ(words.size(), PageTableWordCount(257, 257, 4));
+    ASSERT_EQ(words.size(), CBTTerrain::kCBTPageFadeOffsetWords + 4u + table.Words().size());
     EXPECT_EQ(words[0], 257u);
     EXPECT_EQ(words[1], 257u);
-    EXPECT_EQ(words[2], table.Levels.size());
+    EXPECT_EQ(words[2], table.Levels().size());
     EXPECT_EQ(words[3], geometry.SlotsPerRow);
     EXPECT_EQ(words[4], 4u);
     const uint32 levelsAt = 8u;
     const uint32 fadesAt = levelsAt + 4u * 32u;
-    for (uint32 level = 0; level < table.Levels.size(); ++level)
+    for (uint32 level = 0; level < table.Levels().size(); ++level)
     {
-        EXPECT_EQ(words[levelsAt + 4u * level], table.Levels[level].FirstEntry);
-        EXPECT_EQ(words[levelsAt + 4u * level + 1u], table.Levels[level].PagesX);
-        EXPECT_EQ(words[levelsAt + 4u * level + 2u], table.Levels[level].PagesZ);
+        EXPECT_EQ(words[levelsAt + 4u * level], table.Levels()[level].FirstEntry);
+        EXPECT_EQ(words[levelsAt + 4u * level + 1u], table.Levels()[level].PagesX);
+        EXPECT_EQ(words[levelsAt + 4u * level + 2u], table.Levels()[level].PagesZ);
     }
     EXPECT_EQ(std::bit_cast<float32>(words[fadesAt + 2u]), 0.25f);
     const uint32 entriesAt = fadesAt + 4u;
-    const uint32 pageAt = entriesAt + 2u * table.Levels[0].PagesX + 1u;
+    const uint32 pageAt = entriesAt + 2u * table.Levels()[0].PagesX + 1u;
     EXPECT_EQ(words[pageAt], PageStreaming::PackPageEntry(2, 0)) << "level 0, page (1, 2), row-major";
     EXPECT_EQ(words[entriesAt], PageStreaming::kNoPage);
 }
 
+TEST(TerrainHeightPages, ATableThatFitsItsDenseBudgetPacksTheDenseWordsByteForByte)
+{
+    // The dense layout written out here from its definition: the shape, zeros in [5, 8), each level's
+    // first entry and pages, the fades, then every entry level-major and row-major.
+    constexpr uint32 kSlots = 64u;
+    PageTable table;
+    table.Reset(8193, 2049, kSlots, PageTableBudget{kDesktopHeightPages.DenseTableWords, 1u, 1u});
+    ASSERT_EQ(table.FloorLevel(), 0u);
+    const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(8193, 2049);
+    std::vector<uint32> entries(levels.back().FirstEntry + levels.back().PagesX * levels.back().PagesZ,
+                                PageStreaming::kNoPage);
+    uint32 slot = 0;
+    for (uint32 level = 0; level < levels.size(); ++level)
+        for (uint32 z = 0; z < levels[level].PagesZ; ++z)
+            for (uint32 x = 0; x < levels[level].PagesX; ++x)
+                if ((x * 7u + z * 3u + level) % 5u == 0u && slot < kSlots)
+                {
+                    const uint32 entry = PageStreaming::PackPageEntry(slot++, level);
+                    table.SetEntry(level, x, z, entry);
+                    entries[levels[level].FirstEntry + z * levels[level].PagesX + x] = entry;
+                }
+    table.SetSlotFade(5, 0.5f);
+    const PageCacheGeometry geometry = MakePageCacheGeometry(kSlots);
+
+    std::vector<uint32> expected(CBTTerrain::kCBTPageFadeOffsetWords, 0u);
+    expected[0] = 8193u;
+    expected[1] = 2049u;
+    expected[2] = static_cast<uint32>(levels.size());
+    expected[3] = geometry.SlotsPerRow;
+    expected[4] = kSlots;
+    for (uint32 level = 0; level < levels.size(); ++level)
+    {
+        expected[CBTTerrain::kCBTPageHeaderWords + 4u * level] = static_cast<uint32>(levels[level].FirstEntry);
+        expected[CBTTerrain::kCBTPageHeaderWords + 4u * level + 1u] = levels[level].PagesX;
+        expected[CBTTerrain::kCBTPageHeaderWords + 4u * level + 2u] = levels[level].PagesZ;
+    }
+    for (uint32 fade = 0; fade < kSlots; ++fade)
+        expected.push_back(std::bit_cast<uint32>(fade == 5u ? 0.5f : 1.0f));
+    expected.insert(expected.end(), entries.begin(), entries.end());
+
+    std::vector<uint32> words;
+    PackPageTableWords(table, geometry, words);
+    EXPECT_EQ(words, expected);
+}
+
 TEST(TerrainHeightPages, ATerrainDirtiesItsRectWhenItsSourceSwitchesOrItsPagesChangeAndNothingOnceSettled)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap});
-    const PagedTerrainRequest request = FlatTileRequest();
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
+    const PagedTerrainRequest request = FlatTileRequest(257);
     const Mathematics::Vector3 camera{128.0f, 10.0f, 128.0f};
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(257, 257);
-    const uint32 pyramidPages = levels.back().FirstEntry + levels.back().PagesX * levels.back().PagesZ;
+    const uint32 pyramidPages = static_cast<uint32>(PageStreaming::DensePageCount(levels));
 
     pages.Update(1, 1.0f / 60.0f, false, 2); // configures the field's cache
     pages.DirtyRects().clear();
@@ -208,12 +236,12 @@ TEST(TerrainHeightPages, ATerrainDirtiesItsRectWhenItsSourceSwitchesOrItsPagesCh
 
 TEST(TerrainHeightPages, AnOverlayOfRebuiltModifierDataRewritesEveryPageTheOldOverlayReached)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
     const Mathematics::Vector3 camera{128.0f, 10.0f, 128.0f};
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(257, 257);
     const PageStreaming::PageSampleRect raised{240, 240, 256, 256}; // the far corner: nine pages read it
-    PagedTerrainRequest modified = FlatTileRequest();
+    PagedTerrainRequest modified = FlatTileRequest(257);
     modified.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
         levels, raised, std::vector<float32>(raised.Width() * raised.Height(), 5.0f));
     modified.OverlayVersion = 3;
@@ -229,7 +257,7 @@ TEST(TerrainHeightPages, AnOverlayOfRebuiltModifierDataRewritesEveryPageTheOldOv
 
     // A scene load rebuilt the terrain's data with no modifier: its first overlay version (none
     // built) is not derived from the one the resident pages hold.
-    const PagedTerrainRequest rebuilt = FlatTileRequest();
+    const PagedTerrainRequest rebuilt = FlatTileRequest(257);
     uint32 rewritten = 0;
     for (; frame < 72; ++frame)
     {
@@ -238,7 +266,7 @@ TEST(TerrainHeightPages, AnOverlayOfRebuiltModifierDataRewritesEveryPageTheOldOv
         for (const HeightPageUpload& upload : pages.Uploads())
         {
             ++rewritten;
-            for (float32 sample : upload.Samples)
+            for (float32 sample : PageStreaming::HeightSamples(upload.Bytes))
                 ASSERT_LT(sample, 1.0f) << "a rewritten page carries no overlay";
         }
     }
@@ -292,11 +320,27 @@ uint32 Level0Entry(const TerrainHeightPages& pages, uint32 terrain, uint32 x, ui
     return (*words)[entriesAt + z * pagesX + x];
 }
 
+// The terrain-UV footprint of `address` on StreamedFieldRequest's 4097-sample field, with one
+// sample of the page's level on each side for the bilinear tap: what a page that streams in,
+// leaves or fades dirties.
+HeightPageDirtyRect StreamedFieldFootprint(const PageStreaming::PageAddress& address)
+{
+    const float32 span = static_cast<float32>(PageStreaming::kPageOwnedSamples << address.Level);
+    const float32 margin = static_cast<float32>(1u << address.Level);
+    const float32 inv = 1.0f / 4096.0f;
+    HeightPageDirtyRect rect;
+    rect.MinU = std::max(0.0f, (static_cast<float32>(address.X) * span - margin) * inv);
+    rect.MaxU = std::min(1.0f, (static_cast<float32>(address.X + 1u) * span + margin) * inv);
+    rect.MinV = std::max(0.0f, (static_cast<float32>(address.Z) * span - margin) * inv);
+    rect.MaxV = std::min(1.0f, (static_cast<float32>(address.Z + 1u) * span + margin) * inv);
+    return rect;
+}
+
 } // namespace
 
 TEST(TerrainHeightPages, AMovedTerrainStreamsThePagesUnderTheCameraAtItsNewPlacement)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     pages.Update(1, 1.0f / 60.0f, false, 2);
     uint64 frame = 2;
@@ -327,9 +371,135 @@ TEST(TerrainHeightPages, AMovedTerrainStreamsThePagesUnderTheCameraAtItsNewPlace
         << "the page 2.9 km away, under the camera's place at the old placement, is released";
 }
 
+namespace
+{
+
+// The union of the dirty rects `request`'s pinned pages publish when an edit raises level-0 samples
+// `edit` by 5 m: the pages settle first (their arrival fades end), then the edit's rewrites land.
+HeightPageDirtyRect EditDirtyUnion(PagedTerrainRequest request, const PageStreaming::PageSampleRect& edit)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
+    const float32 center = 0.5f * static_cast<float32>(request.Shape.SamplesX - 1u);
+    const Mathematics::Vector3 camera{center, 10.0f, center};
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    uint64 frame = 2;
+    for (; frame < 62; ++frame)
+    {
+        pages.Request(request, {&camera, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    pages.DirtyRects().clear();
+    pages.Uploads().clear();
+
+    const std::vector<PageStreaming::PageStoreLevel> levels =
+        PageStreaming::BuildPageStoreLevels(request.Shape.SamplesX, request.Shape.SamplesZ);
+    request.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
+        levels, edit, std::vector<float32>(edit.Width() * edit.Height(), 5.0f));
+    request.OverlayVersion = 1;
+    request.OverlayChangedSince = 0; // derived from the pages' overlay (none)
+    request.OverlayChanged = edit;
+    HeightPageDirtyRect dirty{request.Terrain, request.TerrainGeneration, 1.0f, 1.0f, 0.0f, 0.0f};
+    uint32 rewrites = 0;
+    for (; frame < 72; ++frame)
+    {
+        pages.Request(request, {&camera, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+        rewrites += static_cast<uint32>(pages.Uploads().size());
+        for (const HeightPageDirtyRect& rect : pages.DirtyRects())
+        {
+            dirty.MinU = std::min(dirty.MinU, rect.MinU);
+            dirty.MinV = std::min(dirty.MinV, rect.MinV);
+            dirty.MaxU = std::max(dirty.MaxU, rect.MaxU);
+            dirty.MaxV = std::max(dirty.MaxV, rect.MaxV);
+        }
+        pages.DirtyRects().clear();
+        pages.Uploads().clear();
+    }
+    EXPECT_GT(rewrites, 0u) << "the edit rewrote no page";
+    return dirty;
+}
+
+} // namespace
+
+TEST(TerrainHeightPages, AnEditOnALevelZeroPageDirtiesTheEditAndOneSampleAroundItNotThePage)
+{
+    // One level-0 page holds the whole 128-sample terrain; the edit is samples 40 to 50. The
+    // surface reads a sample through the bilinear tap of the cells on either side of it.
+    const HeightPageDirtyRect dirty = EditDirtyUnion(FlatTileRequest(128), PageStreaming::PageSampleRect{40, 40, 50, 50});
+    EXPECT_FLOAT_EQ(dirty.MinU, 39.0f / 127.0f);
+    EXPECT_FLOAT_EQ(dirty.MinV, 39.0f / 127.0f);
+    EXPECT_FLOAT_EQ(dirty.MaxU, 51.0f / 127.0f);
+    EXPECT_FLOAT_EQ(dirty.MaxV, 51.0f / 127.0f);
+}
+
+TEST(TerrainHeightPages, AnEditDirtiesWhatItReachesAtEachCoarseLevelNotTheCoarsePagesFootprints)
+{
+    // Samples 100 to 110 of the 257-sample terrain. The [1 2 1] tent reaches level-1 samples 50 to
+    // 55 and level-2 samples 25 to 28 (level-0 samples 100 to 112); one level-2 sample on each
+    // side for the bilinear tap gives level-0 samples 96 to 116, the widest reach, while the
+    // level-2 page covers the whole terrain.
+    const HeightPageDirtyRect dirty = EditDirtyUnion(FlatTileRequest(257), PageStreaming::PageSampleRect{100, 100, 110, 110});
+    EXPECT_FLOAT_EQ(dirty.MinU, 96.0f / 256.0f);
+    EXPECT_FLOAT_EQ(dirty.MinV, 96.0f / 256.0f);
+    EXPECT_FLOAT_EQ(dirty.MaxU, 116.0f / 256.0f);
+    EXPECT_FLOAT_EQ(dirty.MaxV, 116.0f / 256.0f);
+}
+
+TEST(TerrainHeightPages, AStreamedInPageDirtiesItsWholeFootprint)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
+    const PagedTerrainRequest request = StreamedFieldRequest(0.0f, 77);
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    uint64 frame = 2;
+    const Mathematics::Vector3 before{100.0f, 10.0f, 100.0f};
+    for (; frame < 40; ++frame)
+    {
+        pages.Request(request, {&before, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    ASSERT_EQ(Level0Entry(pages, 0, 8, 0), PageStreaming::kNoPage) << "page (8, 0) is 1 km from the camera";
+    pages.DirtyRects().clear();
+
+    // The camera moves 1 km east: level-0 page (8, 0), samples 1024 to 1151, streams in under it.
+    const Mathematics::Vector3 after{1100.0f, 10.0f, 100.0f};
+    bool arrived = false;
+    for (; frame < 200 && !arrived; ++frame)
+    {
+        pages.Request(request, {&after, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+        arrived = Level0Entry(pages, 0, 8, 0) != PageStreaming::kNoPage;
+        if (arrived)
+        {
+            // Every page that arrived, left or faded this frame dirties its whole footprint.
+            const PageStreaming::PageCache& cache = pages.Residency().FieldCache(kHeightPageField);
+            std::vector<PageStreaming::CachedPage> changed = cache.Transitions();
+            changed.insert(changed.end(), cache.FadeChanges().begin(), cache.FadeChanges().end());
+            HeightPageDirtyRect expected = StreamedFieldFootprint(changed.front().Address);
+            for (const PageStreaming::CachedPage& page : changed)
+            {
+                const HeightPageDirtyRect footprint = StreamedFieldFootprint(page.Address);
+                expected.MinU = std::min(expected.MinU, footprint.MinU);
+                expected.MinV = std::min(expected.MinV, footprint.MinV);
+                expected.MaxU = std::max(expected.MaxU, footprint.MaxU);
+                expected.MaxV = std::max(expected.MaxV, footprint.MaxV);
+            }
+            ASSERT_EQ(pages.DirtyRects().size(), 1u);
+            const HeightPageDirtyRect& dirty = pages.DirtyRects().front();
+            EXPECT_FLOAT_EQ(dirty.MinU, expected.MinU) << changed.size() << " pages changed";
+            EXPECT_FLOAT_EQ(dirty.MinV, expected.MinV);
+            EXPECT_FLOAT_EQ(dirty.MaxU, expected.MaxU);
+            EXPECT_FLOAT_EQ(dirty.MaxV, expected.MaxV);
+        }
+        pages.DirtyRects().clear();
+    }
+    EXPECT_TRUE(arrived) << "page (8, 0) never streamed in";
+}
+
 TEST(TerrainHeightPages, ATerrainPagedAgainAtTheSameIndexNeverRepeatsATableVersion)
 {
-    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap});
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     pages.Update(1, 1.0f / 60.0f, false, 2);
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
@@ -352,20 +522,38 @@ TEST(TerrainHeightPages, ATerrainPagedAgainAtTheSameIndexNeverRepeatsATableVersi
         EXPECT_NE(version, seen) << "the CBT's per-ring-slot upload check would keep the old terrain's table";
 }
 
-TEST(TerrainHeightPages, The60By15KmTerrainAtAQuarterMeterPagesOnDesktopAndTheDeckRefusesItWithTheFix)
+TEST(TerrainHeightPages, The60By15KmTerrainAtAQuarterMeterKeepsOneTierOnDesktopAndIsTieredOnTheDeck)
 {
-    // 60 x 15 km at 0.25 m is 240,001 x 60,001 samples: 1,174,877 words with the desktop's 512 slots,
-    // under its cap of 2^21; 1,174,621 with the Deck's 256, over its cap of 2^19.
-    EXPECT_EQ(PageTableWordCount(240001, 60001, kDesktopHeightPages.Slots), 1174877u);
-    EXPECT_EQ(PageTableRefusal("Outer", 240001, 60001, kDesktopHeightPages), "");
-    const std::string refusal = PageTableRefusal("Outer", 240001, 60001, kSteamDeckHeightPages);
-    EXPECT_NE(refusal.find("Outer (240001 x 60001 samples)"), std::string::npos) << refusal;
-    EXPECT_NE(refusal.find("needs 1174621 words"), std::string::npos) << refusal;
-    EXPECT_NE(refusal.find("cap of 524288 words"), std::string::npos) << refusal;
-    EXPECT_NE(refusal.find("Lower its samples per meter or its size"), std::string::npos) << refusal;
-    // The DEM project's terrains (8193 x 2049 samples) page on every platform.
-    EXPECT_EQ(PageTableRefusal("Near", 8193, 2049, kDesktopHeightPages), "");
-    EXPECT_EQ(PageTableRefusal("Near", 8193, 2049, kSteamDeckHeightPages), "");
+    // 60 x 15 km at 0.25 m is 240,001 x 60,001 samples: 1,174,877 dense words with the desktop's 512
+    // slots, within its 2^21; 1,174,621 with the Deck's 256, past its 2^19, so the Deck tiers it.
+    PageTable desktop;
+    desktop.Reset(240001, 60001, kDesktopHeightPages.Slots,
+                  PageTableBudget{kDesktopHeightPages.DenseTableWords, kDesktopHeightPages.TableMidBlocks,
+                                  kDesktopHeightPages.TableLeafBlocks});
+    EXPECT_EQ(desktop.FloorLevel(), 0u);
+    EXPECT_EQ(desktop.TierCount(), 0u);
+    EXPECT_EQ(CBTTerrain::kCBTPageFadeOffsetWords + kDesktopHeightPages.Slots + desktop.Words().size(), 1174877u);
+
+    PageTable deck;
+    deck.Reset(240001, 60001, kSteamDeckHeightPages.Slots,
+               PageTableBudget{kSteamDeckHeightPages.DenseTableWords, kSteamDeckHeightPages.TableMidBlocks,
+                               kSteamDeckHeightPages.TableLeafBlocks});
+    EXPECT_GT(deck.FloorLevel(), 0u);
+    ASSERT_EQ(deck.TierCount(), 1u) << "the floor is within six levels of level 0";
+    EXPECT_LT(deck.Words().size(), 1174621u) << "the tiered table is smaller than the dense one";
+}
+
+TEST(TerrainHeightPages, AStorePastTheCpuDirectorysLimitIsRefusedWithTheLimitAndTheFix)
+{
+    // A store may hold 2^30 samples a side; its pages stream up to 2^22, where the CPU directory's
+    // 32-bit counts end.
+    constexpr uint32 kLimit = PageStreaming::kCpuDirectoryMaxSamplesPerAxis;
+    EXPECT_EQ(DenseDirectoryRefusal("Earth", kLimit, kLimit), "");
+    EXPECT_EQ(DenseDirectoryRefusal("Near", 8193, 2049), "");
+    const std::string refusal = DenseDirectoryRefusal("Earth", kLimit + 1u, 2049);
+    EXPECT_NE(refusal.find("Earth (4194305 x 2049 samples) does not stream its height"), std::string::npos) << refusal;
+    EXPECT_NE(refusal.find("at most 4194304 samples"), std::string::npos) << refusal;
+    EXPECT_NE(refusal.find("Split it into terrains"), std::string::npos) << refusal;
 }
 
 TEST(TerrainHeightPages, A1KmSquareModifierOnAQuarterMeterTerrainFitsEveryOverlayCapAndATerrainWideOneIsRefused)
@@ -415,8 +603,8 @@ TEST(TerrainHeightPageFeature, ATableBecomesReadableOnlyWithTheUploadPassThatRec
     if (!device || !device->Initialize(desc))
         GTEST_SKIP() << "no Vulkan device";
     {
-        TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap});
-        const PagedTerrainRequest request = FlatTileRequest();
+        TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
+        const PagedTerrainRequest request = FlatTileRequest(257);
         const Mathematics::Vector3 camera{128.0f, 10.0f, 128.0f};
         const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
         pages.Update(1, 1.0f / 60.0f, false, 2);
@@ -463,13 +651,13 @@ TEST(TerrainHeightPageFeature, TheCacheTextureIsReadableOnlyFromTheLatchAfterIts
     if (!device || !device->Initialize(desc))
         GTEST_SKIP() << "no Vulkan device";
     {
-        TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.TableWordCap});
+        TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords});
         const Mathematics::Vector3 camera{128.0f, 10.0f, 128.0f};
         const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
         pages.Update(1, 1.0f / 60.0f, false, 2);
         for (uint64 frame = 2; frame < 20 && pages.Uploads().empty(); ++frame)
         {
-            pages.Request(FlatTileRequest(), {&camera, 1}, view);
+            pages.Request(FlatTileRequest(257), {&camera, 1}, view);
             pages.Update(frame, 1.0f / 60.0f, false, 2);
         }
         ASSERT_FALSE(pages.Uploads().empty());

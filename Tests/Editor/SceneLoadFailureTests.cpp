@@ -49,7 +49,7 @@ using GameEngine::ECS::World;
 namespace fs = std::filesystem;
 
 // Parses and validates, then fails inside LoadParsedIntoWorld — after the clear — because the
-// blueprint it instantiates cannot be read. ValidateDocument only checks that the [resource] id
+// prefab it instantiates cannot be read. ValidateDocument only checks that the [resource] id
 // exists, so nothing catches this until the world is already gone.
 //
 // This used to be an unknown component property. It cannot be any more: a component or field this
@@ -58,12 +58,12 @@ namespace fs = std::filesystem;
 // loader genuinely cannot continue past. "good_one" still precedes it, so it lands in the world.
 constexpr const char* kFailsAfterClear =
     "[scene name=\"PartialLoad\" version=1]\n"
-    "[resource id=\"bp\" path=\"no_such_blueprint.blueprint\"]\n"
+    "[resource id=\"bp\" path=\"no_such_prefab.prefab\"]\n"
     "\n"
     "[entity id=\"good_one\"]\n"
     "Transform.position = (1, 2, 3)\n"
     "\n"
-    "[blueprint id=\"bad_one\" source=\"bp\"]\n";
+    "[prefab id=\"bad_one\" source=\"bp\"]\n";
 
 // Loads, but one assignment cannot be applied: SplineFence.SpanGrade is a reflected enum whose
 // enumerator names this build knows (Racked/Stepped/Sheared), and "Cantilevered" is what a scene
@@ -243,7 +243,7 @@ TEST_F(SceneLoadFailureTests, FailureAfterClearLeavesNoScenePathAndRecordsWhy)
     const auto& failure = *doc.GetLastLoadFailure();
     EXPECT_TRUE(failure.WorldCleared);
     EXPECT_EQ(failure.DocumentPath, bad);
-    EXPECT_NE(failure.Message.find("Blueprint file not found"), std::string::npos) << failure.Message;
+    EXPECT_NE(failure.Message.find("Prefab file not found"), std::string::npos) << failure.Message;
     EXPECT_GT(failure.EntitiesInWorld, 0u) << "the half-loaded entities are the whole problem";
 
     EXPECT_FALSE(doc.GetScenePath().has_value())

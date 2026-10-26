@@ -178,13 +178,9 @@ class SceneDocumentManager
     // Consumes embedded [editor_camera] state from the last OpenSceneReplace (once).
     std::optional<Scene::SceneEditorCameraFromFile> ConsumeEditorCameraFromLastDocumentLoad();
 
-    // Releases the editor-side spline generators (placement / fence / extrude),
-    // which cache EntityHandles into the open scene's world and destroy them on
-    // a later sweep. Runs inside ReleaseSceneScopedState, against the still-live
-    // outgoing world. EditorApplication owns those generators, so it supplies
-    // the call; without it their handles survive the swap and World::Clear's
-    // version restart makes them alias — and destroy — entities of the incoming
-    // scene (SceneSwapOrderingTests).
+    // The call that releases the generated entities the outgoing world holds (the editor services).
+    // Runs inside ReleaseSceneScopedState, before World::Clear restarts entity versions, so no
+    // stale handle aliases an entity of the incoming scene (SceneSwapOrderingTests).
     void SetSceneScopedGeneratorRelease(std::function<void()> release);
 
     // Internal ECS snapshot support (Undo/Redo, play mode clone/restore).

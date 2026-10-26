@@ -89,13 +89,7 @@ struct SkySettings
 
     float moonArcPosition = 0.5f;
     bool fallingStarsEnabled = true;
-    float fallingStarAmount = 0.35f;
-    float fallingStarFrequency = 0.35f;
-    float fallingStarSpeed = 1.0f;
-    float fallingStarLength = 1.0f;
-    float fallingStarThickness = 1.0f;
-    float fallingStarDotSize = 1.0f;
-    float fallingStarDotSize2D = 1.0f;
+    float fallingStarIntervalSeconds = 5.0f; // the mean time between two falling stars
 
     float nightSkyBlend = 0.0f;
     float skyTimeSeconds = 0.0f;

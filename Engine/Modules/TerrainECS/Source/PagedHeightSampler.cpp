@@ -2,6 +2,7 @@
 
 #include "Mathematics/Interpolation.h"
 #include "TerrainECS/PageLevelRule.h"
+#include "TerrainECS/PageTable.h"
 #include "TerrainECS/TerrainAtlas.h"
 
 #include "PageStreaming/PageCache.h"
@@ -26,28 +27,6 @@ PageCacheGeometry MakePageCacheGeometry(uint32 slotCount)
     return geometry;
 }
 
-void PageTable::Reset(uint32 samplesX, uint32 samplesZ, uint32 slotCount)
-{
-    Levels = PageStreaming::BuildPageStoreLevels(samplesX, samplesZ);
-    const std::size_t entries = Levels.empty() ? 0u
-                                               : static_cast<std::size_t>(Levels.back().FirstEntry) +
-                                                     Levels.back().PagesX * Levels.back().PagesZ;
-    Entries.assign(entries, kNoPage);
-    SlotFade.assign(slotCount, 1.0f);
-}
-
-uint32 PageTable::Entry(uint32 level, uint32 pageX, uint32 pageZ) const
-{
-    const PageStreaming::PageStoreLevel& shape = Levels[level];
-    return Entries[shape.FirstEntry + static_cast<std::size_t>(pageZ) * shape.PagesX + pageX];
-}
-
-void PageTable::SetEntry(uint32 level, uint32 pageX, uint32 pageZ, uint32 entry)
-{
-    const PageStreaming::PageStoreLevel& shape = Levels[level];
-    Entries[shape.FirstEntry + static_cast<std::size_t>(pageZ) * shape.PagesX + pageX] = entry;
-}
-
 uint32 UpdatePageTable(const PageStreaming::PageCache& cache, uint32 stream, PageTable& table)
 {
     uint32 writes = 0;
@@ -61,7 +40,7 @@ uint32 UpdatePageTable(const PageStreaming::PageCache& cache, uint32 stream, Pag
         table.SetEntry(address.Level, address.X, address.Z,
                        resident ? PageStreaming::PackPageEntry(slot, address.Level) : kNoPage);
         if (resident)
-            table.SlotFade[slot] = cache.FadeOf(page);
+            table.SetSlotFade(slot, cache.FadeOf(page));
         ++writes;
     }
     for (const PageStreaming::CachedPage& page : cache.FadeChanges())
@@ -69,7 +48,7 @@ uint32 UpdatePageTable(const PageStreaming::PageCache& cache, uint32 stream, Pag
         const uint32 slot = cache.SlotOf(page);
         if (page.Stream != stream || slot == PageStreaming::kNoResidentSlot)
             continue;
-        table.SlotFade[slot] = cache.FadeOf(page);
+        table.SetSlotFade(slot, cache.FadeOf(page));
         ++writes;
     }
     return writes;
@@ -116,19 +95,19 @@ float32 PagedHeightSampler::SampleLevel(float32 u, float32 v, uint32 level, uint
     // A fading page's parent may be fading too: each resident page down the walk takes `fade` of the
     // weight still owed to the levels above, a settled page (or the top level) takes all of it. The
     // order of operations is cbt_page.glsl's CBT_PageSampleLevel, so the two agree bit for bit.
-    const uint32 levels = static_cast<uint32>(Table->Levels.size());
+    const uint32 levels = static_cast<uint32>(Table->Levels().size());
     float32 height = 0.0f;
     float32 remaining = 1.0f;
     outLevel = levels;
     for (uint32 walk = level; walk < levels; ++walk)
     {
-        const PageTexel texel = LocatePageTexel(Table->Levels, walk, u, v);
+        const PageTexel texel = LocatePageTexel(Table->Levels(), walk, u, v);
         const uint32 entry = Table->Entry(walk, texel.PageX, texel.PageZ);
         if (entry == kNoPage)
             continue; // the fallback walk: the first resident ancestor answers
         const uint32 slot = PageStreaming::PageEntrySlot(entry);
         const float32 own = SampleResidentPage(texel, slot);
-        const float32 fade = Table->SlotFade[slot];
+        const float32 fade = Table->SlotFades()[slot];
         if (outLevel == levels)
             outLevel = walk;
         if (fade >= 1.0f || walk + 1u >= levels)
@@ -141,9 +120,9 @@ float32 PagedHeightSampler::SampleLevel(float32 u, float32 v, uint32 level, uint
 
 float32 PagedHeightSampler::Sample(float32 u, float32 v, float32 level) const
 {
-    if (!Table || !Cache || Table->Levels.empty())
+    if (!Table || !Cache || Table->Levels().empty())
         return 0.0f;
-    const uint32 top = static_cast<uint32>(Table->Levels.size()) - 1u;
+    const uint32 top = static_cast<uint32>(Table->Levels().size()) - 1u;
     const float32 clamped = std::clamp(level, 0.0f, static_cast<float32>(top));
     const uint32 base = std::min(static_cast<uint32>(clamped), top);
     uint32 resolved = 0;

@@ -40,6 +40,8 @@ struct TerrainColorGroundWrite
     float32 SoilLinear[3] = {0.0f, 0.0f, 0.0f};       // TerrainGrass::SoilColor, decoded to linear
     uint32 GrassLayer = 0;                            // the splat channel the grass grows on
     float32 MaskThreshold = 0.45f;
+
+    bool operator==(const TerrainColorGroundWrite&) const = default;
 };
 
 // The splat a compose reads: RGBA8 channel weights on the compose's own lattice (Width x Height

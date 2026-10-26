@@ -426,6 +426,30 @@ bool UIManager::ReleaseMouseCaptureHeldBy(uint64_t instanceId)
     return true;
 }
 
+void UIManager::LockCapturedPointer()
+{
+    if (m_MouseCaptured && m_CaptureInstanceId != 0)
+        m_PointerLockCaptureInstanceId = m_CaptureInstanceId;
+}
+
+bool UIManager::IsCapturedPointerLocked() const
+{
+    return m_MouseCaptured && m_PointerLockCaptureInstanceId != 0 &&
+           m_PointerLockCaptureInstanceId == m_CaptureInstanceId;
+}
+
+void UIManager::SyncPointerLock()
+{
+    if (!m_MouseCaptured || m_PointerLockCaptureInstanceId != m_CaptureInstanceId)
+        m_PointerLockCaptureInstanceId = 0;
+    const bool locked = m_PointerLockCaptureInstanceId != 0;
+    if (locked == m_PointerLocked)
+        return;
+    m_PointerLocked = locked;
+    if (m_PointerLockCallback)
+        m_PointerLockCallback(locked);
+}
+
 namespace
 {
 // GE_UI_HOVER_TRACE=1: per-transition log of the hover pipeline — hit result,

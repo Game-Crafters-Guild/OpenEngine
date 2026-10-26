@@ -1,0 +1,4 @@
+[prefab name="BP" version=1]
+
+[entity id="root"]
+Name.value = "BP"

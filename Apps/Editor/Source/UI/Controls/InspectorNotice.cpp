@@ -42,6 +42,21 @@ const char* KindSuffix(InspectorNotice::Kind kind)
     return "warning";
 }
 
+// The class of a glyph that replaces the kind's own (InspectorNotice.css), or null for the kind's.
+const char* GlyphClass(InspectorNotice::Glyph glyph)
+{
+    switch (glyph)
+    {
+    case InspectorNotice::Glyph::Clock:
+        return "inspector-notice-glyph-clock";
+    case InspectorNotice::Glyph::Check:
+        return "inspector-notice-glyph-check";
+    case InspectorNotice::Glyph::OfKind:
+        break;
+    }
+    return nullptr;
+}
+
 void AddKindClass(UIElement* part, const char* partClass, const char* kindSuffix)
 {
     if (part)
@@ -89,13 +104,13 @@ InspectorNotice::InspectorNotice(const std::string& text, Kind kind)
 
     m_Heading = InspectorDrag::FindChildByClass(plateRaw, kHeadingClass);
     m_Title = m_Heading ? dynamic_cast<Label*>(InspectorDrag::FindChildByClass(m_Heading, kTitleClass)) : nullptr;
+    m_Glyph = m_Heading ? InspectorDrag::FindChildByClass(m_Heading, kGlyphClass) : nullptr;
     // Each part carries one class for the kind (InspectorNotice.css).
     AddKindClass(plateRaw, kPlateClass, kindSuffix);
     AddKindClass(m_Text, kTextClass, kindSuffix);
     AddKindClass(m_Action, kActionClass, kindSuffix);
     AddKindClass(m_Title, kTitleClass, kindSuffix);
-    AddKindClass(m_Heading ? InspectorDrag::FindChildByClass(m_Heading, kGlyphClass) : nullptr, kGlyphClass,
-                 kindSuffix);
+    AddKindClass(m_Glyph, kGlyphClass, kindSuffix);
     // The button attaches the shared button sheet to itself, which puts it after this notice's sheet
     // in the action's cascade. Attaching the notice's sheet to the action as well, after the
     // button's, lets the kind's single-class edge rule outrank the button's border color.
@@ -120,6 +135,16 @@ void InspectorNotice::SetTitle(const std::string& title)
         return;
     m_Title->SetText(title);
     m_Heading->RemoveClass(kHiddenClass);
+}
+
+void InspectorNotice::SetGlyph(Glyph glyph)
+{
+    if (!m_Glyph)
+        return;
+    for (const Glyph replaced : {Glyph::Clock, Glyph::Check})
+        m_Glyph->RemoveClass(GlyphClass(replaced));
+    if (const char* glyphClass = GlyphClass(glyph))
+        m_Glyph->AddClass(glyphClass);
 }
 
 void InspectorNotice::SetText(const std::string& text)

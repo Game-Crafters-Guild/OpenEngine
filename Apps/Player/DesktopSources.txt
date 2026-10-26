@@ -8,3 +8,5 @@ PlayerLog.cpp
 PlayerLog.h
 PlayerRunOptions.cpp
 PlayerRunOptions.h
+PlayerStartupReadiness.cpp
+PlayerStartupReadiness.h

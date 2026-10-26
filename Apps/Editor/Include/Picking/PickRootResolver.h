@@ -12,9 +12,13 @@ namespace GameEngine::ECS
 class World;
 }
 
-namespace GameEngine::Editor::Picking
+namespace GameEngine::Scene
 {
 struct PickHit;
+}
+
+namespace GameEngine::Editor::Picking
+{
 
 // Resolve the entity a root-mode pick selects: the topmost contiguous
 // ancestor that belongs to the same model instance as `entity` — mesh
@@ -32,7 +36,7 @@ ECS::EntityHandle ResolvePickRoot(ECS::World& world, ECS::EntityHandle entity);
 // [root, nearest exact hit, deeper exact hits...]; exact mode is just the
 // exact hit entities nearest-to-farthest. Deduplicated, order preserved.
 void BuildPickCandidates(ECS::World& world,
-                         const std::vector<PickHit>& sortedHits,
+                         const std::vector<Scene::PickHit>& sortedHits,
                          bool exactPick,
                          std::vector<ECS::EntityHandle>& outCandidates);
 } // namespace GameEngine::Editor::Picking

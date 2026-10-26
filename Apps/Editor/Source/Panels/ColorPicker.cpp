@@ -1010,7 +1010,7 @@ void ColorPicker::BuildUI()
     
     auto intensitySlider = std::make_unique<Slider>();
     intensitySlider->SetMin(1.0f);
-    intensitySlider->SetMax(8.0f);
+    intensitySlider->SetMax(kColorPickerMaxIntensity);
     intensitySlider->SetValue(m_Value.intensity);
     intensitySlider->SetOnValueChanging([this](const float& i) { OnIntensitySliderChange(i); });
     intensitySlider->SetOnValueChanged([this](const float& i) { OnIntensitySliderChange(i); });

@@ -239,17 +239,6 @@ public:
         m_LastAlbedoDispatchFrame = frameIndex;
         return true;
     }
-    // Once-per-frame claim for the planar-reflection capture. It re-renders the
-    // world (a full world pass), and all views share the single reflection
-    // target, so only the first view each frame records it (using that view's
-    // camera). Separate from the FFT claim because reflections are a world pass.
-    bool TryClaimReflectionDispatch(uint32 frameIndex)
-    {
-        if (m_LastReflectionDispatchFrame == frameIndex)
-            return false;
-        m_LastReflectionDispatchFrame = frameIndex;
-        return true;
-    }
     void SetFFTParams(const OceanFFTParamsGPU& params, bool spectrumDirty)
     {
         m_LatestDepthInputs.FFT = params;
@@ -846,7 +835,6 @@ private:
     uint32 m_LastFoamDispatchFrame = 0xFFFFFFFFu;
     uint32 m_LastClipDispatchFrame = 0xFFFFFFFFu;
     uint32 m_LastAlbedoDispatchFrame = 0xFFFFFFFFu;
-    uint32 m_LastReflectionDispatchFrame = 0xFFFFFFFFu;
     uint32 m_LastCombineDispatchFrame = 0xFFFFFFFFu;
     uint32 m_LastGPUQueryDispatchFrame = 0xFFFFFFFFu;
 
@@ -910,9 +898,9 @@ private:
     // copy pipeline). Lazily built on first DeclareForView with a SceneColor.
     OceanSceneGrab m_SceneGrab;
 
-    // Planar reflection capture (feature-owned scaled colour target + a
-    // persistent secondary view/camera). Lazily built on first DeclareForView
-    // with PlanarReflections enabled.
+    // Planar reflection capture: one mirror (a scaled colour target + a hidden
+    // reflection view and camera) per view that draws water with
+    // PlanarReflections enabled, built on that view's first DeclareForView.
     OceanPlanarReflection m_PlanarReflection;
 
     // Underwater overlay (feature-owned runtime-compiled program + UBO ring).

@@ -158,13 +158,11 @@ void WriteLinkedSunColor(ECS::World& world, ECS::EntityHandle lightEntity, const
 {
     const auto* light = world.GetComponent<Components::Light>(lightEntity);
 
-    float tint[3] = {1.0f, 1.0f, 1.0f};
-    if (light->UseColorTemperature)
-        Components::KelvinToLinearRGB(light->ColorTemperature, tint);
+    const ColorLinear tint =
+        light->UseColorTemperature ? Components::KelvinToLinearRGB(light->ColorTemperature) : ColorLinear(1.0f, 1.0f, 1.0f);
 
-    float newColor[3];
-    for (int i = 0; i < 3; ++i)
-        newColor[i] = targetColor[i] / std::max(tint[i], 1e-4f);
+    const float newColor[3] = {targetColor[0] / std::max(tint.r, 1e-4f), targetColor[1] / std::max(tint.g, 1e-4f),
+                               targetColor[2] / std::max(tint.b, 1e-4f)};
     for (int i = 0; i < 3; ++i)
         writtenColor[i] = newColor[i];
 
@@ -196,7 +194,7 @@ void WriteLinkedSunIntensity(ECS::World& world, ECS::EntityHandle lightEntity, f
 // `color` at unit luminance. False, leaving `outHue` alone, when it is too dark to carry a hue.
 bool HueOf(const float color[3], float outHue[3])
 {
-    const float luminance = ColorUtils::LinearRec709Luminance(color);
+    const float luminance = ColorUtils::LinearRec709Luminance({color[0], color[1], color[2]});
     if (!(luminance > kMinimumHueLuminance))
         return false;
     for (int c = 0; c < 3; ++c)
@@ -556,13 +554,9 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     settings.skyPan2D = std::clamp(comp.SkyPan2D, -1.0f, 1.0f);
     settings.moonExposureEV = std::clamp(comp.MoonExposureEV, -8.0f, 8.0f);
     settings.fallingStarsEnabled = comp.FallingStarsEnabled;
-    settings.fallingStarAmount = Math::Clamp01(comp.FallingStarAmount);
-    settings.fallingStarFrequency = std::clamp(comp.FallingStarFrequency, 0.0f, 4.0f);
-    settings.fallingStarSpeed = std::clamp(comp.FallingStarSpeed, 0.2f, 50.0f);
-    settings.fallingStarLength = std::clamp(comp.FallingStarLength, 0.2f, 4.0f);
-    settings.fallingStarThickness = std::clamp(comp.FallingStarThickness, 0.1f, 4.0f);
-    settings.fallingStarDotSize = std::clamp(comp.FallingStarDotSize, 0.1f, 4.0f);
-    settings.fallingStarDotSize2D = std::clamp(comp.FallingStarDotSize2D, 0.1f, 4.0f);
+    settings.fallingStarIntervalSeconds = std::clamp(comp.FallingStarIntervalSeconds,
+                                                     Components::kFallingStarIntervalMinSeconds,
+                                                     Components::kFallingStarIntervalMaxSeconds);
     Rendering::SkySystemConfig config{};
     Rendering::SkySystemState state{};
     Rendering::SkySunState sunState{};
@@ -782,24 +776,30 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
 
     settings.iblIntensity = std::max(0.0f, comp.IblIntensity);
     settings.iblLowerHemisphereDarkness = Math::Clamp01(comp.IblLowerHemisphereDarkness);
-    for (int i = 0; i < 3; ++i)
-    {
-        settings.ambientTintSky[i]     = comp.AmbientTintSky[i];
-        settings.ambientTintEquator[i] = comp.AmbientTintEquator[i];
-        settings.ambientTintGround[i]  = comp.AmbientTintGround[i];
-    }
+    settings.ambientTintSky[0]     = comp.AmbientTintSky.r;
+    settings.ambientTintSky[1]     = comp.AmbientTintSky.g;
+    settings.ambientTintSky[2]     = comp.AmbientTintSky.b;
+    settings.ambientTintEquator[0] = comp.AmbientTintEquator.r;
+    settings.ambientTintEquator[1] = comp.AmbientTintEquator.g;
+    settings.ambientTintEquator[2] = comp.AmbientTintEquator.b;
+    settings.ambientTintGround[0]  = comp.AmbientTintGround.r;
+    settings.ambientTintGround[1]  = comp.AmbientTintGround.g;
+    settings.ambientTintGround[2]  = comp.AmbientTintGround.b;
 
     // Gradient sky: premultiply the authored 0..1 colors by the luminance (nits) on the shared
     // 203-nit reference-white anchor, so the gradient dome + its baked IBL sit on the SAME
     // scene-linear scale as the physical sky and the camera auto-exposure.
     settings.skyMode = static_cast<uint32_t>(comp.Mode);
     const float gradientScale = std::max(0.0f, comp.GradientSkyIntensity) / Components::kReferenceWhiteNits;
-    for (int i = 0; i < 3; ++i)
-    {
-        settings.gradientSkyTopColor[i]     = comp.GradientSkyTopColor[i] * gradientScale;
-        settings.gradientSkyHorizonColor[i] = comp.GradientSkyHorizonColor[i] * gradientScale;
-        settings.gradientSkyBottomColor[i]  = comp.GradientSkyBottomColor[i] * gradientScale;
-    }
+    settings.gradientSkyTopColor[0]     = comp.GradientSkyTopColor.r * gradientScale;
+    settings.gradientSkyTopColor[1]     = comp.GradientSkyTopColor.g * gradientScale;
+    settings.gradientSkyTopColor[2]     = comp.GradientSkyTopColor.b * gradientScale;
+    settings.gradientSkyHorizonColor[0] = comp.GradientSkyHorizonColor.r * gradientScale;
+    settings.gradientSkyHorizonColor[1] = comp.GradientSkyHorizonColor.g * gradientScale;
+    settings.gradientSkyHorizonColor[2] = comp.GradientSkyHorizonColor.b * gradientScale;
+    settings.gradientSkyBottomColor[0]  = comp.GradientSkyBottomColor.r * gradientScale;
+    settings.gradientSkyBottomColor[1]  = comp.GradientSkyBottomColor.g * gradientScale;
+    settings.gradientSkyBottomColor[2]  = comp.GradientSkyBottomColor.b * gradientScale;
 
     // nightSkyBlend must always be driven by the real sun elevation, not
     // primarySunDir (which can blend toward the moon near sunset).

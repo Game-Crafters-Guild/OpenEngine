@@ -593,8 +593,9 @@ void CBTInstance::RecordUpdate(CommandList& cl, const CBTClassifyDesc& classify,
     // 1.6 The planar split: Classify reads the height-range pyramid of this frame's heights and of the
     // chain the draw shows, so the chain is built first.
     const bool editRect = classify.DirtyMaxU > classify.DirtyMinU && classify.DirtyMaxV > classify.DirtyMinV;
-    const bool chainRebuilt = RecordHeightChainBuild(cl, classify, params, pc, frameCounter, refreshBeforeClassify, editRect);
-    RecordHeightRangeBuild(cl, classify, params, pc, frameCounter, refreshBeforeClassify || editRect || chainRebuilt);
+    const bool chainRebuiltWhole =
+        RecordHeightChainBuild(cl, classify, params, pc, frameCounter, refreshBeforeClassify, editRect);
+    RecordHeightRangeBuild(cl, classify, params, pc, frameCounter, refreshBeforeClassify || chainRebuiltWhole, editRect);
 
     // 2. Classify drives the deterministic depth-target metric. It reads the
     //    CurrentVertexBuffer written by the PREVIOUS frame's vertex-eval (step
@@ -707,7 +708,7 @@ void CBTInstance::RecordUpdate(CommandList& cl, const CBTClassifyDesc& classify,
 
 void CBTInstance::RecordHeightRangeBuild(CommandList& cl, const CBTClassifyDesc& classify,
                                          const CBTFrameParams& params, CBTPushConstants pc,
-                                         uint32_t frameCounter, bool heightsChanged)
+                                         uint32_t frameCounter, bool forced, bool edited)
 {
     const BufferHandle range = m_Resources.GetHeightRangeBuffer();
     if (!range.IsValid() || classify.Mode != kClassifyScreenSpace || m_DomainMode != kDomainPlanar ||
@@ -725,7 +726,8 @@ void CBTInstance::RecordHeightRangeBuild(CommandList& cl, const CBTClassifyDesc&
                                          m_HeightChainLattice == lattice
                                      ? CBTHeightChainRangeLevels(width, height)
                                      : 0u;
-    if (!heightsChanged && source == m_HeightRangeSource && chainLevels == m_HeightRangeChainLevels)
+    const bool whole = forced || source != m_HeightRangeSource || chainLevels != m_HeightRangeChainLevels;
+    if (!whole && !edited)
         return;
     m_HeightRangeSource = source;
     m_HeightRangeChainLevels = chainLevels;
@@ -737,19 +739,61 @@ void CBTInstance::RecordHeightRangeBuild(CommandList& cl, const CBTClassifyDesc&
     if (first == 0u)
         return;
     const uint32_t top = std::max(CBTHeightRangeTopLevel(cellsX, cellsY), first);
+
+    // An edit rebuilds the blocks that read its samples at the first level and at each chain level's base
+    // level, and above them the blocks that fold those. The edit's samples are the ones
+    // RecordHeightChainBuild rebuilds from, plus one each side for the first level's differences, which
+    // read one sample past a block; a chain level's are the chain samples that build rewrote.
+    std::array<CBTHeightBuildRegion, kCBTHeightChainMaxLevel + 1u> chainSamples{};
+    CBTHeightBuildRegion edit;
+    if (!whole)
+    {
+        chainSamples[0].MinX = DirtySampleLow(classify.DirtyMinU, width);
+        chainSamples[0].MinZ = DirtySampleLow(classify.DirtyMinV, height);
+        chainSamples[0].MaxX = DirtySampleHigh(classify.DirtyMaxU, width);
+        chainSamples[0].MaxZ = DirtySampleHigh(classify.DirtyMaxV, height);
+        for (uint32_t chainLevel = 1u; chainLevel <= chainLevels; ++chainLevel)
+            chainSamples[chainLevel] = CBTHeightChainCoarserRegion(chainSamples[chainLevel - 1u],
+                                                                   CBTHeightChainSamples(width, chainLevel - 1u),
+                                                                   CBTHeightChainSamples(height, chainLevel - 1u));
+        edit.MinX = chainSamples[0].MinX > 0u ? chainSamples[0].MinX - 1u : 0u;
+        edit.MinZ = chainSamples[0].MinZ > 0u ? chainSamples[0].MinZ - 1u : 0u;
+        edit.MaxX = std::min(chainSamples[0].MaxX + 1u, cellsX);
+        edit.MaxZ = std::min(chainSamples[0].MaxZ + 1u, cellsY);
+    }
+
     const ResourceBarrier written =
         ResourceBarrier::CreateBufferBarrier(range, ResourceState::UnorderedAccess,
                                              ResourceState::UnorderedAccess);
-    cl.SetMarker("CBT.HeightRangeBuild");
+    cl.SetMarker(whole ? "CBT.HeightRangeBuild" : "CBT.HeightRangeBuildEdit");
+    CBTHeightBuildRegion region;
     for (uint32_t level = first; level <= top; ++level)
     {
+        const uint32_t blocksX = CBTHeightRangeDim(cellsX, level);
+        const uint32_t blocksZ = CBTHeightRangeDim(cellsY, level);
+        if (whole)
+            region = {0u, 0u, blocksX - 1u, blocksZ - 1u};
+        else
+            region = level == first ? CBTHeightRangeBlocksReading(edit, level, blocksX, blocksZ)
+                                    : CBTHeightRangeCoarserRegion(region);
         // The level-0 blocks, then one set per chain level whose pyramid has this level.
         uint32_t sets = 1u;
-        for (uint32_t j = 1u; j <= chainLevels; ++j)
-            sets += CBTHeightChainRangeBase(first, top, j) <= level ? 1u : 0u;
+        for (uint32_t chainLevel = 1u; chainLevel <= chainLevels; ++chainLevel)
+        {
+            const uint32_t base = CBTHeightChainRangeBase(first, top, chainLevel);
+            sets += base <= level ? 1u : 0u;
+            if (!whole && base == level)
+                region = CBTHeightBuildRegionUnion(
+                    region, CBTHeightRangeBlocksReading(chainSamples[chainLevel], level - chainLevel,
+                                                        blocksX, blocksZ));
+        }
+        const uint32_t regionX = region.MaxX - region.MinX + 1u;
+        const uint32_t regionZ = region.MaxZ - region.MinZ + 1u;
         pc.PassIndex = level | (chainLevels << 8u);
-        const uint32_t entries = CBTHeightRangeDim(cellsX, level) * CBTHeightRangeDim(cellsY, level);
-        DispatchDirect(cl, CBTKernel::HeightRangeBuild, pc, CeilDiv(entries * sets, kComputeWorkgroupSize));
+        pc.BuildRegionMin = region.MinX | (region.MinZ << 16u);
+        pc.BuildRegionExtent = regionX | (regionZ << 16u);
+        DispatchDirect(cl, CBTKernel::HeightRangeBuild, pc,
+                       CeilDiv(regionX * regionZ * sets, kComputeWorkgroupSize));
         cl.Barrier(written);
     }
 }
@@ -780,7 +824,7 @@ bool CBTInstance::RecordHeightChainBuild(CommandList& cl, const CBTClassifyDesc&
     m_HeightChainLattice = lattice;
     m_HeightChainBuffer = chain;
 
-    CBTHeightChainRegion region;
+    CBTHeightBuildRegion region;
     if (whole)
     {
         region.MaxX = samplesX - 1u;
@@ -797,7 +841,7 @@ bool CBTInstance::RecordHeightChainBuild(CommandList& cl, const CBTClassifyDesc&
         ResourceBarrier::CreateBufferBarrier(chain, ResourceState::UnorderedAccess, ResourceState::UnorderedAccess);
     const uint32_t normalMips = m_Resources.GetNormalChainMips();
     const bool normals = normalMips == CBTNormalChainMips(samplesX, samplesZ) && normalMips > 0u;
-    std::array<CBTHeightChainRegion, kCBTNormalChainMaxMips> levelRegions{};
+    std::array<CBTHeightBuildRegion, kCBTNormalChainMaxMips> levelRegions{};
     cl.SetMarker("CBT.HeightChainBuild");
     for (uint32_t level = 1u; level <= top; ++level)
     {
@@ -808,13 +852,13 @@ bool CBTInstance::RecordHeightChainBuild(CommandList& cl, const CBTClassifyDesc&
         const uint32_t width = region.MaxX - region.MinX + 1u;
         const uint32_t height = region.MaxZ - region.MinZ + 1u;
         pc.PassIndex = level;
-        pc.HeightChainRegionMin = region.MinX | (region.MinZ << 16u);
-        pc.HeightChainRegionExtent = width | (height << 16u);
+        pc.BuildRegionMin = region.MinX | (region.MinZ << 16u);
+        pc.BuildRegionExtent = width | (height << 16u);
         DispatchDirect(cl, CBTKernel::HeightChainBuild, pc, CeilDiv(width * height, kComputeWorkgroupSize));
         cl.Barrier(written);
     }
     if (!normals)
-        return true; // not provisioned for this lattice: the surface keeps the level-0 normal map
+        return whole; // not provisioned for this lattice: the surface keeps the level-0 normal map
     // The normal chain reads the finished height chain; its mips are independent of each other. It rests
     // in ShaderResource for the surface, so the build takes it to storage and back.
     const TextureHandle normalChain = m_Resources.GetNormalChainTexture();
@@ -826,7 +870,7 @@ bool CBTInstance::RecordHeightChainBuild(CommandList& cl, const CBTClassifyDesc&
         const uint32_t level = mip + 1u;
         const uint32_t texelsX = CBTNormalChainTexels(samplesX, mip);
         const uint32_t texelsZ = CBTNormalChainTexels(samplesZ, mip);
-        CBTHeightChainRegion texelRegion;
+        CBTHeightBuildRegion texelRegion;
         NormalTexelRange(levelRegions[mip].MinX, levelRegions[mip].MaxX, level, samplesX, texelsX,
                          texelRegion.MinX, texelRegion.MaxX);
         NormalTexelRange(levelRegions[mip].MinZ, levelRegions[mip].MaxZ, level, samplesZ, texelsZ,
@@ -834,13 +878,13 @@ bool CBTInstance::RecordHeightChainBuild(CommandList& cl, const CBTClassifyDesc&
         const uint32_t width = texelRegion.MaxX - texelRegion.MinX + 1u;
         const uint32_t height = texelRegion.MaxZ - texelRegion.MinZ + 1u;
         pc.PassIndex = mip;
-        pc.HeightChainRegionMin = texelRegion.MinX | (texelRegion.MinZ << 16u);
-        pc.HeightChainRegionExtent = width | (height << 16u);
+        pc.BuildRegionMin = texelRegion.MinX | (texelRegion.MinZ << 16u);
+        pc.BuildRegionExtent = width | (height << 16u);
         DispatchDirect(cl, CBTKernel::NormalChainBuild, pc, CeilDiv(width * height, kComputeWorkgroupSize));
     }
     cl.Barrier(ResourceBarrier::CreateTextureBarrier(normalChain, ResourceState::UnorderedAccess,
                                                      ResourceState::ShaderResource, 0u, normalMips));
-    return true;
+    return whole;
 }
 
 void CBTInstance::RecordReadback(CommandList& cl)

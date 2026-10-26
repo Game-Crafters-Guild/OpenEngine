@@ -3,6 +3,7 @@
 #include "InspectorRegistry.h"
 #include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
+#include "Types/Color.h"
 
 #include "Components/Rendering/Light.h"
 #include "Components/Rendering/SkyEnvironment.h"
@@ -12,6 +13,7 @@
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 
 #include "Inspectors/InspectorColorSwatchRow.h"
+#include "Inspectors/InspectorComponentColorRow.h"
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorComponentSection.h"
 #include "Inspectors/InspectorUIHelpers.h"
@@ -25,6 +27,7 @@
 #include "Sky/SkyPathGizmo.h"
 #include "Inspectors/SkySunPathRows.h"
 #include "Inspectors/SkySunReadoutCard.h"
+#include "Panels/ColorPicker.h"
 #include "UI/EditorIcons.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "UI/Controls/InspectorNotice.h"
@@ -49,7 +52,6 @@ namespace GameEngine
 namespace
 {
 
-constexpr float kMaxGroundPickerIntensity = 8.0f;
 constexpr float kMinSkyTimeOfDayCycleSecondsField = 0.25f;
 constexpr std::array<const char*, 4> kSkyDayKeyNames = {"Midnight", "Dawn", "Midday", "Sunset"};
 // Lowercase stop captions shared by the gradient-bar rows and the scalar day-key rows.
@@ -93,45 +95,6 @@ constexpr EnumEntry<Components::SkyMode> kSkyModes[] = {
     {Components::SkyMode::Physical, "Physical (atmosphere)"},
     {Components::SkyMode::Gradient, "Gradient"},
 };
-
-static void LinearRgbToPickerState(const float* c, uint32_t& outArgb, float& outIntensity)
-{
-    auto clamp01 = [](float v) { return std::max(0.0f, std::min(1.0f, v)); };
-    const float m = std::max(std::max(c[0], c[1]), c[2]);
-    if (m <= 1e-6f)
-    {
-        outIntensity = 1.0f;
-        outArgb = 0xFF000000u;
-        return;
-    }
-    if (m <= 1.0f)
-    {
-        outIntensity = 1.0f;
-        const uint8_t r = static_cast<uint8_t>(clamp01(c[0]) * 255.0f + 0.5f);
-        const uint8_t g = static_cast<uint8_t>(clamp01(c[1]) * 255.0f + 0.5f);
-        const uint8_t b = static_cast<uint8_t>(clamp01(c[2]) * 255.0f + 0.5f);
-        outArgb = (0xFFu << 24) | (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
-        return;
-    }
-    outIntensity = std::min(m, kMaxGroundPickerIntensity);
-    const float inv = 1.0f / outIntensity;
-    const uint8_t r = static_cast<uint8_t>(clamp01(c[0] * inv) * 255.0f + 0.5f);
-    const uint8_t g = static_cast<uint8_t>(clamp01(c[1] * inv) * 255.0f + 0.5f);
-    const uint8_t b = static_cast<uint8_t>(clamp01(c[2] * inv) * 255.0f + 0.5f);
-    outArgb = (0xFFu << 24) | (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
-}
-
-static void PickerToLinearRgb(uint32_t argb, float intensity, float* out)
-{
-    auto clamp01 = [](float v) { return std::max(0.0f, std::min(1.0f, v)); };
-    const float r = clamp01(static_cast<float>((argb >> 16) & 0xFF) / 255.0f);
-    const float g = clamp01(static_cast<float>((argb >> 8) & 0xFF) / 255.0f);
-    const float b = clamp01(static_cast<float>(argb & 0xFF) / 255.0f);
-    const float i = std::max(1.0f, std::min(intensity, kMaxGroundPickerIntensity));
-    out[0] = r * i;
-    out[1] = g * i;
-    out[2] = b * i;
-}
 
 static std::string FormatSkyInspectorFloat(float v, int decimals)
 {
@@ -255,6 +218,22 @@ static Foldout* AddSkySection(UIElement* parent, std::string_view title, const c
     return section;
 }
 
+// A sky color on the shared color row, with the picker's intensity for colors brighter than white.
+static void AddSkyColorRow(const InspectorContext& ctx, UIElement* parent, const char* label, const char* tooltip,
+                           const char* changeLabel, ColorLinear Components::SkyEnvironment::*member)
+{
+    InspectorUI::ComponentColorBinding<Components::SkyEnvironment> binding;
+    binding.World = ctx.World;
+    binding.Entity = ctx.Entity;
+    binding.Notifications = ctx.ChangeNotifications;
+    binding.Undo = ctx.Undo;
+    binding.OpenPicker = ctx.OpenColorPickerWindow;
+    binding.Color = member;
+    binding.ChangeLabel = changeLabel;
+    binding.MaxIntensity = kColorPickerMaxIntensity;
+    InspectorUI::AddComponentColorRow<Components::SkyEnvironment>(parent, label, tooltip, std::move(binding));
+}
+
 static void AddSkyEnvironmentDayKeyGradientRow(
     UIElement* parent,
     const char* label,
@@ -326,10 +305,8 @@ static void AddSkyEnvironmentDayKeyGradientRow(
             float* rgb = (*accessColorCopy)(*comp, i);
             if (!rgb)
                 continue;
-            uint32_t argb = 0;
-            float intensity = 1.0f;
-            LinearRgbToPickerState(rgb, argb, intensity);
-            barRaw->SetStopColor(i, argb);
+            const ColorLinear stopColor(rgb[0], rgb[1], rgb[2]);
+            barRaw->SetStopColor(i, InspectorUI::HdrColorToPickerState(stopColor, kColorPickerMaxIntensity).Argb);
             if (float* keyHour = (*accessTimeCopy)(*comp, i))
                 barRaw->SetStopPosition(i, Math::Clamp01(*keyHour / 24.0f));
         }
@@ -541,9 +518,8 @@ static void AddSkyEnvironmentDayKeyGradientRow(
         if (!primaryRgb)
             return;
 
-        uint32_t currentArgb = 0;
-        float currentIntensity = 1.0f;
-        LinearRgbToPickerState(primaryRgb, currentArgb, currentIntensity);
+        const InspectorUI::ColorPickerState current = InspectorUI::HdrColorToPickerState(
+            ColorLinear(primaryRgb[0], primaryRgb[1], primaryRgb[2]), kColorPickerMaxIntensity);
 
         using Edit = Editor::UndoRedoService::InteractiveEdit;
         auto edit = std::make_shared<Edit>();
@@ -569,6 +545,8 @@ static void AddSkyEnvironmentDayKeyGradientRow(
         ColorPickerCallbacks cbs;
         cbs.onValueChanging = [world, notifications, edit, targets, accessColorCopy, selectedStop, syncUi](uint32_t newArgb, float intensity) {
             const size_t stop = *selectedStop;
+            const ColorLinear picked =
+                InspectorUI::PickerStateToHdrColor(newArgb, intensity, kColorPickerMaxIntensity);
             if (*edit)
             {
                 edit->Preview([&] {
@@ -580,7 +558,9 @@ static void AddSkyEnvironmentDayKeyGradientRow(
                         float* rgb = (*accessColorCopy)(*c, stop);
                         if (!rgb)
                             continue;
-                        PickerToLinearRgb(newArgb, intensity, rgb);
+                        rgb[0] = picked.r;
+                        rgb[1] = picked.g;
+                        rgb[2] = picked.b;
                     }
                 });
             }
@@ -595,7 +575,9 @@ static void AddSkyEnvironmentDayKeyGradientRow(
                     float* rgb = (*accessColorCopy)(updated, stop);
                     if (!rgb)
                         continue;
-                    PickerToLinearRgb(newArgb, intensity, rgb);
+                    rgb[0] = picked.r;
+                    rgb[1] = picked.g;
+                    rgb[2] = picked.b;
                     Editor::PreviewComponentUpdate(world, h, notifications, updated);
                 }
             }
@@ -603,6 +585,8 @@ static void AddSkyEnvironmentDayKeyGradientRow(
         };
         cbs.onApply = [world, notifications, edit, targets, accessColorCopy, selectedStop, syncUi](uint32_t newArgb, float intensity) {
             const size_t stop = *selectedStop;
+            const ColorLinear picked =
+                InspectorUI::PickerStateToHdrColor(newArgb, intensity, kColorPickerMaxIntensity);
             if (*edit)
             {
                 edit->Preview([&] {
@@ -614,7 +598,9 @@ static void AddSkyEnvironmentDayKeyGradientRow(
                         float* rgb = (*accessColorCopy)(*c, stop);
                         if (!rgb)
                             continue;
-                        PickerToLinearRgb(newArgb, intensity, rgb);
+                        rgb[0] = picked.r;
+                        rgb[1] = picked.g;
+                        rgb[2] = picked.b;
                     }
                 });
                 edit->Commit();
@@ -630,7 +616,9 @@ static void AddSkyEnvironmentDayKeyGradientRow(
                     float* rgb = (*accessColorCopy)(updated, stop);
                     if (!rgb)
                         continue;
-                    PickerToLinearRgb(newArgb, intensity, rgb);
+                    rgb[0] = picked.r;
+                    rgb[1] = picked.g;
+                    rgb[2] = picked.b;
                     Editor::CommitComponentUpdate(world, h, notifications, updated);
                 }
             }
@@ -641,7 +629,7 @@ static void AddSkyEnvironmentDayKeyGradientRow(
                 edit->Cancel();
             syncUi();
         };
-        openPicker(currentArgb, currentIntensity, std::move(cbs));
+        openPicker(current.Argb, current.Intensity, std::move(cbs));
     });
 }
 
@@ -701,140 +689,6 @@ void RegisterSkyEnvironmentInspector()
                 (*refreshTimeOfDayControls)();
         };
 
-        // Shared single-color swatch row for a SkyEnvironment float[3] member (HDR-capable via the
-        // picker-intensity helpers; double-click the label resets to white). Used by both the
-        // ambient gradient tint (diffuse-irradiance wash) and the gradient-sky colors.
-        using SkyColorMember = float (Components::SkyEnvironment::*)[3];
-        auto addSkyColorRow = [w, e, n, undo, openPicker](
-            UIElement* parent, const char* label, const char* tooltip, const char* changeLabel,
-            SkyColorMember member)
-        {
-            auto formatRgb = [](const float* rgb) {
-                return std::string("(") + FormatSkyInspectorFloat(rgb[0], 3) + ", " +
-                       FormatSkyInspectorFloat(rgb[1], 3) + ", " + FormatSkyInspectorFloat(rgb[2], 3) + ")";
-            };
-
-            UIElement* row = InspectorUI::AddRow(parent);
-            Label* colorLabel = InspectorUI::AddLabel(row, label, tooltip);
-            if (colorLabel) colorLabel->AddClass("inspector-label-no-drag");
-            UIElement* fieldContainer = InspectorUI::AddFieldContainer(row);
-            fieldContainer->Overrides()
-                .Set(Style::FlexDir, FlexDirection::Row)
-                .Set(Style::AlignItems, AlignItems::Center)
-                .Set(Style::Gap, StyleLength::Px(6.0f));
-
-            uint32_t argb = 0xFFFFFFFFu;
-            float unusedIntensity = 1.0f;
-            if (auto* c = w->GetComponent<Components::SkyEnvironment>(e))
-                LinearRgbToPickerState(c->*member, argb, unusedIntensity);
-
-            auto swatch = std::make_unique<UIElement>();
-            UIElement* swatchRaw = swatch.get();
-            InspectorUI::StyleColorSwatch(swatchRaw, argb);
-            fieldContainer->AddChild(std::move(swatch));
-
-            auto rgbLabel = std::make_unique<Label>();
-            rgbLabel->AddClass("inspector-text");
-            if (auto* c = w->GetComponent<Components::SkyEnvironment>(e))
-                rgbLabel->SetText(formatRgb(c->*member));
-            rgbLabel->Overrides().Set(Style::Cursor, CursorStyle::Pointer);
-            Label* rgbLabelRaw = rgbLabel.get();
-            fieldContainer->AddChild(std::move(rgbLabel));
-
-            auto updateUI = [swatchRaw, rgbLabelRaw, w, e, member, formatRgb]() {
-                auto* c = w->GetComponent<Components::SkyEnvironment>(e);
-                if (!c) return;
-                uint32_t a = 0; float inten = 1.0f;
-                LinearRgbToPickerState(c->*member, a, inten);
-                InspectorUI::StyleColorSwatch(swatchRaw, a);
-                rgbLabelRaw->SetText(formatRgb(c->*member));
-            };
-
-            auto clickHandler = [w, e, n, undo, openPicker, member, updateUI, changeLabel](UIEvent& ev) {
-                if (ev.Button != 0) return;
-                ev.Stop();
-                if (!openPicker) return;
-                auto* comp = w->GetComponent<Components::SkyEnvironment>(e);
-                if (!comp) return;
-                uint32_t currentArgb = 0; float currentIntensity = 1.0f;
-                LinearRgbToPickerState(comp->*member, currentArgb, currentIntensity);
-
-                using Edit = Editor::UndoRedoService::InteractiveEdit;
-                auto edit = std::make_shared<Edit>();
-                if (undo)
-                {
-                    auto target = MakeComponentSnapshotTarget<Components::SkyEnvironment>(w, e, n, changeLabel);
-                    *edit = undo->BeginInteractiveEdit(changeLabel, std::move(target));
-                }
-                ColorPickerCallbacks cbs;
-                cbs.onValueChanging = [w, e, n, edit, member, updateUI](uint32_t newArgb, float intensity) {
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<Components::SkyEnvironment>(e);
-                            if (c) PickerToLinearRgb(newArgb, intensity, c->*member);
-                        });
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<Components::SkyEnvironment>(e);
-                        if (!c) return;
-                        Components::SkyEnvironment updated = *c;
-                        PickerToLinearRgb(newArgb, intensity, updated.*member);
-                        Editor::PreviewComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                cbs.onApply = [w, e, n, edit, member, updateUI](uint32_t newArgb, float intensity) {
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<Components::SkyEnvironment>(e);
-                            if (c) PickerToLinearRgb(newArgb, intensity, c->*member);
-                        });
-                        edit->Commit();
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<Components::SkyEnvironment>(e);
-                        if (!c) return;
-                        Components::SkyEnvironment updated = *c;
-                        PickerToLinearRgb(newArgb, intensity, updated.*member);
-                        Editor::CommitComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                cbs.onCancel = [edit, updateUI]() {
-                    if (*edit) edit->Cancel();
-                    updateUI();
-                };
-                openPicker(currentArgb, currentIntensity, std::move(cbs));
-            };
-
-            swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
-            rgbLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
-
-            auto lastClick = std::make_shared<std::chrono::steady_clock::time_point>();
-            if (colorLabel)
-            {
-                colorLabel->RegisterEventHandler(kEventMouseDown, [w, e, n, undo, member, updateUI, lastClick, changeLabel](UIEvent& ev) {
-                    if (ev.Button != 0) return;
-                    auto now = std::chrono::steady_clock::now();
-                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - *lastClick);
-                    if (elapsed > std::chrono::milliseconds::zero() && elapsed < GameEngine::Platform::GetDoubleClickInterval())
-                    {
-                        ev.Stop();
-                        CommitComponentWithUndo<Components::SkyEnvironment>(w, e, n, undo, changeLabel,
-                            [member](Components::SkyEnvironment& u) { (u.*member)[0] = 1.0f; (u.*member)[1] = 1.0f; (u.*member)[2] = 1.0f; });
-                        updateUI();
-                        *lastClick = std::chrono::steady_clock::time_point{};
-                        return;
-                    }
-                    *lastClick = now;
-                });
-            }
-        };
-
         // Sky type selector (Physical atmosphere vs stylized Gradient). Switching rebuilds the
         // inspector so the two control sets show/hide (mirrors the BelowHorizon rebuild pattern).
         {
@@ -852,14 +706,15 @@ void RegisterSkyEnvironmentInspector()
         if (sky->Mode == Components::SkyMode::Gradient)
         {
             InspectorUI::AddTextBlock(ctx.Parent, "Gradient sky", "inspector-section-subheader");
-            addSkyColorRow(ctx.Parent, "Top color",
-                "Sky color straight up (view direction +Y). Authored linear RGB; scaled by Sky intensity.",
+            AddSkyColorRow(ctx, ctx.Parent, "Top color",
+                "Sky color straight up (view direction +Y). Authored linear RGB; scaled by Sky intensity. "
+                "Double-click the label to reset to the default.",
                 "Change Gradient Sky Top", &Components::SkyEnvironment::GradientSkyTopColor);
-            addSkyColorRow(ctx.Parent, "Horizon color",
-                "Sky color at the horizon (view direction level).",
+            AddSkyColorRow(ctx, ctx.Parent, "Horizon color",
+                "Sky color at the horizon (view direction level). Double-click the label to reset to the default.",
                 "Change Gradient Sky Horizon", &Components::SkyEnvironment::GradientSkyHorizonColor);
-            addSkyColorRow(ctx.Parent, "Bottom color",
-                "Sky color straight down (view direction -Y).",
+            AddSkyColorRow(ctx, ctx.Parent, "Bottom color",
+                "Sky color straight down (view direction -Y). Double-click the label to reset to the default.",
                 "Change Gradient Sky Bottom", &Components::SkyEnvironment::GradientSkyBottomColor);
             AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
                 ctx.Parent, "Sky intensity (nits)", sky->GradientSkyIntensity, w, e, n, undo,
@@ -884,11 +739,11 @@ void RegisterSkyEnvironmentInspector()
                 extras, 0.0f, 1.0f);
 
             InspectorUI::AddTextBlock(ctx.Parent, "Ambient gradient tint (diffuse only)", "inspector-section-subheader");
-            addSkyColorRow(ctx.Parent, "Sky tint", kAmbientTintSkyTooltip,
+            AddSkyColorRow(ctx, ctx.Parent, "Sky tint", kAmbientTintSkyTooltip,
                 "Change Ambient Tint Sky", &Components::SkyEnvironment::AmbientTintSky);
-            addSkyColorRow(ctx.Parent, "Equator tint", kAmbientTintEquatorTooltip,
+            AddSkyColorRow(ctx, ctx.Parent, "Equator tint", kAmbientTintEquatorTooltip,
                 "Change Ambient Tint Equator", &Components::SkyEnvironment::AmbientTintEquator);
-            addSkyColorRow(ctx.Parent, "Ground tint", kAmbientTintGroundTooltip,
+            AddSkyColorRow(ctx, ctx.Parent, "Ground tint", kAmbientTintGroundTooltip,
                 "Change Ambient Tint Ground", &Components::SkyEnvironment::AmbientTintGround);
             return;
         }
@@ -930,20 +785,19 @@ void RegisterSkyEnvironmentInspector()
         // are built inside a Below-horizon mode branch, and a section that appears and disappears
         // with a dropdown is the churn this split avoids. Ambient gradient tint stays because it
         // is a diffuse-only tint trio that belongs with the ambient rows it sits under.
-        Foldout* fallingStarsSection = AddSkySection(
-            ctx.Parent, "Falling stars",
-            "Occasional meteors across the night sky. Visible only at night, and only while the "
-            "star field is drawn.",
-            ctx.ShowInfoCards);
         Foldout* starsSection = AddSkySection(
             ctx.Parent, "Stars",
             "The night star field: a real sky's magnitudes and star colors, dimmed and reddened by the "
             "air toward the horizon, hidden by a bright sky and by the moon's disk.",
             ctx.ShowInfoCards);
+        Foldout* fallingStarsSection = AddSkySection(
+            ctx.Parent, "Falling stars",
+            "Stars that streak across the night sky now and then. Visible only at night, and only "
+            "while the star field is drawn.",
+            ctx.ShowInfoCards);
         Foldout* backdrop2DSection = AddSkySection(
             ctx.Parent, "2D backdrop",
-            "Sizes and offsets read ONLY by the orthographic 2D-backdrop path, for 2D games. "
-            "Every row here is inert in a perspective scene view.",
+            "Used only by the sky of 2D games. No effect in a 3D view.",
             ctx.ShowInfoCards);
         UIElement* fallingStars = fallingStarsSection ? fallingStarsSection->GetContentContainer() : ctx.Parent;
         UIElement* stars = starsSection ? starsSection->GetContentContainer() : ctx.Parent;
@@ -1747,15 +1601,14 @@ void RegisterSkyEnvironmentInspector()
             "lit from below by the open sky. Leaves the visible sky unchanged. 0 = off, "
             "1 = fully dark below the horizon.");
 
-        // Ambient gradient tint (diffuse-irradiance wash) — visible in Physical mode; the shared
-        // addSkyColorRow helper is defined at the top of this inspector (Gradient mode shows the
-        // same three rows in its own focused section).
+        // Ambient gradient tint (diffuse-irradiance wash), visible in Physical mode; Gradient mode shows the
+        // same three rows in its own focused section.
         InspectorUI::AddTextBlock(stylistic, "Ambient gradient tint (diffuse only)", "inspector-section-subheader");
-        addSkyColorRow(stylistic, "Sky tint", kAmbientTintSkyTooltip,
+        AddSkyColorRow(ctx, stylistic, "Sky tint", kAmbientTintSkyTooltip,
             "Change Ambient Tint Sky", &Components::SkyEnvironment::AmbientTintSky);
-        addSkyColorRow(stylistic, "Equator tint", kAmbientTintEquatorTooltip,
+        AddSkyColorRow(ctx, stylistic, "Equator tint", kAmbientTintEquatorTooltip,
             "Change Ambient Tint Equator", &Components::SkyEnvironment::AmbientTintEquator);
-        addSkyColorRow(stylistic, "Ground tint", kAmbientTintGroundTooltip,
+        AddSkyColorRow(ctx, stylistic, "Ground tint", kAmbientTintGroundTooltip,
             "Change Ambient Tint Ground", &Components::SkyEnvironment::AmbientTintGround);
 
         // One Sun group: the light, its illuminance, the sun's path over the day, what it delivers
@@ -1971,97 +1824,28 @@ void RegisterSkyEnvironmentInspector()
                 365.0f);
         }
 
-        addSkyDiskToggle(fallingStars, "Falling stars", sky->FallingStarsEnabled, &Components::SkyEnvironment::FallingStarsEnabled, "Change Sky Falling Stars", "Enable occasional falling stars in the night sky.");
+        addSkyDiskToggle(fallingStars, "Show falling stars", sky->FallingStarsEnabled, &Components::SkyEnvironment::FallingStarsEnabled, "Change Sky Falling Stars", "Draws falling stars at night, where the stars show.");
         AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
             fallingStars,
-            "Falling amount",
-            sky->FallingStarAmount,
+            "Interval (seconds)",
+            sky->FallingStarIntervalSeconds,
             w,
             e,
             n,
             undo,
-            "Change Sky Falling Star Amount",
-            [](Components::SkyEnvironment& u, float v) { u.FallingStarAmount = Math::Clamp01(v); },
-            sky->FallingStarAmount,
-            "How many falling stars may appear at once.",
+            "Change Sky Falling Star Interval",
+            [](Components::SkyEnvironment& u, float v)
+            {
+                u.FallingStarIntervalSeconds = std::clamp(v, Components::kFallingStarIntervalMinSeconds,
+                                                          Components::kFallingStarIntervalMaxSeconds);
+            },
+            Components::SkyEnvironment{}.FallingStarIntervalSeconds,
+            "The average time between two falling stars, anywhere in the sky. At 5 seconds, a 60-degree view "
+            "tilted up 20 degrees or more shows about one every 15 to 25 seconds. A clear night shows about "
+            "one every 5 minutes, a strong meteor shower about one every 40 seconds.",
             extras,
-            0.0f,
-            1.0f);
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
-            fallingStars,
-            "Falling frequency",
-            sky->FallingStarFrequency,
-            w,
-            e,
-            n,
-            undo,
-            "Change Sky Falling Star Frequency",
-            [](Components::SkyEnvironment& u, float v) { u.FallingStarFrequency = std::clamp(v, 0.0f, 4.0f); },
-            sky->FallingStarFrequency,
-            "How often falling stars streak across the night sky.",
-            extras,
-            0.0f,
-            4.0f);
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
-            fallingStars,
-            "Falling speed",
-            sky->FallingStarSpeed,
-            w,
-            e,
-            n,
-            undo,
-            "Change Sky Falling Star Speed",
-            [](Components::SkyEnvironment& u, float v) { u.FallingStarSpeed = std::clamp(v, 0.2f, 50.0f); },
-            sky->FallingStarSpeed,
-            "How fast each falling star crosses the sky.",
-            extras,
-            0.2f,
-            50.0f);
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
-            fallingStars,
-            "Falling length",
-            sky->FallingStarLength,
-            w,
-            e,
-            n,
-            undo,
-            "Change Sky Falling Star Length",
-            [](Components::SkyEnvironment& u, float v) { u.FallingStarLength = std::clamp(v, 0.2f, 4.0f); },
-            sky->FallingStarLength,
-            "How long each falling star trail is.",
-            extras,
-            0.2f,
-            4.0f);
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
-            fallingStars,
-            "Falling thickness",
-            sky->FallingStarThickness,
-            w,
-            e,
-            n,
-            undo,
-            "Change Sky Falling Star Thickness",
-            [](Components::SkyEnvironment& u, float v) { u.FallingStarThickness = std::clamp(v, 0.1f, 4.0f); },
-            sky->FallingStarThickness,
-            "How wide each falling star trail is.",
-            extras,
-            0.1f,
-            4.0f);
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
-            fallingStars,
-            "Falling dot size",
-            sky->FallingStarDotSize,
-            w,
-            e,
-            n,
-            undo,
-            "Change Sky Falling Star Dot Size",
-            [](Components::SkyEnvironment& u, float v) { u.FallingStarDotSize = std::clamp(v, 0.1f, 4.0f); },
-            sky->FallingStarDotSize,
-            "How large the bright falling star tip is.",
-            extras,
-            0.1f,
-            4.0f);
+            Components::kFallingStarIntervalMinSeconds,
+            Components::kFallingStarIntervalMaxSeconds);
 
         AddSkyStarLookRow(stars, w, e, n, undo);
         AddSkyStarSeenByRow(stars, w, e, n, undo);
@@ -2181,10 +1965,6 @@ void RegisterSkyEnvironmentInspector()
             backdrop2D, "Moon size 2D", sky->MoonSize2D, w, e, n, undo, "Change Sky 2D Moon Size",
             [](Components::SkyEnvironment& u, float v) { u.MoonSize2D = std::clamp(v, 0.1f, 6.0f); },
             sky->MoonSize2D, "Moon disk scale used only by orthographic/2D sky rendering.", extras, 0.1f, 6.0f);
-        AddComponentFloatRowWithDrag<Components::SkyEnvironment>(
-            backdrop2D, "Falling dot size 2D", sky->FallingStarDotSize2D, w, e, n, undo, "Change Sky Falling Star Dot Size 2D",
-            [](Components::SkyEnvironment& u, float v) { u.FallingStarDotSize2D = std::clamp(v, 0.1f, 4.0f); },
-            sky->FallingStarDotSize2D, "How large the bright falling star tip is in 2D mode.", extras, 0.1f, 4.0f);
     };
 
     InspectorRegistry::Get().RegisterComponentInspector<Components::SkyEnvironment>(std::move(fn));

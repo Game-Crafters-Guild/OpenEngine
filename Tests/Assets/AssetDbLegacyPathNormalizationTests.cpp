@@ -42,7 +42,7 @@ TEST(AssetDatabase, NormalizesLegacyAssetsPrefixedPathsWhenAssetRootIsAssetsDir)
     fs::create_directories(tmpRoot, ec);
 
     const fs::path assetsRoot = tmpRoot / "Assets";
-    const fs::path iconPath = assetsRoot / "Icons" / "Folder@64px.png";
+    const fs::path iconPath = assetsRoot / "Icons" / "Folder@64px.svg";
     WriteBinaryFile(iconPath, "DUMMY");
 
     const GUID guid("a3d8e541-8c66-4579-8d71-f1ae63c074eb");

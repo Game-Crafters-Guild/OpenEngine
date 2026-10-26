@@ -1187,7 +1187,7 @@ TEST(TerrainModifierMigration, TwoModifiersOnOneEntityStackInLoadOrder)
 // two independent constructions they were free to disagree, and did: a bare
 // block produced SplinePath while an authored one produced SplineArea, so the
 // same closed spline meant a swept band in one scene and a filled area in the
-// next. AddDefault, the IPC's create_component and blueprint overrides all
+// next. AddDefault, the IPC's create_component and prefab overrides all
 // arrive here.
 TEST(TerrainModifierMigration, BareSplineModifierBlockLoadsTheSameRegionAsADefaultOne)
 {

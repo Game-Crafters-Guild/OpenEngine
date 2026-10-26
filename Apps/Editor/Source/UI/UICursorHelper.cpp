@@ -1,12 +1,39 @@
 #include "UI/UICursorHelper.h"
+
+#include "Core/WindowInputRouter.h"
+#include "PlayMode/WindowCursorLock.h"
 #include "UI/UIStyle.h"
 
 namespace GameEngine
 {
-
-void SetupUICursorCallback(UIManager* ui, Platform::Window* window)
+namespace
 {
-    if (!ui || !window)
+
+// A UI value drag locks the cursor with the motion an unlocked drag sees, so
+// the drag does not change speed when the lock begins.
+void BeginUIPointerLock(Editor::WindowCursorLock* cursorLock)
+{
+    cursorLock->LockForUiDrag();
+}
+
+void EndUIPointerLock(UIManager* ui, Platform::Window* window, Editor::WindowCursorLock* cursorLock)
+{
+    cursorLock->UnlockForUiDrag();
+    // The game can still hold the lock; then the cursor stays hidden.
+    if (cursorLock->IsLocked())
+        return;
+    // The cursor shows again where the lock began, which no move reports.
+    float clientX = 0.0f;
+    float clientY = 0.0f;
+    window->GetCursorClientPosition(clientX, clientY);
+    WindowInputRouter::SendUiMouseFromClientPixels(window, ui, clientX, clientY);
+}
+
+} // namespace
+
+void SetupUICursorCallback(UIManager* ui, Platform::Window* window, Editor::WindowCursorLock* cursorLock)
+{
+    if (!ui || !window || !cursorLock)
         return;
 
     ui->SetCursorCallback([window](CursorStyle cursor)
@@ -50,6 +77,14 @@ void SetupUICursorCallback(UIManager* ui, Platform::Window* window)
             break;
         }
         window->SetCursor(winCursor);
+    });
+
+    ui->SetPointerLockCallback([ui, window, cursorLock](bool locked)
+    {
+        if (locked)
+            BeginUIPointerLock(cursorLock);
+        else
+            EndUIPointerLock(ui, window, cursorLock);
     });
 }
 

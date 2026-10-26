@@ -1374,6 +1374,10 @@ public:
             const GUID g = c->StampAssetGuid.ToGuid();
             outLines.push_back(std::string("TerrainStampModifier.stampAsset = \"") + g.ToString() + "\"");
         }
+        else if (ctx.WriteEveryField)
+        {
+            outLines.push_back("TerrainStampModifier.stampAsset = 0");
+        }
     }
 
     bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
@@ -1668,7 +1672,7 @@ public:
     }
 
     // A bare "TerrainSplineModifier" block adds the volume model, so the editor
-    // and blueprint overrides create what a scene load produces. It converts a
+    // and prefab overrides create what a scene load produces. It converts a
     // default-valued component through the same region constructor the authored
     // path uses, so the two cannot disagree about the region's shape.
     bool AddDefault(ECS::World& world, ECS::EntityHandle entity, std::string* /*outError*/) const override
@@ -2423,9 +2427,9 @@ public:
         const auto* c = world.GetComponent<Components::TerrainColorEffect>(entity);
         if (!c) return;
         SerializeEffectBase(*c, "TerrainColorEffect", outLines);
-        outLines.push_back(std::string("TerrainColorEffect.colorR = ") + FormatFloat(c->Color[0]));
-        outLines.push_back(std::string("TerrainColorEffect.colorG = ") + FormatFloat(c->Color[1]));
-        outLines.push_back(std::string("TerrainColorEffect.colorB = ") + FormatFloat(c->Color[2]));
+        outLines.push_back(std::string("TerrainColorEffect.colorR = ") + FormatFloat(c->Color.r));
+        outLines.push_back(std::string("TerrainColorEffect.colorG = ") + FormatFloat(c->Color.g));
+        outLines.push_back(std::string("TerrainColorEffect.colorB = ") + FormatFloat(c->Color.b));
         outLines.push_back(std::string("TerrainColorEffect.strength = ") + FormatFloat(c->Strength));
     }
 
@@ -2439,9 +2443,9 @@ public:
         if (!ApplyEffectBaseProperty(c, property, value, outError, handled)) return false;
         if (!handled)
         {
-            float32* field = property == "colorr" ? &c.Color[0] :
-                             property == "colorg" ? &c.Color[1] :
-                             property == "colorb" ? &c.Color[2] :
+            float32* field = property == "colorr" ? &c.Color.r :
+                             property == "colorg" ? &c.Color.g :
+                             property == "colorb" ? &c.Color.b :
                              property == "strength" ? &c.Strength : nullptr;
             if (!field) { return ReportUnknownField(ctx, GetComponentName(), property, outError); }
             if (!ParseF32(value, *field, outError)) return false;
@@ -2639,6 +2643,8 @@ public:
         outLines.push_back(std::string("TerrainStampEffect.respectClaims = ") + (c->RespectClaims ? "true" : "false"));
         if (!c->StampAssetGuid.IsNull())
             outLines.push_back(std::string("TerrainStampEffect.stampAsset = \"") + c->StampAssetGuid.ToGuid().ToString() + "\"");
+        else if (ctx.WriteEveryField)
+            outLines.push_back("TerrainStampEffect.stampAsset = 0");
     }
 
     bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,

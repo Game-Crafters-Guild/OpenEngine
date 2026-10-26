@@ -3,9 +3,11 @@
 #include "Engine/Rendering/DDGIEmissive.h"
 #include "Engine/Rendering/DDGIMaterialMapAtlas.h"
 #include "Engine/Rendering/Material.h"
+#include "Mathematics/Vector4.h"
 #include "Rendering/Materials/LegacyMaterialLanes.h"
 #include "Rendering/Materials/MaterialParamsLayout.h"
 #include "Rendering/Materials/ShaderPropertyTable.h"
+#include "Types/Color.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -57,6 +59,16 @@ void ReadParam(const Material& material, const MaterialGpuParams& params, std::s
     std::copy_n(source, std::min(count, components), out);
 }
 
+// The first `count` lanes of a color property as a scene-linear color; the
+// lanes past `count` read 0.
+ColorLinear ReadColorParam(const Material& material, const MaterialGpuParams& params, std::string_view name,
+                           uint32_t count, float fallback)
+{
+    Mathematics::Vector4 lanes(0.0f, 0.0f, 0.0f, 0.0f);
+    ReadParam(material, params, name, lanes.v, count, fallback);
+    return ColorLinear(lanes.x, lanes.y, lanes.z, lanes.w);
+}
+
 } // namespace
 
 // The material record the software kernel shades with. Reads the same PARAMETERS
@@ -105,30 +117,28 @@ SceneBvh::UberMaterial BakeUberMaterial(const Material* material,
     // Defaults are the raster surface's own: an opaque white non-metal at the
     // mid roughness the standard adapter assumes, so a material that authors
     // none of these bounces neutral light rather than black.
-    float baseColor[4] = {};
-    ReadParam(*material, params, "baseColor", baseColor, 4, 1.0f);
+    const ColorLinear baseColor = ReadColorParam(*material, params, "baseColor", 4, 1.0f);
     float metallic = 0.0f;
     ReadParam(*material, params, "metallic", &metallic, 1, 0.0f);
     float roughness = 0.5f;
     ReadParam(*material, params, "roughness", &roughness, 1, 0.5f);
-    float emission[4] = {};
-    ReadParam(*material, params, "emissive", emission, 3, 0.0f);
-    ReadParam(*material, params, "emissionLuminance", &emission[3], 1, 0.0f);
+    const ColorLinear emissiveTint = ReadColorParam(*material, params, "emissive", 3, 0.0f);
+    float emissionLuminance = 0.0f;
+    ReadParam(*material, params, "emissionLuminance", &emissionLuminance, 1, 0.0f);
 
-    baked.BaseColorR        = baseColor[0];
-    baked.BaseColorG        = baseColor[1];
-    baked.BaseColorB        = baseColor[2];
-    baked.Opacity           = baseColor[3];
+    baked.BaseColorR        = baseColor.r;
+    baked.BaseColorG        = baseColor.g;
+    baked.BaseColorB        = baseColor.b;
+    baked.Opacity           = baseColor.a;
     baked.Metalness         = metallic;
     baked.Roughness         = roughness;
     // Authored emission (tint x nits) folded to scene-linear by the reference-
     // white anchor, so the software lane emits exactly what the raster surface
     // shows rather than 203x hotter.
-    const DDGIEmissive emissive =
-        ComputeDDGIEmissive(emission[0], emission[1], emission[2], emission[3]);
-    baked.EmissiveR         = emissive.Color[0];
-    baked.EmissiveG         = emissive.Color[1];
-    baked.EmissiveB         = emissive.Color[2];
+    const DDGIEmissive emissive = ComputeDDGIEmissive(emissiveTint, emissionLuminance);
+    baked.EmissiveR         = emissive.Color.r;
+    baked.EmissiveG         = emissive.Color.g;
+    baked.EmissiveB         = emissive.Color.b;
     return baked;
 }
 

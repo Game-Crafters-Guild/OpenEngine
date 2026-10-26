@@ -15,6 +15,7 @@
 #include "CBTTerrain/CBTSphereFaceMap.h"  // ClassifySphereCapEdit, SphereEditRegions (planet bake)
 #include "CBTTerrain/CBTPlanetShading.h"  // AnyTangent (sphere modifier tangent frame)
 #include "Components/Terrain/Terrain.h"
+#include "PageStreaming/PageStoreFormat.h"
 #include "Components/Terrain/TerrainModifiers.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Transform.h"
@@ -898,8 +899,6 @@ const Spline::SplineData* AppendWorldSpline(std::deque<Spline::SplineData>& stor
     return &worldSpline;
 }
 
-// Passed to the apply helpers when the bake is not region-clamped.
-constexpr int32 kRegionUnbounded = std::numeric_limits<int32>::max();
 
 // Reduction seeds for a heightfield min/max scan: min starts above any real
 // height, max below, so the first sample replaces both. Named so the sentinel
@@ -2240,6 +2239,51 @@ uint64 TerrainModifierSystem::HashModifierGeometry(const ResolvedModifier& mod)
     return sink.Hash;
 }
 
+uint64 TerrainModifierSystem::SurfaceStoreKey(const TiledTerrainData& tiled, PageStreaming::PageFieldKind plane,
+                                              uint64 heightKey, float32 originY,
+                                              const TerrainColorGroundWrite& write) const
+{
+    const bool colorWritten = write.Enabled || !m_ColorZones.empty();
+    if ((plane == PageStreaming::PageFieldKind::GrassControl && m_GrassModifiers.empty()) ||
+        (plane == PageStreaming::PageFieldKind::Color && !colorWritten))
+        return 0u;
+    TerrainBakeKeyBuilder key;
+    key.Value(PageStreaming::kPageStoreFormatVersion);
+    key.Value(static_cast<uint32>(plane));
+    key.Value(heightKey);
+    key.Value(tiled.Config.TilesPerAxisX);
+    key.Value(tiled.Config.TilesPerAxisZ);
+    key.Value(tiled.Config.TileConfig.HeightmapWidth);
+    key.Float(tiled.Config.TileWorldSize);
+    key.Float(tiled.Config.HeightScale);
+    key.Float(tiled.WorldOriginX);
+    key.Float(originY);
+    key.Float(tiled.WorldOriginZ);
+    key.Float(tiled.SplatBakeMinH);
+    key.Float(tiled.SplatBakeMaxH);
+    key.Value(static_cast<uint32>(write.Enabled ? 1u : 0u));
+    if (write.Enabled)
+    {
+        key.Float(write.Amount);
+        for (const float32 channel : write.SoilLinear)
+            key.Float(channel);
+        key.Value(write.GrassLayer);
+        key.Float(write.MaskThreshold);
+    }
+    ModifierBakeKeySink sink{key};
+    for (const std::vector<ResolvedModifier>* set : {&m_AppliedModifiers, &m_GrassModifiers, &m_ColorZones})
+    {
+        key.Value(static_cast<uint64>(set->size()));
+        for (const ResolvedModifier& mod : *set)
+        {
+            key.Value(static_cast<uint32>(mod.Enabled ? 1u : 0u));
+            VisitModifierInputs(mod, sink);
+        }
+    }
+    // Zero means no store.
+    return key.Key() == 0u ? 1u : key.Key();
+}
+
 void TerrainModifierSystem::ClampRuleCountsToCaps(Components::TerrainSurfaceRulesEffect& block,
                                                  ECS::EntityHandle entity)
 {
@@ -2477,8 +2521,9 @@ void TerrainModifierSystem::GatherModifiers(ECS::World& world,
         if (const auto* c = w.GetComponent<Components::TerrainColorEffect>(e); c && c->Enabled)
         {
             auto& fx = add(ResolvedEffect::Kind::Color, c->StackOrder);
-            for (uint32 i = 0; i < 3; ++i)
-                fx.Color.Linear[i] = Components::ClampTerrainColorEffectValue(c->Color[i]);
+            fx.Color.Linear[0] = Components::ClampTerrainColorEffectValue(c->Color.r);
+            fx.Color.Linear[1] = Components::ClampTerrainColorEffectValue(c->Color.g);
+            fx.Color.Linear[2] = Components::ClampTerrainColorEffectValue(c->Color.b);
             fx.Color.Strength = Components::ClampTerrainColorEffectValue(c->Strength);
         }
 
@@ -3998,12 +4043,27 @@ bool PackSurfaceRulesForGpuSplat(const std::vector<ResolvedModifier>& mods,
     return true;
 }
 
+SplatTexelLattice MakeGridSplatLattice(float32 originX, float32 originZ, float32 worldSizeX, float32 worldSizeZ,
+                                       uint32 width, uint32 height)
+{
+    SplatTexelLattice lattice;
+    if (width == 0u || height == 0u)
+        return lattice;
+    lattice.SpacingX = worldSizeX / static_cast<float32>(width - 1u);
+    lattice.SpacingZ = worldSizeZ / static_cast<float32>(height - 1u);
+    lattice.WorldX.resize(width);
+    lattice.WorldZ.resize(height);
+    for (uint32 x = 0; x < width; ++x)
+        lattice.WorldX[x] = originX + static_cast<float32>(x) * lattice.SpacingX;
+    for (uint32 z = 0; z < height; ++z)
+        lattice.WorldZ[z] = originZ + static_cast<float32>(z) * lattice.SpacingZ;
+    return lattice;
+}
+
 void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
                                                  uint32 splatmapWidth, uint32 splatmapHeight,
                                                  const Terrain::HeightfieldData& heightfield,
-                                                 float32 worldSizeX, float32 worldSizeZ,
-                                                 float32 terrainOriginX,
-                                                 float32 terrainOriginZ,
+                                                 const SplatTexelLattice& lattice,
                                                  float32 heightScale,
                                                  float32 splatMinH, float32 splatMaxH,
                                                  const std::vector<ResolvedModifier>& modifiers,
@@ -4018,8 +4078,9 @@ void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
     if (w == 0 || h == 0)
         return;
 
-    const float32 spacingX = worldSizeX / static_cast<float32>(w - 1);
-    const float32 spacingZ = worldSizeZ / static_cast<float32>(h - 1);
+    assert(lattice.WorldX.size() == w && lattice.WorldZ.size() == h);
+    const float32 spacingX = lattice.SpacingX;
+    const float32 spacingZ = lattice.SpacingZ;
 
     // Surface rules measure the heightfield at the splat's own indices, which is
     // exact only while the two grids are the same size — as every generator
@@ -4121,13 +4182,13 @@ void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
         // Clamp to the bake region: only region texels were regenerated from
         // the fresh heightfield — painting outside would double-apply.
         const int32 minSX = std::max({0, regionMinX,
-                                      ModifierSampleIndex(mod.BoundsMinX, terrainOriginX, spacingX)});
+                                      ModifierSampleIndex(mod.BoundsMinX, lattice.WorldX.front(), spacingX)});
         const int32 minSZ = std::max({0, regionMinZ,
-                                      ModifierSampleIndex(mod.BoundsMinZ, terrainOriginZ, spacingZ)});
+                                      ModifierSampleIndex(mod.BoundsMinZ, lattice.WorldZ.front(), spacingZ)});
         const int32 maxSX = std::min({static_cast<int32>(w - 1), regionMaxX,
-                                      ModifierSampleIndex(mod.BoundsMaxX, terrainOriginX, spacingX) + 1});
+                                      ModifierSampleIndex(mod.BoundsMaxX, lattice.WorldX.front(), spacingX) + 1});
         const int32 maxSZ = std::min({static_cast<int32>(h - 1), regionMaxZ,
-                                      ModifierSampleIndex(mod.BoundsMaxZ, terrainOriginZ, spacingZ) + 1});
+                                      ModifierSampleIndex(mod.BoundsMaxZ, lattice.WorldZ.front(), spacingZ) + 1});
 
         if (minSX > maxSX || minSZ > maxSZ)
             continue;
@@ -4137,10 +4198,10 @@ void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
         auto accumulateClaim = [&](float32 strength) {
             for (int32 sz = minSZ; sz <= maxSZ; ++sz)
             {
-                const float32 worldZ = terrainOriginZ + static_cast<float32>(sz) * spacingZ;
+                const float32 worldZ = lattice.WorldZ[static_cast<std::size_t>(sz)];
                 for (int32 sx = minSX; sx <= maxSX; ++sx)
                 {
-                    const float32 worldX = terrainOriginX + static_cast<float32>(sx) * spacingX;
+                    const float32 worldX = lattice.WorldX[static_cast<std::size_t>(sx)];
                     const float32 weight = ComputeWeight(mod, worldX, worldZ);
                     if (weight <= 0.0f)
                         continue;
@@ -4154,10 +4215,10 @@ void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
                               bool respectClaims) {
             for (int32 sz = minSZ; sz <= maxSZ; ++sz)
             {
-                const float32 worldZ = terrainOriginZ + static_cast<float32>(sz) * spacingZ;
+                const float32 worldZ = lattice.WorldZ[static_cast<std::size_t>(sz)];
                 for (int32 sx = minSX; sx <= maxSX; ++sx)
                 {
-                    const float32 worldX = terrainOriginX + static_cast<float32>(sx) * spacingX;
+                    const float32 worldX = lattice.WorldX[static_cast<std::size_t>(sx)];
                     // Claimed ground keeps what the claimant painted. Masked to
                     // zero, the `weight <= 0` early-out below skips the composite
                     // and the texel is left exactly as it was — and that skip is
@@ -4208,10 +4269,10 @@ void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
 
             for (int32 sz = minSZ; sz <= maxSZ; ++sz)
             {
-                const float32 worldZ = terrainOriginZ + static_cast<float32>(sz) * spacingZ;
+                const float32 worldZ = lattice.WorldZ[static_cast<std::size_t>(sz)];
                 for (int32 sx = minSX; sx <= maxSX; ++sx)
                 {
-                    const float32 worldX = terrainOriginX + static_cast<float32>(sx) * spacingX;
+                    const float32 worldX = lattice.WorldX[static_cast<std::size_t>(sx)];
                     // Masked once here rather than per row: every row's weight is
                     // this volume weight times the row's own, so scaling it is
                     // exactly `weight *= 1 - claim` for each of them — and a
@@ -4470,9 +4531,8 @@ void TerrainModifierSystem::BakeTiledFull(TiledTerrainData& tiled, float32 heigh
     runTiles([&](TerrainTileData& tile) {
         ResetSplatmap(
             tile.Heightfield, tile.Splatmap, tile.SplatmapWidth, tile.SplatmapHeight);
-        ApplySplatModifiers(tile.Splatmap, tile.SplatmapWidth, tile.SplatmapHeight,
-                            tile.Heightfield, tileSize, tileSize,
-                            tile.WorldOriginX, tile.WorldOriginZ,
+        ApplySplatModifiers(tile.Splatmap, tile.SplatmapWidth, tile.SplatmapHeight, tile.Heightfield,
+                            MakeGridSplatLattice(tile.WorldOriginX, tile.WorldOriginZ, tileSize, tileSize, tile.SplatmapWidth, tile.SplatmapHeight),
                             heightScale, globalMinH, globalMaxH,
                             modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded);
     });
@@ -4515,9 +4575,8 @@ void TerrainModifierSystem::RenormalizeAllTileSplats(TiledTerrainData& tiled, fl
         ResetSplatmap(
             tilePtr->Heightfield,
             tilePtr->Splatmap, tilePtr->SplatmapWidth, tilePtr->SplatmapHeight);
-        ApplySplatModifiers(tilePtr->Splatmap, tilePtr->SplatmapWidth, tilePtr->SplatmapHeight,
-                            tilePtr->Heightfield, tileSize, tileSize,
-                            tilePtr->WorldOriginX, tilePtr->WorldOriginZ,
+        ApplySplatModifiers(tilePtr->Splatmap, tilePtr->SplatmapWidth, tilePtr->SplatmapHeight, tilePtr->Heightfield,
+                            MakeGridSplatLattice(tilePtr->WorldOriginX, tilePtr->WorldOriginZ, tileSize, tileSize, tilePtr->SplatmapWidth, tilePtr->SplatmapHeight),
                             tiled.Config.HeightScale, globalMinH, globalMaxH,
                             modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded);
         // A running arrival bake writes its remaining rows against this range too.
@@ -4563,9 +4622,8 @@ std::size_t TerrainModifierSystem::RenormalizeTileSplatRows(
     ResetSplatmapRegion(
         tile.Heightfield, tile.Splatmap,
         0, rowStart, w - 1, rowEnd);
-    ApplySplatModifiers(tile.Splatmap, tile.SplatmapWidth, tile.SplatmapHeight,
-                        tile.Heightfield, tileSize, tileSize,
-                        tile.WorldOriginX, tile.WorldOriginZ,
+    ApplySplatModifiers(tile.Splatmap, tile.SplatmapWidth, tile.SplatmapHeight, tile.Heightfield,
+                            MakeGridSplatLattice(tile.WorldOriginX, tile.WorldOriginZ, tileSize, tileSize, tile.SplatmapWidth, tile.SplatmapHeight),
                         heightScale, globalMinH, globalMaxH,
                         modifiers, 0, rowStart, w - 1, rowEnd);
     const std::size_t texels = static_cast<std::size_t>(w) *
@@ -4606,7 +4664,7 @@ void TerrainModifierSystem::BakeSingleTerrainSplat(TerrainData& data, float32 or
         if (resetRect)
             ResetSplatmapRegion(data.Heightfield, data.Splatmap, x0, z0, x1, z1);
         ApplySplatModifiers(data.Splatmap, data.SplatmapWidth, data.SplatmapHeight, data.Heightfield,
-                            data.Config.WorldSizeX, data.Config.WorldSizeZ, originX, originZ,
+                            MakeGridSplatLattice(originX, originZ, data.Config.WorldSizeX, data.Config.WorldSizeZ, data.SplatmapWidth, data.SplatmapHeight),
                             data.Config.HeightScale, minH, maxH, modifiers, x0, z0, x1, z1);
     });
 }
@@ -4770,9 +4828,8 @@ void TerrainModifierSystem::BakeTiledRegion(TiledTerrainData& tiled, float32 hei
                 ResetSplatmapRegion(
                     tp.Heightfield, tp.Splatmap,
                     minX, z0, maxX, z1);
-                ApplySplatModifiers(tp.Splatmap, tp.SplatmapWidth, tp.SplatmapHeight,
-                                    tp.Heightfield, tileSize, tileSize,
-                                    tp.WorldOriginX, tp.WorldOriginZ,
+                ApplySplatModifiers(tp.Splatmap, tp.SplatmapWidth, tp.SplatmapHeight, tp.Heightfield,
+                            MakeGridSplatLattice(tp.WorldOriginX, tp.WorldOriginZ, tileSize, tileSize, tp.SplatmapWidth, tp.SplatmapHeight),
                                     heightScale, minH, maxH,
                                     modifiers, minX, z0, maxX, z1);
             });
@@ -4918,9 +4975,8 @@ void TerrainModifierSystem::BakeTiledStreamedTiles(TiledTerrainData& tiled, floa
             continue;
         ResetSplatmap(coarsePtr->Heightfield, coarsePtr->Splatmap,
                       coarsePtr->SplatmapWidth, coarsePtr->SplatmapHeight);
-        ApplySplatModifiers(coarsePtr->Splatmap, coarsePtr->SplatmapWidth, coarsePtr->SplatmapHeight,
-                            coarsePtr->Heightfield, tileSize, tileSize,
-                            coarsePtr->WorldOriginX, coarsePtr->WorldOriginZ,
+        ApplySplatModifiers(coarsePtr->Splatmap, coarsePtr->SplatmapWidth, coarsePtr->SplatmapHeight, coarsePtr->Heightfield,
+                            MakeGridSplatLattice(coarsePtr->WorldOriginX, coarsePtr->WorldOriginZ, tileSize, tileSize, coarsePtr->SplatmapWidth, coarsePtr->SplatmapHeight),
                             heightScale, tiled.SplatBakeMinH, tiled.SplatBakeMaxH,
                             modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded);
         coarsePtr->MarkSplatChanged();
@@ -5021,9 +5077,8 @@ void TerrainModifierSystem::BakeTiledStreamedTiles(TiledTerrainData& tiled, floa
     RunBakeRowBands(splatRects, [&](std::size_t i, int32 minX, int32 maxX, int32 z0, int32 z1) {
         TerrainTileData* t = splatTiles[i];
         ResetSplatmapRegion(t->Heightfield, t->Splatmap, minX, z0, maxX, z1);
-        ApplySplatModifiers(t->Splatmap, t->SplatmapWidth, t->SplatmapHeight,
-                            t->Heightfield, tileSize, tileSize,
-                            t->WorldOriginX, t->WorldOriginZ,
+        ApplySplatModifiers(t->Splatmap, t->SplatmapWidth, t->SplatmapHeight, t->Heightfield,
+                            MakeGridSplatLattice(t->WorldOriginX, t->WorldOriginZ, tileSize, tileSize, t->SplatmapWidth, t->SplatmapHeight),
                             heightScale, t->ArrivalSplatMinH, t->ArrivalSplatMaxH,
                             modifiers, minX, z0, maxX, z1);
     });
@@ -5110,10 +5165,8 @@ void TerrainModifierSystem::FlushDeferredSplatResplat(ECS::World& world, Terrain
                 const float32 originX = worldXf.matrix[12] - terrain.SizeX * 0.5f;
                 const float32 originZ = worldXf.matrix[14] - terrain.SizeZ * 0.5f;
                 data->ResetSplatmapAndCommitRange();
-                ApplySplatModifiers(data->Splatmap, data->SplatmapWidth, data->SplatmapHeight,
-                                    data->Heightfield,
-                                    data->Config.WorldSizeX, data->Config.WorldSizeZ,
-                                    originX, originZ, data->Config.HeightScale,
+                ApplySplatModifiers(data->Splatmap, data->SplatmapWidth, data->SplatmapHeight, data->Heightfield,
+                            MakeGridSplatLattice(originX, originZ, data->Config.WorldSizeX, data->Config.WorldSizeZ, data->SplatmapWidth, data->SplatmapHeight), data->Config.HeightScale,
                                     data->SplatBakeMinH, data->SplatBakeMaxH, modifiers,
                                     0, 0, kRegionUnbounded, kRegionUnbounded);
                 data->MarkSplatChanged();
@@ -5572,6 +5625,7 @@ void TerrainModifierSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     {
         TakePendingBakeStoreSnapshot();
         m_ColorMapBaker.Update(world, *terrainService, m_ColorZones, m_ColorZonesStamp);
+        m_SurfacePages.Update(world, *terrainService, *this, m_JobPool);
     }
     if (m_BakeStoreRequested)
         StoreRequestedBakes(world);
@@ -6081,6 +6135,8 @@ void TerrainModifierSystem::UpdateBakes(ECS::World& world)
                 // to the base pages, over the whole terrain, not only its resident tiles.
                 if (fullBake || heightDirty.Any || tiled->AwaitsPageOverlay())
                     BakeHeightPageOverlay(*tiled, terrain.HeightScale, originY, modifiers, fullBake, heightDirty);
+                if (fullBake || heightDirty.Any || splatDirty.Any)
+                    PublishSurfaceChanged(*tiled, fullBake, heightDirty, splatDirty);
 
                 // Falsifiable runtime signal (GE_TERRAIN_TILE_DEBUG): one line
                 // per edit frame naming the tiles baked + the world dirty rect.

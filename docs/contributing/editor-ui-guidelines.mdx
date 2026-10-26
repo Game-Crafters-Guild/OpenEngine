@@ -88,6 +88,8 @@ Avoid one-off generic names such as `container`, `box`, `row2`, or `new-style` i
 - `UIManager::RenderRG(frame, target, targetSpace)` prepares geometry and declares the UI pass for the current frame. It should not dispatch events or mutate editor data. The host supplies the target's color space and executes the completed graph.
 - UI event handlers run during the update phase. They may trigger editor actions, but editor data changes should still use the established editor edit APIs.
 - Interactive edits should preview during drag/scrub and commit once at the end of the gesture.
+- A value drag begins at one drag threshold. Below it the press is a click: the value does not move and nothing commits. Past the threshold the value starts to move and the drag calls `UIManager::LockCapturedPointer()`. The cursor then hides and the drag keeps reading the mouse past the screen edge. The lock ends with the capture, so the drag never unlocks it.
+- A value drag handles `kEventMouseCancel` by putting back the value it started from and committing it. Escape, or a press of another mouse button, during a locked drag sends that event.
 - Inspector refresh code must not overwrite focused field subtrees.
 - Prefer posting deferred actions when a control needs to mutate tree structure after layout or during a safe dispatcher drain.
 - Use existing drag/drop payload and ghost renderer helpers for editor drag behavior.

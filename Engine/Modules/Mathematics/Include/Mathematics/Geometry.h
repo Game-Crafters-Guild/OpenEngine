@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -322,6 +323,22 @@ inline Vector3 ClosestPointOnSegment(const Vector3& point, const Vector3& a, con
 	return a + segment * std::clamp(Vector3::Dot(point - a, segment) / lengthSquared, 0.0f, 1.0f);
 }
 
+// The point of segment ab nearest to `point` on the plane; `a` when the segment has no length.
+inline Vector2 ClosestPointOnSegment(const Vector2& point, const Vector2& a, const Vector2& b)
+{
+	const Vector2 segment = b - a;
+	const float lengthSquared = Vector2::Dot(segment, segment);
+	if (lengthSquared <= 0.0f)
+	    return a;
+	return a + segment * std::clamp(Vector2::Dot(point - a, segment) / lengthSquared, 0.0f, 1.0f);
+}
+
+// How far `point` is from segment ab on the plane.
+inline float DistanceToSegment(const Vector2& point, const Vector2& a, const Vector2& b)
+{
+	return (ClosestPointOnSegment(point, a, b) - point).Length();
+}
+
 // The point of triangle abc nearest to `point` (on its face, an edge or a corner). A degenerate
 // triangle (coincident or collinear corners, or a corner angle at `a` under about 0.001 radians)
 // resolves to the nearest point of its three edges.
@@ -392,6 +409,37 @@ inline bool SegmentsIntersect(const Vector2& a, const Vector2& b, const Vector2&
 	    return true;
 	return (d1 == 0.0f && within(c, d, a)) || (d2 == 0.0f && within(c, d, b)) || (d3 == 0.0f && within(a, b, c)) ||
 	       (d4 == 0.0f && within(a, b, d));
+}
+
+// Where segments ab and cd cross at one point: the fractions s along ab and t along cd, each in
+// [0, 1], packed as (s, t). Parallel and collinear segments give nothing, since they share no
+// single point.
+inline std::optional<Vector2> SegmentIntersectionFractions(const Vector2& a, const Vector2& b, const Vector2& c,
+                                                           const Vector2& d)
+{
+	const Vector2 ab = b - a;
+	const Vector2 cd = d - c;
+	const Vector2 ac = c - a;
+	const float denominator = ab.x * cd.y - ab.y * cd.x;
+	if (denominator == 0.0f)
+	    return std::nullopt;
+	const float s = (ac.x * cd.y - ac.y * cd.x) / denominator;
+	const float t = (ac.x * ab.y - ac.y * ab.x) / denominator;
+	if (s < 0.0f || s > 1.0f || t < 0.0f || t > 1.0f)
+	    return std::nullopt;
+	return Vector2(s, t);
+}
+
+// A point on the ground plane, seen from above (+Y up): (x, z).
+inline Vector2 GroundPoint(const Vector3& point)
+{
+	return Vector2(point.x, point.z);
+}
+
+// The distance between two points measured on the ground plane, ignoring their heights.
+inline float GroundDistance(const Vector3& a, const Vector3& b)
+{
+	return (GroundPoint(a) - GroundPoint(b)).Length();
 }
 
 // The convex hull of `points` (Andrew's monotone chain), counter-clockwise with +y up, without

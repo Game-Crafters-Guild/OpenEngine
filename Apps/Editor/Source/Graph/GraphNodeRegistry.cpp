@@ -95,6 +95,7 @@ constexpr NodeIconStemEntry kGameLogicNodeIconStems[] = {
     {"SetVariable", "parameter"},
     {"SetVelocity", "setvelocity"},
     {"ShowPanel", "category-ui"},
+    {"SpawnPrefab", "organization"},
     {"State", "state"},
     {"StopAllSounds", "category-audio"},
     {"StopMove", "stopmove"},

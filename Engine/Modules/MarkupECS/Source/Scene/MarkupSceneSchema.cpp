@@ -466,11 +466,11 @@ class MarkupSceneSchema final : public ISceneComponentSchema
                        std::string_view property, std::string_view value, std::string* outError) const override
     {
         // A mark-up's notes are not a component, and an instance overrides components only,
-        // so a mark-up inside a blueprint or a subscene could not keep its thread.
-        if (!ctx.EntityIdPrefix.empty() || (ctx.SceneFile && ctx.SceneFile->extension() == ".blueprint"))
+        // so a mark-up inside a prefab or a subscene could not keep its thread.
+        if (!ctx.EntityIdPrefix.empty() || (ctx.SceneFile && ctx.SceneFile->extension() == ".prefab"))
         {
             if (outError)
-                *outError = "A mark-up belongs to a scene, not to a blueprint or a subscene; move it into the "
+                *outError = "A mark-up belongs to a scene, not to a prefab or a subscene; move it into the "
                             "scene that places the instance";
             return false;
         }

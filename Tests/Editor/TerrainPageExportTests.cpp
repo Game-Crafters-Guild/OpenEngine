@@ -8,6 +8,7 @@
 #include "Core/Engine.h"
 #include "Engine/Build/AssetCollector.h"
 #include "Engine/Build/TerrainPageExport.h"
+#include "AssetCore/GUID.h"
 #include "PageStreaming/PageStoreReader.h"
 #include "PageStreaming/TerrainPageContainer.h"
 #include "Types/PathUtils.h"
@@ -142,6 +143,44 @@ TEST_F(TerrainPageExportTests, ACancelledExportCooksNothingAndSaysSo)
     EXPECT_TRUE(result.Containers.empty());
     ASSERT_EQ(result.Warnings.size(), 1u);
     EXPECT_NE(result.Warnings.front().find("cancelled"), std::string::npos);
+}
+
+// A shipped scene's terrain ships its surface stores in one container, and never the samples cache
+// beside its Normal store.
+TEST_F(TerrainPageExportTests, ASceneTerrainShipsItsSurfaceStoresAndNeverTheSamplesCache)
+{
+    const std::filesystem::path cache = s_Root / ".Cache" / "TerrainPages";
+    std::filesystem::create_directories(cache);
+    const GUID scene = GUID::Generate();
+    const std::string stem = scene.ToString() + "-0123456789abcdef-";
+    const auto writeBytes = [](const std::filesystem::path& file, std::size_t bytes) {
+        const std::vector<char> data(bytes, 'p');
+        std::ofstream(file, std::ios::binary).write(data.data(), std::streamsize(data.size()));
+    };
+    constexpr std::size_t kSplatBytes = 1000;
+    constexpr std::size_t kNormalBytes = 2000;
+    constexpr std::size_t kSamplesBytes = 50000;
+    writeBytes(cache / (stem + "splat-00000000000000aa.gepage"), kSplatBytes);
+    writeBytes(cache / (stem + "normal-00000000000000bb.gepage"), kNormalBytes);
+    writeBytes(cache / (stem + "normal-00000000000000bb.samples.gepage"), kSamplesBytes);
+
+    AssetManifest manifest;
+    AssetManifestEntry entry;
+    entry.guid = scene;
+    entry.type = AssetType::Scene;
+    manifest.entries.push_back(entry);
+    const std::filesystem::path content = s_Root / "SurfacePackage";
+    AssetManager& assets = EngineCore::GetInstance().GetAssetManager();
+    const TerrainPageExportResult result =
+        ExportTerrainPages(s_Root, content, manifest, assets.GetRegistry(), &EngineCore::GetInstance().GetJobSystem(),
+                           nullptr);
+    ASSERT_TRUE(result.Warnings.empty()) << result.Warnings.front();
+    ASSERT_EQ(result.Containers.size(), 1u);
+    EXPECT_EQ(result.Containers.front().filename().string(), scene.ToString() + "-0123456789abcdef.geterrain");
+    // The two stores and the container's field table: the samples cache would add 50,000 bytes.
+    const uint64 bytes = std::filesystem::file_size(result.Containers.front());
+    EXPECT_GE(bytes, kSplatBytes + kNormalBytes);
+    EXPECT_LT(bytes, kSplatBytes + kNormalBytes + 256u);
 }
 
 } // namespace

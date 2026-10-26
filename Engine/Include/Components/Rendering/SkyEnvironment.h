@@ -190,6 +190,13 @@ inline constexpr float32 kSunSizeMax = 8.0f;
 /// fastest a 60 fps image shows without flicker.
 inline constexpr float32 kStarTwinkleRateMax = 12.0f;
 
+/// The range of the mean time between two falling stars (SkyEnvironment::FallingStarIntervalSeconds), in
+/// seconds. A clear night's sky shows about one every 5 minutes, a strong meteor shower about one every
+/// 40 seconds. The renderer flies four falling stars at most at once; at the shortest interval each still
+/// finishes its flight before the next starts.
+inline constexpr float32 kFallingStarIntervalMinSeconds = 0.5f;
+inline constexpr float32 kFallingStarIntervalMaxSeconds = 600.0f;
+
 /// Who sees the night stars (SkyEnvironment::StarObserver).
 enum class StarObserverKind : uint8_t
 {
@@ -210,9 +217,9 @@ struct SkyEnvironment {
     SkyMode Mode           = SkyMode::Physical;
     /// Gradient-sky colors (authored linear RGB, 0..1). Blended by view-direction.y:
     /// up -> Top, horizon -> Horizon, down -> Bottom. Only used when Mode == Gradient.
-    float32 GradientSkyTopColor[3]    = {0.20f, 0.42f, 0.78f};
-    float32 GradientSkyHorizonColor[3] = {0.60f, 0.72f, 0.86f};
-    float32 GradientSkyBottomColor[3]  = {0.32f, 0.30f, 0.28f};
+    ColorLinear GradientSkyTopColor{0.20f, 0.42f, 0.78f};
+    ColorLinear GradientSkyHorizonColor{0.60f, 0.72f, 0.86f};
+    ColorLinear GradientSkyBottomColor{0.32f, 0.30f, 0.28f};
     /// Gradient-sky luminance in nits (cd/m^2). Colors x this / the 203-nit reference white gives
     /// scene-linear radiance on the SAME anchor as the physical sky + auto-exposure. Only used when
     /// Mode == Gradient.
@@ -284,9 +291,9 @@ struct SkyEnvironment {
     /// is the faithful bridge for Synty ER-style authored washes (purple/magenta/cyan) — a
     /// non-destructive art tint over the physically baked irradiance, applied at IBL sampling
     /// time (not baked, so editing it needs no re-bake). Default white = identity (no change).
-    float32 AmbientTintSky[3]     = {1.0f, 1.0f, 1.0f};
-    float32 AmbientTintEquator[3] = {1.0f, 1.0f, 1.0f};
-    float32 AmbientTintGround[3]  = {1.0f, 1.0f, 1.0f};
+    ColorLinear AmbientTintSky{1.0f, 1.0f, 1.0f};
+    ColorLinear AmbientTintEquator{1.0f, 1.0f, 1.0f};
+    ColorLinear AmbientTintGround{1.0f, 1.0f, 1.0f};
     /// Shared key times (hours in [0, 24)) for the vec3 COLOR day-keys only (GroundAlbedoKeys,
     /// GroundNightColorKeys, ...). The scalar day curves below are arbitrary Math::Curves that carry
     /// their OWN per-key times, so a scalar key's hour is independent of these color-stop times.
@@ -468,14 +475,12 @@ struct SkyEnvironment {
     /// brightness for the phase, at any drawn size; independent of SkyExposureTrim and of the camera
     /// auto-exposure (the disc is too small to move the meter).
     float32 MoonExposureEV = 0.0f;
+    /// Falling stars (meteors) at night: stars of the star model that streak across the sky, each
+    /// with its own path, speed and brightness (magnitude +1 to -3, the brightest brighter than any star).
     bool FallingStarsEnabled = true;
-    float32 FallingStarAmount = 0.35f;
-    float32 FallingStarFrequency = 0.35f;
-    float32 FallingStarSpeed = 4.0f;
-    float32 FallingStarLength = 1.0f;
-    float32 FallingStarThickness = 0.485f;
-    float32 FallingStarDotSize = 0.1f;
-    float32 FallingStarDotSize2D = 0.979f;
+    /// The mean time between two falling stars anywhere in the sky, in seconds
+    /// (kFallingStarIntervalMinSeconds to kFallingStarIntervalMaxSeconds).
+    float32 FallingStarIntervalSeconds = 5.0f;
 
     /// The faintest star drawn, as a visual (V) magnitude: 6.5 is the naked-eye limit under a
     /// dark sky, about 9,000 stars over the whole sky. A star near the horizon is fainter by the

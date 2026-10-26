@@ -178,6 +178,7 @@ struct SplineExtrude
     // loop has no end and ignores it. The tuck depth IS EdgeDrop, so a profile
     // with none — the flat water ribbon — pinches in the surface plane and does
     // not bury its point.
+    // @ge-label End Taper Meters
     float32 EndTaperMetres = 0.0f;
     // Height-only by default: the sweep already pitches with the draped grade,
     // so the per-station surface normal that a rigid tile needs for its lean is
@@ -205,7 +206,9 @@ struct SplineExtrude
     // a filled surface is the MATERIAL's to set, in tiles per metre, against
     // those metres. FitToBanks therefore IGNORES these two rather than honouring
     // them.
+    // @ge-label Tiles Per Meter U
     float32 TilesPerMetreU = 1.0f;
+    // @ge-label Tiles Per Meter V
     float32 TilesPerMetreV = 1.0f;
 
     // Replaces the generated geometry's default material. Null keeps the
@@ -229,7 +232,7 @@ struct SplineExtrude
     //
     // A NaN float would make a recipe unequal to ITSELF and re-arm the settle
     // rebuild forever, so the controller compares sanitized recipes only —
-    // SanitizeExtrudeRecipe (Placement/SplineExtrudeSanitize.h) is the single
+    // SanitizeExtrudeRecipe (SplineRecipes/SplineExtrudeSanitize.h) is the single
     // gate.
     bool operator==(const SplineExtrude&) const = default;
 };

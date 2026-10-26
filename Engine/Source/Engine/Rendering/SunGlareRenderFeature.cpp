@@ -3,10 +3,15 @@
 #include "Logger/Logger.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/PipelineDescTranslator.h"
+#include "Rendering/Core/PipelineTypes.h"
 #include "Rendering/Materials/MaterialBuilder.h"
+#include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace GameEngine::Engine::Renderer
 {
@@ -17,6 +22,27 @@ namespace
 {
 constexpr uint32_t kVertexStage = kShaderStageVertex;
 constexpr uint32_t kFragmentStage = kShaderStageFragment;
+
+// A set-0 binding index from a package's reflected meta, by name, so a layout edit in a shader
+// stays in lockstep with the C++ binds. Only the INDEX is taken from reflection; the
+// descriptor type stays explicit. A uniform or storage block reflects under its INSTANCE
+// name ("ViewParams", "uCasters"), not its block name.
+uint32_t ResolveSet0Binding(const ShaderPackage& package, const char* name, uint32_t fallback)
+{
+    for (const auto& setMeta : package.meta.Sets)
+    {
+        if (setMeta.Set != 0)
+            continue;
+        for (const auto& b : setMeta.Bindings)
+            if (b.Name == name)
+                return b.Binding;
+        break;
+    }
+    Logger::Log::Warning("SunGlareRenderFeature: failed to resolve set0 binding '{}' from "
+                         "reflection; falling back to literal {}",
+                         name, fallback);
+    return fallback;
+}
 } // namespace
 
 bool SunGlareRenderFeature::Initialize(IDevice* device)
@@ -65,31 +91,11 @@ bool SunGlareRenderFeature::Initialize(IDevice* device)
                              loadErrMS.empty() ? "missing vs stage bytes" : loadErrMS);
     }
 
-    // Resolve each set0 binding index from the shader's reflected meta by name so a layout
-    // edit in sun_glare.vert/frag stays in lockstep with the C++ binds. Only the INDEX is
-    // taken from reflection; the descriptor type stays explicit. The UBO reflects under its
-    // INSTANCE name, "ViewParams", not the block name.
-    auto resolveBinding = [&pkg](const char* name, uint32_t fallback) -> uint32_t {
-        for (const auto& setMeta : pkg.meta.Sets)
-        {
-            if (setMeta.Set != 0)
-                continue;
-            for (const auto& b : setMeta.Bindings)
-                if (b.Name == name)
-                    return b.Binding;
-            break;
-        }
-        Logger::Log::Warning("SunGlareRenderFeature: failed to resolve set0 binding '{}' from "
-                             "reflection; falling back to literal {}",
-                             name, fallback);
-        return fallback;
-    };
-    m_TransmittanceBinding = resolveBinding("uTransLUT", 0u);
-    m_DepthBinding = resolveBinding("uSceneDepth", 1u);
-    m_ViewParamsBinding = resolveBinding("ViewParams", 2u);
-    m_ShadowArrayBinding = resolveBinding("uShadowMapArray", 3u);
-    m_ShadowDataBinding = resolveBinding("ShadowData", 4u);
-    m_ExposureBinding = resolveBinding("uExposure", 5u);
+    m_TransmittanceBinding = ResolveSet0Binding(pkg, "uTransLUT", 0u);
+    m_DepthBinding = ResolveSet0Binding(pkg, "uSceneDepth", 1u);
+    m_ViewParamsBinding = ResolveSet0Binding(pkg, "ViewParams", 2u);
+    m_CastersBinding = ResolveSet0Binding(pkg, "uCasters", 3u);
+    m_ExposureBinding = ResolveSet0Binding(pkg, "uExposure", 5u);
 
     // The layouts come from each package's reflection so the image shapes
     // (depth array, multisampled probe, filtered LUT) match what the shader
@@ -152,6 +158,8 @@ bool SunGlareRenderFeature::Initialize(IDevice* device)
                                  "pipeline; the glare will be skipped on MSAA views.");
     }
 
+    InitializeCastersPipeline(*device);
+
     // Linear CLAMP, and the clamp is the load-bearing half: the transmittance LUT's u axis
     // is the ray's zenith cosine, so a repeating address mode would wrap a sun near the
     // horizon onto the opposite horizon's optical depth. The depth probe ignores the filter
@@ -175,6 +183,56 @@ bool SunGlareRenderFeature::Initialize(IDevice* device)
 
     m_Initialized = true;
     return true;
+}
+
+// The cascade term's one-workgroup pass. Its absence is a warning rather than a failure: the
+// glare still runs on the screen probe and the skyline, and the node tells the vertex stage
+// so through Horizon[3].
+void SunGlareRenderFeature::InitializeCastersPipeline(IDevice& device)
+{
+    ShaderPackage pkg{};
+    std::string loadErr;
+    if (!LoadShaderPkg("Shaders/sun_glare_casters.shaderpkg", device.PreferredShaderSource(), pkg,
+                       &loadErr))
+    {
+        Logger::Log::Warning("SunGlareRenderFeature: the cascade term is unavailable, failed to "
+                             "load sun_glare_casters.shaderpkg: {}",
+                             loadErr);
+        return;
+    }
+    auto cs = pkg.stageBytes.find("cs");
+    if (cs == pkg.stageBytes.end() || cs->second.empty())
+    {
+        Logger::Log::Warning("SunGlareRenderFeature: the cascade term is unavailable, "
+                             "sun_glare_casters.shaderpkg has no cs stage bytes.");
+        return;
+    }
+    m_CastersShadowArrayBinding = ResolveSet0Binding(pkg, "uShadowMapArray", 0u);
+    m_CastersShadowDataBinding = ResolveSet0Binding(pkg, "ShadowData", 1u);
+    m_CastersOutputBinding = ResolveSet0Binding(pkg, "uCasters", 2u);
+
+    ComputePipelineDesc cd{};
+    cd.ComputeShader = std::make_shared<const std::vector<uint8_t>>(std::move(cs->second));
+    cd.DebugName = "SunGlare.Casters";
+    std::string err;
+    const auto keepSet0 = [this](uint32_t setIndex, DescriptorSetLayoutDesc& dsl) {
+        if (setIndex == 0)
+            m_CastersLayout = dsl;
+    };
+    if (!MaterialHelper::ApplyShaderMetaToComputeDesc(device, pkg.meta, cd,
+                                                      MaterialBuilder::MergeMode::Auto, {true, 128},
+                                                      keepSet0, &err))
+    {
+        Logger::Log::Warning("SunGlareRenderFeature: the cascade term is unavailable: {}", err);
+        return;
+    }
+    for (DescriptorBinding& b : m_CastersLayout.bindings)
+        b.debugName = nullptr;
+    m_CastersLayout.debugName = "SunGlare.Casters.Set0";
+    m_CastersPipelineId = device.InternComputePipeline(cd);
+    if (!m_CastersPipelineId.IsValid())
+        Logger::Log::Warning("SunGlareRenderFeature: the cascade term is unavailable, failed to "
+                             "intern the sun_glare_casters pipeline.");
 }
 
 void SunGlareRenderFeature::SetSkylines(const ViewSkyline* entries, size_t count)

@@ -714,7 +714,6 @@ TEST_F(PreExposureReader, SunGlareWritesItsRadianceAtThePreExposure)
                 {"sunColorIrradiance", std::array<float, 4>{1.0f, 0.9f, 0.8f, 1.0f}},
                 {"probe", std::array<float, 4>{0.5f, 0.5f, 0.01f, 0.01f}},
                 {"params", std::array<float, 4>{1.0f, 1.0f, 0.0f, 0.0f}},
-                {"cameraShadow", std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}},
                 {"horizon", std::array<float, 4>{1.0f, 6360e3f, 6460e3f, 0.0f}}};
     const Image at1 = Run("sun_glare", run)["oColor"];
     const Image atP = Run("sun_glare", AtPreExposure(run, kPreExposure, kPreExposure))["oColor"];

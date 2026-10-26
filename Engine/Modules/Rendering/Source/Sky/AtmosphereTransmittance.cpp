@@ -114,8 +114,7 @@ float SkySourceIlluminanceScale(const AtmosphereParametersGPU& atmosphere)
 {
     float zenithTau[3];
     OpticalDepth(atmosphere, 1.0f, zenithTau);
-    const float zenithTransmittance[3] = {std::exp(-zenithTau[0]), std::exp(-zenithTau[1]),
-                                          std::exp(-zenithTau[2])};
+    const ColorLinear zenithTransmittance(std::exp(-zenithTau[0]), std::exp(-zenithTau[1]), std::exp(-zenithTau[2]));
     return 1.0f / ColorUtils::LinearRec709Luminance(zenithTransmittance);
 }
 
@@ -130,7 +129,8 @@ SkyBodyGroundColors EvaluateBodyGroundColors(const AtmosphereParametersGPU& atmo
     // The moon's source is its own colour, NOT the sun's tint times it. The tint is art direction
     // for the sun, and the moon disc is drawn from this same untinted colour, so tinting moonlight
     // here would light the ground in a colour the visible moon does not have.
-    EvaluateGroundLevelSunColor(atmosphere, config.moonColor, state.moonDirWS[1], bodies.Moon);
+    const float moonColor[3] = {config.moonColor.r, config.moonColor.g, config.moonColor.b};
+    EvaluateGroundLevelSunColor(atmosphere, moonColor, state.moonDirWS[1], bodies.Moon);
 
     bodies.MoonBlend =
         config.useMoonWhenSunBelowHorizon ? Math::Clamp01(state.primaryMoonBlend) : 0.0f;

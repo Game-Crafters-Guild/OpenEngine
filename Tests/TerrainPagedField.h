@@ -2,15 +2,19 @@
 
 // A paged height field for the resolve's oracles: a page cache driven a frame at a time, its page
 // table and the cache texture's texels, filled from an analytic field. Shared by the CPU oracles
-// (TerrainPageResidencyTests) and the device parity test (TerrainPageResolveGpuTests).
+// (TerrainPageResidencyTests) and the device parity test (TerrainPageResolveGpuTests); the request
+// of a flat paged tile, shared by the height pages' tests and the classify's consume test.
 
 #include "TerrainECS/PagedHeightSampler.h"
+#include "TerrainECS/TerrainHeightPages.h"
 
+#include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/PageCache.h"
 #include "PageStreaming/PageStoreFormat.h"
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 namespace GameEngine::TerrainECS::Test
@@ -41,6 +45,32 @@ inline std::vector<float32> PageSamples(const PageStreaming::PageStoreLevel& sha
     return samples;
 }
 
+// One flat tile of `samples` samples, one meter apart, all its pages pinned in 64 slots: 257 samples
+// make a pyramid of 3 x 3, 2 x 2 and 1 pages; 128 samples make one level-0 page.
+inline PagedTerrainRequest FlatTileRequest(uint32 samples)
+{
+    PageStreaming::GeneratedHeightLattice lattice;
+    lattice.Source = PageStreaming::GeneratedHeightSource::Flat;
+    lattice.TileWorldSize = static_cast<float32>(samples - 1u);
+    lattice.TileSamples = samples;
+    lattice.TilesX = 1;
+    lattice.TilesZ = 1;
+    PagedTerrainRequest request;
+    request.Terrain = 3;
+    request.TerrainGeneration = 7;
+    request.SourceIdentity = 11;
+    request.Source.Generated = std::make_shared<const PageStreaming::GeneratedHeightPageProvider>(lattice);
+    request.Shape.Level0TexelX = 1.0f;
+    request.Shape.Level0TexelZ = 1.0f;
+    request.Shape.SamplesX = samples;
+    request.Shape.SamplesZ = samples;
+    request.Shape.MaxHeight = 1.0f;
+    return request;
+}
+
+// A budget every test field's dense table fits: one tier.
+inline constexpr PageTableBudget kDenseFieldTable{1ull << 40, 1u, 1u};
+
 // The cache, its page table and its texels, driven a frame at a time: one stream's field.
 struct PagedField
 {
@@ -53,15 +83,16 @@ struct PagedField
     uint64 Frame = 0;
     uint32 LastTableWrites = 0;
 
-    explicit PagedField(uint32 slots, float32 fadeSeconds = 0.4f, uint32 samplesX = kFieldX, uint32 samplesZ = kFieldZ)
+    explicit PagedField(uint32 slots, float32 fadeSeconds = 0.4f, uint32 samplesX = kFieldX, uint32 samplesZ = kFieldZ,
+                        const PageTableBudget& budget = kDenseFieldTable)
     {
         Cache.Configure(slots, 2, fadeSeconds);
-        Table.Reset(samplesX, samplesZ, slots);
+        Table.Reset(samplesX, samplesZ, slots, budget);
         Geometry = MakePageCacheGeometry(slots);
         Texels.assign(std::size_t(Geometry.CacheDim) * Geometry.CacheDim, 0.0f);
     }
 
-    uint32 TopLevel() const { return uint32(Table.Levels.size()) - 1u; }
+    uint32 TopLevel() const { return uint32(Table.Levels().size()) - 1u; }
 
     void Step(const std::vector<PageStreaming::PageAddress>& wanted, float32 deltaSeconds = 1.0f / 60.0f, uint32 cap = 64)
     {
@@ -72,7 +103,7 @@ struct PagedField
         for (const PageStreaming::PageUploadRequest& upload : Cache.Uploads())
         {
             const PageStreaming::PageAddress& address = upload.Page.Address;
-            const std::vector<float32> samples = PageSamples(Table.Levels[address.Level], address);
+            const std::vector<float32> samples = PageSamples(Table.Levels()[address.Level], address);
             for (uint32 r = 0; r < PageStreaming::kPageStrideSamples; ++r)
                 for (uint32 c = 0; c < PageStreaming::kPageStrideSamples; ++c)
                     Texels[std::size_t(Geometry.TexelZ(upload.Slot, r)) * Geometry.CacheDim +
@@ -84,9 +115,9 @@ struct PagedField
     std::vector<PageStreaming::PageAddress> AllPages() const
     {
         std::vector<PageStreaming::PageAddress> pages;
-        for (uint32 level = 0; level < Table.Levels.size(); ++level)
-            for (uint32 z = 0; z < Table.Levels[level].PagesZ; ++z)
-                for (uint32 x = 0; x < Table.Levels[level].PagesX; ++x)
+        for (uint32 level = 0; level < Table.Levels().size(); ++level)
+            for (uint32 z = 0; z < Table.Levels()[level].PagesZ; ++z)
+                for (uint32 x = 0; x < Table.Levels()[level].PagesX; ++x)
                     pages.push_back(PageStreaming::PageAddress{0, uint8(level), x, z});
         return pages;
     }

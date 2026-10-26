@@ -1,5 +1,9 @@
 #pragma once
 
+#include "Platform/Window.h"
+
+#include <optional>
+
 namespace GameEngine::Editor
 {
 
@@ -39,5 +43,18 @@ struct GameViewPointerLockState
 /// the game.
 GameViewPointerLockState NextGameViewPointerLockState(GameViewPointerLockState state,
                                                       const GameViewPointerLockInputs& inputs);
+
+/// What asks for an editor window's cursor lock in a frame.
+struct WindowCursorLockRequests
+{
+    /// The game holds the pointer in this window (GameViewPointerLock granted it).
+    bool Game = false;
+    /// The window's UI holds a value drag (UIManager::LockCapturedPointer).
+    bool UiDrag = false;
+};
+
+/// The lock an editor window holds: the game's Raw motion first, then a UI drag's
+/// Accelerated motion, else none. So a UI release while the game holds the lock keeps it.
+std::optional<Platform::Window::LockedCursorMotion> ResolveWindowCursorLock(WindowCursorLockRequests requests);
 
 } // namespace GameEngine::Editor

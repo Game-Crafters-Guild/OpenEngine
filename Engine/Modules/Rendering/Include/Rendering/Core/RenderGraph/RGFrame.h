@@ -33,6 +33,7 @@
 #include "Rendering/Core/RenderGraph/RGStateMap.h"
 #include "Rendering/Core/RenderGraph/RGTransientPool.h"
 #include "Rendering/Core/RenderGraph/RGUploadRing.h"
+#include "Rendering/Core/ReverseZ.h"
 
 #include <cassert>
 #include <cstdint>
@@ -123,7 +124,7 @@ enum class RGStoreOp : uint8_t
 struct RGClearValue
 {
     float Color[4] = {0, 0, 0, 0};
-    float Depth = 0.0f; // reverse-Z: clear to far
+    float Depth = ReverseZ::kClearFar;
     uint32_t Stencil = 0;
 };
 struct RGAttachmentOps
@@ -131,6 +132,9 @@ struct RGAttachmentOps
     RGLoadOp Load = RGLoadOp::Load;
     RGStoreOp Store = RGStoreOp::Store;
     RGClearValue Clear{};
+    // The pass writes every pixel of a one-mip, one-layer color target and loads none. AttachColor
+    // then lets the graph cull an earlier write to the target that no pass reads in between.
+    bool WritesEveryPixel = false;
 };
 
 // Readable at call sites where a bare bool would not be ("what's true?").
@@ -811,6 +815,9 @@ class RGFrame
     std::vector<uint64_t> m_Physical; // raw device handle per resource id
     std::vector<uint8_t> m_HasPhysical;
     RGTexture m_Backbuffer{}; // this frame's ImportBackbuffer result (IsBackbuffer)
+
+    // The value each physical queue's timeline has signaled so far (0 before its first submit).
+    void ReadCompletedTimelineValues(uint64_t (&outValues)[kQueueCount]) const;
 
     // Recording state (persistent CLs per logical queue; Begin() re-acquires a
     // fresh buffer per submission) + per-physical-queue timeline semaphores.

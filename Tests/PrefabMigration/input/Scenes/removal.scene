@@ -1,0 +1,8 @@
+[scene name="S" version=1]
+[resource id="bp" path="Blueprints/bp_remove.blueprint"]
+
+[blueprint id="inst" source="bp"]
+-DebugMarker
++RigidBody
+AudioSource
+RigidBody.mass = 12

@@ -163,7 +163,7 @@ TEST_F(OceanSceneTerrainBake, CenteredComposedTerrainCoversNegativeWorldCoordina
     TerrainECS::TerrainModifierSystem modifiers;
     modifiers.Update(World, 1.f / 60);
 
-    const auto query = TerrainECS::ResolveSurfaceHeightQuery(World);
+    const auto query = TerrainECS::ResolveSurfaceHeightQuery(World, Mathematics::Vector3(-120.0f, 0.0f, -160.0f));
     float height = 0;
     ASSERT_TRUE(SampleGround(query, -120, -160, height));
     ASSERT_NEAR(height, 1, 1e-4f);

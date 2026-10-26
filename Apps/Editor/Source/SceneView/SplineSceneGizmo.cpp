@@ -10,7 +10,7 @@
 #include "Mathematics/BezierCurve.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/VectorOps.h"
-#include "Placement/SplineSurfaceConform.h"
+#include "SplineRecipes/SplineSurfaceConform.h"
 #include "SceneView/SplineDrapePolylines.h"
 #include "SceneView/SplineOwnerQuery.h"
 #include "SceneView/SplineTool.h"
@@ -100,7 +100,7 @@ void DrapeKnots(ECS::World& world, const Spline::SplineData& data, const Mathema
     for (const Spline::SplineControlPoint& point : data.Points)
     {
         Vector3 hit;
-        out.push_back(ConformRayDown(world, worldM.TransformPoint(point.Position), ignore, hit)
+        out.push_back(SplineRecipes::ConformRayDown(world, worldM.TransformPoint(point.Position), ignore, hit)
                           ? hit.y + kDrapeSurfaceLiftMetres
                           : std::numeric_limits<float>::quiet_NaN());
     }
@@ -272,7 +272,7 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
         // altitude while the placed pieces, which observe the same revision,
         // move off it.
         if (!passSurfaceRevision.has_value())
-            passSurfaceRevision = ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
+            passSurfaceRevision = SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
         const bool dirty =
             cache.DataIndex != comp.SplineDataIndex ||
             cache.Generation != comp.SplineDataGeneration ||
@@ -289,7 +289,7 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
             cache.SurfaceRevision = *passSurfaceRevision;
             std::memcpy(cache.Matrix, xf.matrix, sizeof(cache.Matrix));
             if (!conformIgnore.has_value())
-                conformIgnore = CollectConformRayIgnoreList(*world);
+                conformIgnore = SplineRecipes::CollectConformRayIgnoreList(*world);
             BuildSplineDrapedPolylines(*world, data, worldM, *conformIgnore, wantEdges,
                                        Components::SplineConformTarget::Scene, cache.Polylines);
             DrapeKnots(*world, data, worldM, *conformIgnore, cache.KnotDrapedY);

@@ -6,16 +6,23 @@
 #include "ECS/Entity.h"
 #include "ECS/ECSTemplates.h"
 #include "TestComponents.h"
+#include "Memory/Testing/ScopedAllocationFault.h"
 
 #include <algorithm>
+#include <new>
+#include <optional>
 
 using namespace GameEngine::ECS;
 using GameEngine::Components::Parent;
 using GameEngine::Components::ParentRelationIndex;
 using GameEngine::Components::ChildrenOf;
 using GameEngine::Components::DescendantsOf;
+using GameEngine::Components::DestroySubtreeImmediate;
 using GameEngine::Components::IsDescendantOf;
 using GameEngine::ECS::test::Position;
+using GameEngine::ECS::test::Velocity;
+using GameEngine::Memory::Testing::FaultRepeat;
+using GameEngine::Memory::Testing::ScopedAllocationFault;
 
 namespace {
 
@@ -28,6 +35,16 @@ static EntityHandle MakeNode(World& w, EntityHandle parent = {}) {
 
 static bool Contains(const std::vector<EntityHandle>& v, EntityHandle e) {
     return std::find(v.begin(), v.end(), e) != v.end();
+}
+
+std::vector<EntityHandle> removedOrder;
+EntityHandle denyAllocationsAfter;
+std::optional<ScopedAllocationFault> deniedAllocations;
+
+// Records the removal order. After `denyAllocationsAfter` is removed, every allocation fails.
+static void RecordRemoval(EntityHandle entity, Position&) {
+    removedOrder.push_back(entity);
+    if (entity == denyAllocationsAfter) deniedAllocations.emplace(0, 1, FaultRepeat::Every);
 }
 
 } // namespace
@@ -281,4 +298,33 @@ TEST(HierarchyQueries, DescendantsOf_Indexed_ReusesAcrossCalls) {
     EXPECT_EQ(r2.size(), 2u);
     EXPECT_TRUE(Contains(r2, a));
     EXPECT_TRUE(Contains(r2, b));
+}
+
+TEST(HierarchyQueries, DestroySubtreeImmediate_PreparesTheWholeTreeBeforeAnyOnRemove) {
+    World w;
+    w.RegisterOnRemove<Position>(RecordRemoval);
+    w.EnableLifecycleEvents<Velocity>();
+    auto root = MakeNode(w);
+    auto child = MakeNode(w, root);
+    auto grandchild = MakeNode(w, child);
+    w.ProcessCommands();
+    // Only the grandchild needs Removed-event capacity, so only its preparation allocates.
+    w.AddComponentImmediate(grandchild, Velocity{});
+    removedOrder.clear();
+    removedOrder.reserve(3);
+    denyAllocationsAfter = child;
+
+    bool rejected = false;
+    try {
+        DestroySubtreeImmediate(w, root);
+    } catch (const std::bad_alloc&) {
+        rejected = true;
+    }
+    deniedAllocations.reset();
+
+    EXPECT_FALSE(rejected);
+    EXPECT_FALSE(w.IsValid(root));
+    EXPECT_FALSE(w.IsValid(child));
+    EXPECT_FALSE(w.IsValid(grandchild));
+    EXPECT_EQ(removedOrder, (std::vector<EntityHandle>{child, grandchild, root}));
 }

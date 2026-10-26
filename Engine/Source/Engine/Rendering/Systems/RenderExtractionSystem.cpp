@@ -1495,7 +1495,7 @@ ResolvedVolumeStack ResolveVolumeStack(std::span<const PostProcessExtractedVolum
 // is authored as a picker shows it; only its hue is used). A black color has no hue and tints nothing.
 void ExtractNightTint(const Components::PostProcessVolume& volume, PostProcessSettings& settings)
 {
-    const float* color = volume.NightTintColor;
+    const ColorLinear& color = volume.NightTintColor;
     const float luminance = ColorUtils::LinearRec709Luminance(color);
     if (luminance <= 0.0f)
     {
@@ -1503,9 +1503,9 @@ void ExtractNightTint(const Components::PostProcessVolume& volume, PostProcessSe
         return;
     }
     settings.NightTintStrength = volume.NightTintStrength;
-    settings.NightTintR = color[0] / luminance;
-    settings.NightTintG = color[1] / luminance;
-    settings.NightTintB = color[2] / luminance;
+    settings.NightTintR = color.r / luminance;
+    settings.NightTintG = color.g / luminance;
+    settings.NightTintB = color.b / luminance;
 }
 } // namespace
 

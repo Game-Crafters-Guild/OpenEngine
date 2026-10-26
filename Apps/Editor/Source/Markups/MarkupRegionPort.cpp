@@ -165,7 +165,7 @@ std::pair<float32, float32> AreaAndPerimeterWithMembers(const MarkupECS::MarkupR
     }
     float32 squareMeters = 0.0f;
     float32 meters = 0.0f;
-    for (const MarkupECS::MarkupAreaPiece& piece : MarkupECS::CombineRegionArea(area.GetBase().Ring, includes, excludes))
+    for (const SplineGeometry::AreaPiece& piece : MarkupECS::CombineRegionArea(area.GetBase().Ring, includes, excludes))
     {
         squareMeters += MarkupECS::RegionOutlineArea(piece.Outer);
         meters += MarkupECS::RegionOutlinePerimeter(piece.Outer);

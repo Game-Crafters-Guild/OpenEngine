@@ -5,10 +5,11 @@
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
 #include "Components/RuntimeOnlyEntity.h"
-#include "Components/SceneBlueprintInstance.h"
+#include "Components/PrefabInstance.h"
 #include "Components/SceneSubsceneInstance.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/Transform.h"
+#include "Core/Engine.h"
 #include "ECS/ComponentFieldRegistry.h"
 #include "ECS/ComponentRegistry.h"
 #include "ECS/Components.h"
@@ -16,8 +17,15 @@
 #include "ECS/UnresolvedComponentStore.h"
 #include "FileSystem/FileSystem.h"
 #include "Logger/Logger.h"
+#include "Scene/PrefabLibrary.h"
+#include "Scene/PrefabOverrideWriter.h"
+#include "Scene/PrefabPlacement.h"
+#include "Scene/SceneDoc.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneValue.h"
+#include "Types/FlatMap.h"
+#include "Types/FlatSet.h"
+#include "Types/Fnv1a.h"
 #include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
@@ -27,7 +35,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <format>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -430,6 +440,21 @@ std::string_view RecordedUnresolvedReferencePath(const SceneSaveContext& ctx, co
 }
 } // namespace
 
+// The [resource] path a prefab instance's source GUID writes as: the asset database's path for the
+// GUID (redirects chased), relative to the asset root. False when there is no asset database or it
+// does not know the GUID; the saver then has no path to write.
+bool ResolvePrefabSourceForSave(const SceneSaveContext& ctx, const GUID& source, std::string& outPath)
+{
+    if (!ctx.Resolver || source.IsNull())
+        return false;
+    std::filesystem::path absolutePath;
+    AssetType type = AssetType::Unknown;
+    if (!ctx.Resolver->TryGetPathAndType(ctx.Resolver->ResolveGuid(source), absolutePath, type))
+        return false;
+    outPath = RelativizeToAssetRoot(absolutePath, ctx.AssetRoot);
+    return true;
+}
+
 std::string FormatAssetReferenceForSave(const SceneSaveContext& ctx,
                                         const GUID& guid,
                                         std::string_view authoredPath)
@@ -437,11 +462,10 @@ std::string FormatAssetReferenceForSave(const SceneSaveContext& ctx,
     if (authoredPath.empty())
         authoredPath = RecordedUnresolvedReferencePath(ctx, guid);
 
-    // Both inputs may be empty (e.g. cleared asset slot). Caller should typically
-    // skip emission in that case; we return an empty AssetRef that will round-trip
-    // back to a parse error, surfacing the misuse loudly.
+    // Both inputs empty is a cleared slot: its clear form `0`, which TryResolveAssetReference reads
+    // back as a null reference. A plain save skips the line instead (SceneSaveContext::WriteEveryField).
     if (guid.IsNull() && authoredPath.empty())
-        return std::string("[]");
+        return std::string("0");
 
     std::string outPath;
     std::string outGuid;
@@ -638,9 +662,7 @@ bool TryResolveAssetReference(const SceneLoadContext& ctx,
     }
 }
 
-namespace
-{
-static void SetError(const std::filesystem::path& file, int line, const std::string& msg)
+void SetError(const std::filesystem::path& file, int line, const std::string& msg)
 {
     g_LastError.file = file;
     g_LastError.line = line;
@@ -649,7 +671,7 @@ static void SetError(const std::filesystem::path& file, int line, const std::str
 
 static std::atomic<uint64_t> g_AdditiveImportCounter{0};
 
-static bool ReadTextFile(const std::filesystem::path& p, std::string& out)
+bool ReadTextFile(const std::filesystem::path& p, std::string& out)
 {
     return ReadFileTextShared(p, out);
 }
@@ -682,22 +704,9 @@ static std::string Trim(std::string s)
     return s;
 }
 
-static bool StartsWith(const std::string& s, const char* prefix)
-{
-    if (!prefix)
-        return false;
-    const size_t n = std::strlen(prefix);
-    return s.size() >= n && s.compare(0, n, prefix) == 0;
-}
-
-struct Tuple3
-{
-    float x = 0, y = 0, z = 0;
-};
-
 struct Section
 {
-    std::string type; // scene, blueprint, resource, entity, blueprint(instance), subscene
+    std::string type; // scene, prefab, resource, entity, prefab(instance), subscene
     std::unordered_map<std::string, std::string> attrs; // raw attr values (already unquoted for strings)
     std::vector<std::pair<int, std::string>> bodyLines; // {lineNo, text}
     int headerLine = 0;
@@ -776,109 +785,6 @@ static bool ParseSectionHeader(const std::string& line, std::string& outType, st
     }
     return true;
 }
-
-struct SceneDoc
-{
-    bool isBlueprint = false;
-    std::string name;
-    int version = 0;
-
-    struct PropValue
-    {
-        std::string value;
-        int line = 0;
-        // Authored spelling of the property key (keys are lowercased for schema
-        // matching); empty means "same as the lowered key". The load report and
-        // the unknown-component preservation path echo this back.
-        std::string originalKey;
-    };
-
-    // Insertion-ordered flat storage of a component's properties. Replaces a nested
-    // unordered_map; the parse path only ever appends and the load/save/validate paths
-    // only ever range-iterate, so a vector keeps file order deterministic and avoids the
-    // per-entity, per-component map allocations.
-    // components: [ { "transform", [ {"position", {"(1, 2, 3)", line}}, ... ] }, ... ]
-    struct ComponentProps
-    {
-        std::string name;
-        // Authored spelling of the component name (see PropValue::originalKey).
-        std::string originalName;
-        std::vector<std::pair<std::string, PropValue>> props;
-    };
-    using ComponentProperties = std::vector<ComponentProps>;
-
-    struct Include
-    {
-        std::filesystem::path path;
-        int line = 0;
-    };
-    std::vector<Include> includes;
-
-    struct Embed
-    {
-        std::string id;
-        std::string type;
-        std::string guid; // optional; absent in files authored before embed identity was persisted
-        std::unordered_map<std::string, PropValue> properties;
-        int headerLine = 0;
-    };
-    std::unordered_map<std::string, Embed> embeds;
-
-    struct Resource
-    {
-        std::string id;
-        std::string path;
-        std::string guid; // optional
-        int headerLine = 0;
-    };
-    std::unordered_map<std::string, Resource> resources;
-
-    // A body line that is not "Component.field = value" ({line, text}): no '=', no dot, or an empty
-    // component or field name. The load reports each one.
-    using UnreadLines = std::vector<std::pair<int, std::string>>;
-
-    struct Entity
-    {
-        std::string id;
-        std::optional<std::string> parent;
-        ComponentProperties components;
-        UnreadLines unreadLines;
-        int headerLine = 0;
-    };
-    std::vector<Entity> entities; // in file order
-
-    struct BlueprintInstance
-    {
-        std::string id;
-        std::optional<std::string> parent;
-        std::string sourceResourceId;
-        // Overrides (root only), stored as component properties.
-        ComponentProperties components;
-        // Remove directives (-ComponentName)
-        std::unordered_set<std::string> removedComponents;
-        UnreadLines unreadLines;
-        int headerLine = 0;
-    };
-    std::vector<BlueprintInstance> blueprintInstances;
-
-    struct Subscene
-    {
-        std::string id;
-        std::string sourceResourceId;
-        Tuple3 offset{};
-        bool hasOffset = false;
-        bool enabled = true;
-        int headerLine = 0;
-    };
-    std::vector<Subscene> subscenes;
-
-    bool hasHierarchyUi = false;
-    SceneHierarchyUi hierarchyUi;
-
-    bool hasEditorCamera = false;
-    SceneEditorCamera editorCamera;
-
-};
 
 
 static void SplitCommaSeparatedTags(std::string_view blob, std::vector<std::string>& out)
@@ -1025,11 +931,212 @@ static bool ParsePropertyLine(const std::string& line, std::string& outKey, std:
     return !outKey.empty();
 }
 
-static bool ParseDocument(const std::filesystem::path& filePath,
-                          const std::string& text,
-                          SceneDoc& out,
-                          std::string* outError,
-                          int* outErrorLine = nullptr)
+// True when `address` reads as an override address: ids joined by '.', none empty and none holding
+// '~', '/' or a space. The empty address, the root's, reads too.
+static bool IsValidOverrideAddress(std::string_view address)
+{
+    for (const std::string_view id : Split(address, '.'))
+    {
+        if (id.empty() || id.find_first_of("~/ \t") != std::string_view::npos)
+            return false;
+    }
+    return true;
+}
+
+static std::string AddressNotReadMessage(int lineNo, std::string_view address)
+{
+    return "Line " + std::to_string(lineNo) + ": the address \"" + std::string(address) +
+           "\" does not read. An address is the ids from the instance's root to the entity, joined by '.', "
+           "as in lid.handle.";
+}
+
+// The refusal of a line that writes the root's empty address with its separator ("/Name.value").
+static std::string RootAddressMessage(int lineNo)
+{
+    return "Line " + std::to_string(lineNo) +
+           ": the root's lines take no address. Write the line without the '/' in front.";
+}
+
+// A [blueprint] section, which migrate_blueprints_to_prefabs.py turns into [prefab], is refused with the
+// script's name.
+static std::string BlueprintSectionMessage(int headerLine)
+{
+    return "Unknown section [blueprint] at line " + std::to_string(headerLine) +
+           ". Rename it to [prefab] and the source file to .prefab, or run "
+           "migrate_blueprints_to_prefabs.py on the project.";
+}
+
+// Separates an override's address from its component line ("lid/MeshRenderer.material").
+constexpr char kAddressSeparator = '/';
+
+// The refusal of a line that writes the separator twice ("lid//Name.value"), with the key as it reads with
+// one separator.
+static std::string DoubledSeparatorMessage(int lineNo, const std::string& written, const std::string& address,
+                                           const std::string& field)
+{
+    return "Line " + std::to_string(lineNo) + ": '" + written + "' has two '/'. Write " + address +
+           kAddressSeparator + field + ".";
+}
+
+// `text` with `address` and the separator in front; the root's (empty) address adds nothing.
+std::string Addressed(std::string_view address, std::string_view text)
+{
+    std::string line;
+    line.reserve(address.size() + 1 + text.size());
+    if (!address.empty())
+        line.append(address).append(1, kAddressSeparator);
+    return line.append(text);
+}
+
+// Reads one body line of a [prefab] section into `section`: a changed field, an added or a removed
+// component, or a removed entity. A component name on a line of its own is refused with the fix;
+// any other line that does not read as a component line is kept as unread for the load report.
+static bool ParseOverrideLine(const std::string& line, int lineNo, SceneDoc::PrefabInstanceSection& section,
+                              std::string* outError)
+{
+    constexpr std::string_view kRemovedEntityWord = "entity";
+    const char sign = line[0];
+    if (sign == '-' || sign == '+')
+    {
+        const std::string rest = Trim(line.substr(1));
+        if (sign == '-' && rest == kRemovedEntityWord)
+        {
+            if (outError)
+                *outError = "Line " + std::to_string(lineNo) +
+                            ": '-entity' names no entity. Write -entity address, as in -entity lid.handle.";
+            return false;
+        }
+        const std::size_t wordEnd = rest.find_first_of(" \t");
+        if (sign == '-' && wordEnd != std::string::npos && std::string_view(rest).substr(0, wordEnd) == kRemovedEntityWord)
+        {
+            const std::string address = Trim(rest.substr(kRemovedEntityWord.size()));
+            if (address.empty() || !IsValidOverrideAddress(address))
+            {
+                if (outError)
+                    *outError = AddressNotReadMessage(lineNo, address);
+                return false;
+            }
+            section.removedEntities.push_back({address, lineNo});
+            return true;
+        }
+
+        SceneDoc::PrefabInstanceSection::AddressedComponent component{};
+        component.line = lineNo;
+        component.authoredName = rest;
+        if (const std::size_t slash = rest.find('/'); slash != std::string::npos)
+        {
+            if (slash == 0)
+            {
+                if (outError)
+                    *outError = RootAddressMessage(lineNo);
+                return false;
+            }
+            component.address = Trim(rest.substr(0, slash));
+            component.authoredName = Trim(rest.substr(slash + 1));
+        }
+        if (!IsValidOverrideAddress(component.address))
+        {
+            if (outError)
+                *outError = AddressNotReadMessage(lineNo, component.address);
+            return false;
+        }
+        if (component.authoredName.empty() || component.authoredName.find_first_of("=. \t/") != std::string::npos)
+        {
+            if (outError)
+                *outError = "Line " + std::to_string(lineNo) + ": '" + line + "' does not name a component. Write " +
+                            sign + "Component, or " + sign + "address/Component for an entity under the root.";
+            return false;
+        }
+        component.name = ToLowerAscii(component.authoredName);
+        (sign == '+' ? section.addedComponents : section.removedComponents).push_back(std::move(component));
+        return true;
+    }
+
+    const std::size_t eq = line.find('=');
+    if (eq == std::string::npos && line.find('.', line.find('/') + 1) == std::string::npos)
+    {
+        if (outError)
+            *outError = "Line " + std::to_string(lineNo) + ": '" + line +
+                        "' names a component on a line of its own. Write +" + line +
+                        " to add the component to the instance.";
+        return false;
+    }
+
+    // '/' never occurs in "Component.field", so the first '/' left of the '=' ends the address.
+    std::string address;
+    std::string componentLine = line;
+    if (const std::size_t slash = line.find('/'); slash != std::string::npos && slash < eq && eq != std::string::npos)
+    {
+        if (slash == 0)
+        {
+            if (outError)
+                *outError = RootAddressMessage(lineNo);
+            return false;
+        }
+        address = Trim(line.substr(0, slash));
+        componentLine = Trim(line.substr(slash + 1));
+        if (!IsValidOverrideAddress(address))
+        {
+            if (outError)
+                *outError = AddressNotReadMessage(lineNo, address);
+            return false;
+        }
+        // A second separator ("lid//Name.value") is refused with the key written with one.
+        if (componentLine.empty() || componentLine.front() == kAddressSeparator)
+        {
+            if (outError)
+            {
+                const std::size_t fieldStart = line.find_first_not_of(kAddressSeparator, slash);
+                *outError = DoubledSeparatorMessage(lineNo, Trim(line.substr(0, eq)), address,
+                                                    Trim(line.substr(fieldStart, eq - fieldStart)));
+            }
+            return false;
+        }
+    }
+    std::string comp, prop, value, compAuthored, propAuthored;
+    if (!ParseComponentLine(componentLine, comp, prop, value, &compAuthored, &propAuthored))
+    {
+        section.unreadLines.emplace_back(lineNo, line);
+        return true;
+    }
+    auto fields = std::find_if(section.changedFields.begin(), section.changedFields.end(),
+                               [&address](const auto& f) { return f.address == address; });
+    if (fields == section.changedFields.end())
+        fields = section.changedFields.insert(section.changedFields.end(),
+                                              SceneDoc::PrefabInstanceSection::AddressedFields{address, {}});
+    SetComponentProp(FindOrAppendComponent(fields->components, comp, compAuthored), prop,
+                     SceneDoc::PropValue{value, lineNo, propAuthored});
+    return true;
+}
+
+// A section that both adds and removes one component at one address says two things at once; it
+// is refused with both lines.
+static bool RefuseAddAndRemoveOfOneComponent(const SceneDoc::PrefabInstanceSection& section, std::string* outError,
+                                             int* outErrorLine)
+{
+    for (const auto& added : section.addedComponents)
+    {
+        for (const auto& removed : section.removedComponents)
+        {
+            if (added.address != removed.address || added.name != removed.name)
+                continue;
+            if (outError)
+                *outError = "Line " + std::to_string(added.line) + " adds " + added.authoredName + " to " +
+                            (added.address.empty() ? std::string("the root") : "\"" + added.address + "\"") +
+                            " and line " + std::to_string(removed.line) + " removes it. Keep one of the two lines.";
+            if (outErrorLine)
+                *outErrorLine = std::max(added.line, removed.line);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ParseDocument(const std::filesystem::path& filePath,
+                   const std::string& text,
+                   SceneDoc& out,
+                   std::string* outError,
+                   int* outErrorLine)
 {
     if (outErrorLine)
         *outErrorLine = 0;
@@ -1090,18 +1197,19 @@ static bool ParseDocument(const std::filesystem::path& filePath,
         return false;
     }
 
-    // Header must be first section: [scene] or [blueprint]
+    // Header must be first section: [scene] or [prefab]
     {
         const Section& h = sections.front();
-        if (h.type != "scene" && h.type != "blueprint")
+        if (h.type != "scene" && h.type != "prefab")
         {
             if (outError)
-                *outError = "First section must be [scene] or [blueprint]";
+                *outError = h.type == "blueprint" ? BlueprintSectionMessage(h.headerLine)
+                                                  : "First section must be [scene] or [prefab]";
             if (outErrorLine)
                 *outErrorLine = h.headerLine;
             return false;
         }
-        out.isBlueprint = (h.type == "blueprint");
+        out.isPrefab = (h.type == "prefab");
         auto itVer = h.attrs.find("version");
         if (itVer == h.attrs.end())
         {
@@ -1223,49 +1331,40 @@ static bool ParseDocument(const std::filesystem::path& filePath,
             out.entities.push_back(std::move(e));
             continue;
         }
-        if (s.type == "blueprint")
+        if (s.type == "prefab")
         {
-            // Blueprint instance section in a scene
-            SceneDoc::BlueprintInstance bi{};
+            // Prefab instance section in a scene
+            SceneDoc::PrefabInstanceSection instance{};
             auto itId = s.attrs.find("id");
             auto itSrc = s.attrs.find("source");
             if (itId == s.attrs.end() || itSrc == s.attrs.end())
-                continue;
-            bi.id = itId->second;
-            bi.sourceResourceId = itSrc->second;
-            bi.headerLine = s.headerLine;
+            {
+                if (outError)
+                    *outError = "Line " + std::to_string(s.headerLine) +
+                                ": a [prefab] section needs id and source: [prefab id=\"...\" source=\"...\"]";
+                if (outErrorLine)
+                    *outErrorLine = s.headerLine;
+                return false;
+            }
+            instance.id = itId->second;
+            instance.sourceResourceId = itSrc->second;
+            instance.headerLine = s.headerLine;
             if (auto itParent = s.attrs.find("parent"); itParent != s.attrs.end() && !itParent->second.empty())
-                bi.parent = itParent->second;
+                instance.parent = itParent->second;
 
             for (const auto& [ln, l] : s.bodyLines)
             {
-                if (!l.empty() && l[0] == '-')
+                if (!ParseOverrideLine(l, ln, instance, outError))
                 {
-                    bi.removedComponents.insert(ToLowerAscii(Trim(l.substr(1))));
-                    continue;
+                    if (outErrorLine)
+                        *outErrorLine = ln;
+                    return false;
                 }
-                // Additions: "Component" or "+Component"
-                {
-                    std::string t = Trim(l);
-                    if (!t.empty() && t[0] == '+')
-                        t = Trim(t.substr(1));
-                    if (!t.empty() && t.find('=') == std::string::npos && t.find('.') == std::string::npos)
-                    {
-                        FindOrAppendComponent(bi.components, ToLowerAscii(t), t); // mark component present with no explicit properties
-                        continue;
-                    }
-                }
-                std::string comp, prop, value, compAuthored, propAuthored;
-                if (!ParseComponentLine(l, comp, prop, value, &compAuthored, &propAuthored))
-                {
-                    bi.unreadLines.emplace_back(ln, l);
-                    continue;
-                }
-                SetComponentProp(FindOrAppendComponent(bi.components, comp, compAuthored), prop,
-                                 SceneDoc::PropValue{value, ln, propAuthored});
             }
+            if (!RefuseAddAndRemoveOfOneComponent(instance, outError, outErrorLine))
+                return false;
 
-            out.blueprintInstances.push_back(std::move(bi));
+            out.prefabInstances.push_back(std::move(instance));
             continue;
         }
         if (s.type == "subscene")
@@ -1281,7 +1380,7 @@ static bool ParseDocument(const std::filesystem::path& filePath,
             for (const auto& [ln, l] : s.bodyLines)
             {
                 // offset = (x, y, z)
-                if (StartsWith(ToLowerAscii(l), "offset"))
+                if (ToLowerAscii(l).starts_with("offset"))
                 {
                     const size_t eq = l.find('=');
                     if (eq != std::string::npos)
@@ -1295,11 +1394,11 @@ static bool ParseDocument(const std::filesystem::path& filePath,
                                 *outErrorLine = ln;
                             return false;
                         }
-                        ss.offset = Tuple3{f3.X, f3.Y, f3.Z};
+                        ss.offset = Mathematics::Vector3(f3.X, f3.Y, f3.Z);
                         ss.hasOffset = true;
                     }
                 }
-                if (StartsWith(ToLowerAscii(l), "enabled"))
+                if (ToLowerAscii(l).starts_with("enabled"))
                 {
                     const size_t eq = l.find('=');
                     if (eq != std::string::npos)
@@ -1399,13 +1498,24 @@ static bool ParseDocument(const std::filesystem::path& filePath,
             }
             continue;
         }
+
+        // Other section kinds belong to other readers ([editor_tilemap]); [blueprint] is the
+        // instance section's old name, refused with the conversion that fixes the file.
+        if (s.type == "blueprint")
+        {
+            if (outError)
+                *outError = BlueprintSectionMessage(s.headerLine);
+            if (outErrorLine)
+                *outErrorLine = s.headerLine;
+            return false;
+        }
     }
 
     return true;
 }
 
 // Records `id` as used by the section on `headerLine`. False, with the cause and the fix, when an
-// earlier section already uses it: entity and blueprint-instance ids share one namespace.
+// earlier section already uses it: entity and prefab-instance ids share one namespace.
 static bool ClaimEntityId(std::unordered_map<std::string, int>& firstLineById, const std::string& id,
                           int headerLine, std::string* outError, int* outErrorLine)
 {
@@ -1420,7 +1530,133 @@ static bool ClaimEntityId(std::unordered_map<std::string, int>& firstLineById, c
     return false;
 }
 
-static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* outErrorLine = nullptr)
+// The id of a prefab file's root, the entity an instance's root is.
+constexpr std::string_view kPrefabRootId = "root";
+
+// The longest scene identity a SceneEntityTag holds.
+constexpr std::size_t kMaxSceneTagLength = sizeof(Components::SceneEntityTag::value) - 1;
+
+// A long scene identity is 16 hex digits of its path's hash and '~' before the local id.
+constexpr std::size_t kHashedSceneTagHeadLength = 17;
+
+// The longest id in a prefab file: a hashed scene identity keeps it whole.
+constexpr std::size_t kMaxPrefabIdLength = kMaxSceneTagLength - kHashedSceneTagHeadLength;
+
+// False, with the line and the fix, when `id` holds a separator, or is longer than a prefab file
+// allows.
+static bool ValidateEntityId(const std::string& id, int headerLine, bool inPrefab, std::string* outError,
+                             int* outErrorLine)
+{
+    const std::size_t separator = id.find_first_of(kIdSeparators);
+    if (separator != std::string::npos)
+    {
+        std::string renamed = id;
+        std::replace_if(renamed.begin(), renamed.end(),
+                        [](char c) { return kIdSeparators.find(c) != std::string_view::npos; }, '_');
+        if (outError)
+            *outError = "Entity id \"" + id + "\" at line " + std::to_string(headerLine) + " holds '" +
+                        id[separator] +
+                        "'. An id never holds '.', '/' or '~': '.' joins ids in a scene identity and in an "
+                        "address, '/' separates an address from its component line, and '~' separates the "
+                        "hash from the id in a long scene identity. Rename it, for example to \"" +
+                        renamed + "\".";
+        if (outErrorLine)
+            *outErrorLine = headerLine;
+        return false;
+    }
+    if (inPrefab && id.size() > kMaxPrefabIdLength)
+    {
+        if (outError)
+            *outError = "Entity id \"" + id + "\" at line " + std::to_string(headerLine) + " is " +
+                        std::to_string(id.size()) + " characters. An id in a prefab file is at most " +
+                        std::to_string(kMaxPrefabIdLength) +
+                        " characters, so a long scene identity keeps it whole. Shorten the id to " +
+                        std::to_string(kMaxPrefabIdLength) + " characters.";
+        if (outErrorLine)
+            *outErrorLine = headerLine;
+        return false;
+    }
+    return true;
+}
+
+// A prefab file holds exactly one root, the [entity] or [prefab] section with id "root" and no
+// parent, and no subscene. False with the lines and the fix otherwise.
+static bool ValidatePrefabShape(const SceneDoc& doc, std::string* outError, int* outErrorLine)
+{
+    if (!doc.subscenes.empty())
+    {
+        if (outError)
+            *outError = "Line " + std::to_string(doc.subscenes.front().headerLine) +
+                        ": a prefab holds entities and prefab instances; move the subscene into a scene.";
+        if (outErrorLine)
+            *outErrorLine = doc.subscenes.front().headerLine;
+        return false;
+    }
+
+    std::vector<std::pair<int, std::string>> roots; // {header line, id}, in file order
+    for (const auto& e : doc.entities)
+    {
+        if (!e.parent)
+            roots.emplace_back(e.headerLine, e.id);
+    }
+    for (const auto& b : doc.prefabInstances)
+    {
+        if (!b.parent)
+            roots.emplace_back(b.headerLine, b.id);
+    }
+    std::sort(roots.begin(), roots.end());
+
+    if (roots.empty())
+    {
+        if (outError)
+            *outError = "Prefab file has no root. Add one [entity id=\"root\"] with no parent, or one "
+                        "[prefab id=\"root\" source=...] for a variant.";
+        if (outErrorLine)
+            *outErrorLine = 1;
+        return false;
+    }
+    if (roots.size() > 1)
+    {
+        const auto& second = roots[0].second == kPrefabRootId ? roots[1] : roots[0];
+        if (outError)
+            *outError = "Prefab file has " + (roots.size() == 2 ? std::string("two") : std::to_string(roots.size())) +
+                        " roots, \"" + roots[0].second + "\" at line " + std::to_string(roots[0].first) +
+                        " and \"" + roots[1].second + "\" at line " + std::to_string(roots[1].first) +
+                        ". A prefab has exactly one root, the entity with id \"root\": give \"" + second.second +
+                        "\" a parent, for example parent=\"root\".";
+        if (outErrorLine)
+            *outErrorLine = second.first;
+        return false;
+    }
+    if (roots.front().second != kPrefabRootId)
+    {
+        if (outError)
+            *outError = "The root of a prefab has the id \"root\"; \"" + roots.front().second + "\" at line " +
+                        std::to_string(roots.front().first) +
+                        " has no parent. Rename it to \"root\", or give it a parent.";
+        if (outErrorLine)
+            *outErrorLine = roots.front().first;
+        return false;
+    }
+    return true;
+}
+
+// True when `parent` names an entity of one of the document's prefab instances: the instance's id
+// (its root), the id, '.', and the entity's address ("crate2.lid"), or a long scene identity in its
+// hashed form. The load resolves it once the instance is placed.
+static bool NamesInstanceMember(const SceneDoc& doc, std::string_view parent)
+{
+    if (parent.find('~') != std::string_view::npos)
+        return true;
+    const std::size_t dot = parent.find('.');
+    if (dot != std::string_view::npos && dot + 1 == parent.size())
+        return false;
+    const std::string_view instanceId = parent.substr(0, dot);
+    return std::any_of(doc.prefabInstances.begin(), doc.prefabInstances.end(),
+                       [instanceId](const auto& b) { return b.id == instanceId; });
+}
+
+bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* outErrorLine)
 {
     if (outErrorLine)
         *outErrorLine = 0;
@@ -1432,14 +1668,23 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
         return false;
     }
 
-    if (doc.isBlueprint && doc.entities.empty())
+    for (const auto& e : doc.entities)
     {
-        if (outError)
-            *outError = "Blueprint file must contain at least one [entity] section";
-        if (outErrorLine)
-            *outErrorLine = 1;
-        return false;
+        if (!ValidateEntityId(e.id, e.headerLine, doc.isPrefab, outError, outErrorLine))
+            return false;
     }
+    for (const auto& b : doc.prefabInstances)
+    {
+        if (!ValidateEntityId(b.id, b.headerLine, doc.isPrefab, outError, outErrorLine))
+            return false;
+    }
+    for (const auto& s : doc.subscenes)
+    {
+        if (!ValidateEntityId(s.id, s.headerLine, doc.isPrefab, outError, outErrorLine))
+            return false;
+    }
+    if (doc.isPrefab && !ValidatePrefabShape(doc, outError, outErrorLine))
+        return false;
 
     // Embed/resource ids must not collide (both are referenced as #id).
     for (const auto& kv : doc.embeds)
@@ -1456,19 +1701,20 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
 
     // id -> header line of its first use, so the message can point at both sections.
     std::unordered_map<std::string, int> ids;
-    ids.reserve(doc.entities.size() + doc.blueprintInstances.size());
+    ids.reserve(doc.entities.size() + doc.prefabInstances.size());
     for (const auto& e : doc.entities)
     {
         if (!e.id.empty() && !ClaimEntityId(ids, e.id, e.headerLine, outError, outErrorLine))
             return false;
     }
-    for (const auto& b : doc.blueprintInstances)
+    for (const auto& b : doc.prefabInstances)
     {
         if (!b.id.empty() && !ClaimEntityId(ids, b.id, b.headerLine, outError, outErrorLine))
             return false;
     }
 
-    // Parent refs must exist in the same file (for base entities and blueprint instance root).
+    // Parent refs name an entity or an instance of the same file, or an entity inside one of its
+    // instances (NamesInstanceMember), which the load links once the instance is placed.
     auto hasId = [&](const std::string& id) { return ids.find(id) != ids.end(); };
     for (const auto& e : doc.entities)
     {
@@ -1480,7 +1726,7 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
                 *outErrorLine = e.headerLine;
             return false;
         }
-        if (e.parent && !hasId(*e.parent))
+        if (e.parent && !hasId(*e.parent) && !NamesInstanceMember(doc, *e.parent))
         {
             if (outError)
                 *outError = "Missing parent '" + *e.parent + "' for entity '" + e.id + "'";
@@ -1489,20 +1735,20 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
             return false;
         }
     }
-    for (const auto& b : doc.blueprintInstances)
+    for (const auto& b : doc.prefabInstances)
     {
         if (b.parent && *b.parent == b.id)
         {
             if (outError)
-                *outError = "Blueprint instance '" + b.id + "' cannot parent itself";
+                *outError = "Prefab instance '" + b.id + "' cannot parent itself";
             if (outErrorLine)
                 *outErrorLine = b.headerLine;
             return false;
         }
-        if (b.parent && !hasId(*b.parent))
+        if (b.parent && !hasId(*b.parent) && !NamesInstanceMember(doc, *b.parent))
         {
             if (outError)
-                *outError = "Missing parent '" + *b.parent + "' for blueprint instance '" + b.id + "'";
+                *outError = "Missing parent '" + *b.parent + "' for prefab instance '" + b.id + "'";
             if (outErrorLine)
                 *outErrorLine = b.headerLine;
             return false;
@@ -1510,7 +1756,12 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
         if (!b.sourceResourceId.empty() && doc.resources.find(b.sourceResourceId) == doc.resources.end())
         {
             if (outError)
-                *outError = "Missing resource '" + b.sourceResourceId + "' for blueprint instance '" + b.id + "'";
+            {
+                *outError = "Missing resource '" + b.sourceResourceId + "' for prefab instance '" + b.id + "'";
+                if (b.sourceResourceId.starts_with('#'))
+                    *outError += ". A source names a [resource] id without '#': source=\"" +
+                                 b.sourceResourceId.substr(1) + "\"";
+            }
             if (outErrorLine)
                 *outErrorLine = b.headerLine;
             return false;
@@ -1530,11 +1781,11 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
 
     // Included embed/resource ids are already merged into doc; just ensure embeds don't collide with resources ids? (allowed)
 
-    // Cycle detection for base entities only (blueprint instance roots participate too).
+    // Cycle detection for base entities only (prefab instance roots participate too).
     std::unordered_map<std::string, std::optional<std::string>> parentMap;
     for (const auto& e : doc.entities)
         parentMap[e.id] = e.parent;
-    for (const auto& b : doc.blueprintInstances)
+    for (const auto& b : doc.prefabInstances)
         parentMap[b.id] = b.parent;
 
     enum class Mark : uint8_t
@@ -1588,7 +1839,7 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
     };
 
     // A value this parser cannot read is only worth aborting the load for where nothing downstream
-    // can report it. Entity and blueprint-instance component properties are applied tolerantly: the
+    // can report it. Entity and prefab-instance component properties are applied tolerantly: the
     // apply records the failure in the census and keeps the authored text for the re-save, which is
     // strictly better than losing the whole scene over one line. Embed properties have no such
     // path, so a syntax error there still stops the load rather than failing later somewhere worse.
@@ -1667,17 +1918,20 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
             }
         }
     }
-    for (const auto& b : doc.blueprintInstances)
+    for (const auto& b : doc.prefabInstances)
     {
-        for (const auto& comp : b.components)
+        for (const auto& fields : b.changedFields)
         {
-            for (const auto& propKv : comp.props)
+            for (const auto& comp : fields.components)
             {
-                const std::string& prop = propKv.first;
-                const SceneDoc::PropValue& pv = propKv.second;
-                if (!scanValueRefs(pv, "blueprint instance '" + b.id + "' " + comp.name + "." + prop,
-                                   BadValueSyntax::DeferToApply))
-                    return false;
+                for (const auto& propKv : comp.props)
+                {
+                    const std::string& prop = propKv.first;
+                    const SceneDoc::PropValue& pv = propKv.second;
+                    if (!scanValueRefs(pv, "prefab instance '" + b.id + "' " + comp.name + "." + prop,
+                                       BadValueSyntax::DeferToApply))
+                        return false;
+                }
             }
         }
     }
@@ -1696,7 +1950,7 @@ static bool ValidateDocument(const SceneDoc& doc, std::string* outError, int* ou
     return true;
 }
 
-static Components::SceneEntityTag MakeTag(const std::string& s)
+Components::SceneEntityTag MakeTag(const std::string& s)
 {
     Components::SceneEntityTag t{};
     std::memset(t.value, 0, sizeof(t.value));
@@ -1728,7 +1982,7 @@ static bool LooksLikeAutoGeneratedNumericSceneId(std::string_view id)
     return true;
 }
 
-static std::string SlugifyDisplayNameForSceneEntityId(std::string_view raw)
+std::string SlugifyDisplayNameForSceneEntityId(std::string_view raw)
 {
     std::string s;
     s.reserve(raw.size());
@@ -1755,7 +2009,7 @@ static std::string SlugifyDisplayNameForSceneEntityId(std::string_view raw)
     return s;
 }
 
-static std::string AllocateUniqueSceneEntityId(const std::string& preferred, std::unordered_set<std::string>& used)
+std::string AllocateUniqueSceneEntityId(const std::string& preferred, std::unordered_set<std::string>& used)
 {
     std::string base = preferred.empty() ? std::string("entity") : preferred;
     if (base.empty())
@@ -1981,9 +2235,9 @@ static void SortEntitiesDepthFirstForSave(ECS::World& world, std::vector<ECS::En
     entities = std::move(out);
 }
 
-static std::filesystem::path ResolveResourcePath(const SceneLoadContext& ctx,
-                                                 const std::filesystem::path& ownerFile,
-                                                 const SceneDoc::Resource& r)
+std::filesystem::path ResolveResourcePath(const SceneLoadContext& ctx,
+                                          const std::filesystem::path& ownerFile,
+                                          const SceneDoc::Resource& r)
 {
     std::filesystem::path p;
     if (!r.guid.empty())
@@ -2012,23 +2266,17 @@ static std::filesystem::path ResolveResourcePath(const SceneLoadContext& ctx,
     return p;
 }
 
-struct Instantiated
-{
-    std::vector<ECS::EntityHandle> created;
-    std::unordered_map<std::string, ECS::EntityHandle> idToEntity;
-};
-
-// A blueprint or subscene instance whose [resource] file the load cannot read. The error belongs to
+// A prefab or subscene instance whose [resource] file the load cannot read. The error belongs to
 // `ownerFile` at the instance's line, which is where the load stopped. The message says which of the
 // three causes it is, names the path the loader searched (relative to `projectRoot` when it lies
 // inside it), names both lines involved (the instance and the [resource] that declares the path),
 // and says what to change. The resolved absolute path goes to the Debug log only.
-static void ReportUnreadableResource(std::string_view kind, const SceneDoc::Resource& r,
-                                     const std::filesystem::path& resolvedPath,
-                                     const std::filesystem::path& projectRoot,
-                                     const std::filesystem::path& ownerFile, int instanceLine,
-                                     std::string* outError, std::filesystem::path* outErrorFile,
-                                     int* outErrorLine)
+void ReportUnreadableResource(std::string_view kind, const SceneDoc::Resource& r,
+                              const std::filesystem::path& resolvedPath,
+                              const std::filesystem::path& projectRoot,
+                              const std::filesystem::path& ownerFile, int instanceLine,
+                              std::string* outError, std::filesystem::path* outErrorFile,
+                              int* outErrorLine)
 {
     const std::filesystem::path relative = RelativePathUnderRoot(resolvedPath, projectRoot);
     const std::string searched = (relative.empty() ? resolvedPath : relative).generic_string();
@@ -2112,11 +2360,11 @@ static bool ExpandIncludes(const std::filesystem::path& ownerFile,
             return false;
         }
 
-        // Spec: includes only merge resources/embeds (no entities/blueprints/subscenes).
-        if (!included.entities.empty() || !included.blueprintInstances.empty() || !included.subscenes.empty())
+        // Spec: includes only merge resources/embeds (no entities/prefabs/subscenes).
+        if (!included.entities.empty() || !included.prefabInstances.empty() || !included.subscenes.empty())
         {
             const int ln = !included.entities.empty() ? included.entities.front().headerLine :
-                           !included.blueprintInstances.empty() ? included.blueprintInstances.front().headerLine :
+                           !included.prefabInstances.empty() ? included.prefabInstances.front().headerLine :
                                                                   included.subscenes.front().headerLine;
             if (outError)
                 *outError = "Included file '" + inc.path.string() + "' contains entity content; [include] only merges [resource] and [embed]";
@@ -2253,9 +2501,9 @@ static std::string QuoteUnreadLine(const std::string& text)
 
 // Record each body line the parser could not read as an assignment, then put the entity's rows,
 // from `firstRow` on, in line order. A save drops an unread line.
-static void RecordUnreadLines(const SceneDoc::UnreadLines& unreadLines, const std::string& entityId,
-                              const std::filesystem::path& ownerFile, ECS::EntityHandle h,
-                              std::size_t firstRow, SceneLoadDegradation* degradation)
+void RecordUnreadLines(const SceneDoc::UnreadLines& unreadLines, const std::string& entityId,
+                       const std::filesystem::path& ownerFile, ECS::EntityHandle h,
+                       std::size_t firstRow, SceneLoadDegradation* degradation)
 {
     if (!degradation)
         return;
@@ -2358,10 +2606,10 @@ static void ApplyComponentPropertiesTolerantly(ECS::World& world, const SceneLoa
 // SplineComponent block beside the Spline block, both written by a build whose reflection fallback
 // did not know the token owned the type) -> DROP with a warning, since the token's block carries the
 // data and the next save no longer emits this one.
-static void PreserveOrDropUnhandledComponent(ECS::World& world, ECS::EntityHandle h,
-                                             const SceneDoc::ComponentProps& comp,
-                                             const std::string& entityId,
-                                             const std::filesystem::path& ownerFile)
+void PreserveOrDropUnhandledComponent(ECS::World& world, ECS::EntityHandle h,
+                                      const SceneDoc::ComponentProps& comp,
+                                      const std::string& entityId,
+                                      const std::filesystem::path& ownerFile)
 {
     const std::string& compName = comp.name;
     // Preservation and messages echo the AUTHORED spelling: the lowered form is a matching key,
@@ -2417,11 +2665,11 @@ constexpr std::string_view kComponentSwitchKey = "enabled";
 // schema reads the switch the same way and none has to know about it. A switch line whose value
 // is not a bool stays in the block for the schema to refuse and the census to record. A block
 // with no properties, or none left once the switch line is out, adds the component's defaults.
-static void ApplyComponentBlock(ECS::World& world, const SceneLoadContext& ctx,
-                                const ISceneComponentSchema& schema, ECS::EntityHandle h,
-                                const SceneDoc::ComponentProps& authored, const std::string& entityId,
-                                const std::filesystem::path& ownerFile, int headerLine,
-                                SceneLoadDegradation* degradation)
+void ApplyComponentBlock(ECS::World& world, const SceneLoadContext& ctx,
+                         const ISceneComponentSchema& schema, ECS::EntityHandle h,
+                         const SceneDoc::ComponentProps& authored, const std::string& entityId,
+                         const std::filesystem::path& ownerFile, int headerLine,
+                         SceneLoadDegradation* degradation)
 {
     const ECS::ComponentTypeId typeId = SceneSchemaRegistry::ComponentTypeForSchema(schema);
     std::optional<bool> enabled;
@@ -2461,22 +2709,42 @@ static void ApplyComponentBlock(ECS::World& world, const SceneLoadContext& ctx,
     if (!block->props.empty())
         ApplyComponentPropertiesTolerantly(world, ctx, schema, h, *block, entityId, ownerFile, degradation);
 
-    if (enabled && !*enabled && world.HasComponent(h, typeId))
-        world.SetComponentEnabledImmediate(h, typeId, false);
+    if (enabled && world.HasComponent(h, typeId))
+        world.SetComponentEnabledImmediate(h, typeId, *enabled);
+}
+
+// Fills an absent or empty Name from `fallbackName` (the scene id, or the prefab's local id) through
+// the Name schema. An auto-generated id (e_123) gets no Name: the hierarchy shows "Entity <id>". An
+// empty `fallbackName` asks for no name.
+void ApplyFallbackName(ECS::World& world, const SceneLoadContext& ctx, ECS::EntityHandle h,
+                       std::string_view fallbackName, const std::string& entityId)
+{
+    if (fallbackName.empty() || LooksLikeAutoGeneratedNumericSceneId(fallbackName))
+        return;
+    const auto* nameSchema = SceneSchemaRegistry::Find("Name");
+    if (!nameSchema || nameSchema->IsPresent(world, h))
+        return;
+    std::string err;
+    const std::string quotedId = "\"" + std::string(fallbackName) + "\"";
+    if (!nameSchema->ApplyProperty(world, h, ctx, "value", quotedId, &err))
+    {
+        // Soft-fail: a malformed id at this point would mean the entity loads without a Name
+        // fallback. Log and continue.
+        Logger::Log::Warning("Scene: failed to set fallback Name for '{}': {}", entityId, err);
+    }
 }
 
 // Applies every component authored on one entity. Cannot fail: a component or property this binary
 // cannot apply is recorded in `degradation` and skipped, never propagated as a load failure.
-static void ApplyEntityComponents(ECS::World& world,
-                                 const SceneLoadContext& ctx,
-                                 const std::filesystem::path& ownerFile,
-                                 ECS::EntityHandle h,
-                                 const SceneDoc::Entity& e,
-                                 const std::string& entityId,
-                                 SceneLoadDegradation* degradation)
+void ApplyEntityComponents(ECS::World& world,
+                          const SceneLoadContext& ctx,
+                          const std::filesystem::path& ownerFile,
+                          ECS::EntityHandle h,
+                          const SceneDoc::Entity& e,
+                          const std::string& entityId,
+                          std::string_view fallbackName,
+                          SceneLoadDegradation* degradation)
 {
-    world.AddComponentImmediate(h, MakeTag(entityId));
-
     const std::size_t firstRow = degradation ? degradation->skips.size() : 0;
     for (const auto& comp : e.components)
     {
@@ -2492,32 +2760,7 @@ static void ApplyEntityComponents(ECS::World& world,
     }
     RecordUnreadLines(e.unreadLines, entityId, ownerFile, h, firstRow, degradation);
 
-    // Hierarchy uses Name; scene files may omit it. Fill from the scene id
-    // string for human-authored ids (e.g. main_camera). Skip auto-generated
-    // technical ids (e_123) so we do not persist internal-looking labels —
-    // the hierarchy falls back to "Entity <id>" instead.
-    //
-    // Routed through the Name schema so the WRITE goes through schema
-    // validation rather than constructing the component shape inline.
-    // IsPresent returns false for both absent and empty Name (the Name
-    // schema's Serialize skips emission in either case), so a single check
-    // captures the original "needs fallback" semantic.
-    if (!LooksLikeAutoGeneratedNumericSceneId(entityId))
-    {
-        const auto* nameSchema = SceneSchemaRegistry::Find("Name");
-        if (nameSchema && !nameSchema->IsPresent(world, h))
-        {
-            std::string err;
-            const std::string quotedId = std::string("\"") + entityId + "\"";
-            if (!nameSchema->ApplyProperty(world, h, ctx, "value", quotedId, &err))
-            {
-                // Soft-fail: a malformed id at this point would mean the
-                // entity loads without a Name fallback. Log and continue.
-                Logger::Log::Warning("Scene: failed to set fallback Name for '{}': {}",
-                                     entityId, err);
-            }
-        }
-    }
+    ApplyFallbackName(world, ctx, h, fallbackName, entityId);
 }
 
 static bool InstantiateEntities(ECS::World& world,
@@ -2555,26 +2798,36 @@ static bool InstantiateEntities(ECS::World& world,
     SceneLoadContext applyCtx = ctx;
     applyCtx.EntityIdMap = &out.idToEntity;
     applyCtx.EntityIdPrefix = idPrefix;
+    const std::size_t firstCreated = out.created.size() - doc.entities.size();
     for (size_t i = 0; i < doc.entities.size(); ++i)
     {
         const SceneDoc::Entity& e = doc.entities[i];
         const std::string fullId = idPrefix.empty() ? e.id : (idPrefix + e.id);
-        ApplyEntityComponents(world, applyCtx, ownerFile, out.created[i], e, fullId, degradation);
+        const ECS::EntityHandle h = out.created[firstCreated + i];
+        world.AddComponentImmediate(h, MakeTag(fullId));
+        ApplyEntityComponents(world, applyCtx, ownerFile, h, e, fullId, fullId, degradation);
     }
 
-    // Parent links
+    // Parent links. A parent inside a prefab instance exists once the instance is placed, so its
+    // link waits for that.
     for (size_t i = 0; i < doc.entities.size(); ++i)
     {
         const SceneDoc::Entity& e = doc.entities[i];
+        const ECS::EntityHandle h = out.created[firstCreated + i];
         if (!e.parent)
         {
-            world.RemoveComponentImmediate<Components::Parent>(out.created[i]);
+            world.RemoveComponentImmediate<Components::Parent>(h);
             continue;
         }
         const std::string parentId = idPrefix + *e.parent;
         auto it = out.idToEntity.find(parentId);
         if (it == out.idToEntity.end())
         {
+            if (NamesInstanceMember(doc, *e.parent))
+            {
+                out.pendingParents.push_back({h, parentId, ownerFile, e.headerLine});
+                continue;
+            }
             if (outError) *outError = "Missing parent during instantiation";
             if (outErrorFile)
                 *outErrorFile = ownerFile;
@@ -2584,12 +2837,85 @@ static bool InstantiateEntities(ECS::World& world,
         }
         Components::Parent p{};
         p.Entity = it->second;
-        world.AddComponentImmediate(out.created[i], p);
+        world.AddComponentImmediate(h, p);
     }
     return true;
 }
 
-static void ApplyOffsetToRoots(ECS::World& world, const Instantiated& inst, float ox, float oy, float oz)
+// Joins a path or an address and an id with '.'; an empty head leaves the id alone.
+std::string JoinPath(std::string_view head, std::string_view id)
+{
+    if (head.empty())
+        return std::string(id);
+    if (id.empty())
+        return std::string(head);
+    std::string joined;
+    joined.reserve(head.size() + 1 + id.size());
+    joined.append(head).append(1, '.').append(id);
+    return joined;
+}
+
+// The last id of a path or of a scene identity: the text after '~' in the hashed form, else after
+// the last '.'.
+std::string_view LastIdOf(std::string_view pathOrTag)
+{
+    if (const std::size_t tilde = pathOrTag.rfind('~'); tilde != std::string_view::npos)
+        return pathOrTag.substr(tilde + 1);
+    if (const std::size_t dot = pathOrTag.rfind('.'); dot != std::string_view::npos)
+        return pathOrTag.substr(dot + 1);
+    return pathOrTag;
+}
+
+// The scene identity of the entity at `path` (the instance id and the entity's address, joined by
+// '.'): the path itself when SceneEntityTag holds it, else 16 hex digits of the path's hash, '~'
+// and the entity's own id.
+std::string SceneTagForPath(std::string_view path)
+{
+    if (path.size() <= kMaxSceneTagLength)
+        return std::string(path);
+    return std::format("{:016x}~{}", Hashing::Fnv1a64(path), LastIdOf(path));
+}
+
+// True when `tag` is the scene identity of an entity inside a prefab instance.
+bool IsMemberTag(std::string_view tag)
+{
+    return tag.find_first_of(".~") != std::string_view::npos;
+}
+
+// The tables a document's lines resolve against: its resources and its embeds.
+SceneLoadContext MakeDocumentLoadContext(ECS::World& world, const std::filesystem::path& file,
+                                         const SceneDoc& doc, const LoadOptions& options)
+{
+    SceneLoadContext ctx{};
+    ctx.SceneFile = &file;
+    ctx.TargetWorld = &world;
+    ctx.Resolver = options.assetResolver;
+    ctx.AssetRoot = !options.assetRootOverride.empty()
+                        ? options.assetRootOverride
+                        : (ctx.Resolver ? ctx.Resolver->GetAssetRoot() : std::filesystem::path{});
+    ctx.EmbedMaterializer = options.embedMaterializer;
+    ctx.ResourceAbsPathById.reserve(doc.resources.size());
+    ctx.ResourceGuidById.reserve(doc.resources.size());
+    for (const auto& kv : doc.resources)
+    {
+        ctx.ResourceAbsPathById[kv.first] = ResolveResourcePath(ctx, file, kv.second);
+        ctx.ResourceGuidById[kv.first] = kv.second.guid;
+    }
+    ctx.EmbedsById.reserve(doc.embeds.size());
+    for (const auto& kv : doc.embeds)
+    {
+        SceneLoadContext::EmbedDef e{};
+        e.Type = kv.second.type;
+        e.Guid = kv.second.guid;
+        e.Properties.reserve(kv.second.properties.size());
+        for (const auto& pkv : kv.second.properties)
+            e.Properties[pkv.first] = pkv.second.value;
+        ctx.EmbedsById.emplace(kv.first, std::move(e));
+    }
+    return ctx;
+}
+
+static void ApplyOffsetToRoots(ECS::World& world, const Instantiated& inst, const Mathematics::Vector3& offset)
 {
     std::unordered_set<ECS::EntityId> createdIds;
     createdIds.reserve(inst.created.size());
@@ -2605,7 +2931,7 @@ static void ApplyOffsetToRoots(ECS::World& world, const Instantiated& inst, floa
         auto* t = world.GetComponentForWrite<Components::Transform>(h);
         if (!t)
             continue;
-        t->Translate(ox, oy, oz);
+        t->Translate(offset.x, offset.y, offset.z);
     }
 }
 
@@ -2634,6 +2960,7 @@ static bool LoadParsedIntoWorld(ECS::World& world,
                                const SceneDoc& doc,
                                const LoadOptions& options,
                                const std::string& idPrefix,
+                               PrefabPlacement& placement,
                                Instantiated& out,
                                std::string* outError,
                                std::filesystem::path* outErrorFile,
@@ -2642,351 +2969,117 @@ static bool LoadParsedIntoWorld(ECS::World& world,
 {
     // Build the per-load context. Threaded through schema dispatch and
     // SceneIO helpers (TryResolveAssetReference et al) by const reference.
-    SceneLoadContext localCtx{};
-    localCtx.SceneFile = &sceneFilePath;
-    localCtx.TargetWorld = &world;
-    localCtx.Resolver = options.assetResolver;
-    localCtx.AssetRoot = !options.assetRootOverride.empty()
-                             ? options.assetRootOverride
-                             : (localCtx.Resolver ? localCtx.Resolver->GetAssetRoot() : std::filesystem::path{});
-    localCtx.EmbedMaterializer = options.embedMaterializer;
-    localCtx.ResourceAbsPathById.reserve(doc.resources.size());
-    localCtx.ResourceGuidById.reserve(doc.resources.size());
-    for (const auto& kv : doc.resources)
-    {
-        localCtx.ResourceAbsPathById[kv.first] = ResolveResourcePath(localCtx, sceneFilePath, kv.second);
-        localCtx.ResourceGuidById[kv.first] = kv.second.guid;
-    }
-    localCtx.EmbedsById.reserve(doc.embeds.size());
-    for (const auto& kv : doc.embeds)
-    {
-        SceneLoadContext::EmbedDef e{};
-        e.Type = kv.second.type;
-        e.Guid = kv.second.guid;
-        e.Properties.reserve(kv.second.properties.size());
-        for (const auto& pkv : kv.second.properties)
-        {
-            e.Properties[pkv.first] = pkv.second.value;
-        }
-        localCtx.EmbedsById.emplace(kv.first, std::move(e));
-    }
+    SceneLoadContext localCtx = MakeDocumentLoadContext(world, sceneFilePath, doc, options);
 
     // Base entities
     if (!InstantiateEntities(world, localCtx, sceneFilePath, doc, idPrefix, out, outError, outErrorFile, outErrorLine, degradation))
         return false;
 
-    // Blueprint instances (scene-only)
-    if (!doc.isBlueprint)
+    if (!PlaceSceneInstances(placement, localCtx, sceneFilePath, doc, idPrefix, out,
+                             LoadFailure{outError, outErrorFile, outErrorLine}))
+        return false;
+
+    // Subscenes
+    for (const auto& ss : doc.subscenes)
     {
-        for (const auto& bi : doc.blueprintInstances)
+        auto rit = doc.resources.find(ss.sourceResourceId);
+        if (rit == doc.resources.end())
+            continue;
+
+        // Represent the subscene instance itself as a root entity (useful for editor hierarchy + re-serialization).
+        ECS::EntityHandle subsceneRoot = world.CreateEntity();
+        if (!subsceneRoot.IsValid())
         {
-            auto rit = doc.resources.find(bi.sourceResourceId);
-            if (rit == doc.resources.end())
-                continue;
-
-            const std::filesystem::path bpPath = ResolveResourcePath(localCtx, sceneFilePath, rit->second);
-            std::string bpText;
-            if (bpPath.empty() || !ReadTextFile(bpPath, bpText))
-            {
-                ReportUnreadableResource("Blueprint", rit->second, bpPath, options.projectRoot, sceneFilePath,
-                                         bi.headerLine, outError, outErrorFile, outErrorLine);
-                return false;
-            }
-            SceneDoc bpDoc{};
-            {
-                int bpParseLine = 0;
-                if (!ParseDocument(bpPath, bpText, bpDoc, outError, &bpParseLine))
-                {
-                    if (outErrorFile)
-                        *outErrorFile = bpPath;
-                    if (outErrorLine)
-                        *outErrorLine = bpParseLine;
-                    return false;
-                }
-            }
-            {
-                int bpValLine = 0;
-                if (!ValidateDocument(bpDoc, outError, &bpValLine))
-                {
-                    if (outErrorFile)
-                        *outErrorFile = bpPath;
-                    if (outErrorLine)
-                        *outErrorLine = bpValLine;
-                    return false;
-                }
-            }
-
-            // Instantiate blueprint entities with prefix "instanceId."
-            const std::string instPrefix = idPrefix + bi.id + ".";
-            Instantiated bpInst{};
-            {
-                SceneLoadContext bpCtx{};
-                bpCtx.SceneFile = &bpPath;
-                bpCtx.TargetWorld = &world;
-                bpCtx.Resolver = options.assetResolver;
-                bpCtx.AssetRoot = localCtx.AssetRoot;
-                bpCtx.EmbedMaterializer = options.embedMaterializer;
-                bpCtx.ResourceAbsPathById.reserve(bpDoc.resources.size());
-                bpCtx.ResourceGuidById.reserve(bpDoc.resources.size());
-                for (const auto& kv : bpDoc.resources)
-                {
-                    bpCtx.ResourceAbsPathById[kv.first] = ResolveResourcePath(bpCtx, bpPath, kv.second);
-                    bpCtx.ResourceGuidById[kv.first] = kv.second.guid;
-                }
-                bpCtx.EmbedsById.reserve(bpDoc.embeds.size());
-                for (const auto& kv : bpDoc.embeds)
-                {
-                    SceneLoadContext::EmbedDef e{};
-                    e.Type = kv.second.type;
-                    e.Guid = kv.second.guid;
-                    e.Properties.reserve(kv.second.properties.size());
-                    for (const auto& pkv : kv.second.properties)
-                    {
-                        e.Properties[pkv.first] = pkv.second.value;
-                    }
-                    bpCtx.EmbedsById.emplace(kv.first, std::move(e));
-                }
-
-                if (!InstantiateEntities(world, bpCtx, bpPath, bpDoc, instPrefix, bpInst, outError, outErrorFile, outErrorLine, degradation))
-                    return false;
-            }
-
-            // Create the root instance entity (bi.id) as the blueprint root mapping:
-            // We model this by renaming the blueprint's "root" entity tag to bi.id if it exists,
-            // otherwise we create a new root and parent all blueprint roots under it.
-            ECS::EntityHandle rootEntity{};
-            auto itRoot = bpInst.idToEntity.find(instPrefix + "root");
-            if (itRoot != bpInst.idToEntity.end())
-            {
-                rootEntity = itRoot->second;
-                // overwrite tag to instance id
-                world.AddComponentImmediate(rootEntity, MakeTag(idPrefix + bi.id));
-                bpInst.idToEntity[idPrefix + bi.id] = rootEntity;
-            }
-            else
-            {
-                rootEntity = world.CreateEntity();
-                if (!rootEntity.IsValid())
-                {
-                    if (outError)
-                        *outError = "Failed to create blueprint instance root entity";
-                    if (outErrorFile)
-                        *outErrorFile = sceneFilePath;
-                    if (outErrorLine)
-                        *outErrorLine = bi.headerLine;
-                    return false;
-                }
-                world.AddComponentImmediate(rootEntity, MakeTag(idPrefix + bi.id));
-                bpInst.idToEntity[idPrefix + bi.id] = rootEntity;
-            }
-
-            // Tag instance root for re-serialization.
-            {
-                Components::SceneBlueprintInstance inst{};
-                std::memset(inst.sourcePath, 0, sizeof(inst.sourcePath));
-                std::memset(inst.sourceGuid, 0, sizeof(inst.sourceGuid));
-                const auto& res = rit->second;
-                const size_t maxPath = sizeof(inst.sourcePath) - 1;
-                const size_t maxGuid = sizeof(inst.sourceGuid) - 1;
-                if (!res.path.empty())
-                {
-                    const size_t n = std::min(maxPath, res.path.size());
-                    std::memcpy(inst.sourcePath, res.path.data(), n);
-                    inst.sourcePath[n] = '\0';
-                }
-                if (!res.guid.empty())
-                {
-                    const size_t n = std::min(maxGuid, res.guid.size());
-                    std::memcpy(inst.sourceGuid, res.guid.data(), n);
-                    inst.sourceGuid[n] = '\0';
-                }
-                world.AddComponentImmediate(rootEntity, inst);
-            }
-
-            // Apply overrides to root entity
-            for (const auto& compName : bi.removedComponents)
-            {
-                const auto* schema = SceneSchemaRegistry::Find(compName);
-                if (!schema)
-                {
-                    if (outError) *outError = "Unknown component '" + compName + "' in remove directive";
-                    if (outErrorFile)
-                        *outErrorFile = sceneFilePath;
-                    if (outErrorLine)
-                        *outErrorLine = bi.headerLine;
-                    return false;
-                }
-                if (!schema->Remove(world, rootEntity))
-                {
-                    if (outError)
-                        *outError = "Component '" + compName + "' does not support removal";
-                    if (outErrorFile)
-                        *outErrorFile = sceneFilePath;
-                    if (outErrorLine)
-                        *outErrorLine = bi.headerLine;
-                    return false;
-                }
-            }
-
-            const std::size_t firstRow = degradation ? degradation->skips.size() : 0;
-            for (const auto& comp : bi.components)
-            {
-                const std::string& compName = comp.name;
-                const auto* schema = SceneSchemaRegistry::Find(compName);
-                if (!schema)
-                {
-                    PreserveOrDropUnhandledComponent(world, rootEntity, comp, bi.id, sceneFilePath);
-                    continue;
-                }
-
-                // Addition semantics: a component listed with no properties means "add defaults".
-                ApplyComponentBlock(world, localCtx, *schema, rootEntity, comp, bi.id, sceneFilePath,
-                                    bi.headerLine, degradation);
-            }
-            RecordUnreadLines(bi.unreadLines, bi.id, sceneFilePath, rootEntity, firstRow, degradation);
-
-            // Ensure all blueprint roots are parented under the instance root.
-            for (auto h : bpInst.created)
-            {
-                if (!world.IsValid(h) || h.id == rootEntity.id)
-                    continue;
-                auto* parent = world.GetComponent<Components::Parent>(h);
-                const bool hasAnyParent = parent && parent->Entity.IsValid();
-                if (!hasAnyParent)
-                {
-                    Components::Parent p{};
-                    p.Entity = rootEntity;
-                    world.AddComponentImmediate(h, p);
-                }
-            }
-
-            // Parent instance root under specified parent (scene-level)
-            if (bi.parent.has_value())
-            {
-                auto it = out.idToEntity.find(idPrefix + *bi.parent);
-                if (it == out.idToEntity.end())
-                {
-                    if (outError) *outError = "Missing parent for blueprint instance";
-                    if (outErrorFile)
-                        *outErrorFile = sceneFilePath;
-                    if (outErrorLine)
-                        *outErrorLine = bi.headerLine;
-                    return false;
-                }
-                Components::Parent p{};
-                p.Entity = it->second;
-                world.AddComponentImmediate(rootEntity, p);
-            }
-
-            out.created.insert(out.created.end(), bpInst.created.begin(), bpInst.created.end());
-            out.idToEntity.insert(bpInst.idToEntity.begin(), bpInst.idToEntity.end());
+            if (outError)
+                *outError = "Failed to create subscene root entity";
+            if (outErrorFile)
+                *outErrorFile = sceneFilePath;
+            if (outErrorLine)
+                *outErrorLine = ss.headerLine;
+            return false;
         }
-
-        // Subscenes
-        for (const auto& ss : doc.subscenes)
+        world.AddComponentImmediate(subsceneRoot, MakeTag(idPrefix + ss.id));
         {
-            auto rit = doc.resources.find(ss.sourceResourceId);
-            if (rit == doc.resources.end())
-                continue;
-
-            // Represent the subscene instance itself as a root entity (useful for editor hierarchy + re-serialization).
-            ECS::EntityHandle subsceneRoot = world.CreateEntity();
-            if (!subsceneRoot.IsValid())
+            Components::SceneSubsceneInstance inst{};
+            std::memset(inst.sourcePath, 0, sizeof(inst.sourcePath));
+            std::memset(inst.sourceGuid, 0, sizeof(inst.sourceGuid));
+            const auto& res = rit->second;
+            const size_t maxPath = sizeof(inst.sourcePath) - 1;
+            const size_t maxGuid = sizeof(inst.sourceGuid) - 1;
+            if (!res.path.empty())
             {
-                if (outError)
-                    *outError = "Failed to create subscene root entity";
-                if (outErrorFile)
-                    *outErrorFile = sceneFilePath;
-                if (outErrorLine)
-                    *outErrorLine = ss.headerLine;
-                return false;
+                const size_t n = std::min(maxPath, res.path.size());
+                std::memcpy(inst.sourcePath, res.path.data(), n);
+                inst.sourcePath[n] = '\0';
             }
-            world.AddComponentImmediate(subsceneRoot, MakeTag(idPrefix + ss.id));
+            if (!res.guid.empty())
             {
-                Components::SceneSubsceneInstance inst{};
-                std::memset(inst.sourcePath, 0, sizeof(inst.sourcePath));
-                std::memset(inst.sourceGuid, 0, sizeof(inst.sourceGuid));
-                const auto& res = rit->second;
-                const size_t maxPath = sizeof(inst.sourcePath) - 1;
-                const size_t maxGuid = sizeof(inst.sourceGuid) - 1;
-                if (!res.path.empty())
-                {
-                    const size_t n = std::min(maxPath, res.path.size());
-                    std::memcpy(inst.sourcePath, res.path.data(), n);
-                    inst.sourcePath[n] = '\0';
-                }
-                if (!res.guid.empty())
-                {
-                    const size_t n = std::min(maxGuid, res.guid.size());
-                    std::memcpy(inst.sourceGuid, res.guid.data(), n);
-                    inst.sourceGuid[n] = '\0';
-                }
-                inst.hasOffset = ss.hasOffset;
-                inst.offsetX = ss.offset.x;
-                inst.offsetY = ss.offset.y;
-                inst.offsetZ = ss.offset.z;
-                world.AddComponentImmediate(subsceneRoot, inst);
-                if (!ss.enabled)
-                    ECS::Entity(&world, subsceneRoot).SetEnabled<Components::SceneSubsceneInstance>(false);
+                const size_t n = std::min(maxGuid, res.guid.size());
+                std::memcpy(inst.sourceGuid, res.guid.data(), n);
+                inst.sourceGuid[n] = '\0';
             }
-            out.created.push_back(subsceneRoot);
-            out.idToEntity[idPrefix + ss.id] = subsceneRoot;
-
+            inst.hasOffset = ss.hasOffset;
+            inst.offsetX = ss.offset.x;
+            inst.offsetY = ss.offset.y;
+            inst.offsetZ = ss.offset.z;
+            world.AddComponentImmediate(subsceneRoot, inst);
             if (!ss.enabled)
-                continue;
-
-            const std::filesystem::path subPath = ResolveResourcePath(localCtx, sceneFilePath, rit->second);
-            std::string subText;
-            if (subPath.empty() || !ReadTextFile(subPath, subText))
-            {
-                ReportUnreadableResource("Subscene", rit->second, subPath, options.projectRoot, sceneFilePath,
-                                         ss.headerLine, outError, outErrorFile, outErrorLine);
-                return false;
-            }
-            SceneDoc subDoc{};
-            {
-                int subParseLine = 0;
-                if (!ParseDocument(subPath, subText, subDoc, outError, &subParseLine))
-                {
-                    if (outErrorFile)
-                        *outErrorFile = subPath;
-                    if (outErrorLine)
-                        *outErrorLine = subParseLine;
-                    return false;
-                }
-            }
-            {
-                int subValLine = 0;
-                if (!ValidateDocument(subDoc, outError, &subValLine))
-                {
-                    if (outErrorFile)
-                        *outErrorFile = subPath;
-                    if (outErrorLine)
-                        *outErrorLine = subValLine;
-                    return false;
-                }
-            }
-
-            Instantiated subInst{};
-            const std::string subPrefix = idPrefix + ss.id + ".";
-            LoadOptions subOpts = options;
-            subOpts.mode = LoadMode::Additive;
-            if (!LoadParsedIntoWorld(world, subPath, subDoc, subOpts, subPrefix, subInst, outError, outErrorFile, outErrorLine, degradation))
-                return false;
-            if (ss.hasOffset)
-                ApplyOffsetToRoots(world, subInst, ss.offset.x, ss.offset.y, ss.offset.z);
-            ParentRootsTo(world, subInst, subsceneRoot);
-
-            out.created.insert(out.created.end(), subInst.created.begin(), subInst.created.end());
-            out.idToEntity.insert(subInst.idToEntity.begin(), subInst.idToEntity.end());
+                ECS::Entity(&world, subsceneRoot).SetEnabled<Components::SceneSubsceneInstance>(false);
         }
+        out.created.push_back(subsceneRoot);
+        out.idToEntity[idPrefix + ss.id] = subsceneRoot;
+
+        if (!ss.enabled)
+            continue;
+
+        const std::filesystem::path subPath = ResolveResourcePath(localCtx, sceneFilePath, rit->second);
+        std::string subText;
+        if (subPath.empty() || !ReadTextFile(subPath, subText))
+        {
+            ReportUnreadableResource("Subscene", rit->second, subPath, options.projectRoot, sceneFilePath,
+                                     ss.headerLine, outError, outErrorFile, outErrorLine);
+            return false;
+        }
+        SceneDoc subDoc{};
+        {
+            int subParseLine = 0;
+            if (!ParseDocument(subPath, subText, subDoc, outError, &subParseLine))
+            {
+                if (outErrorFile)
+                    *outErrorFile = subPath;
+                if (outErrorLine)
+                    *outErrorLine = subParseLine;
+                return false;
+            }
+        }
+        {
+            int subValLine = 0;
+            if (!ValidateDocument(subDoc, outError, &subValLine))
+            {
+                if (outErrorFile)
+                    *outErrorFile = subPath;
+                if (outErrorLine)
+                    *outErrorLine = subValLine;
+                return false;
+            }
+        }
+
+        Instantiated subInst{};
+        const std::string subPrefix = idPrefix + ss.id + ".";
+        LoadOptions subOpts = options;
+        subOpts.mode = LoadMode::Additive;
+        if (!LoadParsedIntoWorld(world, subPath, subDoc, subOpts, subPrefix, placement, subInst, outError, outErrorFile, outErrorLine, degradation))
+            return false;
+        if (ss.hasOffset)
+            ApplyOffsetToRoots(world, subInst, ss.offset);
+        ParentRootsTo(world, subInst, subsceneRoot);
+
+        out.created.insert(out.created.end(), subInst.created.begin(), subInst.created.end());
+        out.idToEntity.insert(subInst.idToEntity.begin(), subInst.idToEntity.end());
     }
 
-    (void)options;
     return true;
 }
-
-} // namespace
 
 bool LoadSceneFromFile(ECS::World& world,
                        const std::filesystem::path& sceneFilePath,
@@ -3076,7 +3169,14 @@ bool LoadSceneFromFile(ECS::World& world,
     std::filesystem::path loadErrFile;
     int loadErrLine = 0;
     SceneLoadDegradation degradation;
-    if (!LoadParsedIntoWorld(world, sceneFilePath, doc, options, idPrefix, inst, &err, &loadErrFile,
+    PrefabPlacement placement{world, options, &degradation};
+    placement.usesLibrary = true;
+    // The engine's library on the main thread (its thread rule); a library of this load's own
+    // otherwise, which the spawns never see.
+    EngineCore& engine = EngineCore::GetInstance();
+    PrefabLibrary* const engineLibrary = engine.IsMainThread() ? engine.TryGetPrefabLibrary() : nullptr;
+    placement.library = engineLibrary;
+    if (!LoadParsedIntoWorld(world, sceneFilePath, doc, options, idPrefix, placement, inst, &err, &loadErrFile,
                              &loadErrLine, &degradation))
     {
         SetError(loadErrFile.empty() ? sceneFilePath : loadErrFile, loadErrLine, err);
@@ -3090,6 +3190,9 @@ bool LoadSceneFromFile(ECS::World& world,
             *options.outDegradation = std::move(degradation);
         return false;
     }
+
+    if (engineLibrary)
+        HoldReferencedPrefabs(placement, inst.created);
 
     // The load succeeded, so every caller is about to treat this world as the scene. When a line of the
     // file did not apply, that is only true with an asterisk — say so once, loudly, with the
@@ -3252,8 +3355,8 @@ static void SerializePreservedComponents(const ECS::World& world, ECS::EntityHan
 // component to the entity relocates its row, and editing a SIBLING field writes the same component.
 // Both then retire a live override and the next save writes the fallback over the user's unreadable
 // data, which is the loss this table exists to prevent.
-static void ApplyPreservedFieldOverrides(ECS::World& world, ECS::EntityHandle entity,
-                                         std::vector<std::string>& lines)
+void ApplyPreservedFieldOverrides(ECS::World& world, ECS::EntityHandle entity,
+                                  std::vector<std::string>& lines)
 {
     if (!world.TryGetUnresolvedComponents() || world.TryGetUnresolvedComponents()->FieldsEmpty())
         return;
@@ -3406,7 +3509,7 @@ bool SaveSceneToFile(ECS::World& world,
                     if (auto it = attrs.find("path"); it != attrs.end() && !it->second.empty())
                         return "include:path:" + it->second;
                 }
-                if ((type == "scene" || type == "blueprint") && attrs.find("version") != attrs.end())
+                if ((type == "scene" || type == "prefab") && attrs.find("version") != attrs.end())
                     return type + ":__header__";
                 auto it = attrs.find("id");
                 if (it != attrs.end() && !it->second.empty())
@@ -3576,18 +3679,10 @@ bool SaveSceneToFile(ECS::World& world,
     out << "[scene name=\"" << sceneFilePath.stem().string() << "\" version=1]\n\n";
     const auto schemas = SceneSchemaRegistry::GetAllSorted();
 
-    // If requested, re-serialize blueprint instances back to [blueprint] sections (plus [resource] lines),
+    // If requested, re-serialize prefab instances back to [prefab] sections (plus [resource] lines),
     // rather than flattening all instantiated entities.
-    struct BlueprintRoot
-    {
-        ECS::EntityHandle h{};
-        std::string id;        // SceneEntityTag of root (instance id)
-        std::string sourcePath; // as-authored resource path
-        std::string sourceGuid; // optional
-        std::string parentId;   // SceneEntityTag of parent (if any and tagged)
-    };
-
-    std::vector<BlueprintRoot> blueprintRoots;
+    std::vector<SavedPrefabInstance> prefabRoots;
+    PrefabTemplates prefabTemplates(options);
     struct SubsceneRoot
     {
         ECS::EntityHandle h{};
@@ -3599,11 +3694,11 @@ bool SaveSceneToFile(ECS::World& world,
         bool enabled = true;
     };
     std::vector<SubsceneRoot> subsceneRoots;
-    std::unordered_set<ECS::EntityId> excluded; // blueprint/subscene roots + prefixed children, plus runtime-only entities
+    std::unordered_set<ECS::EntityId> excluded; // instance roots and members, subscene roots and children, runtime-only entities
 
     // Runtime-only entities (HLOD proxies, spline placement pieces, terrain collider
     // tiles) are engine-created and reconstructed at runtime; they must never be written
-    // to the scene, mirroring the blueprint/subscene root exclusion below. Both emission
+    // to the scene, mirroring the prefab/subscene root exclusion below. Both emission
     // arms below consult `excluded`, so this holds whatever the preserve-* options say.
     for (auto h : entities)
     {
@@ -3615,7 +3710,7 @@ bool SaveSceneToFile(ECS::World& world,
     // in the file, and the loader hard-rejects a missing parent — a scene that fails
     // to open, silently. Refuse the save and name the fix, as the instanced-parent
     // cases do. Keyed on the tag rather than on `excluded`, which also holds
-    // blueprint and subscene roots: those ARE written, as their own sections, and
+    // prefab and subscene roots: those ARE written, as their own sections, and
     // parenting under one is legal.
     const auto RuntimeOnlyParentOf = [&world](ECS::EntityHandle h) -> ECS::EntityHandle
     {
@@ -3634,32 +3729,8 @@ bool SaveSceneToFile(ECS::World& world,
         return "entity " + std::to_string(h.id);
     };
 
-    if (options.preserveBlueprintInstances || options.preserveSubscenes)
+    if (options.preservePrefabInstances || options.preserveSubscenes)
     {
-        if (options.preserveBlueprintInstances)
-        {
-            // Identify blueprint instance roots.
-            for (auto h : entities)
-            {
-                const auto* bp = world.GetComponent<Components::SceneBlueprintInstance>(h);
-                if (!bp)
-                    continue;
-                const std::string id = tagByEntity.count(h.id) ? tagByEntity[h.id] : ("e_" + std::to_string(h.id));
-                BlueprintRoot r{};
-                r.h = h;
-                r.id = id;
-                r.sourcePath = std::string(bp->SourcePath());
-                r.sourceGuid = std::string(bp->SourceGuid());
-                if (auto* p = world.GetComponent<Components::Parent>(h))
-                {
-                    auto it = tagByEntity.find(p->Entity.id);
-                    if (p->Entity.IsValid() && it != tagByEntity.end())
-                        r.parentId = it->second;
-                }
-                blueprintRoots.push_back(std::move(r));
-            }
-        }
-
         if (options.preserveSubscenes)
         {
             for (auto h : entities)
@@ -3682,20 +3753,7 @@ bool SaveSceneToFile(ECS::World& world,
             }
         }
 
-        // Exclude instance roots and their prefixed children from normal [entity] blocks.
-        for (const auto& br : blueprintRoots)
-        {
-            excluded.insert(br.h.id);
-            const std::string prefix = br.id + ".";
-            for (auto h : entities)
-            {
-                auto it = tagByEntity.find(h.id);
-                if (it == tagByEntity.end())
-                    continue;
-                if (StartsWith(it->second, prefix.c_str()))
-                    excluded.insert(h.id);
-            }
-        }
+        // Exclude subscene roots and their prefixed children from normal [entity] blocks.
         for (const auto& sr : subsceneRoots)
         {
             excluded.insert(sr.h.id);
@@ -3705,12 +3763,16 @@ bool SaveSceneToFile(ECS::World& world,
                 auto it = tagByEntity.find(h.id);
                 if (it == tagByEntity.end())
                     continue;
-                if (StartsWith(it->second, prefix.c_str()))
+                if (it->second.starts_with(prefix))
                     excluded.insert(h.id);
             }
         }
 
-        // Emit resources for blueprint instances (deduped by guid/path).
+        if (!CollectPrefabInstances(world, entities, options, saveCtx, sceneFilePath, tagByEntity, excluded,
+                                    prefabTemplates, prefabRoots))
+            return false;
+
+        // Emit resources for prefab instances (deduped by guid/path).
         struct ResourceKey
         {
             std::string key;  // guid if present else path (with prefix)
@@ -3718,15 +3780,16 @@ bool SaveSceneToFile(ECS::World& world,
             std::string guid; // optional
         };
         std::vector<ResourceKey> resourceKeys;
-        resourceKeys.reserve(blueprintRoots.size() + subsceneRoots.size());
+        resourceKeys.reserve(prefabRoots.size() + subsceneRoots.size());
         {
             std::unordered_set<std::string> seen;
-            for (const auto& br : blueprintRoots)
+            for (const auto& instance : prefabRoots)
             {
-                const std::string k = !br.sourceGuid.empty() ? ("guid:" + br.sourceGuid) : ("path:" + br.sourcePath);
+                const std::string k =
+                    !instance.sourceGuid.empty() ? ("guid:" + instance.sourceGuid) : ("path:" + instance.sourcePath);
                 if (!seen.insert(k).second)
                     continue;
-                resourceKeys.push_back(ResourceKey{k, br.sourcePath, br.sourceGuid});
+                resourceKeys.push_back(ResourceKey{k, instance.sourcePath, instance.sourceGuid});
             }
             for (const auto& sr : subsceneRoots)
             {
@@ -3878,21 +3941,16 @@ bool SaveSceneToFile(ECS::World& world,
             out << "\n";
         }
 
-        // Sort blueprint instances so parent blueprint roots come first (to satisfy load-time ordering).
-        std::unordered_map<std::string, size_t> idxById;
-        idxById.reserve(blueprintRoots.size());
-        for (size_t i = 0; i < blueprintRoots.size(); ++i)
-            idxById[blueprintRoots[i].id] = i;
-
+        // Sort prefab instances so an instance whose parent belongs to another comes after it.
         std::vector<size_t> sorted;
-        sorted.reserve(blueprintRoots.size());
+        sorted.reserve(prefabRoots.size());
         enum class Mark : uint8_t
         {
             None,
             Temp,
             Perm
         };
-        std::vector<Mark> marks(blueprintRoots.size(), Mark::None);
+        std::vector<Mark> marks(prefabRoots.size(), Mark::None);
         std::function<bool(size_t)> dfs = [&](size_t i) -> bool
         {
             if (marks[i] == Mark::Perm)
@@ -3900,27 +3958,22 @@ bool SaveSceneToFile(ECS::World& world,
             if (marks[i] == Mark::Temp)
                 return false;
             marks[i] = Mark::Temp;
-            const std::string& p = blueprintRoots[i].parentId;
-            if (!p.empty())
+            if (const auto parentInstance = prefabRoots[i].parentInstance)
             {
-                auto it = idxById.find(p);
-                if (it != idxById.end())
-                {
-                    if (!dfs(it->second))
-                        return false;
-                }
+                if (!dfs(*parentInstance))
+                    return false;
             }
             marks[i] = Mark::Perm;
             sorted.push_back(i);
             return true;
         };
-        for (size_t i = 0; i < blueprintRoots.size(); ++i)
+        for (size_t i = 0; i < prefabRoots.size(); ++i)
         {
             if (marks[i] == Mark::None)
             {
                 if (!dfs(i))
                 {
-                    SetError(sceneFilePath, 0, "Cycle detected in blueprint instance parenting (cannot save)");
+                    SetError(sceneFilePath, 0, "Cycle detected in prefab instance parenting (cannot save)");
                     return false;
                 }
             }
@@ -3956,22 +4009,14 @@ bool SaveSceneToFile(ECS::World& world,
                     parentStr = it->second;
             }
 
-            // Disallow parenting under an instanced child (cannot be represented in file).
+            // Disallow parenting under a subscene's entity (cannot be represented in file). An entity
+            // under a prefab instance's member is an entity added on the instance, written here.
             if (!parentStr.empty())
             {
-                for (const auto& br : blueprintRoots)
-                {
-                    const std::string pref = br.id + ".";
-                    if (StartsWith(parentStr, pref.c_str()))
-                    {
-                        SetError(sceneFilePath, 0, "Cannot save: entity '" + id + "' is parented under blueprint-instanced entity '" + parentStr + "'");
-                        return false;
-                    }
-                }
                 for (const auto& sr : subsceneRoots)
                 {
                     const std::string pref = sr.id + ".";
-                    if (StartsWith(parentStr, pref.c_str()))
+                    if (parentStr.starts_with(pref))
                     {
                         SetError(sceneFilePath, 0, "Cannot save: entity '" + id + "' is parented under subscene-instanced entity '" + parentStr + "'");
                         return false;
@@ -4003,151 +4048,28 @@ bool SaveSceneToFile(ECS::World& world,
             out << "\n";
         }
 
-        // Cache blueprint root component sets by resource key.
-        std::unordered_map<std::string, std::unordered_set<std::string>> bpRootComponentsByKey;
-        bpRootComponentsByKey.reserve(resourceKeys.size());
-
-        auto resolveBlueprintAbsolutePath = [&](const ResourceKey& rk) -> std::filesystem::path
-        {
-            std::filesystem::path p;
-            if (!rk.guid.empty())
-            {
-                if (options.assetResolver)
-                {
-                    try
-                    {
-                        GUID g(rk.guid);
-                        g = options.assetResolver->ResolveGuid(g);
-                        std::filesystem::path resolvedPath;
-                        AssetType resolvedType = AssetType::Unknown;
-                        if (options.assetResolver->TryGetPathAndType(g, resolvedPath, resolvedType))
-                            p = resolvedPath;
-                    }
-                    catch (...)
-                    {
-                    }
-                }
-            }
-            if (p.empty() && !rk.path.empty())
-            {
-                p = rk.path;
-                if (p.is_relative())
-                {
-                    const auto assetRoot = !options.assetRootOverride.empty()
-                                               ? options.assetRootOverride
-                                               : (options.assetResolver ? options.assetResolver->GetAssetRoot() : std::filesystem::path{});
-                    if (!assetRoot.empty())
-                        p = (assetRoot / p).lexically_normal();
-                    else
-                        p = (sceneFilePath.parent_path() / p).lexically_normal();
-                }
-            }
-            return p;
-        };
-
-        auto getBlueprintRootComponentSet = [&](const ResourceKey& rk, std::string* outErr) -> const std::unordered_set<std::string>*
-        {
-            auto it = bpRootComponentsByKey.find(rk.key);
-            if (it != bpRootComponentsByKey.end())
-                return &it->second;
-
-            const std::filesystem::path bpPath = resolveBlueprintAbsolutePath(rk);
-            std::string bpText;
-            if (bpPath.empty() || !ReadTextFile(bpPath, bpText))
-            {
-                if (outErr)
-                    *outErr = "Failed to read blueprint '" + bpPath.string() + "'";
-                return nullptr;
-            }
-
-            SceneDoc bpDoc{};
-            int pLine = 0;
-            std::string perr;
-            if (!ParseDocument(bpPath, bpText, bpDoc, &perr, &pLine))
-            {
-                if (outErr)
-                    *outErr = perr;
-                return nullptr;
-            }
-            int vLine = 0;
-            if (!ValidateDocument(bpDoc, &perr, &vLine))
-            {
-                if (outErr)
-                    *outErr = perr;
-                return nullptr;
-            }
-
-            std::unordered_set<std::string> comps;
-            for (const auto& e : bpDoc.entities)
-            {
-                if (e.id == "root")
-                {
-                    for (const auto& comp : e.components)
-                        comps.insert(comp.name);
-                    break;
-                }
-            }
-
-            auto [ins, ok] = bpRootComponentsByKey.emplace(rk.key, std::move(comps));
-            (void)ok;
-            return &ins->second;
-        };
-
-        // Emit blueprint instance sections. Reuses the `lines` buffer declared
-        // above for the non-instanced entity loop (same scope), so its capacity
-        // carries over and neither loop reallocates per entity.
+        // Emit prefab instance sections. Each body is what the instance changes in its prefab.
         for (size_t si : sorted)
         {
-            lines.clear();
-            const BlueprintRoot& br = blueprintRoots[si];
-            const std::string rkKey = !br.sourceGuid.empty() ? ("guid:" + br.sourceGuid) : ("path:" + br.sourcePath);
+            const SavedPrefabInstance& instance = prefabRoots[si];
+            const std::string rkKey =
+                !instance.sourceGuid.empty() ? ("guid:" + instance.sourceGuid) : ("path:" + instance.sourcePath);
             const std::string sourceId = resourceIdByKey.count(rkKey) ? resourceIdByKey[rkKey] : std::string{};
 
-            if (auto it = commentsBeforeSection.find("blueprint:" + br.id); it != commentsBeforeSection.end())
+            if (auto it = commentsBeforeSection.find("prefab:" + instance.id); it != commentsBeforeSection.end())
             {
                 for (const auto& l : it->second)
                     out << l << "\n";
             }
-            out << "[blueprint id=\"" << br.id << "\"";
+            out << "[prefab id=\"" << instance.id << "\"";
             if (!sourceId.empty())
                 out << " source=\"" << sourceId << "\"";
-            if (!br.parentId.empty())
-                out << " parent=\"" << br.parentId << "\"";
+            if (!instance.parentId.empty())
+                out << " parent=\"" << instance.parentId << "\"";
             out << "]\n";
-
-            // Emit removals for blueprint-root components that are not present on the instance root.
-            {
-                std::string bperr;
-                ResourceKey rk{rkKey, br.sourcePath, br.sourceGuid};
-                const auto* bpComps = getBlueprintRootComponentSet(rk, &bperr);
-                if (!bpComps)
-                {
-                    SetError(sceneFilePath, 0, bperr);
-                    return false;
-                }
-                for (const auto& compLower : *bpComps)
-                {
-                    const auto* schema = SceneSchemaRegistry::Find(compLower);
-                    if (!schema)
-                        continue;
-                    if (!schema->IsPresent(world, br.h))
-                        out << "-" << schema->GetComponentName() << "\n";
-                }
-            }
-
-            // Serialize root overrides (safe even if redundant).
-            for (const auto* schema : schemas)
-            {
-                if (schema)
-                    schema->Serialize(world, br.h, saveCtx, lines);
-            }
-            SerializeReflectedComponents(world, br.h, saveCtx, lines);
-            SerializeSwitchedOffComponents(world, br.h, lines);
-            SerializePreservedComponents(world, br.h, lines);
-            ApplyPreservedFieldOverrides(world, br.h, lines);
-            for (const auto& l : lines)
-                out << l << "\n";
-            out << "\n";
+            std::string body;
+            WritePrefabInstanceBody(world, instance, prefabTemplates, saveCtx, schemas, body);
+            out << body << "\n";
         }
 
         // Emit subscene instance sections (deterministic by id).
@@ -4176,6 +4098,16 @@ bool SaveSceneToFile(ECS::World& world,
     }
     else
     {
+        std::unordered_set<std::string> usedTags;
+        usedTags.reserve(tagByEntity.size());
+        for (const auto& [entityId, tag] : tagByEntity)
+            usedTags.insert(tag);
+        for (auto h : entities)
+        {
+            if (excluded.count(h.id) == 0)
+                AssignSceneLevelIdIfNeeded(world, h, tagByEntity, usedTags);
+        }
+
         std::vector<std::string> lines;
         for (auto h : entities)
         {

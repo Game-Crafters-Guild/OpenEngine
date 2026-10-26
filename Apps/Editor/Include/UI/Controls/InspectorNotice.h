@@ -39,6 +39,14 @@ public:
         Error,
     };
 
+    // The heading's glyph: the kind's own, a clock for a wait, or a check mark for a success.
+    enum class Glyph
+    {
+        OfKind,
+        Clock,
+        Check,
+    };
+
     explicit InspectorNotice(const std::string& text, Kind kind = Kind::Warning);
 
     // Shows the action button with `label` and `tooltip`; a click calls `onInvoke`.
@@ -46,6 +54,9 @@ public:
 
     // Opens the notice with a heading: the kind's glyph and `title`, above the text.
     void SetTitle(const std::string& title);
+
+    // Draws `glyph` in the heading, in the kind's color.
+    void SetGlyph(Glyph glyph);
 
     // Replaces the notice's text.
     void SetText(const std::string& text);
@@ -59,6 +70,7 @@ private:
     Button* m_Action = nullptr;
     UIElement* m_Heading = nullptr;
     Label* m_Title = nullptr;
+    UIElement* m_Glyph = nullptr;
     std::function<void()> m_OnInvoke;
 };
 

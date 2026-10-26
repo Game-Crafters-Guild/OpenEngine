@@ -36,7 +36,7 @@
 #include "Mathematics/Vector3.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
 #include "PhysicsECS/PhysicsWorldService.h"
-#include "Picking/MeshPickingService.h"
+#include "Picking/ScenePick.h"
 #include "Types/Color.h"
 #include "Types/ColorUtils.h"
 #include "UndoRedo/MultiEntityComponentSnapshot.h"
@@ -362,7 +362,7 @@ inline bool TryBuildWorldMatrixForEntity(World* world, EntityHandle entity, Math
     // Compose the sector so the gizmo, world-position queries, and measure
     // endpoints land on the SAME absolute world position the mesh renders and
     // picks at. ComposeEffectiveWorldTransform is the single source of truth
-    // (also used by SceneTlas + MeshPickingService); a null/zero sector returns
+    // (also used by SceneTlas + SceneRaycast); a null/zero sector returns
     // the matrix unchanged (dark-ship for untagged entities).
     const auto* sector = world->GetComponent<Components::WorldSectorCoord>(entity);
     const WorldTransform composed =

@@ -106,7 +106,7 @@ public:
     /// is false.
     bool CollectRenderPipeline(const std::string& renderPipelinePath, AssetManifest& manifest);
 
-    /// The components the manifest's scenes and blueprints assign fields of
+    /// The components the manifest's scenes and prefabs assign fields of
     /// (SceneAssetParser::CollectComponentNames over each Scene entry's file).
     static std::unordered_set<std::string> CollectComponentNames(const AssetManifest& manifest);
 

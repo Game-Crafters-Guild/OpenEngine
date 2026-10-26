@@ -66,7 +66,7 @@ constexpr uint32_t kRimMode = 2u;
 constexpr uint32_t kDiscGrid = 512u;
 // Glow directions from the horizon (0) to the zenith (kGlowDirections - 1), one per degree.
 constexpr uint32_t kGlowDirections = 91u;
-// View directions from the moon's centre out to twice the drawn radius.
+// Mode 2's fixed table: the four rim taps, three values of the sky under the disk and the stars' cover.
 constexpr uint32_t kRimTableSlots = 8u;
 // The real moon's angular radius (moon_disc.glsl's GE_MOON_ANGULAR_RADIUS: 0.2595 degrees), and the
 // drawn radius at which the art's moon (GE_MOON_TEXTURE_RADIUS of the drawn disc) has that size.
@@ -332,6 +332,7 @@ TEST_F(SkyNightProbeTest, TheDiscHasTheRealMoonsSurfaceBrightnessAtAnyDrawnSize)
 {
     constexpr float kIlluminance = 1.0f;
     const SkySystemConfig config{};
+    const float moonColor[3] = {config.moonColor.r, config.moonColor.g, config.moonColor.b};
     for (const float radius : {static_cast<float>(kRealSizeDrawnRadius), kDefaultMoonRadius})
     {
         const double areaRatio = (radius / kRealSizeDrawnRadius) * (radius / kRealSizeDrawnRadius);
@@ -339,7 +340,7 @@ TEST_F(SkyNightProbeTest, TheDiscHasTheRealMoonsSurfaceBrightnessAtAnyDrawnSize)
         EXPECT_NEAR(Luminance(delivered) / areaRatio, kIlluminance, 0.02 * kIlluminance)
             << "drawn radius " << radius << " rad: the surface's radiance is the real moon's";
         for (int c = 0; c < 3; ++c)
-            EXPECT_NEAR(delivered[c] / Luminance(delivered), config.moonColor[c], 0.02 * config.moonColor[c])
+            EXPECT_NEAR(delivered[c] / Luminance(delivered), moonColor[c], 0.02 * moonColor[c])
                 << "channel " << c << ": the disc's color is the moon's tint";
     }
 }
@@ -462,9 +463,9 @@ TEST_F(SkyNightProbeTest, TheSkyUnderTheDiscIsTheSkyAroundIt)
     EXPECT_NEAR(out[6][0], 0.5, 1e-6) << "the disc's soft edge blends the two";
 }
 
-// The disc hides what is beyond it: a falling star behind three quarters of the disc's cover keeps a
-// quarter of its light (the stars' own pass hides behind the disc the same way).
-TEST_F(SkyNightProbeTest, TheMoonHidesAFallingStarBehindIt)
+// The moon's disk hides a star behind it and never a falling star, which burns in front of the moon;
+// a star off the disk is not hidden.
+TEST_F(SkyNightProbeTest, TheMoonHidesAStarButNotAFallingStar)
 {
     ProbePC pc{};
     pc.modeCountRadiusIlluminance[0] = static_cast<float>(kRimMode);
@@ -472,7 +473,9 @@ TEST_F(SkyNightProbeTest, TheMoonHidesAFallingStarBehindIt)
     pc.modeCountRadiusIlluminance[2] = kDefaultMoonRadius;
     pc.moonDir[1] = 1.0f;
     const std::vector<Rgba> out = Run(pc, kRimTableSlots);
-    EXPECT_NEAR(out[7][0], 0.25, 1e-6);
+    EXPECT_NEAR(out[7][0], 1.0, 1e-6) << "a star behind the disk's center";
+    EXPECT_EQ(out[7][1], 0.0f) << "a falling star in front of the disk's center";
+    EXPECT_NEAR(out[7][2], 0.0, 1e-6) << "a star at twice the drawn radius";
 }
 
 // The default night glow with nothing under it: about 1.7e-4 cd/m2 at the zenith and three times

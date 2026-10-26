@@ -87,6 +87,9 @@ GE_Result RefuseZeroId(const char* function, const char* parameter);
 /// Refuses an entity argument that names no entity (an event's scope).
 GE_Result RefuseNoEntity(const char* function, const char* parameter);
 
+/// Refuses a `parent` argument that names no live entity.
+GE_Result RefuseDeadParent(const char* function);
+
 /// Refuses a call off the function's thread; logs once per process for each function.
 GE_Result RefuseThread(const char* function, ThreadRule rule);
 

@@ -6,14 +6,15 @@
 namespace GameEngine
 {
 
-// Human-readable scene asset (.scene). This is primarily an editor-authoring format.
+// Human-readable scene text: a scene (.scene, AssetType::Scene) or a prefab (.prefab,
+// AssetType::Prefab), which share one grammar. This is primarily an editor-authoring format.
 // Runtime loading is performed by Scene::LoadSceneFromFile which consumes the file
 // and instantiates entities into an ECS World.
 class SceneAsset final : public Asset
 {
   public:
-    SceneAsset(const GUID& guid, const std::filesystem::path& path)
-        : Asset(guid, AssetType::Scene, path)
+    SceneAsset(const GUID& guid, const std::filesystem::path& path, AssetType type)
+        : Asset(guid, type, path)
     {
     }
 

@@ -10,6 +10,8 @@
 #include "Assets/AssetManager.h"
 #include "Assets/FileWatchingService.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Components/Spline/SplineComponent.h"
+#include "Components/Spline/SplineExtrude.h"
 #include "Components/Transform.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
@@ -148,6 +150,32 @@ TEST_F(NavigationSurfaceGatingTest, SurfaceBakesAroundItsPlacedPositionOnceWorld
     EXPECT_FLOAT_EQ(settings.OriginX, kPlacedX - 0.5f * kGridWidth * kCellSize);
     EXPECT_FLOAT_EQ(settings.OriginY, kPlacedY - 1.0f);
     EXPECT_FLOAT_EQ(settings.OriginZ, kPlacedZ - 0.5f * kGridDepth * kCellSize);
+}
+
+// With no recipe system running, a spline recipe stays unbuilt: the bake waits while the scene
+// has it, and runs on the first update after it is gone.
+TEST_F(NavigationSurfaceGatingTest, BakeWaitsForTheSplineRecipesToSettle)
+{
+    auto road = world->Create();
+    road.Set(Components::SplineComponent{});
+    road.Set(Components::SplineExtrude{});
+    road.Set(MakeWorldTransform(0.0f, 0.0f, 0.0f));
+    auto entity = world->Create();
+    entity.Set(MakeGridSurface());
+    entity.Set(MakeWorldTransform(0.0f, 0.0f, 0.0f));
+    world->ProcessCommands();
+
+    RunBuild();
+    const auto* surface = entity.Get<Components::NavigationSurface>();
+    ASSERT_NE(surface, nullptr);
+    EXPECT_EQ(surface->BakePhase, Components::NavigationBakePhase::Waiting);
+    EXPECT_EQ(Navigation::FormatBakeStatus(*surface), "Waiting for: the scene's spline recipes to build");
+    EXPECT_EQ(GridOf(entity), nullptr);
+
+    road.Remove<Components::SplineExtrude>();
+    world->ProcessCommands();
+    RunBuild();
+    EXPECT_NE(GridOf(entity), nullptr);
 }
 
 // A surface on an entity with no Transform at all has no placed position, so the world origin is
