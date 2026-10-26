@@ -76,7 +76,7 @@ GameEngine::Components::NavigationSurface addable=1 doNotSerialize=0
   BakeRequested type=1 offset=104 size=1 category=0 flags=5
   BakePhase type=6 offset=105 size=1 category=0 flags=5 enum=NotBaked:0,Waiting:1,Baking:2,Baked:3,Failed:4,
   BakeFailure type=6 offset=106 size=1 category=0 flags=5 enum=None:0,NoGeometry:1,SphericalTerrain:2,TooLarge:3,TileBuild:4,
-  BakeWait type=6 offset=107 size=1 category=0 flags=5 enum=TerrainPage:0,TerrainData:1,Model:2,BakedData:3,
+  BakeWait type=6 offset=107 size=1 category=0 flags=5 enum=TerrainPage:0,TerrainData:1,Model:2,BakedData:3,SplineRecipes:4,
   SettingsChanged type=1 offset=108 size=1 category=0 flags=5
   MapHoldsBake type=1 offset=109 size=1 category=0 flags=5
   BakedMode type=6 offset=110 size=1 category=0 flags=5 enum=Mesh:0,Grid:1,
