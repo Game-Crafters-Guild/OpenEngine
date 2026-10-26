@@ -14,7 +14,9 @@ std::filesystem::path MaterialSourceIdentity(const std::filesystem::path& materi
     for (const MaterialBuildContext::AssetSourceRoot& source : context.AssetSourceRoots)
     {
         const fs::path root = fs::absolute(source.Root).lexically_normal();
-        const fs::path relative = material.lexically_relative(root);
+        fs::path relative = material.lexically_relative(root);
+        if ((relative.empty() || *relative.begin() == "..") && !source.RegistryRoot.empty())
+            relative = material.lexically_relative(source.RegistryRoot);
         const size_t rootLength = root.native().size();
         if (relative.empty() || *relative.begin() == ".." || rootLength <= matchedRootLength)
             continue;
