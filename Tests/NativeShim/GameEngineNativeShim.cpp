@@ -1,8 +1,3 @@
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
 #include <cstdint>
 
 // Build this shim as the scripting module and include public ABI once
@@ -70,11 +65,4 @@ GE_API GE_Result GE_CDECL GE_GetInterface(uint32_t abiVersion, const void** outT
 GE_API GE_Result GE_CDECL GE_RegisterManagedCallback(GE_CallbackId /*id*/, void* /*fnPtr*/) { return GE_Result_Ok; }
 GE_API GE_Result GE_CDECL GE_Log(GE_LogLevel /*level*/, const char* /*msg*/, uint32_t /*len*/) { return GE_Result_Ok; }
 
-BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID)
-{
-    return TRUE;
-}
-
 } // extern "C"
-#endif
-
