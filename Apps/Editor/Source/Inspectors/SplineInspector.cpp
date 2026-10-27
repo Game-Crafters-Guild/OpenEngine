@@ -997,21 +997,21 @@ void RegisterSplineInspectors()
                 }
             }
 
-            const SplineECS::SplineHandle settingsHandle{comp->SplineDataIndex, comp->SplineDataGeneration};
-            AddToggleRow(ctx.Parent, "Show Width Envelope", comp->ShowWidthEnvelope,
-                [w, e, n, undo, splineService, settingsHandle](bool visible)
+            AddComponentFloatRowWithDrag<SplineComponent>(
+                ctx.Parent,
+                "Default Radius",
+                comp->DefaultRadius,
+                w,
+                e,
+                n,
+                undo,
+                "Change Spline Default Radius",
+                [](SplineComponent& u, float v)
                 {
-                    CommitSplineDataOneShot(splineService, settingsHandle, w, e, n, undo,
-                        "Change Spline Width Envelope", [w, e, visible](Spline::SplineData*)
-                        { w->GetComponentForWrite<SplineComponent>(e)->ShowWidthEnvelope = visible; });
-                }, "Show this spline's width guide when Show Width Envelope is enabled in the spline tool menu");
-
-            AddSplineFloatRowWithUndo(
-                ctx.Parent, "Default Radius", comp->DefaultRadius,
-                splineService, settingsHandle, w, e, n, undo, "Change Spline Default Radius",
-                [w, e](Spline::SplineData*, float value)
-                { w->GetComponentForWrite<SplineComponent>(e)->DefaultRadius = std::max(0.1f, value); },
-                comp->DefaultRadius, "Width/radius for newly added control points");
+                    u.DefaultRadius = std::max(0.1f, v);
+                },
+                comp->DefaultRadius,
+                "Width/radius for newly added control points");
         });
 }
 
