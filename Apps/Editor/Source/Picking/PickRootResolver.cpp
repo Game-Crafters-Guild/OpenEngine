@@ -6,6 +6,7 @@
 
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Components/RuntimeOnlyEntity.h"
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "Editor/Entities/EditorComponentTraits.h"
@@ -179,8 +180,10 @@ void BuildPickCandidates(ECS::World& world,
     }
     for (const Scene::PickHit& hit : sortedHits)
     {
-        if (std::find(outCandidates.begin(), outCandidates.end(), hit.Entity) == outCandidates.end())
-            outCandidates.push_back(hit.Entity);
+        const ECS::EntityHandle candidate = !exactPick && world.HasComponent<Components::RuntimeOnlyEntity>(hit.Entity)
+            ? ResolvePickRoot(world, hit.Entity) : hit.Entity;
+        if (std::find(outCandidates.begin(), outCandidates.end(), candidate) == outCandidates.end())
+            outCandidates.push_back(candidate);
     }
 }
 

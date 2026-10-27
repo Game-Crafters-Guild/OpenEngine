@@ -2,6 +2,7 @@
 
 #include "Components/Spline/SplineComponent.h"
 #include "ECS/ECSTemplates.h"
+#include "Editor/Entities/EditorComponentTraits.h"
 #include "SceneView/SplineTool.h"
 #include "SceneView/SplineToolMenu.h"
 #include "SceneViewController.h"
@@ -28,8 +29,27 @@ std::unique_ptr<SceneTools::ISceneTool> CreateSplineToolForView(SceneViewControl
     return CreateSplineTool(owner.GetWorld(), std::move(services));
 }
 
+bool IsAuthoringRoot(ECS::World& world, ECS::EntityHandle entity)
+{
+    const auto registered = EditorComponentTraitsRegistry::Get().Snapshot();
+    for (const auto& [type, traits] : *registered)
+    {
+        if (traits.IsPickClimbRoot && world.HasComponent(entity, type))
+            return true;
+    }
+    return false;
+}
+
 bool IsSplineEntitySelected(ECS::World& world, ECS::EntityHandle primary, const std::vector<ECS::EntityHandle>& selection)
 {
+    // Authoring containers keep the current tool; their spline is edited explicitly.
+    if (IsAuthoringRoot(world, primary))
+        return false;
+    for (const ECS::EntityHandle entity : selection)
+    {
+        if (IsAuthoringRoot(world, entity))
+            return false;
+    }
     if (primary.IsValid() && world.HasComponent<Components::SplineComponent>(primary))
         return true;
     for (const ECS::EntityHandle& entity : selection)
