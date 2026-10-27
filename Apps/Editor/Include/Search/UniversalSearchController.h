@@ -12,7 +12,7 @@ class AssetsPanel;
 class DockingManager;
 class EditorPanelManager;
 class HierarchyPanel;
-class ProjectFolderPickerModal;
+class ProjectPickerModal;
 class ScriptEditorPanel;
 class SearchDialog;
 class SettingsPanel;
@@ -49,7 +49,7 @@ class UniversalSearchController
         SceneEditorController* SceneEditor = nullptr;
         PlayModeManager* PlayMode = nullptr;
         UndoRedoService* UndoRedo = nullptr;
-        ProjectFolderPickerModal* ProjectFolderModal = nullptr;
+        ProjectPickerModal* ProjectPicker = nullptr;
         std::function<ECS::World*()> GetWorld;
         std::function<std::filesystem::path()> GetProjectRoot;
         std::function<void()> ResetLayout;

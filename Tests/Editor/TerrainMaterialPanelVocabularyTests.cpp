@@ -50,7 +50,7 @@ std::string ReadEditorSource(const std::string& relativePath)
 }
 
 constexpr const char* kTerrainPanel = "Source/Terrain/TerrainInspector.cpp";
-constexpr const char* kLibraryPanel = "Source/Inspectors/TerrainMaterialLibraryInspector.cpp";
+constexpr const char* kLibraryPanel = "Source/Terrain/TerrainMaterialLibraryInspector.cpp";
 
 } // namespace
 

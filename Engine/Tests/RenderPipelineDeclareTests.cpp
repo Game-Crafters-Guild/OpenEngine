@@ -5818,6 +5818,138 @@ TEST(RenderPipelineDeclareTests, MsaaOnKeepsViewColorMultisampledAndWorldDeclare
     }
 }
 
+namespace
+{
+// What the pipeline declared for one 4x MSAA view of the world pass, with bloom on or off.
+struct BloomSampleDeltaDecl
+{
+    bool Published = false;
+    bool SizedLikeSceneColor = false;
+    bool WrittenByTheColorResolve = false;
+    // A FullscreenShader stage that lists the delta as an optional input: declared, and its physical valid.
+    bool ConsumerDeclared = false;
+    bool BoundAtDeclaration = false;
+    std::vector<std::string> Errors;
+};
+
+BloomSampleDeltaDecl DeclareMsaaWorldForBloom(IDevice* device, bool bloomOn)
+{
+    BloomSampleDeltaDecl out{};
+    RenderServices rs;
+    if (!rs.Initialize(device))
+        return out;
+    const CameraId camId = rs.Views().AllocateCamera("BloomDeltaCam");
+    const ViewId viewId = rs.Views().AllocateView("BloomDeltaView", camId);
+    rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
+    Rendering::ViewClearConfig clear{};
+    clear.clearColor = true;
+    clear.clearDepth = true;
+    rs.Views().SetViewTargets(viewId, 0, 0, 0, clear);
+    // A view override: BeginWorldDrawFrame clears the world settings before the declare reads them.
+    PostProcessSettings settings{};
+    settings.BloomIntensity = bloomOn ? 1.0f : 0.0f;
+    rs.Views().SetViewPostProcessOverride(viewId, settings);
+
+    RenderPipelineNodeRegistry registry;
+    registry.Register("WorldRender", [] { return std::make_unique<Nodes::WorldRenderNode>(); }, true);
+    registry.Register("FullscreenShader", [] { return std::make_unique<Nodes::FullscreenShaderNode>(); }, true);
+    RenderPipelineBlueprint bp;
+    bp.pipelineName = "BloomDeltaTest";
+    RenderPipelineBlueprint::Pass pass;
+    pass.id = "World";
+    pass.type = "WorldRender";
+    pass.enabled = true;
+    pass.perView = true;
+    pass.passJson = R"({"id":"World","type":"WorldRender"})";
+    bp.passes.push_back(pass);
+    RenderPipelineBlueprint::Pass consumer;
+    consumer.id = "BloomIn";
+    consumer.type = "FullscreenShader";
+    consumer.enabled = true;
+    consumer.perView = true;
+    consumer.passJson =
+        R"({"id":"BloomIn","type":"FullscreenShader","inputs":{"uTex":"View.BloomSampleDelta"},"optionalInputs":["uTex"],"output":"PostA","shaderPkg":"Shaders/copy.shaderpkg"})";
+    bp.passes.push_back(consumer);
+    bp.worldColorResolveTargetRef = "SceneColor";
+    bp.resources.push_back(
+        {"SceneColor",
+         R"({"kind":"texture","scope":"perView","format":"rgba8_unorm","extent":{"scale":[1,1]},"usage":["renderTarget","shaderResource"]})"});
+    bp.resources.push_back(
+        {"PostA",
+         R"({"kind":"texture","scope":"perView","format":"rgba8_unorm","extent":{"scale":[1,1]},"usage":["renderTarget","shaderResource"]})"});
+    bp.outputs.push_back({"FinalColor", "PostA"});
+    RenderPipelineInstance instance(rs, registry);
+    instance.SetBlueprint(bp);
+
+    FramePools pools(device);
+    RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.BeginFrame(0);
+    const RenderGraph::RGTexture color = frame.ImportPersistentTexture("MSAA.Color", SampledMsaaColorDesc());
+    const RenderGraph::RGTexture depth = frame.ImportPersistentTexture("MSAA.Depth", DepthTargetDesc(4));
+    rs.BeginWorldDrawFrame();
+    rs.BuildWorldBatchKeys();
+    const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{viewId, color, depth, {}}};
+    const std::vector<Rendering::ViewDesc> views(rs.Views().GetViews().begin(), rs.Views().GetViews().end());
+    {
+        GameEngine::TestLog::ScopedEngineLogCapture capture(&out.Errors, Logger::LogLevel::Error);
+        instance.Declare(frame, targets, views);
+        if (const auto* declared = instance.FrameResourcesFor(&frame))
+        {
+            const auto it = declared->Textures.find({viewId, Names::View::BloomSampleDelta});
+            if (it != declared->Textures.end())
+                out.BoundAtDeclaration = frame.PhysicalTexture(it->second).IsValid();
+        }
+        Logger::Log::Flush();
+    }
+
+    const RenderGraph::RGGraph& graph = frame.Graph();
+    for (RenderGraph::RGPassId p = 0; p < graph.PassCount(); ++p)
+        out.ConsumerDeclared |= std::string(graph.PassName(p)).find(".BloomIn.") != std::string::npos;
+    const auto* fr = instance.FrameResourcesFor(&frame);
+    if (fr)
+    {
+        const auto deltaIt = fr->Textures.find({viewId, Names::View::BloomSampleDelta});
+        const auto resolveIt = fr->Textures.find({viewId, Names::View::Resolve});
+        if (deltaIt != fr->Textures.end() && resolveIt != fr->Textures.end())
+        {
+            const RenderGraph::RGGraph& g = frame.Graph();
+            const RenderGraph::RGResourceDesc& deltaDesc = g.ResourceDesc(deltaIt->second.Id);
+            const RenderGraph::RGResourceDesc& sceneDesc = g.ResourceDesc(resolveIt->second.Id);
+            out.Published = true;
+            out.SizedLikeSceneColor = deltaDesc.SampleCount == 1 && deltaDesc.Width == sceneDesc.Width &&
+                                      deltaDesc.Height == sceneDesc.Height && deltaDesc.Format == sceneDesc.Format;
+            for (RenderGraph::RGPassId p = 0; p < g.PassCount(); ++p)
+                out.WrittenByTheColorResolve |= std::string(g.PassName(p)).ends_with(".ColorResolve") &&
+                                                g.HasReadAccess(p, color.Id) &&
+                                                g.HasWriteAccess(p, resolveIt->second.Id) &&
+                                                g.HasWriteAccess(p, deltaIt->second.Id);
+        }
+    }
+    rs.Shutdown();
+    return out;
+}
+} // namespace
+
+// The bloom sample delta exists only for a multisampled view with bloom on; the color resolve writes
+// it beside the scene color. With bloom off nothing is created and bloom reads the scene color alone.
+TEST(RenderPipelineDeclareTests, MsaaBloomSampleDeltaOnlyWithBloomOnAndWrittenByTheColorResolve)
+{
+    auto* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    const BloomSampleDeltaDecl off = DeclareMsaaWorldForBloom(device, false);
+    EXPECT_FALSE(off.Published) << "bloom off: no delta target";
+    EXPECT_TRUE(off.ConsumerDeclared) << "bloom off: the optional input binds black and the stage runs";
+    EXPECT_TRUE(off.Errors.empty()) << "bloom off: " << (off.Errors.empty() ? "" : off.Errors.front());
+    const BloomSampleDeltaDecl on = DeclareMsaaWorldForBloom(device, true);
+    ASSERT_TRUE(on.Published) << "MSAA and bloom on: the pipeline publishes View.BloomSampleDelta";
+    EXPECT_TRUE(on.SizedLikeSceneColor);
+    EXPECT_TRUE(on.WrittenByTheColorResolve) << "the color resolve writes the scene color and the delta";
+    EXPECT_TRUE(on.ConsumerDeclared);
+    EXPECT_TRUE(on.BoundAtDeclaration) << "a FullscreenShader input binds its physical at declaration";
+    EXPECT_TRUE(on.Errors.empty()) << "bloom on: " << (on.Errors.empty() ? "" : on.Errors.front());
+}
+
 // ── SSSR world-MRT gate: the *.Written positive signal ──────────────────────
 namespace
 {

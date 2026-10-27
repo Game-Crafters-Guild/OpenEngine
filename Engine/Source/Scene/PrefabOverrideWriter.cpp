@@ -3,12 +3,18 @@
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
 #include "Components/PrefabInstance.h"
+#include "Components/SceneEntityTag.h"
+#include "Core/Engine.h"
 #include "ECS/ComponentRegistry.h"
 #include "ECS/UnresolvedComponentStore.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
+#include "Scene/AssetManagerSceneResolver.h"
+#include "Scene/PrefabAuthoring.h"
+#include "Scene/PrefabLibrary.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Types/StringUtils.h"
+#include "Types/FlatMap.h"
 
 #include <algorithm>
 
@@ -356,6 +362,168 @@ void WritePrefabInstanceBody(ECS::World& world, const SavedPrefabInstance& insta
         if (instance.addresses.Contains(parentAddress))
             out.append("-entity ").append(address).append(1, '\n');
     }
+}
+
+// Drops the components that place an instance's root in the scene.
+static void RemovePlacementText(std::vector<ComponentText>& texts)
+{
+    std::erase_if(texts, [](const ComponentText& text) { return IsPlacementComponent(text.key); });
+}
+
+// The overrides of the instance entity at `address` against the template entity, read from the
+// lines the saver writes. Placement components are no override on the root.
+static void CollectEntityOverrides(const std::string& address, std::vector<ComponentText>& instanceText,
+                                   std::vector<ComponentText>& templateText, std::vector<PrefabOverride>& out)
+{
+    if (address.empty())
+    {
+        RemovePlacementText(instanceText);
+        RemovePlacementText(templateText);
+    }
+    std::string text;
+    WriteEntityOverrides(address, instanceText, instanceText, templateText, text);
+    const std::string prefix = Addressed(address, {});
+    std::string_view addedComponent;
+    for (std::string_view line : Split(text, '\n'))
+    {
+        if (line.empty())
+            continue;
+        const char sign = line.front();
+        if (sign == '+' || sign == '-')
+        {
+            const std::string_view component = line.substr(1 + prefix.size());
+            addedComponent = sign == '+' ? component : std::string_view();
+            out.push_back({sign == '+' ? PrefabOverrideKind::AddedComponent : PrefabOverrideKind::RemovedComponent,
+                           std::string(component), {}});
+            continue;
+        }
+        // "Component.field = value": the field lines of an added component are part of the addition.
+        const std::string_view body = line.substr(prefix.size());
+        const std::size_t dot = body.find('.');
+        const std::size_t equals = body.find(" = ");
+        if (dot == std::string_view::npos || equals == std::string_view::npos || dot > equals)
+            continue;
+        const std::string_view component = body.substr(0, dot);
+        if (component == addedComponent)
+            continue;
+        out.push_back(
+            {PrefabOverrideKind::Field, std::string(component), std::string(body.substr(dot + 1, equals - dot - 1))});
+    }
+}
+
+// The children of every entity in `world` that has a parent, keyed by the parent's id.
+static std::unordered_map<ECS::EntityId, std::vector<ECS::EntityHandle>> CollectChildren(ECS::World& world)
+{
+    std::unordered_map<ECS::EntityId, std::vector<ECS::EntityHandle>> childrenOf;
+    world.Query<ECS::Read<Components::Parent>>().IncludeDisabled().Each(
+        [&childrenOf](ECS::EntityHandle child, const Components::Parent& parent)
+        {
+            if (parent.Entity.IsValid())
+                childrenOf[parent.Entity.id].push_back(child);
+        });
+    return childrenOf;
+}
+
+// True when the tag of `child` is the identity its path under `parentAddress` gives.
+static bool CarriesPathIdentity(ECS::World& world, ECS::EntityHandle child, std::string_view instanceId,
+                                std::string_view parentAddress)
+{
+    const auto* tag = world.GetComponent<Components::SceneEntityTag>(child);
+    return tag && tag->View() == SceneTagForPath(JoinPath(instanceId, JoinPath(parentAddress, LastIdOf(tag->View()))));
+}
+
+// Membership follows CollectPrefabInstances: a child is a member when its parent is one, its tag
+// is a member tag and its address is in the template and not taken. The child whose tag is the
+// identity the path gives takes the address first.
+bool DescribePrefabInstance(ECS::World& world, ECS::EntityHandle root, std::vector<PrefabInstanceEntity>& out)
+{
+    out.clear();
+    EngineCore& engine = EngineCore::GetInstance();
+    PrefabLibrary* library = engine.TryGetPrefabLibrary();
+    const auto* marker = world.IsValid(root) ? world.GetComponent<Components::PrefabInstance>(root) : nullptr;
+    const auto* rootTag = marker ? world.GetComponent<Components::SceneEntityTag>(root) : nullptr;
+    const PrefabTemplate* prefab = library && rootTag ? library->FindByGuid(marker->Source) : nullptr;
+    if (!prefab)
+        return false;
+
+    const std::string instanceId(rootTag->View());
+    FlatMap<std::string, std::size_t> templateIndexByAddress;
+    std::unordered_map<ECS::EntityId, std::string> templateTags;
+    for (std::size_t index = 0; index < prefab->Addresses.size(); ++index)
+    {
+        templateIndexByAddress.InsertOrAssign(prefab->Addresses[index], index);
+        templateTags[prefab->Entities[index].id] = SceneTagForPath(JoinPath(instanceId, prefab->Addresses[index]));
+    }
+
+    const auto childrenOf = CollectChildren(world);
+    std::vector<std::string> addresses{std::string()};
+    std::unordered_map<ECS::EntityId, std::string> instanceTags{{root.id, instanceId}};
+    FlatSet<std::string> taken;
+    taken.Insert(std::string());
+    out.push_back({root, false, {}});
+    for (std::size_t index = 0; index < out.size(); ++index)
+    {
+        const auto children = childrenOf.find(out[index].Entity.id);
+        if (out[index].AddedOnInstance || children == childrenOf.end())
+            continue;
+        std::vector<ECS::EntityHandle> ordered = children->second;
+        const std::string parentAddress = addresses[index];
+        std::stable_partition(ordered.begin(), ordered.end(),
+                              [&world, &instanceId, &parentAddress](ECS::EntityHandle child)
+                              { return CarriesPathIdentity(world, child, instanceId, parentAddress); });
+        for (const ECS::EntityHandle child : ordered)
+        {
+            const auto* tag = world.GetComponent<Components::SceneEntityTag>(child);
+            std::string address = tag ? JoinPath(parentAddress, LastIdOf(tag->View())) : std::string();
+            const bool member = tag && IsMemberTag(tag->View()) && templateIndexByAddress.Contains(address) &&
+                                taken.Insert(address);
+            if (tag)
+                instanceTags[child.id] = std::string(tag->View());
+            out.push_back({child, !member, {}});
+            addresses.push_back(member ? std::move(address) : std::string());
+        }
+    }
+
+    AssetManagerSceneResolver resolver(engine.GetAssetManager(), engine.GetResolvedAssetRoot(),
+                                       AssetManagerSceneResolver::UnknownFile::AssignGuid);
+    SceneSaveContext instanceCtx{};
+    instanceCtx.SceneFile = &prefab->Path;
+    instanceCtx.AssetRoot = resolver.GetAssetRoot();
+    instanceCtx.Resolver = &resolver;
+    instanceCtx.EntityTagById = &instanceTags;
+    instanceCtx.Unresolved = world.TryGetUnresolvedComponents();
+    instanceCtx.WriteEveryField = true;
+    SceneSaveContext templateCtx = instanceCtx;
+    templateCtx.EntityTagById = &templateTags;
+    templateCtx.Unresolved = library->GetWorld().TryGetUnresolvedComponents();
+
+    const auto schemas = SceneSchemaRegistry::GetAllSorted();
+    std::vector<ComponentText> instanceText;
+    std::vector<ComponentText> templateText;
+    FlatMap<std::string, std::size_t> entryByAddress;
+    for (std::size_t index = 0; index < out.size(); ++index)
+    {
+        if (out[index].AddedOnInstance)
+            continue;
+        const std::string& address = addresses[index];
+        entryByAddress.InsertOrAssign(address, index);
+        CollectComponentText(world, out[index].Entity, instanceCtx, schemas, instanceText);
+        CollectComponentText(library->GetWorld(), prefab->Entities[*templateIndexByAddress.Find(address)], templateCtx,
+                             schemas, templateText);
+        CollectEntityOverrides(address, instanceText, templateText, out[index].Overrides);
+    }
+
+    // A removed child is an override of its parent.
+    for (const std::string& address : prefab->Addresses)
+    {
+        if (address.empty() || taken.Contains(address))
+            continue;
+        const std::size_t dot = address.rfind('.');
+        const std::string parentAddress = dot == std::string::npos ? std::string() : address.substr(0, dot);
+        if (const std::size_t* parent = entryByAddress.Find(parentAddress))
+            out[*parent].Overrides.push_back({PrefabOverrideKind::RemovedChild, {}, address});
+    }
+    return true;
 }
 
 } // namespace GameEngine::Scene

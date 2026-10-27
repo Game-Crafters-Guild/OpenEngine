@@ -544,7 +544,7 @@ void EditorApplication::UndockToFloatingWindow(const std::string& panelId)
         }
     }
 
-    ctx->gameView = std::make_unique<GameViewController>(mainRs, m_AssetsDirectory);
+    ctx->gameView = std::make_unique<GameViewController>(mainRs, m_ChangeNotifications.get());
 
     // Mark this window as floating for styling, then bind its dockspace
     if (auto* rootEl = ctx->ui->GetRootElement())

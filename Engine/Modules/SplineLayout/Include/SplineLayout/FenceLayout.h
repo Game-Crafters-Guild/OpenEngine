@@ -49,7 +49,7 @@ struct FencePieceBounds
 };
 
 // A station is a post position whether or not a post mesh covers it: the
-// measured fence kits ship no standalone post, so an empty PostPool still
+// measured fence kits ship no standalone post, so an empty Post pool still
 // articulates its spans here.
 struct FenceStation
 {
@@ -109,7 +109,7 @@ struct FenceSpan
     // picked and FencePieceBounds::Length() measured, which the emission lays
     // on the pose's Forward. 1 = the piece's authored length.
     float32 LengthScale = 1.0f;
-    // Active pool slot this span draws: a SpanPool slot, or a GatePool slot
+    // Active pool slot this span draws: a Span pool slot, or a Gate pool slot
     // when IsGate.
     uint32 PoolSlot = 0;
     // An override made this span a gate, drawn from GatePieces. A gate is laid
@@ -224,10 +224,10 @@ struct FenceLayoutParams
     FencePieceBounds PostPiece{};
     bool HasPostMesh = false;
 
-    // One entry per ACTIVE SpanPool slot, in slot order. Empty = no spans; the
+    // One entry per ACTIVE Span pool slot, in slot order. Empty = no spans; the
     // stations are then walked at the pitch and nothing is stretched.
     std::span<const FencePieceBounds> SpanPieces;
-    // One entry per ACTIVE GatePool slot, in slot order: what a gate override
+    // One entry per ACTIVE Gate pool slot, in slot order: what a gate override
     // draws. Empty leaves every gate an opening — the room of the wall it
     // replaced, with nothing in it.
     std::span<const FencePieceBounds> GatePieces;
@@ -239,10 +239,10 @@ struct FenceLayoutParams
     // With no override the result is byte-identical to one built without this.
     std::span<const Components::SplineSpanOverride> SpanOverrides;
 
-    // One entry per ACTIVE CrestPool slot, in slot order. Empty = no crest row,
+    // One entry per ACTIVE Crest pool slot, in slot order. Empty = no crest row,
     // and the result is then byte-identical to one built with none of it.
     std::span<const FencePieceBounds> CrestPieces;
-    // One entry per ACTIVE CapPool slot. End pieces offered to the remainder
+    // One entry per ACTIVE Cap pool slot. End pieces offered to the remainder
     // each run leaves beside a post, a tower or a gate; the longest that fits
     // closes it. Empty leaves the remainder bare, which the post covers.
     std::span<const FencePieceBounds> CapPieces;

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PageStreaming/PageCache.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Mathematics/Vector3.h"
 #include "Types/Types.h"
 
@@ -72,12 +72,11 @@ struct PageRequestTerrain
     uint32 CacheSlots = 0;      ///< the slots of the field's height cache (the profile's budget)
 };
 
-/// The first pinned level of a pyramid (whose levels are `levels`): 0, the whole pyramid, when its
-/// page count is at most CacheSlots / kPinWholePyramidCacheFraction. Else the coarsest levels,
-/// coarsest first, while their pages stay within that count and their texel is at least
-/// kPinnedPageTexelMeters (design page-streaming-planets 3.5), and at least the top level. The
-/// pinned levels serve the frames after a teleport; the level rule requests the far field.
-uint32 FirstPinnedPageLevel(const PageRequestTerrain& terrain, std::span<const PageStreaming::PageStoreLevel> levels);
+/// The first pinned level of a pyramid of `faces` faces, level-0 texel `level0Texel` meters: 0 when
+/// all its pages fit cacheSlots / kPinWholePyramidCacheFraction, else the coarsest levels that fit
+/// with a texel of at least kPinnedPageTexelMeters, and at least the top level (planets 3.5).
+uint32 FirstPinnedPageLevel(std::span<const PageStreaming::PageStoreLevel> levels, uint32 faces, float32 level0Texel,
+                            uint32 cacheSlots);
 
 /// The pages a terrain's geometry needs for its cameras, each frame. Holds the terrain's pyramid and
 /// its scratch, so a frame allocates nothing once the request set's size has been seen.

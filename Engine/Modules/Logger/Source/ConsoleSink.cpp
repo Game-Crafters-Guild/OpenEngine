@@ -1,4 +1,5 @@
 #include "Logger/LogSink.h"
+#include "Logger/Logger.h"
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -43,6 +44,13 @@ std::string LogSink::FormatMessage(const LogMessage& message,
     {
         result += '[';
         result += LogLevelToString(message.Level);
+        result += "] ";
+    }
+
+    if (message.Channel != CoreLog().Index)
+    {
+        result += '[';
+        result += Log::GetChannelName(message.Channel);
         result += "] ";
     }
 

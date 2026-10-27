@@ -3,7 +3,7 @@
 #include "TerrainECS/PageLevelRule.h"
 #include "PageStreaming/CpuPageDirectory.h"
 #include "PageStreaming/HeightPageOverlay.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Mathematics/Rect.h"
 #include "Mathematics/Vector3.h"
 #include "Types/Types.h"

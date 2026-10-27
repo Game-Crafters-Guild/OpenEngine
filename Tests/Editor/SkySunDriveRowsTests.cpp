@@ -11,7 +11,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "InspectorRegistry.h"
-#include "Inspectors/SkySunDriveRows.h"
+#include "Inspectors/SkySun/SkySunDriveRows.h"
 #include "UI/Controls/EnumField.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Label.h"

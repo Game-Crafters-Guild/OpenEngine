@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 #include "Logger/Logger.h"
 #include "LoggerModuleProbe.h"
+#include "LoggerInternals.h"
 #include <windows.h>
 #include <cstdio>
 #include <filesystem>
@@ -34,7 +35,6 @@ using namespace Logger;
 enum class QueueUse
 {
     Dispatch,
-    OwnedSource,
     Move,
     Destroy,
     Detach,
@@ -103,8 +103,7 @@ void ExerciseUnloadedQueue(QueueUse use)
     s_RetiredSize = nt->OptionalHeader.SizeOfImage;
     auto configure =
         reinterpret_cast<ConfigureLoggerModuleProbe>(::GetProcAddress(module, "ConfigureProbe"));
-    auto emit = reinterpret_cast<EmitLoggerModuleProbe>(::GetProcAddress(
-        module, use == QueueUse::OwnedSource ? "EmitOwnedProbe" : "EmitProbe"));
+    auto emit = reinterpret_cast<EmitLoggerModuleProbe>(::GetProcAddress(module, "EmitProbe"));
     Check(configure && emit, "missing fixture exports");
     // Deliberately rejected ABI fixture: logging happened before acceptance.
     Check(::GetProcAddress(module, "GE_UserModule_AbiVersion_v1") == nullptr,
@@ -146,15 +145,6 @@ void ExerciseUnloadedQueue(QueueUse use)
                 });
         for (auto& producer : producers)
             producer.join();
-    }
-    else if (use == QueueUse::OwnedSource)
-    {
-        // Twice: the first call builds the call-site snapshot and then destroys
-        // the buffers it was built from, so the second record can only be right
-        // if the snapshot copied them.
-        count = 2;
-        emit(29, true);
-        emit(30, true);
     }
     else
         emit(29, use != QueueUse::Plain);
@@ -200,16 +190,16 @@ void ExerciseUnloadedQueue(QueueUse use)
     Check(ownedBeforeUnload, "producer returned with pending formatter code or argument ownership");
     Check(stats.LiveArguments == 0, "queue retained module-defined argument destructors");
 
-    const char* expectedFunction = use == QueueUse::OwnedSource ? "EmitOwnedProbe" : "EmitProbe";
     unsigned delivered = 0, detached = 0;
     for (const auto& message : spy->Messages)
     {
         if (message.Message.starts_with("probe "))
         {
             ++delivered;
-            Check(message.SourceFile == "fixture.cpp" && message.SourceLine == 91 &&
-                      message.Function == expectedFunction,
-                  "source metadata did not survive the producer");
+            Check(message.SourceFile.ends_with("LoggerModuleProbe.cpp") && message.SourceLine > 0 &&
+                      message.Function == "EmitProbe" && message.Channel == ProbeLog().Index &&
+                      Log::GetChannelName(message.Channel) == "Tests.Probe",
+                  "source metadata or the channel did not survive the producer");
         }
         if (message.Message == "detach log 71")
             ++detached;
@@ -223,10 +213,6 @@ void ExerciseUnloadedQueue(QueueUse use)
 TEST(LoggerModuleLifetime, RejectedDllRecordsDispatchAfterUnmap)
 {
     EXPECT_EXIT(ExerciseUnloadedQueue(QueueUse::Dispatch), ::testing::ExitedWithCode(0), "");
-}
-TEST(LoggerModuleLifetime, OwnedSourceRecordsDispatchAfterUnmap)
-{
-    EXPECT_EXIT(ExerciseUnloadedQueue(QueueUse::OwnedSource), ::testing::ExitedWithCode(0), "");
 }
 TEST(LoggerModuleLifetime, QueuedRecordsMoveAfterUnmap)
 {

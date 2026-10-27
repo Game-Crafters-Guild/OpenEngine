@@ -1,0 +1,12 @@
+<!-- The content of the Open project card in the project picker's library grid. The styles, the glyph included,
+     are in ProjectPicker.css and ProjectCard.css. -->
+<UIElement class="project-card-lift">
+  <UIElement class="project-card-empty-preview project-card-preview">
+    <UIElement class="project-card-folder-icon project-card-action-icon" />
+  </UIElement>
+  <UIElement class="project-card-body">
+    <Label class="project-card-title" text="Open project" />
+    <Label class="project-card-meta" text="Choose an existing folder" />
+  </UIElement>
+  <UIElement class="project-card-outline" />
+</UIElement>

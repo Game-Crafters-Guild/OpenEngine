@@ -1,13 +1,16 @@
 #include "Logger/Logger.h"
+#include "JobSystem/Task.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "JobSystem/TaskDependencyGraph.h"
 #include "TestPlatform.h"
+#include "HeldWorkers.h"
 
 #include <gtest/gtest.h>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <future>
+#include <optional>
 #include <vector>
 #include <random>
 
@@ -81,6 +84,94 @@ TEST_F(WorkStealingThreadPoolTest, TryGetResultFalseBranchesAreBenign) {
     auto voidTask = pool.Submit([]() {});
     voidTask.Wait();
     EXPECT_FALSE(voidTask.TryGetResult(result));
+}
+
+namespace {
+// Counts the live copies of a job result, so a test can see who still owns one.
+struct LiveResult {
+    std::atomic<int>* Live;
+    explicit LiveResult(std::atomic<int>* live) : Live(live) { Live->fetch_add(1); }
+    LiveResult(const LiveResult& other) : LiveResult(other.Live) {}
+    ~LiveResult() { Live->fetch_sub(1); }
+};
+
+// A Task subclass carries no TaskData of its own: with no handle, the registry entry is its only reference.
+class EmptyTask final : public Task {
+  public:
+    explicit EmptyTask(WorkStealingThreadPool* pool) : Task(pool) {}
+    void Execute() override {}
+};
+} // namespace
+
+/**
+ * @brief An idle worker's cleanup batch keeps a completed result until
+ * ReleaseFinishedTasks. A result whose type comes from a hot-reloadable module
+ * must die before that module unloads.
+ */
+TEST_F(WorkStealingThreadPoolTest, ReleaseFinishedTasksReleasesAnIdleWorkersResult) {
+    WorkStealingThreadPool pool(1);
+    std::atomic<int> live{0};
+    {
+        auto handle = pool.Submit([&live]() { return LiveResult(&live); });
+        handle.Wait();
+        ASSERT_TRUE(handle.IsCompleted());
+    }
+    // The pending count drops after the envelope dies on the worker.
+    ASSERT_TRUE(WaitUntil([&pool] { return pool.GetPendingTasksApprox() == 0; }, std::chrono::seconds(2)));
+    EXPECT_EQ(live.load(), 1) << "the worker's batch no longer holds the result; this test lost its premise";
+
+    pool.ReleaseFinishedTasks();
+    EXPECT_EQ(live.load(), 0) << "the idle worker's batch kept the completed result";
+    EXPECT_EQ(pool.GetTaskDataRegistrySizeForTests(), 0u);
+}
+
+/**
+ * @brief ReleaseFinishedTasks releases a finished result that only the
+ * registry holds, and keeps a result a handle holds and a task that still runs.
+ */
+TEST_F(WorkStealingThreadPoolTest, ReleaseFinishedTasksReleasesOnlyRegistryHeldResults) {
+    WorkStealingThreadPool pool(1);
+    std::atomic<int> live{0};
+    std::atomic<bool> release{false};
+    auto running = pool.Submit([&release]() {
+        while (!release.load()) {
+            std::this_thread::yield();
+        }
+    });
+    // This thread's cleanup batch, not a worker's, holds the finished entry.
+    std::optional<TaskHandle> finished = pool.CreateCompletedHandle(LiveResult(&live));
+    ASSERT_EQ(live.load(), 1);
+
+    pool.ReleaseFinishedTasks();
+    EXPECT_EQ(live.load(), 1) << "released a result that a handle still holds";
+
+    finished.reset();
+    EXPECT_EQ(live.load(), 1);
+    pool.ReleaseFinishedTasks();
+    EXPECT_EQ(live.load(), 0) << "the registry kept a finished result that no handle holds";
+    EXPECT_EQ(pool.GetTaskDataRegistrySizeForTests(), 1u) << "the running task must keep its entry";
+
+    release.store(true);
+    running.Wait();
+    EXPECT_TRUE(running.IsCompleted());
+}
+
+/**
+ * @brief ReleaseFinishedTasks keeps a Pending task that only the registry
+ * holds: the worker that runs it later must find its callbacks (F12).
+ */
+TEST_F(WorkStealingThreadPoolTest, ReleaseFinishedTasksKeepsAPendingTaskTheRegistryAloneHolds) {
+    WorkStealingThreadPool pool(1);
+    HeldWorkers hold(pool);
+    std::atomic<bool> fired{false};
+    {
+        TaskHandle handle = pool.Submit(JobSystem::MakeUnique<EmptyTask>(&pool));
+        handle.OnComplete([&fired] { fired.store(true); });
+    }
+    pool.ReleaseFinishedTasks();
+    hold.Release();
+    EXPECT_TRUE(WaitUntil([&fired] { return fired.load(); }, std::chrono::seconds(2)))
+        << "the release erased a Pending entry; the worker made a fresh TaskData and lost the callback";
 }
 
 #if GTEST_HAS_DEATH_TEST && !defined(NDEBUG)

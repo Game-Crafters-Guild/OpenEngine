@@ -76,7 +76,8 @@ private:
     void ParkOffscreen();
     bool UpdateText(const std::string& text);
 
-    // Walk up the element chain to find the nearest tooltip text.
+    // Walks up the element chain to the nearest tooltip text. The walk stops at a popup (an element on an
+    // overlay layer), and a control with an open popup has no tooltip.
     static const std::string* FindTooltipText(UIElement* element, UIElement** outSource = nullptr);
 
     void PlaceTooltip(UIElement* root, UIElement* source, float mouseX, float mouseY);

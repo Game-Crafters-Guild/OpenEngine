@@ -28,7 +28,6 @@
 
 #include <algorithm>
 #include <exception>
-#include <filesystem>
 #include <memory>
 #include <optional>
 
@@ -45,16 +44,20 @@ constexpr float kGameViewNoCameraClearRgb = 0.09f;
 using GameEngine::Rendering::TextureFormat;
 
 GameViewController::GameViewController(Engine::Renderer::RenderServices* renderServices,
-                                       std::filesystem::path editorAssetsDirectory)
+                                       Editor::EditorChangeNotifications* notifications)
     : m_RenderServices(renderServices),
-      m_EditorAssetsDirectory(std::move(editorAssetsDirectory)),
+      m_ChangeNotifications(notifications),
       m_MovieCapture(renderServices)
 {
     EnsureGameUI();
+    if (m_ChangeNotifications)
+        m_ProjectSwitchedSub = m_ChangeNotifications->SubscribeProjectSwitched([this]() { RebuildGameUI(); });
 }
 
 GameViewController::~GameViewController()
 {
+    if (m_ChangeNotifications)
+        m_ChangeNotifications->Unsubscribe(m_ProjectSwitchedSub);
     try
     {
         m_MovieCapture.StopForShutdown();
@@ -131,10 +134,15 @@ void GameViewController::EnsureGameUI()
 
     m_GameUI = GameUIHost::CreateForHost(
         m_RenderServices->GetDevice(), &EngineCore::GetInstance().GetAssetManager(),
-        &EngineCore::GetInstance().GetJobSystem(), m_EditorAssetsDirectory,
-        /*neverClearTarget=*/false);
+        &EngineCore::GetInstance().GetJobSystem(), /*neverClearTarget=*/false);
     m_GameUiScale.Apply(*m_GameUI->GetUIManager());
     GameUI::SetHost(m_GameUI.get());
+}
+
+void GameViewController::RebuildGameUI()
+{
+    m_GameUI.reset();
+    EnsureGameUI();
 }
 
 void GameViewController::HandleGameUiPointerMove(bool over, float x, float y, int mods)

@@ -15,7 +15,7 @@
 #include "CBTTerrain/CBTSphereFaceMap.h"  // ClassifySphereCapEdit, SphereEditRegions (planet bake)
 #include "CBTTerrain/CBTPlanetShading.h"  // AnyTangent (sphere modifier tangent frame)
 #include "Components/Terrain/Terrain.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Components/Terrain/TerrainModifiers.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Transform.h"
@@ -4068,7 +4068,9 @@ void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
                                                  float32 splatMinH, float32 splatMaxH,
                                                  const std::vector<ResolvedModifier>& modifiers,
                                                  int32 regionMinX, int32 regionMinZ,
-                                                 int32 regionMaxX, int32 regionMaxZ)
+                                                 int32 regionMaxX, int32 regionMaxZ,
+                                                 BakeWarningLatch& layerClampWarnings,
+                                                 BakeWarningLatch& unaddressableRulesWarnings)
 {
     if (splatmap.empty())
         return;
@@ -4136,7 +4138,7 @@ void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
     auto clampLayer = [&](uint32 layerIdx, const char* what) {
         if (layerIdx < Terrain::kMaxTerrainMaterialLayers)
             return layerIdx;
-        if (m_LayerClampWarnings.First(layerIdx))
+        if (layerClampWarnings.First(layerIdx))
         {
             Logger::Log::Warning(
                 "Terrain.Paint layer index {} is out of range (max {}); clamping. Check the "
@@ -4255,7 +4257,7 @@ void TerrainModifierSystem::ApplySplatModifiers(std::vector<uint8>& splatmap,
                 return;
             if (!rulesAddressable)
             {
-                if (m_UnaddressableRulesWarnings.First(HashCombine(HashCombine(HashCombine(w, h),
+                if (unaddressableRulesWarnings.First(HashCombine(HashCombine(HashCombine(w, h),
                                                                           heightfield.GetWidth()),
                                                               heightfield.GetHeight())))
                 {
@@ -4534,7 +4536,8 @@ void TerrainModifierSystem::BakeTiledFull(TiledTerrainData& tiled, float32 heigh
         ApplySplatModifiers(tile.Splatmap, tile.SplatmapWidth, tile.SplatmapHeight, tile.Heightfield,
                             MakeGridSplatLattice(tile.WorldOriginX, tile.WorldOriginZ, tileSize, tileSize, tile.SplatmapWidth, tile.SplatmapHeight),
                             heightScale, globalMinH, globalMaxH,
-                            modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded);
+                            modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded,
+                            m_LayerClampWarnings, m_UnaddressableRulesWarnings);
     });
     const auto splatEnd = std::chrono::steady_clock::now();
     for (const auto& [coord, tile] : fullTiles)
@@ -4578,7 +4581,8 @@ void TerrainModifierSystem::RenormalizeAllTileSplats(TiledTerrainData& tiled, fl
         ApplySplatModifiers(tilePtr->Splatmap, tilePtr->SplatmapWidth, tilePtr->SplatmapHeight, tilePtr->Heightfield,
                             MakeGridSplatLattice(tilePtr->WorldOriginX, tilePtr->WorldOriginZ, tileSize, tileSize, tilePtr->SplatmapWidth, tilePtr->SplatmapHeight),
                             tiled.Config.HeightScale, globalMinH, globalMaxH,
-                            modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded);
+                            modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded,
+                            m_LayerClampWarnings, m_UnaddressableRulesWarnings);
         // A running arrival bake writes its remaining rows against this range too.
         tilePtr->ArrivalSplatMinH = globalMinH;
         tilePtr->ArrivalSplatMaxH = globalMaxH;
@@ -4625,7 +4629,7 @@ std::size_t TerrainModifierSystem::RenormalizeTileSplatRows(
     ApplySplatModifiers(tile.Splatmap, tile.SplatmapWidth, tile.SplatmapHeight, tile.Heightfield,
                             MakeGridSplatLattice(tile.WorldOriginX, tile.WorldOriginZ, tileSize, tileSize, tile.SplatmapWidth, tile.SplatmapHeight),
                         heightScale, globalMinH, globalMaxH,
-                        modifiers, 0, rowStart, w - 1, rowEnd);
+                        modifiers, 0, rowStart, w - 1, rowEnd, m_LayerClampWarnings, m_UnaddressableRulesWarnings);
     const std::size_t texels = static_cast<std::size_t>(w) *
                                static_cast<std::size_t>(rowEnd - rowStart + 1);
     g_SplatRenormalizeTexelCount.fetch_add(texels, std::memory_order_relaxed);
@@ -4665,7 +4669,8 @@ void TerrainModifierSystem::BakeSingleTerrainSplat(TerrainData& data, float32 or
             ResetSplatmapRegion(data.Heightfield, data.Splatmap, x0, z0, x1, z1);
         ApplySplatModifiers(data.Splatmap, data.SplatmapWidth, data.SplatmapHeight, data.Heightfield,
                             MakeGridSplatLattice(originX, originZ, data.Config.WorldSizeX, data.Config.WorldSizeZ, data.SplatmapWidth, data.SplatmapHeight),
-                            data.Config.HeightScale, minH, maxH, modifiers, x0, z0, x1, z1);
+                            data.Config.HeightScale, minH, maxH, modifiers, x0, z0, x1, z1,
+                            m_LayerClampWarnings, m_UnaddressableRulesWarnings);
     });
 }
 
@@ -4831,7 +4836,7 @@ void TerrainModifierSystem::BakeTiledRegion(TiledTerrainData& tiled, float32 hei
                 ApplySplatModifiers(tp.Splatmap, tp.SplatmapWidth, tp.SplatmapHeight, tp.Heightfield,
                             MakeGridSplatLattice(tp.WorldOriginX, tp.WorldOriginZ, tileSize, tileSize, tp.SplatmapWidth, tp.SplatmapHeight),
                                     heightScale, minH, maxH,
-                                    modifiers, minX, z0, maxX, z1);
+                                    modifiers, minX, z0, maxX, z1, m_LayerClampWarnings, m_UnaddressableRulesWarnings);
             });
         for (const auto& r : splatRegions)
         {
@@ -4978,7 +4983,8 @@ void TerrainModifierSystem::BakeTiledStreamedTiles(TiledTerrainData& tiled, floa
         ApplySplatModifiers(coarsePtr->Splatmap, coarsePtr->SplatmapWidth, coarsePtr->SplatmapHeight, coarsePtr->Heightfield,
                             MakeGridSplatLattice(coarsePtr->WorldOriginX, coarsePtr->WorldOriginZ, tileSize, tileSize, coarsePtr->SplatmapWidth, coarsePtr->SplatmapHeight),
                             heightScale, tiled.SplatBakeMinH, tiled.SplatBakeMaxH,
-                            modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded);
+                            modifiers, 0, 0, kRegionUnbounded, kRegionUnbounded,
+                            m_LayerClampWarnings, m_UnaddressableRulesWarnings);
         coarsePtr->MarkSplatChanged();
         coarsePtr->CoarseSplatBaked = true;
     }
@@ -5080,7 +5086,7 @@ void TerrainModifierSystem::BakeTiledStreamedTiles(TiledTerrainData& tiled, floa
         ApplySplatModifiers(t->Splatmap, t->SplatmapWidth, t->SplatmapHeight, t->Heightfield,
                             MakeGridSplatLattice(t->WorldOriginX, t->WorldOriginZ, tileSize, tileSize, t->SplatmapWidth, t->SplatmapHeight),
                             heightScale, t->ArrivalSplatMinH, t->ArrivalSplatMaxH,
-                            modifiers, minX, z0, maxX, z1);
+                            modifiers, minX, z0, maxX, z1, m_LayerClampWarnings, m_UnaddressableRulesWarnings);
     });
 
     static const bool kTileStreamDebug = std::getenv("GE_TERRAIN_TILE_DEBUG") != nullptr;
@@ -5168,7 +5174,8 @@ void TerrainModifierSystem::FlushDeferredSplatResplat(ECS::World& world, Terrain
                 ApplySplatModifiers(data->Splatmap, data->SplatmapWidth, data->SplatmapHeight, data->Heightfield,
                             MakeGridSplatLattice(originX, originZ, data->Config.WorldSizeX, data->Config.WorldSizeZ, data->SplatmapWidth, data->SplatmapHeight), data->Config.HeightScale,
                                     data->SplatBakeMinH, data->SplatBakeMaxH, modifiers,
-                                    0, 0, kRegionUnbounded, kRegionUnbounded);
+                                    0, 0, kRegionUnbounded, kRegionUnbounded,
+                                    m_LayerClampWarnings, m_UnaddressableRulesWarnings);
                 data->MarkSplatChanged();
                 data->SplatResplatPending = false;
                 data->SplatResplatIdleFrames = 0;

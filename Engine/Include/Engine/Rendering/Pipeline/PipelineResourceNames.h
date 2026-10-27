@@ -23,6 +23,9 @@ namespace View
 inline constexpr const char* Color = "View.Color";
 inline constexpr const char* Depth = "View.Depth";
 inline constexpr const char* Resolve = "View.Resolve";
+// The plain sample mean minus the weighted mean, written by the MSAA color resolve. Published only
+// when the view is multisampled and bloom is on; BloomThreshold adds it to the scene color it reads.
+inline constexpr const char* BloomSampleDelta = "View.BloomSampleDelta";
 // Single-sample R32F copy of the view depth: everything the colour pass depth-tests against.
 inline constexpr const char* DepthResolved = "View.DepthResolved";
 // The occluders' depth GTAO and the world pass's contact shadows read: View.DepthResolved without the

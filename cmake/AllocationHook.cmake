@@ -49,12 +49,12 @@ endfunction()
 # The counter copy compiles empty in a target whose link closure already holds the
 # counter: Memory and Engine carry the GE_ALLOCATION_COUNTER_LINKED link-interface
 # property (COMPATIBLE_INTERFACE_BOOL), which $<TARGET_PROPERTY:...> evaluates over the
-# compiling target's dependencies. Only this source sees the definition.
+# compiling target's dependencies. The definition is on the test target, not on the
+# source: the Xcode generator rejects a source definition that depends on the link
+# closure. Only AllocationCounter.cpp reads it.
 function(_ge_allocation_counter_compile_empty_when_linked target_name)
-    set_source_files_properties(${GE_ALLOCATION_COUNTER_SOURCE}
-        TARGET_DIRECTORY ${target_name}
-        PROPERTIES COMPILE_DEFINITIONS
-            "$<$<BOOL:$<TARGET_PROPERTY:GE_ALLOCATION_COUNTER_LINKED>>:GE_ALLOCATION_COUNTER_LINKED>")
+    target_compile_definitions(${target_name} PRIVATE
+        "$<$<BOOL:$<TARGET_PROPERTY:GE_ALLOCATION_COUNTER_LINKED>>:GE_ALLOCATION_COUNTER_LINKED>")
 endfunction()
 
 function(_ge_is_test_executable target_name out_var)

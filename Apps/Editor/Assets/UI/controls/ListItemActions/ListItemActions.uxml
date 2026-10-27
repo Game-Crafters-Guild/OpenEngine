@@ -1,0 +1,8 @@
+<!-- ListItemActions (Apps/Editor/Include/UI/Controls/ListItemActions.h): Move Up, Move Down and
+     Remove for one item of an inspector list. The classes are the contract with ListItemActions.cpp;
+     ListItemActions.css draws each icon from its action class. -->
+<UIElement class="list-item-actions-group">
+  <Button class="list-item-action list-item-move-up" />
+  <Button class="list-item-action list-item-move-down" />
+  <Button class="list-item-action list-item-remove" />
+</UIElement>

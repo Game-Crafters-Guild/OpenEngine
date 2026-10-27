@@ -1269,18 +1269,18 @@ BuryReport ParseBuryReport(const FenceLayoutResult& result)
     {
         if (message.find("ground rises through the spans") == std::string::npos)
             continue;
-        const size_t runAt = message.find("run ");
+        const size_t runAt = message.find("segment from point ");
         const size_t worstAt = message.find("worst at span ");
         if (runAt == std::string::npos || worstAt == std::string::npos)
             continue;
         uint32 from = 0;
         uint32 to = 0;
-        if (std::sscanf(message.c_str() + runAt, "run %u->%u at %u sample(s)", &from, &to,
+        if (std::sscanf(message.c_str() + runAt, "segment from point %u to point %u at %u sample(s)", &from, &to,
                         &report.Samples) != 3)
             continue;
         if (std::sscanf(message.c_str() + worstAt,
-                        "worst at span %u, %f m deeper than the piece is planted for, %f m along "
-                        "the run at (%f, %f)",
+                        "worst at span %u: %f m deeper than the part is planted for, %f m along "
+                        "the segment at (%f, %f)",
                         &report.Span, &report.Depth, &report.ArcMetres, &report.X, &report.Z) != 5)
             continue;
         report.Found = true;
@@ -2356,7 +2356,7 @@ size_t EmptyCrestRowReports(const FenceLayoutResult& result)
 {
     size_t count = 0;
     for (const std::string& message : result.Validation)
-        count += message.find("crest row placed no crest pieces") != std::string::npos ? 1u : 0u;
+        count += message.find("crest row placed no crest parts") != std::string::npos ? 1u : 0u;
     return count;
 }
 
@@ -2711,10 +2711,10 @@ TEST(FenceLayout, ACrestRowThatPlacesNothingSaysWhyOnce)
     ASSERT_TRUE(CellOrdinals(tooLong).empty()) << "fixture no longer reproduces an empty row";
     EXPECT_EQ(EmptyCrestRowReports(tooLong), 1u)
         << "one dead row is one message, however many runs it spans";
-    EXPECT_TRUE(AnyValidationContains(tooLong, "the longest clear stretch is 3.00 m."));
+    EXPECT_TRUE(AnyValidationContains(tooLong, "The longest clear stretch is 3.00 m."));
     EXPECT_TRUE(AnyValidationContains(
-        tooLong, "A crest piece no longer than half of it, 1.50 m, always fits; use one, or "
-                 "clear the Post pool."));
+        tooLong, "A crest part no longer than half of it, 1.50 m, always fits; use one, or "
+                 "remove the Post parts."));
     EXPECT_FALSE(AnyValidationContains(tooLong, "plant towers"))
         << "a hand-placed tower reserves nothing, so the row would run through it";
 
@@ -2766,7 +2766,7 @@ TEST(FenceLayout, TheEmptyCrestRowReportNamesAPitchThatBinds)
     const FenceLayoutResult slack = CrestRowBetweenTowers(2.0f, 2.6f, true);
     ASSERT_TRUE(CellOrdinals(slack).empty()) << "fixture no longer reproduces an empty row";
     EXPECT_TRUE(AnyValidationContains(
-        slack, "At a Crest Pitch of 2.60 m, a crest piece no longer than 0.40 m (the stretch "
+        slack, "At a Crest Pitch of 2.60 m, a crest part no longer than 0.40 m (the stretch "
                "less the pitch) always fits"));
     EXPECT_FALSE(CellOrdinals(CrestRowBetweenTowers(0.4f, 2.6f, true)).empty())
         << "the bound the report names must place a cell";
@@ -2774,8 +2774,8 @@ TEST(FenceLayout, TheEmptyCrestRowReportNamesAPitchThatBinds)
     const FenceLayoutResult noRoom = CrestRowBetweenTowers(3.0f, 6.0f, true);
     ASSERT_TRUE(CellOrdinals(noRoom).empty()) << "fixture no longer reproduces an empty row";
     EXPECT_TRUE(AnyValidationContains(
-        noRoom, "Crest Pitch 6.00 m leaves no room for a piece in it; lower the pitch, or clear "
-                "the Post pool."));
+        noRoom, "Crest Pitch 6.00 m leaves no room for a part in it; lower the pitch, or remove "
+                "the Post parts."));
 }
 
 // A pitch typed below the longest piece in the pool would overlap the pieces.
@@ -2799,7 +2799,7 @@ TEST(FenceLayout, PitchBelowTheLongestPieceIsClampedAndReportedOnce)
         reports += message.find("Crest Pitch") != std::string::npos ? 1u : 0u;
     EXPECT_EQ(reports, 1u);
     EXPECT_TRUE(AnyValidationContains(
-        result, "Crest Pitch 0.50 m is below the longest crest piece, 0.78 m"));
+        result, "Crest Pitch 0.50 m is below the longest crest part, 0.78 m"));
     // Raised to the piece's own length: the first cell stands at half of it.
     ASSERT_FALSE(result.Crests.empty());
     EXPECT_NEAR(result.Crests.front().Pose.Position.z, 0.39f, 1.0e-4f);
@@ -3197,7 +3197,7 @@ TEST(FenceLayout, GlobalIndexCountsEveryCellOfTheRunBefore)
     EXPECT_EQ(result.Crests[1].OrdinalInRun, 0u);
     EXPECT_EQ(result.Crests[1].Index, 20u);
     EXPECT_EQ(result.Crests[2].Index, 21u);
-    EXPECT_TRUE(AnyValidationContains(result, "the rest of the crest row is not built"));
+    EXPECT_TRUE(AnyValidationContains(result, "The rest of the crest row is not built"));
 }
 
 // The row is emitted after every station and span of the whole spline, so one
@@ -3212,7 +3212,7 @@ TEST(FenceLayout, CrestsAreEmittedAfterSpansUnderOneBudget)
     EXPECT_EQ(result.Stations.size(), 3u);
     EXPECT_EQ(result.Spans.size(), 2u);
     EXPECT_TRUE(result.Crests.empty());
-    EXPECT_TRUE(AnyValidationContains(result, "the rest of the crest row is not built"));
+    EXPECT_TRUE(AnyValidationContains(result, "The rest of the crest row is not built"));
 
     // Room for two cells: what fits is built and the cut is still reported,
     // rather than the whole row being voided over it.
@@ -3221,7 +3221,7 @@ TEST(FenceLayout, CrestsAreEmittedAfterSpansUnderOneBudget)
     EXPECT_EQ(partial.Stations.size(), 3u);
     EXPECT_EQ(partial.Spans.size(), 2u);
     EXPECT_EQ(CellOrdinals(partial), (std::vector<uint32>{0u, 1u}));
-    EXPECT_TRUE(AnyValidationContains(partial, "the rest of the crest row is not built"));
+    EXPECT_TRUE(AnyValidationContains(partial, "The rest of the crest row is not built"));
 
     // A budget that structure itself cannot meet reports the cut once, as the
     // cut it is: the row never gets to speak over it.
@@ -3230,7 +3230,7 @@ TEST(FenceLayout, CrestsAreEmittedAfterSpansUnderOneBudget)
     EXPECT_EQ(starved.Stations.size() + starved.Spans.size(), 3u);
     EXPECT_TRUE(starved.Crests.empty());
     EXPECT_FALSE(AnyValidationContains(starved, "crest row"));
-    EXPECT_TRUE(AnyValidationContains(starved, "the rest of the spline is not built"));
+    EXPECT_TRUE(AnyValidationContains(starved, "The rest of the spline is not built"));
 }
 
 // The row stands on the tops of the spans, so a recipe that asks for one
@@ -3246,7 +3246,7 @@ TEST(FenceLayout, CrestRowWithoutSpansIsReported)
 
     const FenceLayoutResult result = BuildFenceLayout(center, params);
     EXPECT_TRUE(result.Crests.empty());
-    EXPECT_TRUE(AnyValidationContains(result, "the span pool is empty"));
+    EXPECT_TRUE(AnyValidationContains(result, "has no Span part with a mesh"));
 }
 
 // ---- Crest row: frames -----------------------------------------------------
@@ -3802,11 +3802,11 @@ TEST(FenceLayout, AnEmptyRegisteredCrestRowNamesOnlyTheReservation)
         ASSERT_TRUE(CellOrdinals(result).empty()) << posts;
         EXPECT_EQ(EmptyCrestRowReports(result), 1u) << posts;
         EXPECT_TRUE(AnyValidationContains(
-            result, "a reserved stretch reaches every wall they stand on; move what reserves "
-                    "the run."))
+            result, "A reserved stretch reaches every span they stand on; move what reserves "
+                    "the segment."))
             << posts;
         EXPECT_FALSE(AnyValidationContains(result, "always fits")) << posts;
-        EXPECT_FALSE(AnyValidationContains(result, "clear the Post pool")) << posts;
+        EXPECT_FALSE(AnyValidationContains(result, "remove the Post parts")) << posts;
     }
 }
 
@@ -4461,7 +4461,7 @@ TEST(FenceLayout, AGateOnEveryRegisteredWallNamesTheReservation)
     ASSERT_EQ(gated.Spans.size(), 1u);
     ASSERT_TRUE(gated.Spans[0].IsGate);
     EXPECT_TRUE(gated.Crests.empty());
-    EXPECT_TRUE(AnyValidationContains(gated, "a reserved stretch reaches every wall"));
+    EXPECT_TRUE(AnyValidationContains(gated, "A reserved stretch reaches every span"));
 
     // The control: the same run without the gate lays its crest and says nothing.
     const FenceLayoutResult walled = StraightCastleRun(5.0f, {}, gates, battlements);
@@ -4486,7 +4486,7 @@ TEST(FenceLayout, PinnedSpanDrawsItsSlotAndLeavesEveryOtherPickUnchanged)
     const uint32 pinnedSlot = (seeded.Spans[5].PoolSlot + 1u) % 3u;
 
     const SplineSpanOverride overrides[1] = {
-        {0u, 5u, SplineSpanOverrideKind::ExplicitPiece, static_cast<uint8>(pinnedSlot)}};
+        {0u, 5u, SplineSpanOverrideKind::ExplicitPart, static_cast<uint8>(pinnedSlot)}};
     params.SpanOverrides = overrides;
     const FenceLayoutResult pinned = BuildFenceLayout(center, params);
     ASSERT_EQ(pinned.Spans.size(), seeded.Spans.size());
@@ -4508,24 +4508,24 @@ TEST(FenceLayout, OverridesTheLayoutCannotApplyAreReportedNeverDropped)
         {0u, 9u, SplineSpanOverrideKind::Gate, 0u},
         {4u, 0u, SplineSpanOverrideKind::Gate, 0u},
         {0u, 1u, SplineSpanOverrideKind::Gate, 3u},
-        {0u, 2u, SplineSpanOverrideKind::ExplicitPiece, 5u},
+        {0u, 2u, SplineSpanOverrideKind::ExplicitPart, 5u},
         {0u, 2u, SplineSpanOverrideKind::Gate, 0u},
     };
     const FenceLayoutResult result = StraightCastleRun(20.0f, overrides, gates);
 
     EXPECT_TRUE(AnyValidationContains(
-        result, "a span override names span 9 of run 0->1, which has 4 span(s) — it places "
-                "nothing; move it or remove it"));
+        result, "a span override names span 9 of the segment from point 0 to point 1, which has 4 "
+                "span(s). It places nothing; change its point or span, or remove it."));
     EXPECT_TRUE(AnyValidationContains(
-        result, "a span override names point 4, which opens no run — it places nothing"));
+        result, "a span override names point 4, which opens no segment. It places nothing"));
     EXPECT_TRUE(AnyValidationContains(
-        result, "the gate on span 1 of run 0->1 names Gate 4, but the Gate pool holds 1 — "
-                "the span is left open"));
+        result, "the gate on span 1 of the segment from point 0 to point 1 names Gate part 4, but the "
+                "fence has 1 Gate part(s) with a mesh. The span is left open."));
     EXPECT_TRUE(AnyValidationContains(
-        result, "the explicit piece on span 2 of run 0->1 names Span 6, but the Span pool holds 1 — "
-                "it keeps the fence's own pick"));
+        result, "the explicit part on span 2 of the segment from point 0 to point 1 names Span part 6, "
+                "but the fence has 1 Span part(s) with a mesh. The fence picks a Span part by Seed there."));
     EXPECT_TRUE(AnyValidationContains(
-        result, "two span overrides name span 2 of run 0->1 — the first is used"));
+        result, "two span overrides name span 2 of the segment from point 0 to point 1. The first is used."));
     EXPECT_EQ(result.Validation.size(), 5u);
 
     // What each did: the missing gate piece left an opening, and the first of
@@ -4617,8 +4617,8 @@ TEST(FenceLayout, OverridesOnACoincidentRunAreReported)
     const FenceLayoutResult result = BuildFenceLayout(center, params);
     EXPECT_TRUE(AnyValidationContains(result, "are coincident"));
     EXPECT_TRUE(AnyValidationContains(
-        result, "1 span override(s) on run 0->1 place nothing — the run has no length; move point 1 or "
-                "remove them"));
+        result, "1 span override(s) on the segment from point 0 to point 1 place nothing. The segment has "
+                "no length; move point 1 or remove them"));
 }
 
 // Only walls decide whether a run registers to its spans, and only a wall's slot
@@ -4642,10 +4642,10 @@ TEST(FenceLayout, RegistrationReadsNoGateSlotFromTheSpanPool)
     const FencePieceBounds gates[2] = {CastleGate(), shortGate};
     const FencePieceBounds battlements[1] = {CastleBattlement()};
     const SplineSpanOverride overrides[4] = {
-        {0u, 0u, SplineSpanOverrideKind::ExplicitPiece, 0u},
+        {0u, 0u, SplineSpanOverrideKind::ExplicitPart, 0u},
         {0u, 1u, SplineSpanOverrideKind::Gate, 1u},
-        {0u, 2u, SplineSpanOverrideKind::ExplicitPiece, 0u},
-        {0u, 3u, SplineSpanOverrideKind::ExplicitPiece, 0u},
+        {0u, 2u, SplineSpanOverrideKind::ExplicitPart, 0u},
+        {0u, 3u, SplineSpanOverrideKind::ExplicitPart, 0u},
     };
     FenceLayoutParams params;
     params.RunBoundaries = boundaries;

@@ -1,18 +1,20 @@
 #include "Components/Spline/SplineFence.h"
 #include "Components/Spline/SplinePoolSelection.h"
+#include "ECS/ComponentFieldRegistry.h"
+#include "ECS/ECSTemplates.h"
 #include "Placement/FenceLayout.h"
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cmath>
+#include <string>
 #include <limits>
 #include <vector>
 
 using namespace GameEngine;
-using Components::ActivePoolCount;
-using Components::kSplineFencePoolCapacity;
+using Components::kSplineFenceMaxParts;
 using Components::MaterialRef;
 using Components::ModelRef;
-using Components::PoolHasHole;
 using Components::SplineFence;
 using Components::SplinePoolRole;
 using Components::SplinePoolSelect;
@@ -41,30 +43,6 @@ MaterialRef MaterialTestRef(uint8 ordinal)
 }
 
 } // namespace
-
-// The pool helpers are templated on the array bound precisely so the two
-// recipes can size their pools from their own kits. Capacity 7 comes from the
-// castle battlement family (6) plus one.
-TEST(SplineFenceRecipe, PoolHelpersWorkAtFenceCapacity)
-{
-    EXPECT_EQ(kSplineFencePoolCapacity, 7u);
-
-    ModelRef pool[kSplineFencePoolCapacity] = {};
-    EXPECT_EQ(ActivePoolCount(pool), 0u);
-    EXPECT_FALSE(PoolHasHole(pool));
-
-    for (uint32 i = 0; i < kSplineFencePoolCapacity; ++i)
-        pool[i] = TestRef(static_cast<uint8>(i + 1));
-    EXPECT_EQ(ActivePoolCount(pool), kSplineFencePoolCapacity);
-    EXPECT_FALSE(PoolHasHole(pool));
-
-    // (valid, empty, valid) selects from the leading prefix only, and reports.
-    ModelRef holed[kSplineFencePoolCapacity] = {};
-    holed[0] = TestRef(1);
-    holed[2] = TestRef(3);
-    EXPECT_EQ(ActivePoolCount(holed), 1u);
-    EXPECT_TRUE(PoolHasHole(holed));
-}
 
 // Role salts are an on-disk-adjacent contract: renumbering one reshuffles every
 // authored scene's picks. Post/Span/Gate must draw independently of each other
@@ -101,16 +79,15 @@ TEST(SplineFenceRecipe, FenceRoleGoldenPicks)
     }
 }
 
-// Chunk-resident authored data: five fixed pools plus the override table must
-// not balloon the component. 5 * 7 * 16 (pools) + 8 * 4 (scalars/enums) +
-// 16 * 8 (overrides) + 4 (Seed) + 16 (override material) = 740 bytes, no
+// Chunk-resident authored data: the parts list plus the override table must
+// not balloon the component. 32 * 17 (parts) + 8 * 4 (scalars/enums) +
+// 16 * 8 (overrides) + 4 (Seed) + 16 (override material) = 724 bytes, no
 // padding. The pin is exact, so every field added to the recipe edits it
-// deliberately; the budget is 768 bytes, which holds one more scalar family and
-// no sixth pool.
+// deliberately; the budget is 768 bytes.
 TEST(SplineFenceRecipe, ComponentSizeStaysEcsFriendly)
 {
     RecordProperty("sizeof_SplineFence", static_cast<int>(sizeof(SplineFence)));
-    EXPECT_EQ(sizeof(SplineFence), 740u);
+    EXPECT_EQ(sizeof(SplineFence), 724u);
 }
 
 // The rebuild scheduler compares whole recipes; flipping any single field must
@@ -126,19 +103,11 @@ TEST(SplineFenceRecipe, EveryFieldParticipatesInEquality)
         void (*Flip)(SplineFence&);
     };
     const Case cases[] = {
-        {"PostPool[0]", [](SplineFence& f) { f.PostPool[0] = TestRef(1); }},
-        {"PostPool[last]",
-         [](SplineFence& f) { f.PostPool[kSplineFencePoolCapacity - 1] = TestRef(2); }},
-        {"SpanPool[0]", [](SplineFence& f) { f.SpanPool[0] = TestRef(3); }},
-        {"SpanPool[last]",
-         [](SplineFence& f) { f.SpanPool[kSplineFencePoolCapacity - 1] = TestRef(4); }},
-        {"GatePool[0]", [](SplineFence& f) { f.GatePool[0] = TestRef(5); }},
-        {"CrestPool[0]", [](SplineFence& f) { f.CrestPool[0] = TestRef(6); }},
-        {"CrestPool[last]",
-         [](SplineFence& f) { f.CrestPool[kSplineFencePoolCapacity - 1] = TestRef(7); }},
-        {"CapPool[0]", [](SplineFence& f) { f.CapPool[0] = TestRef(8); }},
-        {"CapPool[last]",
-         [](SplineFence& f) { f.CapPool[kSplineFencePoolCapacity - 1] = TestRef(9); }},
+        {"Parts[0].Mesh", [](SplineFence& f) { f.Parts[0].Mesh = TestRef(1); }},
+        {"Parts[0].Kind", [](SplineFence& f) { f.Parts[0].Kind = Components::SplineFencePartKind::Post; }},
+        {"Parts[last]",
+         [](SplineFence& f)
+         { f.Parts[kSplineFenceMaxParts - 1] = {TestRef(2), Components::SplineFencePartKind::Cap}; }},
         {"PostPitch", [](SplineFence& f) { f.PostPitch = 3.75f; }},
         {"CrestPitch", [](SplineFence& f) { f.CrestPitch = 1.5f; }},
         {"ConformMode",
@@ -155,7 +124,7 @@ TEST(SplineFenceRecipe, EveryFieldParticipatesInEquality)
         {"Overrides[0].SpanOrdinal", [](SplineFence& f) { f.Overrides[0].SpanOrdinal = 2u; }},
         {"Overrides[0].Kind",
          [](SplineFence& f)
-         { f.Overrides[0].Kind = Components::SplineSpanOverrideKind::ExplicitPiece; }},
+         { f.Overrides[0].Kind = Components::SplineSpanOverrideKind::ExplicitPart; }},
         {"Overrides[0].PoolSlot", [](SplineFence& f) { f.Overrides[0].PoolSlot = 4u; }},
         {"Overrides[last].PointIndex",
          [](SplineFence& f)
@@ -202,7 +171,7 @@ TEST(SplineFenceRecipe, SanitizeRepairsEveryFloatAndKeepsTheRest)
     poisoned.Seed = 1234u;
     poisoned.SpanGrade = Components::SplineSpanGrade::Stepped;
     poisoned.ConformTarget = Components::SplineConformTarget::TerrainOnly;
-    poisoned.PostPool[0] = TestRef(1);
+    poisoned.Parts[0] = {TestRef(1), Components::SplineFencePartKind::Post};
 
     const SplineFence clean = SanitizeFenceRecipe(poisoned);
     // A non-finite value carries no authored intent, so it falls back to the
@@ -218,7 +187,7 @@ TEST(SplineFenceRecipe, SanitizeRepairsEveryFloatAndKeepsTheRest)
     EXPECT_EQ(clean.ConformTarget, Components::SplineConformTarget::TerrainOnly)
         << "sanitization dropped the conform target, so a terrain-only fence would silently "
            "re-place itself against whatever scenery overhangs it";
-    EXPECT_EQ(clean.PostPool[0], poisoned.PostPool[0]);
+    EXPECT_EQ(clean.Parts[0], poisoned.Parts[0]);
 
     // Out-of-domain but finite values are clamped into the domain the layout
     // can act on, so a hand-edited scene cannot divide by zero downstream.
@@ -243,7 +212,7 @@ TEST(SplineFenceRecipe, SanitizeRepairsEveryFloatAndKeepsTheRest)
 TEST(SplineFenceRecipe, SanitizePreservesOverrideMaterialAndKeepsItRebuildTriggering)
 {
     SplineFence authored{};
-    authored.PostPool[0] = TestRef(1);
+    authored.Parts[0].Mesh = TestRef(1);
 
     SplineFence retextured = authored;
     retextured.OverrideMaterial = MaterialTestRef(3);
@@ -260,4 +229,17 @@ TEST(SplineFenceRecipe, SanitizePreservesOverrideMaterialAndKeepsItRebuildTrigge
     SplineFence cleared = retextured;
     cleared.OverrideMaterial.Clear();
     EXPECT_TRUE(SanitizeFenceRecipe(cleared) == cleanBase);
+}
+
+// The override kind has one name in script and in the label: ExplicitPart reads Explicit Part.
+TEST(SplineFenceRecipe, TheOverrideKindHasOneNameInScriptAndLabel)
+{
+    const ECS::FieldInfo* field =
+        ECS::ComponentFieldRegistry::FindField(ECS::GetComponentTypeId<Components::SplineSpanOverride>(), "Kind");
+    ASSERT_NE(field, nullptr);
+    std::vector<std::string> names;
+    for (const ECS::EnumNameValue& value : field->EnumNames)
+        names.emplace_back(value.Name);
+    EXPECT_NE(std::find(names.begin(), names.end(), "ExplicitPart"), names.end());
+    EXPECT_EQ(std::find(names.begin(), names.end(), "ExplicitPiece"), names.end());
 }

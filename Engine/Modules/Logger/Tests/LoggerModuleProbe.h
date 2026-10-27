@@ -1,5 +1,9 @@
 #pragma once
+#include "Logger/LogChannel.h"
+
 #include <atomic>
+
+GE_LOG_CHANNEL(ProbeLog, "Tests.Probe", Info)
 
 struct LoggerModuleProbeStats
 {

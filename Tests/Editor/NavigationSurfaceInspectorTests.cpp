@@ -4,7 +4,7 @@
 
 #include "InspectorLayoutFixture.h"
 #include "InspectorRegistry.h"
-#include "Inspectors/NavigationSurfaceInspector.h"
+#include "Inspectors/Navigation/NavigationSurfaceInspector.h"
 
 #include "Core/Application.h"
 #include "Core/Engine.h"

@@ -72,4 +72,9 @@ std::span<const uint32> RecipeControllers::FenceRunSpanCounts(ECS::EntityHandle 
     return m_Fence->RunSpanCounts(entity);
 }
 
+std::span<const FenceMeshBounds> RecipeControllers::FencePartBounds(ECS::EntityHandle entity) const
+{
+    return m_Fence->PartBounds(entity);
+}
+
 } // namespace GameEngine::SplineRecipes

@@ -1,0 +1,29 @@
+<!-- The fence's preview strip (SplineFencePreview.h): the caption, the legend, the plot, and the
+     laid length of a scaled gate under the plot. The look is SplineRecipePreview.css. The ids are
+     the contract with SplineFencePreview.cpp. -->
+<SplineFencePreview class="spline-recipe-preview">
+  <UIElement class="spline-recipe-preview-header">
+    <Label id="spline-fence-preview-caption" class="spline-recipe-preview-caption" />
+    <UIElement class="spline-recipe-preview-legend">
+      <UIElement id="spline-fence-preview-legend-post" class="spline-recipe-preview-legend-entry">
+        <UIElement class="spline-recipe-preview-swatch spline-recipe-preview-swatch-post" />
+        <Label text="Post" />
+      </UIElement>
+      <UIElement id="spline-fence-preview-legend-span" class="spline-recipe-preview-legend-entry">
+        <UIElement class="spline-recipe-preview-swatch spline-recipe-preview-swatch-span" />
+        <Label text="Span" />
+      </UIElement>
+      <UIElement id="spline-fence-preview-legend-gate" class="spline-recipe-preview-legend-entry">
+        <UIElement class="spline-recipe-preview-swatch spline-recipe-preview-swatch-gate" />
+        <Label text="Gate" />
+      </UIElement>
+      <UIElement id="spline-fence-preview-legend-crest" class="spline-recipe-preview-legend-entry">
+        <UIElement class="spline-recipe-preview-swatch spline-recipe-preview-swatch-crest" />
+        <Label text="Crest" />
+      </UIElement>
+    </UIElement>
+  </UIElement>
+  <Label id="spline-fence-preview-note" class="spline-recipe-preview-note hidden" text="Dashed parts show a stand-in size. The scene has not measured their meshes yet." />
+  <UIElement id="spline-fence-preview-plot" class="spline-recipe-preview-plot" />
+  <Label id="spline-fence-preview-gate-length" class="spline-recipe-preview-note hidden" />
+</SplineFencePreview>

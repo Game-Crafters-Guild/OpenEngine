@@ -194,6 +194,10 @@ struct SaveOptions
 {
     bool ensureSceneEntityTags = true; // assign SceneEntityTag to entities that lack one
 
+    // If true, the file is a prefab file: it starts with the [prefab version=1] header. The world
+    // must hold one root entity, with the id "root", and every other id must be a valid prefab id.
+    bool writePrefabHeader = false;
+
     // If true, each prefab instance is saved as a [prefab] section (with its [resource] line) that holds
     // what the instance changes in its prefab, rather than flattened into [entity] blocks. The save
     // reads each prefab's path from assetResolver and refuses an instance it cannot name.

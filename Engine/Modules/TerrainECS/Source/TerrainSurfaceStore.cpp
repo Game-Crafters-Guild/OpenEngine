@@ -61,12 +61,12 @@ const char* SurfacePlaneName(PageFieldKind plane)
     }
 }
 
-PageStreaming::PageStoreHeader MakeSurfaceStoreHeader(const TiledTerrainData& tiled, PageFieldKind plane, uint64 key)
+PageStreaming::PageStoreHeader MakeSurfaceStoreHeader(const TiledTerrainConfig& config, PageFieldKind plane, uint64 key)
 {
     PageStreaming::PageStoreHeader header;
     SetSurfaceEncoding(plane, header);
-    header.SamplesX = tiled.Config.TilesPerAxisX * (tiled.Config.TileConfig.HeightmapWidth - 1u) + 1u;
-    header.SamplesZ = tiled.Config.TilesPerAxisZ * (tiled.Config.TileConfig.HeightmapHeight - 1u) + 1u;
+    header.SamplesX = config.TilesPerAxisX * (config.TileConfig.HeightmapWidth - 1u) + 1u;
+    header.SamplesZ = config.TilesPerAxisZ * (config.TileConfig.HeightmapHeight - 1u) + 1u;
     header.Key = key;
     return header;
 }

@@ -1,6 +1,6 @@
 #include "PageStreaming/HeightStoreKey.h"
 
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 
 #include "AssetCore/SharedFileRead.h"
 #include "FileSystem/FileSystem.h"

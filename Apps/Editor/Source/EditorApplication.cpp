@@ -169,7 +169,7 @@
 #include "EditorDebugMetrics.h"
 #include "Panels/PlayModeChangeReviewModal.h"
 #include "EditorVideoPlayerController.h"
-#include "Panels/ProjectFolderPickerModal.h"
+#include "Panels/ProjectPicker/ProjectPickerModal.h"
 #include "Panels/SaveSceneChangesModal.h"
 #include "EditorDockNodeJson.h"
 #include "Panels/SceneViewPanel.h"
@@ -233,8 +233,6 @@
 #include "Thumbnails/ThumbnailService.h"
 #include "Thumbnails/VideoThumbnailHandler.h"
 #include "UI/Controls/Button.h"
-#include "UI/Controls/TextField.h"
-#include "UI/Controls/TextArea.h"
 #include "Search/UniversalSearchController.h"
 #include "UI/Controls/DockOverlay.h"
 #include "UI/Controls/LayoutPresetToolbar.h"
@@ -338,23 +336,6 @@ Rendering::GraphicsAPI LoadPreferredGraphicsApi()
     if (api != Rendering::GraphicsAPI::Auto)
         Logger::Log::Info("Graphics API preference: {}", requested);
     return api;
-}
-
-
-// True if the current UI focus is in a TextField or TextArea (so Ctrl+I is not treated as the CSS inspector toggle).
-bool IsFocusInTextField(UIManager* ui)
-{
-    if (!ui) return false;
-    const std::string& focusId = ui->GetFocusedElementId();
-    if (focusId.empty()) return false;
-    UIElement* root = ui->GetRootElement();
-    if (!root) return false;
-    for (UIElement* el = root->FindById(HashStringId(focusId)); el; el = el->GetParent())
-    {
-        if (dynamic_cast<TextField*>(el) || dynamic_cast<TextArea*>(el))
-            return true;
-    }
-    return false;
 }
 
 namespace
@@ -1917,6 +1898,7 @@ bool EditorApplication::Initialize()
     m_EditorContext->FileWatcher = &FileWatchingService::GetInstance();
     m_EditorContext->Assets = &EngineCore::GetInstance().GetAssetManager();
     m_EditorContext->UndoRedo = m_UndoRedo.get();
+    m_EditorContext->ChangeNotifications = m_ChangeNotifications.get();
     m_EditorContext->PlayMode = m_PlayMode.get();
     m_EditorContext->DownloadManager = m_DownloadManager.get();
     m_EditorContext->RenderGraphTicks = &m_RenderGraphTicks;
@@ -1946,6 +1928,11 @@ bool EditorApplication::Initialize()
     }
 
     m_EditorContext->OnSceneDirty = [this]() { if (m_SceneEditor) m_SceneEditor->MarkSceneDirty(); };
+    m_EditorContext->AssetsPanelFolder = [this]()
+    {
+        const auto* assetsPanel = FindFirstPanelOfType<AssetsPanel>(m_PanelStorage);
+        return assetsPanel ? assetsPanel->GetVisibleAssetDirectory() : std::filesystem::path{};
+    };
     m_EditorContext->SceneBuildProgress = [this](uint64_t& processed, uint64_t& total) {
         return m_SceneEditor && m_SceneEditor->GetSceneBuildProgress(processed, total);
     };
@@ -2410,7 +2397,7 @@ bool EditorApplication::Initialize()
                 "UI/panels/BuildPanel.css","UI/panels/MovieRecorderPanel.css",
                 "UI/theme/node-graph.css",
                 "UI/controls/EditorTopToolbar.uxml", "UI/controls/EditorTopToolbar.css",
-                "UI/controls/ProjectPicker.uxml", "UI/controls/ProjectPicker.css",
+                "UI/controls/ProjectPicker/ProjectPicker.uxml", "UI/controls/ProjectPicker/ProjectPicker.css",
                 // Panel UXML + CSS that actually exist on disk.
                 // Only panels with separate .uxml/.css files are listed here.
                 "UI/panels/SceneViewPanel.uxml", "UI/panels/SceneViewPanel.css",
@@ -2689,7 +2676,7 @@ bool EditorApplication::Initialize()
     // Create minimal GameViewController for this window (ECS camera -> engine("game_main")).
     mainCtx->gameView = std::make_unique<GameViewController>(
         mainCtx->renderCtx ? mainCtx->renderCtx->GetRenderServices() : nullptr,
-        m_AssetsDirectory);
+        m_ChangeNotifications.get());
 
     // Reserve capacity for the main window + a few tool windows (color picker, tear-offs).
     // This reduces the chance of m_Windows reallocating during iteration when a tool window
@@ -2904,7 +2891,7 @@ bool EditorApplication::Initialize()
             {
                 if (auto* rootEl = main->ui->GetRootElement())
                 {
-                    auto modal = std::make_unique<ProjectFolderPickerModal>();
+                    auto modal = std::make_unique<ProjectPickerModal>();
                     modal->SetOnFolderSelected([this](const std::filesystem::path& path)
                                                {
                         m_SelectedProjectPath = path;
@@ -2917,7 +2904,7 @@ bool EditorApplication::Initialize()
                         // For now, continue with default workspace
                         m_ProjectFolderSelected = false; });
 
-                    m_ProjectFolderModal = modal.get();
+                    m_ProjectPickerModal = modal.get();
                     rootEl->AddChild(std::move(modal));
 
                     const auto& config = GetConfig();
@@ -2956,8 +2943,8 @@ bool EditorApplication::Initialize()
                                                   lastProject->string());
                                 m_SelectedProjectPath = *lastProject;
                                 m_ProjectFolderSelected = true;
-                                if (m_ProjectFolderModal)
-                                    m_ProjectFolderModal->SetPath(*lastProject);
+                                if (m_ProjectPickerModal)
+                                    m_ProjectPickerModal->SetPath(*lastProject);
                                 SetProjectFolder(*lastProject, /*outgoingChangesDiscarded=*/false);
                                 autoLoaded = true;
                             }
@@ -2972,13 +2959,13 @@ bool EditorApplication::Initialize()
                         if (!autoLoaded)
                         {
                             Logger::Log::Info("Editor: Showing project folder picker");
-                            m_ProjectFolderModal->Show();
+                            m_ProjectPickerModal->Show();
 
 #if defined(__APPLE__)
                             try
                             {
                                 const auto global = GameEngine::Editor::GetEditorGlobalPaths();
-                                m_ProjectFolderModal->SetPath(global.defaultProjectRoot);
+                                m_ProjectPickerModal->SetPath(global.defaultProjectRoot);
                             }
                             catch (...) {}
 #endif
@@ -2990,9 +2977,9 @@ bool EditorApplication::Initialize()
                         std::filesystem::path explicitProject = std::filesystem::path(config.WorkspaceDirectory);
                         m_SelectedProjectPath = explicitProject;
                         m_ProjectFolderSelected = true;
-                        if (m_ProjectFolderModal)
+                        if (m_ProjectPickerModal)
                         {
-                            m_ProjectFolderModal->SetPath(explicitProject);
+                            m_ProjectPickerModal->SetPath(explicitProject);
                         }
                         GameEngine::Editor::SettingsStore prefs = GameEngine::Editor::OpenEditorPreferences();
                         std::string err;
@@ -4635,16 +4622,16 @@ bool EditorApplication::Initialize()
                             });
                         };
                         toolbarCb.onProjectFolderClicked = [this]() {
-                            if (m_ProjectFolderModal)
+                            if (m_ProjectPickerModal)
                             {
                                 auto& engine = EngineCore::GetInstance();
                                 std::filesystem::path currentWorkspace = engine.GetWorkspaceRoot();
                                 if (!currentWorkspace.empty())
-                                    m_ProjectFolderModal->SetPath(currentWorkspace);
-                                m_ProjectFolderModal->Show();
+                                    m_ProjectPickerModal->SetPath(currentWorkspace);
+                                m_ProjectPickerModal->Show();
                                 // The toolbar opens the picker over a usable editor
                                 // session, so the user must always be able to dismiss it.
-                                m_ProjectFolderModal->SetShowButtons(true);
+                                m_ProjectPickerModal->SetShowButtons(true);
                             }
                         };
                         toolbarCb.onFullscreenToggleClicked = [this]() {
@@ -4957,7 +4944,7 @@ bool EditorApplication::Initialize()
             searchDeps.SceneEditor = m_SceneEditor.get();
             searchDeps.PlayMode = m_PlayMode.get();
             searchDeps.UndoRedo = m_UndoRedo.get();
-            searchDeps.ProjectFolderModal = m_ProjectFolderModal;
+            searchDeps.ProjectPicker = m_ProjectPickerModal;
             searchDeps.GetWorld = [this]() { return m_EditorContext ? m_EditorContext->World : nullptr; };
             searchDeps.GetProjectRoot = []() { return EngineCore::GetInstance().GetWorkspaceRoot(); };
             searchDeps.ResetLayout = [this]() { ResetLayoutToDefault(); };
@@ -5237,10 +5224,10 @@ void EditorApplication::OpenPickedProject(const std::filesystem::path& projectPa
         return;
     }
     // The save prompt is answered with the picker closed: it would otherwise sit over the prompt.
-    if (m_SceneEditor->IsSceneDirty() && m_ProjectFolderModal)
+    if (m_SceneEditor->IsSceneDirty() && m_ProjectPickerModal)
     {
-        m_ProjectFolderModal->HideLoading();
-        m_ProjectFolderModal->Hide();
+        m_ProjectPickerModal->HideLoading();
+        m_ProjectPickerModal->Hide();
     }
     m_SceneEditor->PromptSaveBefore(
         "opening another project",
@@ -5271,9 +5258,9 @@ void EditorApplication::SetProjectFolder(const std::filesystem::path& projectPat
     {
         Logger::Log::Error("Editor: Project folder does not exist or is not a directory: {}", projectPath.string());
         // Hide loading indicator on error
-        if (m_ProjectFolderModal)
+        if (m_ProjectPickerModal)
         {
-            m_ProjectFolderModal->HideLoading();
+            m_ProjectPickerModal->HideLoading();
         }
         return;
     }
@@ -5361,8 +5348,8 @@ void EditorApplication::RollBackProjectFolderSwitch(const ProjectSwitch& pending
                                                   // project's packages remount against it.
                                                   m_Packages->MountForProject(
                                                       EngineCore::GetInstance().GetWorkspaceRoot());
-                                                  if (m_ProjectFolderModal)
-                                                      m_ProjectFolderModal->HideLoading();
+                                                  if (m_ProjectPickerModal)
+                                                      m_ProjectPickerModal->HideLoading();
                                                   m_ProjectSwitchPending = false;
                                               });
     if (started)
@@ -5371,8 +5358,8 @@ void EditorApplication::RollBackProjectFolderSwitch(const ProjectSwitch& pending
     Logger::Log::Error("Editor: could not roll the project source back to '{}'",
                        pending.OldAssetRoot.string());
     m_Packages->MountForProject(EngineCore::GetInstance().GetWorkspaceRoot());
-    if (m_ProjectFolderModal)
-        m_ProjectFolderModal->HideLoading();
+    if (m_ProjectPickerModal)
+        m_ProjectPickerModal->HideLoading();
     m_ProjectSwitchPending = false;
 }
 
@@ -5480,11 +5467,11 @@ void EditorApplication::FinishProjectFolderSwitch(const ProjectSwitch& pending)
 
     // Dismiss the project picker before scanning Assets/ and updating thumbnails. LoadDirectory and
     // grid refresh can take noticeable time on large projects; those are not required to close the modal.
-    if (m_ProjectFolderModal)
+    if (m_ProjectPickerModal)
     {
-        m_ProjectFolderModal->SetPath(projectPath);
-        m_ProjectFolderModal->AddToRecentProjects(projectPath);
-        m_ProjectFolderModal->Hide();
+        m_ProjectPickerModal->SetPath(projectPath);
+        m_ProjectPickerModal->AddToRecentProjects(projectPath);
+        m_ProjectPickerModal->Hide();
     }
 
     const std::filesystem::path deferredProjectPath = projectPath;
@@ -6365,9 +6352,9 @@ void EditorApplication::Update(float64 deltaTime)
     }
 
     // Update project folder picker modal to process deferred folder loading
-    if (m_ProjectFolderModal)
+    if (m_ProjectPickerModal)
     {
-        m_ProjectFolderModal->Update();
+        m_ProjectPickerModal->Update();
     }
 
     TryOpenDeferredStartupScene();
@@ -7938,7 +7925,7 @@ void EditorApplication::Render()
             {
                 const bool webTabInactive = !ctx->docking->IsPanelActiveTab(EditorPanelIds::Web);
                 const bool projectPickerBlocking =
-                    m_ProjectFolderModal != nullptr && m_ProjectFolderModal->ShouldSuppressNativeWebView();
+                    m_ProjectPickerModal != nullptr && m_ProjectPickerModal->ShouldSuppressNativeWebView();
                 const bool sceneModalBlocking =
                     m_SceneEditor && m_SceneEditor->IsAnyModalOpen();
                 const bool videoModalBlocking = m_VideoPlayer.IsOpen();

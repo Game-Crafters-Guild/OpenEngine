@@ -516,7 +516,7 @@ void ValidateBlueprint(RenderPipelineBlueprint& bp, const RenderPipelineNodeRegi
     // blueprint predates the SSR targets), so it is valid without a declaration.
     std::unordered_set<std::string> validSet = {Names::View::Color, Names::View::Depth,
                                                 Names::View::Resolve, Names::View::DepthResolved,
-                                                Names::View::NormalRoughness};
+                                                Names::View::NormalRoughness, Names::View::BloomSampleDelta};
     for (const auto& r : bp.resources)
         validSet.insert(r.name);
     for (size_t i = 0; i < bp.passes.size(); ++i)
@@ -1784,6 +1784,8 @@ void RenderPipelineInstance::Declare(Rendering::RenderGraph::RGFrame& frame,
             m_FrameResources.PreExposedTextures[color.Id] = v->id;
         m_FrameResources.Textures[{v->id, Names::View::Depth}] = rasterDepth;
         m_FrameResources.Textures[{v->id, Names::View::Resolve}] = resolve;
+        if (samples > 1 && m_Rs.GetEffectivePostProcessSettings(v->id, v->worldId).IsBloomActive())
+            DeclareBloomSampleDelta(frame, v->id, resolve);
         m_FrameResources.Textures[{v->id, Names::View::DepthResolved}] = rasterDepth;
         if (splitActive)
         {
@@ -1866,6 +1868,7 @@ void RenderPipelineInstance::Declare(Rendering::RenderGraph::RGFrame& frame,
             d.ViewColor = TableTexture(v->id, Names::View::Color);
             d.ViewDepth = TableTexture(v->id, Names::View::Depth);
             d.ViewResolve = TableTexture(v->id, Names::View::Resolve);
+            d.ViewBloomSampleDelta = TableTexture(v->id, Names::View::BloomSampleDelta);
             d.ViewDepthResolved = TableTexture(v->id, Names::View::DepthResolved);
             d.ViewOccluderDepthResolved = TableTexture(v->id, Names::View::OccluderDepthResolved);
             if (!d.ViewOccluderDepthResolved.IsValid())
@@ -1898,6 +1901,35 @@ RenderPipelineInstance::FindResourceDescription(const std::string& name) const
 {
     const auto found = m_ResourceDescriptions.find(name);
     return found == m_ResourceDescriptions.end() ? nullptr : found->second.get();
+}
+
+void RenderPipelineInstance::DeclareBloomSampleDelta(Rendering::RenderGraph::RGFrame& frame, Rendering::ViewId viewId,
+                                                     Rendering::RenderGraph::RGTexture resolve)
+{
+    if (!resolve.IsValid())
+        return;
+    const Rendering::RenderGraph::RGResourceDesc& resolveDesc = frame.Graph().ResourceDesc(resolve.Id);
+    if (resolveDesc.SampleCount != 1)
+        return;
+    Rendering::TextureDesc td{};
+    td.width = resolveDesc.Width;
+    td.height = resolveDesc.Height;
+    td.depth = 1;
+    td.mipLevels = 1;
+    td.arrayLayers = 1;
+    td.sampleCount = 1;
+    // The scene color's format: the delta is signed and has the HDR range of the samples.
+    td.format = resolveDesc.Format;
+    td.usage = static_cast<uint32_t>(Rendering::TextureUsage::RenderTarget) |
+               static_cast<uint32_t>(Rendering::TextureUsage::ShaderResource);
+    const std::string name = "Pipeline.View" + std::to_string(static_cast<uint32_t>(viewId)) + ".BloomSampleDelta";
+    td.debugName = name.c_str();
+    // Pool-persistent: a FullscreenShader input binds its physical at declaration, before a transient exists.
+    const Rendering::RenderGraph::RGTexture delta = frame.ImportPersistentTexture(name.c_str(), td);
+    if (!delta.IsValid())
+        return;
+    m_FrameResources.Textures[{viewId, Names::View::BloomSampleDelta}] = delta;
+    m_FrameResources.PreExposedTextures[delta.Id] = viewId;
 }
 
 Rendering::RenderGraph::RGTexture RenderPipelineInstance::MaterializeTexture(

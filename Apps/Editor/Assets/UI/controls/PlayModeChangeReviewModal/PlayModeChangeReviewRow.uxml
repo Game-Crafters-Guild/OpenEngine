@@ -1,0 +1,6 @@
+<!-- One change row of PlayModeChangeReviewModal (Apps/Editor/Include/Panels/PlayModeChangeReviewModal.h): the
+     toggle that keeps the change and its name. The classes are the contract with PlayModeChangeReviewModal.cpp. -->
+<UIElement class="pmcr-row">
+  <Toggle class="pmcr-toggle" />
+  <Label class="pmcr-row-label" />
+</UIElement>

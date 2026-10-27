@@ -86,6 +86,10 @@ public:
     /// whoever binds it. Native menus may ignore this when not supported.
     virtual void SetItemShortcut(uint32_t commandId, const std::string& keyText) { (void)commandId; (void)keyText; }
 
+    /// Optional: the text a pointer on the item shows, also on a disabled item, where it says why the
+    /// item is off and what to do. Native menus may ignore this when not supported.
+    virtual void SetItemTooltip(uint32_t commandId, const std::string& text) { (void)commandId; (void)text; }
+
     // Show menu at (x, y) relative to the client area of `window`.
     virtual void Show(Platform::Window* window, int x, int y) = 0;
 };
@@ -97,6 +101,7 @@ struct ContextMenuItemDesc {
     int         Priority = 0;
     std::string IconPath;
     std::string Shortcut;  // the key that runs CommandId, as SetItemShortcut shows it; empty for none
+    std::string Tooltip;   // the text SetItemTooltip shows on the item; empty for none
 };
 
 // Build a menu from path-based descriptors.
@@ -112,9 +117,10 @@ public:
                                 uint32_t Flags    = MenuItemFlag_None,
                                 int      Priority = 0,
                                 const std::string& IconPath = {},
-                                const std::string& Shortcut = {})
+                                const std::string& Shortcut = {},
+                                const std::string& Tooltip = {})
     {
-        m_Items.push_back({ path, commandId, Flags, Priority, IconPath, Shortcut });
+        m_Items.push_back({ path, commandId, Flags, Priority, IconPath, Shortcut, Tooltip });
         return *this;
     }
 

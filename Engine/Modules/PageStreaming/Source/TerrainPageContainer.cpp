@@ -1,11 +1,11 @@
 #include "PageStreaming/TerrainPageContainer.h"
 
-#include "PageStreaming/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
 
 #include "AssetCore/SharedFileRead.h"
 #include "FileSystem/FileSystem.h"
 #include "NonInheritedFile.h"
-#include "PageStoreSerialization.h"
+#include "PageStore/PageStoreSerialization.h"
 
 #include <cstring>
 #include <system_error>

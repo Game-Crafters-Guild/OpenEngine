@@ -7,11 +7,10 @@
 #include "NonInheritedFile.h"
 #include "PageFaceSeams.h"
 #include "PagePyramidBuilder.h"
-#include "PageStreaming/PageStoreWriter.h"
+#include "PageStreaming/PageStore/PageStoreWriter.h"
 
 #include "FileSystem/FileSystem.h"
 #include "JobSystem/WorkStealingThreadPool.h"
-#include "Mathematics/CubeFaces.h"
 #include "Mathematics/Vector3.h"
 
 #include <algorithm>
@@ -29,17 +28,6 @@ namespace GameEngine::PageStreaming
 {
 namespace
 {
-
-// A planet face's samples a side is valid when every level but the last halves evenly, so each
-// level has a sample on both of the face's edges.
-bool PlanetFaceSamplesHalve(uint32 samples)
-{
-    const std::vector<PageStoreLevel> levels = BuildPageStoreLevels(samples, samples);
-    for (std::size_t level = 0; level + 1u < levels.size(); ++level)
-        if ((levels[level].SamplesX - 1u) % 2u != 0)
-            return false;
-    return samples >= 5u;
-}
 
 // The level-0 lattice of a planet: the gnomonic coordinate of every sample index, and the height
 // at each sample's direction.
@@ -62,9 +50,10 @@ public:
         std::atomic<bool> finite{true};
         JobSystem::ParallelFor(m_Request.Pool, count, [&](size_t bandRow) {
             float32* row = out.data() + bandRow * samples;
+            const uint32 z = firstRow + static_cast<uint32>(bandRow);
             for (uint32 x = 0; x < samples; ++x)
             {
-                row[x] = Height(face, x, firstRow + static_cast<uint32>(bandRow));
+                row[x] = m_Request.Height(face, x, z, GnomonicFaceDirection(face, m_Gnomonic[x], m_Gnomonic[z]));
                 if (!std::isfinite(row[x]))
                     finite.store(false);
             }
@@ -73,29 +62,6 @@ public:
     }
 
 private:
-    // The height at sample (x, z) of `face`. The direction is built per world axis from the face's
-    // axes, so a sample on an edge has the same direction, bit for bit, on both faces.
-    float32 Height(uint8 face, uint32 x, uint32 z) const
-    {
-        const Mathematics::CubeFaceAxes& axes = Mathematics::kCubeFaceAxes[face];
-        const float64 cubeX = CubeComponent(axes, 0, m_Gnomonic[x], m_Gnomonic[z]);
-        const float64 cubeY = CubeComponent(axes, 1, m_Gnomonic[x], m_Gnomonic[z]);
-        const float64 cubeZ = CubeComponent(axes, 2, m_Gnomonic[x], m_Gnomonic[z]);
-        const float64 inverseLength = 1.0 / std::sqrt(cubeX * cubeX + cubeY * cubeY + cubeZ * cubeZ);
-        return m_Request.Height(face, x, z,
-                                Mathematics::Vector3(static_cast<float32>(cubeX * inverseLength),
-                                                     static_cast<float32>(cubeY * inverseLength),
-                                                     static_cast<float32>(cubeZ * inverseLength)));
-    }
-
-    // The component along world axis `worldAxis` of the point (x, z) on the cube face `axes`.
-    static float64 CubeComponent(const Mathematics::CubeFaceAxes& axes, uint8 worldAxis, float64 x, float64 z)
-    {
-        if (worldAxis == axes.NormalAxis)
-            return axes.NormalSign;
-        return worldAxis == axes.XAxis ? axes.XSign * x : axes.ZSign * z;
-    }
-
     const PlanetCookRequest& m_Request;
     std::vector<float64> m_Gnomonic;
 };

@@ -95,8 +95,8 @@ SplineFillResult BuildSplineFillField(std::span<const SplineStripStation> statio
         return result;
 
     // The floor stands a hair above the level it names, so a mouth that merges
-    // with a sea sits ON it rather than IN its surface (kSeaLevelFloorLiftMetres).
-    const float32 seaFloor = params.SeaLevelFloor + kSeaLevelFloorLiftMetres;
+    // with a sea sits ON it rather than IN its surface (kFloorHeightLiftMetres).
+    const float32 seaFloor = params.FloorHeight + kFloorHeightLiftMetres;
 
     const uint32 cornerCount = ground.CornerCount();
     result.Corners.assign(cornerCount, SplineFillCorner{});

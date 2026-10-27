@@ -201,6 +201,7 @@ void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
             targets.Color = d.ViewColor;
             targets.Depth = d.ViewDepth;
             targets.Resolve = d.ViewResolve;
+            targets.BloomSampleDelta = d.ViewBloomSampleDelta;
             targets.DepthResolved = d.ViewDepthResolved;
             targets.SkyBackdrop = d.ResolveTexture(Engine::Renderer::Pipeline::Names::Res::SkyBackdrop);
             targets.ResolveFromPipeline = d.ResolveFromPipeline;

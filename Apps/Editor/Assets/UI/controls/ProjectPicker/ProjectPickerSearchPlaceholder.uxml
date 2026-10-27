@@ -1,0 +1,4 @@
+<!-- The hint inside the library's search bar. The picker hides it while the field holds text; the styles are in
+     ProjectPicker.css. -->
+<Label class="project-picker-small-text project-picker-search-placeholder"
+       text="Search projects" />

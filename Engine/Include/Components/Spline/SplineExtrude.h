@@ -84,30 +84,24 @@ enum class SplineExtrudeWidthMode : int32
     FitToBanks = 1,
 };
 
-// "No sea-level floor" for SplineExtrude::SeaLevelFloor. See that field.
-inline constexpr float32 kNoSeaLevelFloor = std::numeric_limits<float32>::lowest();
+// "No floor height" for SplineExtrude::FloorHeight. See that field.
+inline constexpr float32 kNoFloorHeight = std::numeric_limits<float32>::lowest();
 
-// What a generated run does to the terrain under it.
-//
-// A run and the ground beneath it are one thing to whoever places it — a road is
-// a road, not a mesh plus a graded region plus a claim — so the recipe declares
-// the relationship and the editor provisions the terrain effects that implement
-// it. Nothing here is a new terrain mechanism: Grades IS a pooled flatten effect
-// and Owns adds the ground claim, on exactly the volume a hand-authored route
-// carries.
+// What an extrude does to the terrain under it. The recipe declares it, and the editor makes the
+// terrain effects that apply it: Grades is a pooled flatten effect, and Owns adds the ground claim
+// on the volume that a hand-authored route carries.
 enum class SplineGroundAuthority : int32
 {
-    // Read the choice off the cross-section, which is where the author already
-    // said what kind of run this is (ResolveGroundAuthority below).
+    // Read the choice from the cross-section, where the author already says what kind of extrude
+    // this is (ResolveGroundAuthority below).
     Auto = 0,
-    // Leave the terrain alone; the run lies on whatever ground it finds.
+    // Leave the terrain alone; the extrude lies on the ground it finds.
     None = 1,
-    // The terrain follows the run's own heights, fading out to either side.
+    // The terrain follows the heights of the extrude and fades out to each side.
     Grades = 2,
-    // Grades, and OWNS the ground it graded, so other routes stop at its edge
-    // rather than grading through. A run that owns its ground does NOT defer to
-    // claims: its pool reads ownership at the flush, by which time its own claim
-    // is in place, and a deferring road holds itself off its own route.
+    // Grades, and owns the ground it graded, so other routes stop at its edge. It does not defer to
+    // claims: its pool reads ownership at the flush, after its own claim is in place, so a road
+    // that defers would hold itself off its own route.
     Owns = 3,
 };
 
@@ -125,20 +119,30 @@ enum class SplineGroundAuthority : int32
 // overlap, and no quantised count to jump when its length changes.
 struct SplineExtrude
 {
+    // @ge-tooltip The shape of the cross-section. Bevel is a flat strip whose edges drop, for a path or a stream. Crown is a road that is higher at the center, with a shoulder at each side.
     SplineExtrudeProfile Profile = SplineExtrudeProfile::Bevel;
     // Lateral extent of the cross-section in metres, before the width channel
     // scales it.
+    // @ge-tooltip The width of the cross-section in meters, before the spline's width channel scales it.
     float32 Width = 2.0f;
-    // Bevel only: how far the outer edge drops below the walkable surface, and
-    // how far in from that edge the surface stays flat.
+    // How far the outer edge drops below the walkable surface. It is also how
+    // far a tapered end and the rim of a filled region sink. EdgeInset, Bevel
+    // only: how far in from that edge the surface stays flat.
+    // @ge-tooltip How far the outer edge drops below the surface, in meters. A tapered end sinks by the same distance. With Fit To Banks, how far the edge of the water sinks into the bank.
     float32 EdgeDrop = 0.1f;
+    // @ge-tooltip How far in from the edge the surface stays flat, in meters.
     float32 EdgeInset = 0.15f;
     // Crown only: camber rise at the centreline, and the shoulder beyond Width.
+    // @ge-tooltip How much higher the center line is than the edges, in meters.
     float32 CrownRise = 0.12f;
+    // @ge-tooltip The width of the shoulder at each side of the road, in meters.
     float32 ShoulderWidth = 0.5f;
+    // @ge-tooltip How far each shoulder drops below the edge of the road, in meters.
     float32 ShoulderDrop = 0.2f;
 
+    // @ge-tooltip What the spline's width channel changes. Lateral Only makes the cross-section wider and keeps its height. Uniform scales its width and height. None ignores the width channel.
     SplineExtrudeWidthScale WidthScale = SplineExtrudeWidthScale::LateralOnly;
+    // @ge-tooltip Channel sweeps the cross-section along the spline. Fit To Banks fills the area that the ground holds at the height of the spline, for water such as a river or a lake.
     SplineExtrudeWidthMode WidthMode = SplineExtrudeWidthMode::Channel;
     // FitToBanks only: the search radius around the spline, in metres. The fill
     // stamps and floods only corners within this distance of a station, so it
@@ -152,6 +156,8 @@ struct SplineExtrude
     // are reported as UnseenBankCorners — raise this until the banks are inside
     // it — which is a different instruction from a channel that is simply too
     // shallow, so the fill counts the two separately.
+    // @ge-label Search Reach
+    // @ge-tooltip How far from the spline the fill looks for banks, in meters. Increase it when the build reports banks it cannot see.
     float32 MaxHalfWidth = 12.0f;
     // FitToBanks only: an altitude the water surface never falls below, in world
     // metres. A river mouth reaching a sea at a known level then merges into the
@@ -163,7 +169,8 @@ struct SplineExtrude
     // state therefore needs no branch and is never compared for equality, so it
     // cannot be broken by a scene round-trip. A NaN sentinel would be far worse
     // than useless here — see the memberwise == note below.
-    float32 SeaLevelFloor = kNoSeaLevelFloor;
+    // @ge-tooltip The lowest world height of the filled surface, in meters. Set it where a river meets a sea or a lake of known height, so that the two surfaces join. None means that the surface has no floor.
+    float32 FloorHeight = kNoFloorHeight;
     // Metres of run at EACH open end over which the ring pinches smoothly to
     // nothing and sinks EdgeDrop below the surface, so a run ends in a buried
     // point rather than a square cut across its full cross-section.
@@ -178,11 +185,13 @@ struct SplineExtrude
     // loop has no end and ignores it. The tuck depth IS EdgeDrop, so a profile
     // with none — the flat water ribbon — pinches in the surface plane and does
     // not bury its point.
-    // @ge-label End Taper Meters
+    // @ge-label End Taper
+    // @ge-tooltip The length in meters over which each open end narrows to a point and sinks by Edge Drop. 0 keeps the ends square.
     float32 EndTaperMetres = 0.0f;
     // Height-only by default: the sweep already pitches with the draped grade,
     // so the per-station surface normal that a rigid tile needs for its lean is
     // not what orients a ring.
+    // @ge-tooltip How the extrude meets the surface under the spline. None keeps the heights of the spline. Height puts the extrude on the surface. Height And Slope also tilts it with the surface.
     SplinePlacementConform ConformMode = SplinePlacementConform::Height;
     // What the conform ray may land on. Scene (the default) is every pickable
     // surface; TerrainOnly makes scenery transparent so a swept ribbon follows
@@ -190,9 +199,11 @@ struct SplineExtrude
     // @ge-tooltip What the conform ray may land on. Scene takes the nearest surface of any kind, so a ribbon passing under a tree or a bridge is swept over its roof; TerrainOnly makes scenery transparent so the ribbon follows the ground beneath it. Under TerrainOnly the drawn drape line can still ride scene props while the generated geometry follows the terrain under them; the line does not read this setting yet.
     SplineConformTarget ConformTarget = SplineConformTarget::Scene;
     // Metres to the right of travel; negative = left.
+    // @ge-tooltip Moves the extrude to the right of the direction of travel, in meters. A negative value moves it to the left.
     float32 LateralOffset = 0.0f;
     // Metres above the conformed surface. A water ribbon wants a small positive
     // lift so it reads as sitting in its bed rather than z-fighting the bank.
+    // @ge-tooltip Raises the extrude above the surface it follows, in meters. A water surface needs a small lift to sit in its bed without flicker.
     float32 VerticalOffset = 0.0f;
 
     // Texture density in world metres, never normalized: U runs along the
@@ -207,23 +218,28 @@ struct SplineExtrude
     // those metres. FitToBanks therefore IGNORES these two rather than honouring
     // them.
     // @ge-label Tiles Per Meter U
+    // @ge-tooltip How many times the texture repeats per meter along the extrude.
     float32 TilesPerMetreU = 1.0f;
     // @ge-label Tiles Per Meter V
+    // @ge-tooltip How many times the texture repeats per meter across the extrude.
     float32 TilesPerMetreV = 1.0f;
 
     // Replaces the generated geometry's default material. Null keeps the
     // built-in one, so dropping the recipe on a spline renders something on the
     // first try rather than nothing.
+    // @ge-tooltip The material of the generated surface. Empty uses the built-in material.
     MaterialRef Material;
 
     // What this run does to the terrain under it. Auto — the default — reads the
     // answer off Profile and WidthMode, so dropping a road recipe on a spline
     // grades and claims the ground without anyone opening the terrain effects at
     // all. See ResolveGroundAuthority below.
-    // @ge-tooltip What this run does to the ground under it. Auto reads it off the cross-section: a path grades the terrain to its own heights, a road grades and OWNS its ground so other routes stop at its edge, and a filled water region leaves the terrain alone. Setting it explicitly provisions the terrain effects on this entity; the fields on those effects stay yours to tune afterwards. Setting it to None removes the effects THIS FIELD created (undoable, and reported in the log); components you added by hand are never touched or removed by it. Deleting a recipe-created Flatten or Ground Claim by hand does not stick - the run provisions it again while the authority still grades.
+    // @ge-tooltip What the extrude does to the terrain under it. Auto reads it from the cross-section: a path grades the terrain to its heights, a road grades and owns its ground so other routes stop at its edge, and a filled water region leaves the terrain alone. Another value adds its terrain effects to this entity, and you can tune their fields. None removes only the effects that this field added, and you can undo it. While the extrude grades, it adds again a Flatten or Ground Claim of its own that you delete.
     SplineGroundAuthority GroundAuthority = SplineGroundAuthority::Auto;
 
+    // @ge-tooltip The generated surface casts shadows.
     bool CastShadows = true;
+    // @ge-tooltip Shadows fall on the generated surface.
     bool ReceiveShadows = true;
 
     // Memberwise: the rebuild scheduler compares whole recipes, so a
@@ -318,7 +334,7 @@ static_assert(std::is_standard_layout_v<SplineExtrude>,
 // read as hand-authored and cleanup leaves them in place — the conservative
 // direction: an orphaned effect is visible and deletable, a deleted authored one
 // is gone.
-// @ge-tooltip Recipe bookkeeping: which of this run's terrain effects the Ground Authority created. Cleanup on an authority change removes only the pieces marked here; anything you added by hand stays yours.
+// @ge-tooltip The terrain effects of this extrude that Ground Authority added. A change of Ground Authority removes only these. Effects that you add by hand stay.
 struct SplineGroundProvisioned
 {
     bool Flatten = false;

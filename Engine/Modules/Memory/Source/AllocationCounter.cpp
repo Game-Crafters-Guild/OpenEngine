@@ -4,7 +4,7 @@
 //
 // One copy per process. The Memory module compiles it into Engine; a test executable
 // that links neither Engine nor the Memory module compiles its own copy. A target that
-// links either sees GE_ALLOCATION_COUNTER_LINKED (set on this file alone, from the
+// links either sees GE_ALLOCATION_COUNTER_LINKED (set on the test target, from the
 // link-interface property Memory and Engine carry: cmake/AllocationHook.cmake) and
 // compiles this file empty, so its hook and its scopes reach the linked copy instead of
 // a second counter that the linked images would never feed.

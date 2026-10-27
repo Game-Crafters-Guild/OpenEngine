@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,12 @@ namespace GameEngine::Editor
 std::filesystem::path MakeUniqueFilePath(const std::filesystem::path& dir,
                                          const std::string& baseStem,
                                          const std::string& extensionWithDot);
+
+// The path of `fileName` in `dir`, or of "Stem (1).ext", "Stem (2).ext" and on while that is taken, as a
+// paste names a copy. A path in `reserved` counts as taken, so a batch names each file once. Empty when
+// 9999 numbers are taken.
+std::filesystem::path MakeNumberedFilePath(const std::filesystem::path& dir, const std::filesystem::path& fileName,
+                                           std::span<const std::filesystem::path> reserved = {});
 
 struct AssetFileResult
 {

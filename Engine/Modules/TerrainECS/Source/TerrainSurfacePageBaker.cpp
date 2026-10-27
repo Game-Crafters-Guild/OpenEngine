@@ -1,14 +1,16 @@
 #include "TerrainECS/TerrainSurfacePageBaker.h"
 
 #include "TerrainECS/TerrainModifierSystem.h"
-#include "TerrainECS/TerrainService.h"
+#include "TerrainECS/TerrainSurfaceBakeInputs.h"
 #include "TerrainECS/TerrainSurfaceStore.h"
 
-#include "PageStreaming/PageStorePatcher.h"
-#include "PageStreaming/PageStoreReader.h"
-#include "PageStreaming/PageStoreWriter.h"
+#include "PageStreaming/PageStore/PageStoreAccess.h"
+#include "PageStreaming/PageStore/PageStorePatcher.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreWriter.h"
 
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Logger/Logger.h"
 
 #include <algorithm>
 #include <optional>
@@ -46,14 +48,11 @@ struct FetchedHeightPages
     }
 };
 
-// Every height page next to or under one of `pages`, fetched.
-FetchedHeightPages FetchHeightPages(const SurfaceHeightPageFetch& fetch, const PageStoreLevel& shape, uint32 level,
-                                    std::span<const PageAddress> pages, JobSystem::WorkStealingThreadPool* pool)
+// The dense rect of height pages of `level` next to or under one of `pages` (not empty).
+FetchedHeightPages HeightFetchRect(const PageStoreLevel& shape, uint32 level, std::span<const PageAddress> pages)
 {
-    FetchedHeightPages fetched;
-    fetched.Level = level;
-    if (pages.empty())
-        return fetched;
+    FetchedHeightPages rect;
+    rect.Level = level;
     uint32 minX = pages.front().X, maxX = pages.front().X, minZ = pages.front().Z, maxZ = pages.front().Z;
     for (const PageAddress& page : pages)
     {
@@ -62,10 +61,32 @@ FetchedHeightPages FetchHeightPages(const SurfaceHeightPageFetch& fetch, const P
         minZ = std::min(minZ, page.Z);
         maxZ = std::max(maxZ, page.Z);
     }
-    fetched.FirstX = minX == 0u ? 0u : minX - 1u;
-    fetched.FirstZ = minZ == 0u ? 0u : minZ - 1u;
-    fetched.CountX = std::min(maxX + 1u, shape.PagesX - 1u) - fetched.FirstX + 1u;
-    fetched.CountZ = std::min(maxZ + 1u, shape.PagesZ - 1u) - fetched.FirstZ + 1u;
+    rect.FirstX = minX == 0u ? 0u : minX - 1u;
+    rect.FirstZ = minZ == 0u ? 0u : minZ - 1u;
+    rect.CountX = std::min(maxX + 1u, shape.PagesX - 1u) - rect.FirstX + 1u;
+    rect.CountZ = std::min(maxZ + 1u, shape.PagesZ - 1u) - rect.FirstZ + 1u;
+    return rect;
+}
+
+// Adds the height pages of HeightFetchRect to `out`.
+void AddHeightFetchRect(const PageStoreLevel& shape, uint32 level, std::span<const PageAddress> pages,
+                        std::vector<PageAddress>& out)
+{
+    if (pages.empty())
+        return;
+    const FetchedHeightPages rect = HeightFetchRect(shape, level, pages);
+    for (uint32 z = 0; z < rect.CountZ; ++z)
+        for (uint32 x = 0; x < rect.CountX; ++x)
+            out.push_back(PageAddress{0, static_cast<uint8>(level), rect.FirstX + x, rect.FirstZ + z});
+}
+
+// Every height page next to or under one of `pages`, fetched.
+FetchedHeightPages FetchHeightPages(const SurfaceHeightPageFetch& fetch, const PageStoreLevel& shape, uint32 level,
+                                    std::span<const PageAddress> pages, JobSystem::WorkStealingThreadPool* pool)
+{
+    if (pages.empty())
+        return FetchedHeightPages{level};
+    FetchedHeightPages fetched = HeightFetchRect(shape, level, pages);
     fetched.Pages.resize(static_cast<std::size_t>(fetched.CountX) * fetched.CountZ);
     JobSystem::ParallelFor(pool, fetched.Pages.size(), [&](std::size_t i) {
         const PageAddress address{0, static_cast<uint8>(level), fetched.FirstX + static_cast<uint32>(i % fetched.CountX),
@@ -153,30 +174,31 @@ std::vector<PageAddress> EveryPage(const PageStoreLevel& shape, uint32 level)
     return pages;
 }
 
-// The writers of one surface store and, for a Normal store, of its samples cache.
+// The writer of a Normal store's samples cache. The store itself is written through its plane's
+// PageStoreAccess.
 struct SurfaceStoreWriters
 {
-    PageStreaming::PageStoreWriter Store;
     PageStreaming::PageStoreWriter Samples;
     bool HasSamples = false;
 };
 
-void AbandonStores(SurfaceStoreWriters& writers)
+void AbandonStores(PageStreaming::PageStoreAccess& store, SurfaceStoreWriters& writers)
 {
-    writers.Store.Abandon();
+    store.Close();
     writers.Samples.Abandon();
 }
 
 // Publishes the samples cache, then the store. When the store fails, its new cache is deleted.
-std::string FinishStores(SurfaceStoreWriters& writers, const std::filesystem::path& file)
+std::string FinishStores(PageStreaming::PageStoreAccess& store, SurfaceStoreWriters& writers,
+                         const std::filesystem::path& file)
 {
     if (writers.HasSamples)
         if (std::string error = writers.Samples.Finish(); !error.empty())
         {
-            writers.Store.Abandon();
+            store.Close();
             return error;
         }
-    std::string error = writers.Store.Finish();
+    std::string error = store.Finish();
     if (!error.empty() && writers.HasSamples)
     {
         std::error_code ec;
@@ -185,13 +207,13 @@ std::string FinishStores(SurfaceStoreWriters& writers, const std::filesystem::pa
     return error;
 }
 
-void MakePatcher(SurfaceStoreWriters& writers, JobSystem::WorkStealingThreadPool* pool,
-                 std::optional<PageStreaming::PageStorePatcher>& out)
+void MakePatcher(PageStreaming::PageStoreAccess& store, SurfaceStoreWriters& writers,
+                 JobSystem::WorkStealingThreadPool* pool, std::optional<PageStreaming::PageStorePatcher>& out)
 {
     if (writers.HasSamples)
-        out.emplace(writers.Store, writers.Samples, pool);
+        out.emplace(store.Writer(), writers.Samples, pool);
     else
-        out.emplace(writers.Store, pool);
+        out.emplace(store.Writer(), pool);
 }
 
 } // namespace
@@ -202,24 +224,83 @@ struct TerrainSurfacePageBaker::BakedPage
     std::vector<uint8> Texels; // empty: not baked
 };
 
-TerrainSurfacePageBaker::TerrainSurfacePageBaker(TerrainModifierSystem& system, const TiledTerrainData& tiled,
-                                   PageStreaming::PageFieldKind plane, SurfaceHeightPageFetch fetchHeights,
-                                   JobSystem::WorkStealingThreadPool* pool)
-    : m_System(system)
-    , m_Tiled(tiled)
+struct TerrainSurfacePageBaker::OpenStore
+{
+    std::filesystem::path File;
+    SurfaceStoreWriters Writers;
+};
+
+TerrainSurfacePageBaker::TerrainSurfacePageBaker(std::shared_ptr<const TerrainSurfaceBakeInputs> inputs,
+                                                 PageStreaming::PageFieldKind plane,
+                                                 std::shared_ptr<PageStreaming::PageStoreAccess> store,
+                                                 SurfaceHeightPageFetch fetchHeights,
+                                                 JobSystem::WorkStealingThreadPool* pool)
+    : m_Inputs(std::move(inputs))
     , m_Plane(plane)
+    , m_Store(std::move(store))
     , m_FetchHeights(std::move(fetchHeights))
     , m_Pool(pool)
 {
-    const PageStreaming::PageStoreHeader header = MakeSurfaceStoreHeader(tiled, plane, 0u);
+    const PageStreaming::PageStoreHeader header = MakeSurfaceStoreHeader(m_Inputs->Config, plane, 0u);
     m_Levels = PageStreaming::BuildPageStoreLevels(header.SamplesX, header.SamplesZ);
+}
+
+TerrainSurfacePageBaker::~TerrainSurfacePageBaker()
+{
+    if (std::string error = Finish(); !error.empty())
+        Logger::Log::Warning("Surface pages: a store held open was not published: {}", error);
+}
+
+void TerrainSurfacePageBaker::SetInputs(std::shared_ptr<const TerrainSurfaceBakeInputs> inputs,
+                                        SurfaceHeightPageFetch fetchHeights)
+{
+    m_Inputs = std::move(inputs);
+    m_FetchHeights = std::move(fetchHeights);
+}
+
+uint32 TerrainSurfacePageBaker::FirstCoarseLevel(uint32 firstCoarseLevel) const
+{
+    const uint32 levels = static_cast<uint32>(m_Levels.size());
+    return std::clamp(firstCoarseLevel, 1u, std::max(levels, 2u) - 1u);
+}
+
+std::vector<PageAddress> TerrainSurfacePageBaker::HeightPagesReadByCreate(uint32 firstCoarseLevel) const
+{
+    std::vector<PageAddress> read;
+    if (m_Plane == PageStreaming::PageFieldKind::GrassControl)
+        return read;
+    for (uint32 level = FirstCoarseLevel(firstCoarseLevel); level < m_Levels.size(); ++level)
+        for (const PageAddress& page : EveryPage(m_Levels[level], level))
+            read.push_back(page);
+    return read;
+}
+
+std::vector<PageAddress> TerrainSurfacePageBaker::HeightPagesReadByBake(std::span<const PageAddress> level0Pages) const
+{
+    std::vector<PageAddress> read;
+    if (m_Plane == PageStreaming::PageFieldKind::GrassControl || level0Pages.empty())
+        return read;
+    AddHeightFetchRect(m_Levels.front(), 0u, level0Pages, read);
+    std::vector<PageAddress> ancestors;
+    for (uint32 level = 1; level < m_Levels.size(); ++level)
+    {
+        ancestors.clear();
+        for (const PageAddress& page : level0Pages)
+        {
+            const PageAddress ancestor{0, static_cast<uint8>(level), page.X >> level, page.Z >> level};
+            if (std::find(ancestors.begin(), ancestors.end(), ancestor) == ancestors.end())
+                ancestors.push_back(ancestor);
+        }
+        AddHeightFetchRect(m_Levels[level], level, ancestors, read);
+    }
+    return read;
 }
 
 std::vector<PageAddress> TerrainSurfacePageBaker::Level0PagesReading(const PageStreaming::PageSampleRect& changed) const
 {
     // A page stores its stride from StoredFirst minus the format's extra apron, and its bake reads
     // the heights one sample past that.
-    const PageStreaming::PageStoreHeader header = MakeSurfaceStoreHeader(m_Tiled, m_Plane, 0u);
+    const PageStreaming::PageStoreHeader header = MakeSurfaceStoreHeader(m_Inputs->Config, m_Plane, 0u);
     const int64 reach =
         (static_cast<int64>(PageStreaming::PageStrideTexels(header.Format)) - kPageOwnedSamples) / 2 + 1;
     const PageStoreLevel& shape = m_Levels.front();
@@ -247,7 +328,7 @@ std::vector<TerrainSurfacePageBaker::BakedPage> TerrainSurfacePageBaker::BakePag
     {
         JobSystem::ParallelFor(m_Pool, pages.size(), [&](std::size_t i) {
             baked[i].Address = pages[i];
-            if (!m_System.BakeSurfaceGrassPage(m_Tiled, pages[i], shape, baked[i].Texels))
+            if (!TerrainModifierSystem::BakeSurfaceGrassPage(*m_Inputs, pages[i], shape, baked[i].Texels))
                 baked[i].Texels.clear();
         });
         return baked;
@@ -270,29 +351,30 @@ bool TerrainSurfacePageBaker::BakePageTexels(const PageAddress& address, const P
                                              const SurfaceHeightWindow& window, std::vector<uint8>& outTexels) const
 {
     if (m_Plane == PageStreaming::PageFieldKind::Normal)
-        return BakeSurfaceNormalPage(m_Tiled, address, shape, window, outTexels);
-    if (!m_System.BakeSurfaceSplatPage(m_Tiled, address, shape, window, outTexels))
+        return BakeSurfaceNormalPage(m_Inputs->Config, address, shape, window, outTexels);
+    if (!TerrainModifierSystem::BakeSurfaceSplatPage(*m_Inputs, address, shape, window, outTexels))
         return false;
     if (m_Plane != PageStreaming::PageFieldKind::Color)
         return true;
     // A color page composes over the splat page of its address.
     const std::vector<uint8> splat = std::move(outTexels);
-    return m_System.BakeSurfaceColorPage(m_Tiled, address, shape, m_GroundWrite, splat, outTexels);
+    return TerrainModifierSystem::BakeSurfaceColorPage(*m_Inputs, address, shape, splat, outTexels);
 }
 
 std::string TerrainSurfacePageBaker::CreateStore(const std::filesystem::path& file, uint64 key, uint32 firstCoarseLevel)
 {
-    const PageStreaming::PageStoreHeader header = MakeSurfaceStoreHeader(m_Tiled, m_Plane, key);
+    if (m_Open)
+        return "the baker holds the store at " + m_Open->File.string() + " open: finish it first";
+    const PageStreaming::PageStoreHeader header = MakeSurfaceStoreHeader(m_Inputs->Config, m_Plane, key);
     const uint32 levels = static_cast<uint32>(m_Levels.size());
-    const uint32 first = std::clamp(firstCoarseLevel, 1u, std::max(levels, 2u) - 1u);
+    const uint32 first = FirstCoarseLevel(firstCoarseLevel);
     std::vector<uint8> present(static_cast<std::size_t>(PageStreaming::DensePageCount(m_Levels)), 0u);
     for (uint32 level = first; level < levels; ++level)
         for (const PageAddress& page : EveryPage(m_Levels[level], level))
             present[DenseIndex(m_Levels, page)] = 1u;
 
     SurfaceStoreWriters writers;
-    if (std::string error = writers.Store.Create(file, PageStreaming::MakePageStoreLayout(header, present));
-        !error.empty())
+    if (std::string error = m_Store->Create(file, PageStreaming::MakePageStoreLayout(header, present)); !error.empty())
         return error;
     writers.HasSamples = m_Plane == PageStreaming::PageFieldKind::Normal;
     if (writers.HasSamples)
@@ -303,12 +385,12 @@ std::string TerrainSurfacePageBaker::CreateStore(const std::filesystem::path& fi
                                                        PageStreaming::MakePageStoreLayout(samplesHeader, present));
             !error.empty())
         {
-            writers.Store.Abandon();
+            m_Store->Close();
             return error;
         }
     }
     std::optional<PageStreaming::PageStorePatcher> patcher;
-    MakePatcher(writers, m_Pool, patcher);
+    MakePatcher(*m_Store, writers, m_Pool, patcher);
     // Coarsest first: the far field is whole before any finer level is.
     for (uint32 level = levels; level-- > first;)
     {
@@ -317,25 +399,28 @@ std::string TerrainSurfacePageBaker::CreateStore(const std::filesystem::path& fi
         {
             if (page.Texels.empty())
             {
-                AbandonStores(writers);
+                AbandonStores(*m_Store, writers);
                 return "the height page of level " + std::to_string(level) + " page (" +
                        std::to_string(page.Address.X) + ", " + std::to_string(page.Address.Z) +
                        ") is not on hand: a coarse level is baked from heights the CPU holds";
             }
             if (!patcher->WritePage(page.Address, page.Texels))
             {
-                AbandonStores(writers);
+                AbandonStores(*m_Store, writers);
                 return "the surface store could not be written at " + file.string();
             }
         }
     }
     m_PagesWritten += patcher->PagesWritten();
     patcher.reset();
-    return FinishStores(writers, file);
+    return FinishStores(*m_Store, writers, file);
 }
 
-std::string TerrainSurfacePageBaker::BakeLevel0Pages(const std::filesystem::path& file, std::span<const PageAddress> pages)
+std::string TerrainSurfacePageBaker::OpenForBake(const std::filesystem::path& file)
 {
+    if (m_Open)
+        return m_Open->File == file ? std::string{}
+                                    : "the baker holds the store at " + m_Open->File.string() + " open: finish it first";
     const bool hasSamples = m_Plane == PageStreaming::PageFieldKind::Normal;
     const std::filesystem::path samplesFile = SurfaceSamplesCachePath(file);
     PageStoreLayout layout;
@@ -361,6 +446,29 @@ std::string TerrainSurfacePageBaker::BakeLevel0Pages(const std::filesystem::path
         (samplesLayout.Entries.size() != layout.Entries.size() || samplesLayout.Header.Key != layout.Header.Key))
         return "the samples cache at " + samplesFile.string() + " does not match its store: bake the store again";
 
+    auto open = std::make_unique<OpenStore>();
+    open->File = file;
+    open->Writers.HasSamples = hasSamples;
+    if (std::string error = m_Store->OpenForPatch(file, std::move(layout)); !error.empty())
+        return error;
+    if (hasSamples)
+        if (std::string error = open->Writers.Samples.OpenForPatch(samplesFile, samplesFile, std::move(samplesLayout));
+            !error.empty())
+        {
+            m_Store->Close();
+            return error;
+        }
+    m_Open = std::move(open);
+    return {};
+}
+
+std::string TerrainSurfacePageBaker::BakeLevel0Pages(const std::filesystem::path& file, std::span<const PageAddress> pages)
+{
+    if (std::string error = OpenForBake(file); !error.empty())
+        return error;
+    SurfaceStoreWriters& writers = m_Open->Writers;
+    const PageStoreLayout layout = m_Store->Writer().Layout();
+
     std::vector<BakedPage> level0 = BakePages(0u, pages);
     // The ancestors the store does not hold, finest first, each baked at its own spacing.
     std::vector<std::vector<BakedPage>> ancestors(layout.Levels.size());
@@ -385,21 +493,17 @@ std::string TerrainSurfacePageBaker::BakeLevel0Pages(const std::filesystem::path
                 present[DenseIndex(m_Levels, page.Address)] = 1u;
     }
 
-    SurfaceStoreWriters writers;
-    writers.HasSamples = hasSamples;
-    if (std::string error = writers.Store.OpenForPatch(file, file, PageStreaming::AddPresentPages(layout, present));
-        !error.empty())
-        return error;
-    if (hasSamples)
-        if (std::string error = writers.Samples.OpenForPatch(samplesFile, samplesFile,
-                                                             PageStreaming::AddPresentPages(samplesLayout, present));
-            !error.empty())
-        {
-            writers.Store.Abandon();
-            return error;
-        }
+    std::string grown = m_Store->AddPresentPages(present);
+    if (grown.empty() && writers.HasSamples)
+        grown = writers.Samples.AddPresentPages(present);
+    if (!grown.empty())
+    {
+        AbandonStores(*m_Store, writers);
+        m_Open.reset();
+        return grown;
+    }
     std::optional<PageStreaming::PageStorePatcher> patcher;
-    MakePatcher(writers, m_Pool, patcher);
+    MakePatcher(*m_Store, writers, m_Pool, patcher);
     std::optional<PageSampleRect> written;
     std::optional<PageAddress> notBaked;
     for (uint32 level = static_cast<uint32>(layout.Levels.size()); level-- > 0u;)
@@ -413,7 +517,9 @@ std::string TerrainSurfacePageBaker::BakeLevel0Pages(const std::filesystem::path
             }
             if (!patcher->WritePage(page.Address, page.Texels))
             {
-                AbandonStores(writers);
+                patcher.reset();
+                AbandonStores(*m_Store, writers);
+                m_Open.reset();
                 return "the surface store could not be written at " + file.string();
             }
             if (level == 0u)
@@ -424,18 +530,26 @@ std::string TerrainSurfacePageBaker::BakeLevel0Pages(const std::filesystem::path
         }
     if (written && !patcher->RefilterAncestors(*written))
     {
-        AbandonStores(writers);
+        patcher.reset();
+        AbandonStores(*m_Store, writers);
+        m_Open.reset();
         return "the surface store's coarser pages could not be written at " + file.string();
     }
     m_PagesWritten += patcher->PagesWritten();
-    patcher.reset();
-    if (std::string error = FinishStores(writers, file); !error.empty())
-        return error;
+    m_Store->Commit();
     if (notBaked)
         return "the height page of level " + std::to_string(notBaked->Level) + " page (" +
                std::to_string(notBaked->X) + ", " + std::to_string(notBaked->Z) +
                ") is not on hand: the page is not baked";
     return {};
+}
+
+std::string TerrainSurfacePageBaker::Finish()
+{
+    if (!m_Open)
+        return {};
+    const std::unique_ptr<OpenStore> open = std::move(m_Open);
+    return FinishStores(*m_Store, open->Writers, open->File);
 }
 
 } // namespace GameEngine::TerrainECS

@@ -1,0 +1,135 @@
+/* The Log panel's Channels list (Apps/Editor/Include/Panels/LogChannelPopover.h); the surface is the theme's
+   .popover-panel. The anchor is a zero-size box at the Log panel's origin, so a press beside the list is outside it. */
+
+.log-channels-anchor {
+	position: absolute;
+	left: 0px;
+	top: 0px;
+	width: 0px;
+	height: 0px;
+}
+
+/* --log-channels-row-width: the 362 px inside the border and the padding less the 18 px of the vertical scrollbar
+   and its margin (Scrollbar::kDefaultThicknessPx, theme/core.css .scrollbar.vertical). The column names and the
+   rows take this width whether the list scrolls or not, so the columns stay in place and line up. */
+.log-channels {
+	position: absolute;
+	width: 380px;
+	padding: var(--ui_spacing_md);
+	--log-channels-row-width: 344px;
+}
+
+.log-channels-header {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	column-gap: var(--ui_spacing_xs);
+}
+
+.log-channels-title {
+	flex-grow: 1;
+	color: var(--ui_color_text_bright);
+}
+
+/* The height of the search field in the searchable context menus (theme/widgets.css, .context-menu-search). */
+.log-channels-search-host {
+	display: flex;
+	flex-direction: row;
+	height: 22px;
+}
+
+.log-channels-search {
+	flex-grow: 1;
+}
+
+/* The field has the focus on open but shows no focus ring until the user types or presses in it. */
+.log-channels-search.awaiting-input:focus-within {
+	border-color: transparent;
+}
+
+.log-channels-columns {
+	width: var(--log-channels-row-width);
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	column-gap: var(--ui_spacing_md);
+	padding: 0px var(--ui_spacing_xs);
+	border-bottom: 1px solid var(--ui_color_border_panel);
+}
+
+.log-channels-column-show {
+	width: 36px;
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+}
+
+.log-channels-column-name {
+	flex-grow: 1;
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+}
+
+/* The level list is as wide as its column: 144 px keeps "Default (Debug)" on one line beside the check mark. */
+.log-channels-column-level {
+	width: 144px;
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+}
+
+/* The list takes the height of its rows up to this cap, then scrolls. */
+.log-channels-scroll {
+	max-height: 320px;
+	min-height: 0px;
+	flex-shrink: 1;
+}
+
+.log-channel-row {
+	width: var(--log-channels-row-width);
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	column-gap: var(--ui_spacing_md);
+	padding: 2px var(--ui_spacing_xs);
+	border-radius: var(--ui_radius_sm);
+}
+
+.log-channel-row:hover {
+	background-color: var(--ui_color_bg_item_hover);
+}
+
+.log-channel-show-cell {
+	display: flex;
+	flex-direction: row;
+	width: 36px;
+}
+
+.log-channel-name {
+	flex-grow: 1;
+	flex-shrink: 1;
+	min-width: 0px;
+	color: var(--ui_color_text);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* A hidden channel's name and level dim, so the rows read as shown or hidden at a glance. The level still works,
+   and an open level list shows at full contrast (theme/widgets.css, .dropdown.open .dropdown-header). */
+.log-channel-row-off .log-channel-name {
+	color: var(--ui_color_text_disabled);
+}
+
+.log-channel-row-off .dropdown-header {
+	color: var(--ui_color_text_disabled);
+}
+
+.log-channel-level {
+	width: 144px;
+	flex-shrink: 0;
+}
+
+.log-channels-count {
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+}

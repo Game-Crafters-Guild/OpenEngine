@@ -1,6 +1,6 @@
 #include "HeightPageCodec.h"
 
-#include "PageStoreSerialization.h"
+#include "PageStore/PageStoreSerialization.h"
 
 #include "Types/Fnv1a.h"
 

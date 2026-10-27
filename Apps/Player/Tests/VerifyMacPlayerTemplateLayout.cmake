@@ -16,6 +16,8 @@
 #    export stages the packages a game uses under its content root,
 #    Contents/Resources/Packages with packages.index, so the copy left in the template
 #    would ship in every exported game.
+#  - Both bundles stage the bundled UI faces in Contents/Resources/Assets/Fonts
+#    (VerifyFontStaging.cmake). The scrub keeps them, so every macOS export ships them.
 foreach(var IN ITEMS PLAYER_APP PLAYER_TEMPLATE_APP)
     if(NOT DEFINED ${var})
         message(FATAL_ERROR "${var} must name a bundle")
@@ -44,6 +46,10 @@ endif()
 if(NOT IS_DIRECTORY "${PLAYER_TEMPLATE_APP}/Contents")
     message(FATAL_ERROR "No SDK Player.app template at ${PLAYER_TEMPLATE_APP}")
 endif()
+foreach(bundle IN ITEMS "${PLAYER_APP}" "${PLAYER_TEMPLATE_APP}")
+    set(PLAYER_CONTENT_DIR "${bundle}/Contents/Resources")
+    include("${CMAKE_CURRENT_LIST_DIR}/VerifyFontStaging.cmake")
+endforeach()
 file(GLOB_RECURSE template_entries LIST_DIRECTORIES true RELATIVE "${PLAYER_TEMPLATE_APP}" "${PLAYER_TEMPLATE_APP}/*")
 set(leftovers "")
 foreach(entry IN LISTS template_entries)

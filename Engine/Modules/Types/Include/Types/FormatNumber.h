@@ -72,4 +72,11 @@ inline std::string FormatFixed(double value, int decimals)
     return out == "-0" ? "0" : out;
 }
 
+// A length for display: FormatFixed to `decimals` places and the unit, for example (12.5, 1) -> "12.5 m",
+// (4.041, 2) -> "4.04 m", (10.0, 1) -> "10 m".
+inline std::string FormatMeters(double meters, int decimals)
+{
+    return FormatFixed(meters, decimals) + " m";
+}
+
 } // namespace GameEngine

@@ -23,6 +23,7 @@
 #include "SceneView/TerrainBrushTool.h"
 #include "SceneViewController.h"
 #include "TerrainECS/SurfaceHeightQuery.h"
+#include "TerrainECS/TerrainHeightPages.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainECS/TerrainRenderPublication.h"
 #include "TerrainECS/TerrainService.h"
@@ -889,6 +890,34 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
                     out["sculpt"]["probeComposed"] = svc->SampleSphereSculptHeight(px, py, pz, 0.0f);
                 }
             }
+        }
+
+        // Each height page stream's wanted pages per level and how many of them are resident.
+        if (auto* heightService = TerrainECS::TerrainService::TryGet())
+        {
+            std::vector<TerrainECS::HeightPageStreamCounts> streams;
+            heightService->GetHeightPages().StreamCounts(streams);
+            json pageStreams = json::array();
+            for (const TerrainECS::HeightPageStreamCounts& stream : streams)
+            {
+                json levels = json::array();
+                uint32 wanted = 0;
+                uint32 resident = 0;
+                for (std::size_t level = 0; level < stream.Levels.size(); ++level)
+                {
+                    wanted += stream.Levels[level].Wanted;
+                    resident += stream.Levels[level].Resident;
+                    levels.push_back({{"level", level},
+                                      {"wanted", stream.Levels[level].Wanted},
+                                      {"resident", stream.Levels[level].Resident}});
+                }
+                pageStreams.push_back({{"label", stream.Label},
+                                       {"planet", stream.Planet},
+                                       {"wanted", wanted},
+                                       {"resident", resident},
+                                       {"levels", std::move(levels)}});
+            }
+            out["pageStreams"] = std::move(pageStreams);
         }
 
         if (!cbt->IsInitialized())

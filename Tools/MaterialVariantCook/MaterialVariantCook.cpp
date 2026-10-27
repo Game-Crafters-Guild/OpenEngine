@@ -669,9 +669,6 @@ std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPath
         const MaterialKeyword base = CBTTerrainMaterialKeywords();
         CookSource terrain{"cbt-terrain", cacheRoot / "Synthetic" / "cbt_terrain.material",
                            BuildCBTTerrainMaterialDocument(), {}};
-        // The keyword-less variant registration prewarms before any pass has asked.
-        terrain.Variants.push_back({"cbt-base", MaterialKeyword::None,
-                                    VertexAttributeFlags::None});
         terrain.Variants.push_back({"cbt-forward", base, VertexAttributeFlags::None});
         terrain.Variants.push_back({"cbt-forward-sssr",
                                     base | MaterialKeyword::SSSRNormalRoughness,

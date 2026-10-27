@@ -9,14 +9,12 @@
 namespace GameEngine::Components
 {
 
-// Mesh slots per fence role. Sized from the measured kits: the largest role
-// family found is 6 (castle battlements, all 5.000 m) as largest-family + 1.
-// Fixed capacity keeps the component trivially copyable; the inspector reports
-// a full pool as a validation message, never a silent drop.
-inline constexpr uint32 kSplineFencePoolCapacity = 7;
+// The most parts a fence can list. 32 parts keep SplineFence trivially
+// copyable and in its 768-byte budget. The inspector disables Add Part at 32.
+inline constexpr uint32 kSplineFenceMaxParts = 32;
 
 // Span overrides a recipe can carry. Fixed capacity for the same reason the
-// pools are: the component stays trivially copyable and chunk-resident.
+// parts list has one: the component stays trivially copyable and chunk-resident.
 inline constexpr uint32 kSplineFenceMaxSpanOverrides = 16;
 
 // How a span meets the grade between the two stations it joins.
@@ -47,31 +45,64 @@ enum class SplineSpanGrade : int32
     Sheared = 2,
 };
 
+// The role of one part of a fence. The parts of one kind are that role's pool:
+// the fence picks among them by Seed, in list order.
+enum class SplineFencePartKind : uint8
+{
+    // An empty slot of the parts list.
+    None = 0,
+    // Planted at each station.
+    Post = 1,
+    // Stretched between two stations.
+    Span = 2,
+    // Stands in a span that an override makes a gate.
+    Gate = 3,
+    // Laid along the tops of the spans at Crest Pitch.
+    Crest = 4,
+    // Closes a gap at the end of a crest row.
+    Cap = 5,
+};
+
+// One part of a fence: a mesh and the role it plays. A part without a mesh
+// places nothing.
+//
+// @ge-no-add
+struct SplineFencePart
+{
+    ModelRef Mesh;
+    // @ge-tooltip What the part is. Post: stands between two spans. A fence whose spans carry their own posts needs no Post part. Span: fills the gap between two posts. Gate: stands in a span that a span override makes a gate. Crest: laid along the tops of the spans at Crest Pitch, such as battlements. Cap: closes the end of a row of crest parts. The fence picks among the parts of one kind by Seed.
+    SplineFencePartKind Kind = SplineFencePartKind::None;
+
+    bool operator==(const SplineFencePart&) const = default;
+};
+
+static_assert(sizeof(SplineFencePart) == 17, "SplineFencePart has no padding bytes");
+static_assert(std::is_trivially_copyable_v<SplineFencePart>);
+static_assert(std::is_standard_layout_v<SplineFencePart>);
+
 // What an override substitutes for the span it names.
 enum class SplineSpanOverrideKind : uint8
 {
     // An empty slot of the override table: it names no span.
     None = 0,
-    // Draw from GatePool instead of SpanPool. An empty GatePool leaves the
-    // opening empty, which is itself useful (a gap in a hedge).
+    // Draw from the Gate parts instead of the Span parts. With no Gate part the
+    // opening stays empty, which is itself useful (a gap in a hedge).
     Gate = 1,
-    // Pin this span to a chosen SpanPool slot, overriding the seeded pick.
-    ExplicitPiece = 2,
+    // Draw one Span part in this span instead of the part the Seed picks.
+    ExplicitPart = 2,
 };
 
-// One authored "this span is a gate" / "this span is that specific piece".
-// Addressed by (authored point, ordinal within that run's fill) rather than by
-// distance, so it survives a knot drag. Overrides live in the RECIPE, not on
-// the spline: the spline stays recipe-agnostic and no consumer of its layout
-// grows a field.
+// One authored "this span is a gate" or "this span is that part". It names the span
+// by its authored point and its place in that segment, not by distance, so it
+// survives a knot drag. Overrides live on the fence, not on the spline.
 //
 // @ge-no-add
 struct SplineSpanOverride
 {
-    uint32 PointIndex = 0;  // authored point opening the run
-    uint16 SpanOrdinal = 0; // which span within the run's fill sequence
+    uint32 PointIndex = 0;  // authored point that opens the segment
+    uint16 SpanOrdinal = 0; // which span of that segment, counted from 0 at the point
     SplineSpanOverrideKind Kind = SplineSpanOverrideKind::None;
-    uint8 PoolSlot = 0; // ExplicitPiece: SpanPool slot; Gate: GatePool slot
+    uint8 PoolSlot = 0; // the n-th Span part (ExplicitPart) or Gate part (Gate) with a mesh
 
     bool operator==(const SplineSpanOverride&) const = default;
 };
@@ -90,30 +121,10 @@ static_assert(std::is_standard_layout_v<SplineSpanOverride>);
 // corner by planting a post, never by bending a rail.
 struct SplineFence
 {
-    // Piece pools — one mesh family per role. A pool's active entries are its
-    // leading non-empty slots (SplinePoolSelection.h); everything after the
-    // first empty slot is ignored and reported as validation.
-    //
-    // PostPool MAY BE EMPTY, and on the measured fence kits it usually is:
-    // those kits ship no standalone post — the post is modelled into each
-    // panel's ends. A station then emits no post mesh, the spans still
-    // articulate there, and the panels' own end posts cover the corner.
-    ModelRef PostPool[kSplineFencePoolCapacity];
-    // Stretched between consecutive stations. Members need not share a length:
-    // the run's fill computes how many instances span the distance.
-    ModelRef SpanPool[kSplineFencePoolCapacity];
-    // Replaces the span an override marks as a gate.
-    ModelRef GatePool[kSplineFencePoolCapacity];
-    // Laid along the tops of the spans at a fixed pitch — battlements, coping,
-    // lamps. Whole on the pitch grid: the cell is sized to the pool's longest
-    // piece and the piece is centred in it. Where the pitch is that length and
-    // every wall of a run shares it, one piece stands on each wall and is
-    // stretched with it. Empty means no crest row.
-    ModelRef CrestPool[kSplineFencePoolCapacity];
-    // End pieces offered to the gap a whole crest piece cannot fill, at a post,
-    // a tower or a gate. The longest that fits closes it; empty leaves the gap,
-    // which the post covers.
-    ModelRef CapPool[kSplineFencePoolCapacity];
+    // The parts the fence builds from, in list order. A slot whose Kind is None
+    // is empty. The parts of one kind with a mesh are the pool of that role. A
+    // fence builds when it has a Post or a Span part with a mesh.
+    SplineFencePart Parts[kSplineFenceMaxParts] = {{ModelRef{}, SplineFencePartKind::Span}};
     // Target metres between stations within a run, along the draped
     // centerline. Runs bend it slightly so their stations land on both
     // authored endpoints — the trade FitToLength already makes for tiles.
@@ -126,6 +137,7 @@ struct SplineFence
     float32 CrestPitch = 0.0f;
     // Stations conform; spans derive their frame from the stations and cast no
     // rays of their own.
+    // @ge-tooltip How the posts meet the surface under the spline. None keeps the frame of the spline. Height puts each post on the surface. Height And Slope also tilts it with the surface. Spans take their frame from the posts.
     SplinePlacementConform ConformMode = SplinePlacementConform::HeightAndSlope;
     // What the conform ray may land on. Scene (the default) is every pickable
     // surface; TerrainOnly makes scenery transparent so stations do not ride
@@ -135,6 +147,7 @@ struct SplineFence
     // 3D length of its DRAPED polyline, so a prop overhanging the line does not
     // merely lift the stations beneath it: it lengthens the run, re-solves how
     // many spans fill it, and so moves every station in that run.
+    // @ge-tooltip What the posts stand on. Scene takes the nearest surface of any kind, so a fence under a tree or an awning stands on top of it, and the longer path over it can take more spans. Terrain Only ignores scenery, so the posts follow the ground under it. With Terrain Only the drawn line of the spline can still ride over scenery that the parts pass under.
     SplineConformTarget ConformTarget = SplineConformTarget::Scene;
     // 0 = plumb posts (what a real fence does), 1 = posts lean into the slope.
     float32 SlopeBlend = 0.0f;
@@ -142,7 +155,9 @@ struct SplineFence
     // run re-walks with one more or one fewer station. Protects proportion and
     // silhouette: a 2x stretched plank reads instantly as wrong.
     float32 SpanMaxStretch = 1.25f;
+    // @ge-tooltip Which height of a part meets the ground. Pivot Plane puts the height of the mesh's pivot on the ground, so a part modeled to reach below its pivot sinks into the ground as it was made to. Bounds Min lifts the part until its lowest point touches the ground, so a part like that floats.
     SplinePlantMode PlantMode = SplinePlantMode::PivotPlane;
+    // @ge-tooltip How a span follows a slope. Racked turns the whole part onto the slope, so its posts lean (rails, hedges). Stepped keeps the part level at the lower post, so the height steps at each post (brick walls, castle walls). Sheared slants the part and keeps its posts upright, so both ends meet their own post: the joint a real fence uses on a slope.
     SplineSpanGrade SpanGrade = SplineSpanGrade::Racked;
     // Authored span exceptions: "this span is a gate", "this span is that
     // piece". Every slot whose Kind is not None is one override, in any order;

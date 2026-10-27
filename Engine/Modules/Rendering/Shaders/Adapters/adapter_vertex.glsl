@@ -115,11 +115,17 @@ layout(location = 9) in vec4 aWeights1;
 // current endpoint is gl_FragCoord, which is the pixel center, and its previous
 // endpoint rides components of these same locations. Centroid there would build
 // the delta from two different sample positions on a partially covered pixel.
+//
+// A surface whose inputs are continuous across its triangles (the terrain) asks for the pixel
+// center too: extrapolation past a triangle edge stays on the same field, and a centroid value
+// on a partly covered pixel reads a sharp field (a splat border, a shadow edge) off the center.
 #ifdef ALPHA_TEST
 #define GE_SURFACE_CENTROID
 #elif defined(GE_COMPAT_PROFILE)
 #define GE_SURFACE_CENTROID
 #elif defined(GE_MOTION_VECTORS)
+#define GE_SURFACE_CENTROID
+#elif defined(GE_SURFACE_INPUTS_AT_PIXEL_CENTER)
 #define GE_SURFACE_CENTROID
 #else
 #define GE_SURFACE_CENTROID centroid

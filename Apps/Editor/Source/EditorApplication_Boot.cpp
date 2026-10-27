@@ -18,8 +18,8 @@ bool EditorApplication::ShouldIdleWorldPathForProjectPicker() const
     // Only a host that owns the frame loop needs the world path parked: there a
     // cold first frame behind the picker starves the picker of input. Where the
     // editor pumps its own loop the world keeps rendering behind the picker.
-    return Platform::HostDrivesFrameLoop() && m_ProjectFolderModal != nullptr &&
-           m_ProjectFolderModal->IsVisible();
+    return Platform::HostDrivesFrameLoop() && m_ProjectPickerModal != nullptr &&
+           m_ProjectPickerModal->IsVisible();
 }
 
 void EditorApplication::SyncWorldPathForProjectPicker()

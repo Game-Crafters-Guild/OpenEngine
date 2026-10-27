@@ -1446,6 +1446,7 @@ if (TARGET CompileShaders AND (TARGET ShaderReflect OR GE_SHADERREFLECT_EXECUTAB
     _ge_add_shaderpkg_graphics(tonemap fullscreen_noinput.vert tonemap.frag)
     _ge_add_shaderpkg_graphics(copy fullscreen_noinput.vert copy.frag)
     _ge_add_shaderpkg_graphics(msaa_color_resolve fullscreen_noinput.vert msaa_color_resolve.frag)
+    _ge_add_shaderpkg_graphics(msaa_color_resolve_bloom_delta fullscreen_noinput.vert msaa_color_resolve_bloom_delta.frag)
     _ge_add_shaderpkg_graphics(clear_color_backdrop fullscreen_noinput.vert clear_color_backdrop.frag)
     _ge_add_shaderpkg_graphics(color_filter fullscreen_noinput.vert color_filter.frag)
     _ge_add_shaderpkg_graphics(hdr_color_fx fullscreen_noinput.vert hdr_color_fx.frag)

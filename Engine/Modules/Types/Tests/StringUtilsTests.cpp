@@ -200,3 +200,12 @@ TEST(StringUtilsTests, ReplaceAllReplacesEveryOccurrenceOnce)
     EXPECT_EQ(ReplaceAll("abc", "d", "x"), "abc");
     EXPECT_EQ(ReplaceAll("a.b.c", ".", ""), "abc");
 }
+
+TEST(StringUtilsTests, CountOccurrencesCountsWithoutOverlap)
+{
+    EXPECT_EQ(CountOccurrences("abc", "d"), 0u);
+    EXPECT_EQ(CountOccurrences("abc", "b"), 1u);
+    EXPECT_EQ(CountOccurrences("<path/><path/><path/>", "<path"), 3u);
+    EXPECT_EQ(CountOccurrences("aaaa", "aa"), 2u) << "a match does not overlap the one before it";
+    EXPECT_EQ(CountOccurrences("abc", ""), 0u) << "an empty needle counts nothing";
+}

@@ -4,6 +4,7 @@
 // suite existed, textures fell through to the raw-source fallback), and the
 // request path does not emit a log line per call.
 
+#include "Prefabs/PrefabThumbnailHandler.h"
 #include "Thumbnails/CubeLutStripBands.h"
 #include "Thumbnails/CubeLutStripRequest.h"
 #include "Thumbnails/CubeLutThumbnailHandler.h"
@@ -291,6 +292,19 @@ TEST(ThumbnailServiceRouting, TextureAssetsReachTheTextureHandler)
     // Warm: the request path now resolves to the thumbnail, not the source.
     const std::string warm = fixture.Service.GetOrRequest(source, 128, nullptr);
     EXPECT_EQ(warm, expected.generic_string());
+}
+
+// A .prefab file has no tile until the prefab handler is registered; then the service serves its glyph.
+TEST(ThumbnailServiceRouting, PrefabFilesReachThePrefabHandler)
+{
+    ServiceFixture fixture("prefab");
+    const auto source = fixture.Root / "Assets" / "Crate.prefab";
+    EXPECT_TRUE(fixture.Service.GetOrRequest(source, 128, nullptr).empty());
+
+    fixture.Service.RegisterHandler(GameEngine::AssetType::Prefab,
+                                    std::make_unique<GameEngine::Editor::PrefabThumbnailHandler>());
+    EXPECT_EQ(fixture.Service.GetOrRequest(source, 128, nullptr),
+              GameEngine::Editor::PrefabThumbnailHandler::kGlyphPath);
 }
 
 // SetCacheRoot must reach a handler registered before it, and one registered

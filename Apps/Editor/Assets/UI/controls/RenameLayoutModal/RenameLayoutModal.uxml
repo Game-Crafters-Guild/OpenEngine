@@ -1,0 +1,17 @@
+<!-- RenameLayoutModal (Apps/Editor/Include/Panels/RenameLayoutModal.h): one name field with Cancel and
+     Rename. The ids are the contract with RenameLayoutModal.cpp. -->
+<UIElement class="modal-backdrop">
+  <UIElement class="modal-window modal-window-shadow modal-window-420">
+    <UIElement class="modal-header">
+      <Label id="rename-layout-title" class="modal-title" text="Rename Layout" />
+    </UIElement>
+    <UIElement class="modal-content rename-layout-modal-content">
+      <Label class="modal-field-label" text="New name" />
+      <TextField id="rename-layout-name" class="modal-text-field" />
+    </UIElement>
+    <UIElement class="modal-footer">
+      <Button id="rename-layout-cancel" class="secondary" text="Cancel" />
+      <Button id="rename-layout-rename" class="primary" text="Rename" />
+    </UIElement>
+  </UIElement>
+</UIElement>

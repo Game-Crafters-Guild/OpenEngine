@@ -1,6 +1,7 @@
 #include "Thumbnails/SimpleThumbnailProvider.h"
 
 #include "Logger/Logger.h"
+#include "Thumbnails/AssetThumbnailHandler.h"
 #include "Types/StringUtils.h"
 
 #include <cctype>
@@ -31,6 +32,10 @@ static bool IsVideoExtension(const std::filesystem::path& p)
 {
     auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
     return ext == ".mp4" || ext == ".mov" || ext == ".avi" || ext == ".mkv" || ext == ".m4v";
+}
+
+void SimpleThumbnailProvider::RegisterHandler(AssetType /*type*/, std::unique_ptr<AssetThumbnailHandler> /*handler*/)
+{
 }
 
 std::string SimpleThumbnailProvider::GetOrRequest(const std::filesystem::path& assetPath,

@@ -44,7 +44,6 @@ class SaveSceneChangesModal final : public UIElement
     void OnCancelClicked();
 
     UIElement* m_Backdrop = nullptr;
-    UIElement* m_Window = nullptr;
     UIElement* m_Title = nullptr;
     UIElement* m_Message = nullptr;
     UIElement* m_SaveButton = nullptr;

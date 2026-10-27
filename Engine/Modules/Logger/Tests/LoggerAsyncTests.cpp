@@ -51,29 +51,6 @@ class LoggerAsyncTest : public ::testing::Test
 // A) CORRECTNESS
 // ==========================================================================
 
-TEST_F(LoggerAsyncTest, OwnedSourceIsCopiedBeforeItsOwnerDies)
-{
-    auto captured = std::make_shared<std::vector<LogMessage>>();
-    auto sink = std::make_unique<CallbackSink>();
-    sink->RegisterCallback([captured](const LogMessage& message) { captured->push_back(message); });
-    Log::AddSink(std::move(sink));
-    {
-        OwnedSourceLocation source("owned.cpp", "ScopedFunction");
-        Log::LogWithSource(LogLevel::Info, source, 42, "owned {}", 7);
-        Log::LogWithSource(LogLevel::Info, source, 43, std::string_view("plain"));
-        Log::LogWithSource(LogLevel::Critical, source, 44, std::string_view("critical"));
-    }
-    Log::Flush();
-    const auto& messages = *captured;
-    ASSERT_EQ(messages.size(), 3u);
-    for (const auto& message : messages)
-    {
-        EXPECT_EQ(message.SourceFile, "owned.cpp");
-        EXPECT_EQ(message.Function, "ScopedFunction");
-    }
-}
-
-#if LOGGER_ENABLE_SOURCE_LOCATION && defined(_DEBUG)
 TEST_F(LoggerAsyncTest, SourceMacrosKeepCallerFunctionAndLine)
 {
     auto captured = std::make_shared<std::vector<LogMessage>>();
@@ -82,12 +59,18 @@ TEST_F(LoggerAsyncTest, SourceMacrosKeepCallerFunctionAndLine)
     Log::AddSink(std::move(sink));
     const int expectedLine = __LINE__ + 1;
     LOG_INFO("macro {}", 3);
+    LOG_CRITICAL("critical {}", 4);
     Log::Flush();
     const auto& messages = *captured;
-    ASSERT_EQ(messages.size(), 1u);
-    EXPECT_EQ(messages[0].SourceFile, __FILE__);
-    EXPECT_EQ(messages[0].Function, __FUNCTION__);
+    ASSERT_EQ(messages.size(), 2u);
+    for (const LogMessage& message : messages)
+    {
+        EXPECT_EQ(message.Channel, CoreLog().Index);
+        EXPECT_EQ(message.SourceFile, __FILE__);
+        EXPECT_TRUE(message.Function.ends_with("TestBody")) << message.Function;
+    }
     EXPECT_EQ(messages[0].SourceLine, expectedLine);
+    EXPECT_EQ(messages[1].SourceLine, expectedLine + 1);
 }
 
 TEST_F(LoggerAsyncTest, FilteredSourceMacroDoesNotEvaluateArguments)
@@ -97,7 +80,6 @@ TEST_F(LoggerAsyncTest, FilteredSourceMacroDoesNotEvaluateArguments)
     LOG_INFO("filtered {}", ++evaluations);
     EXPECT_EQ(evaluations, 0);
 }
-#endif
 
 TEST_F(LoggerAsyncTest, BasicMessageDelivery)
 {

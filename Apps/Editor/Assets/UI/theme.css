@@ -1,12 +1,6 @@
 /* Master theme file: composed via @import */
 @import "theme/tokens.css";
 @import "controls/Modal.css";
-@import "controls/AddTagModal.css";
-@import "controls/CameraCustomAspectModal.css";
-@import "controls/PlayModeChangeReviewModal.css";
-@import "controls/RenameLayoutModal.css";
-@import "controls/SaveSceneAsModal.css";
-@import "controls/VideoPlayerModal.css";
 @import "theme/core.css";
 /* After core.css: the panel icons override nothing there, but the panel
    launcher resolves them out of the loaded cascade, where later wins. */

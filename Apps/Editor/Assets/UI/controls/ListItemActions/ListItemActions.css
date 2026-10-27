@@ -1,0 +1,46 @@
+.list-item-actions {
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+.list-item-actions-group {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+}
+
+.list-item-action {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0px;
+    border-width: 0px;
+    background-color: transparent;
+    background-size: 14px 14px;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-tint: var(--ui_color_text_dim);
+}
+
+.list-item-action:hover {
+    background-color: var(--ui_color_bg_hover);
+    background-tint: var(--ui_color_text);
+}
+
+.list-item-action:disabled {
+    background-color: transparent;
+    background-tint: var(--ui_color_text_disabled);
+}
+
+.list-item-move-up {
+    background-image: url("editor:Icons/ArrowUp.svg");
+}
+
+.list-item-move-down {
+    background-image: url("editor:Icons/ArrowDown.svg");
+}
+
+.list-item-remove {
+    background-image: url("editor:Icons/trash.svg");
+}

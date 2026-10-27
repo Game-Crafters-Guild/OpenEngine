@@ -1,25 +1,22 @@
 #include "PlayMode/PlayModeEntryModal.h"
 
-#include "Editor/EditorPaths.h"
 #include "PlayMode/PlayModeEntryGate.h"
 
 #include "Input/KeyCodes.h"
-#include "Logger/Logger.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
-#include "UI/Parsers/XMLParser.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
-#include <filesystem>
-#include <fstream>
 #include <memory>
-#include <sstream>
 #include <string>
+#include <string_view>
 
 namespace GameEngine
 {
@@ -28,23 +25,21 @@ namespace
 
 constexpr const char* kLayoutAssetPath = "UI/controls/PlayModeEntryModal/PlayModeEntryModal.uxml";
 constexpr const char* kStyleAssetPath = "UI/controls/PlayModeEntryModal/PlayModeEntryModal.css";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 6> kRequiredIds = {
+    "play-entry-title",
+    "play-entry-message",
+    "play-entry-activity",
+    "play-entry-progress-track",
+    "play-entry-progress-fill",
+    "play-entry-button",
+};
 constexpr const char* kFailedClass = "play-entry-failed";
 constexpr const char* kPulseDimClass = "play-entry-progress-dim";
 // Half a period of the indeterminate pulse: the fill's opacity transition in the stylesheet runs
 // over the same time.
 constexpr std::chrono::milliseconds kPulseHalfPeriod{700};
 constexpr const char* kHiddenClass = "hidden";
-
-std::string ReadLayoutText()
-{
-    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / kLayoutAssetPath;
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-        return {};
-    std::ostringstream text;
-    text << in.rdbuf();
-    return text.str();
-}
 
 std::string JoinModules(const std::vector<std::string>& modules)
 {
@@ -67,16 +62,9 @@ PlayModeEntryModal::PlayModeEntryModal(Editor::PlayModeEntryGate& gate)
     SetOverlayLayer(OverlayLayer::BlockingDialog);
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    std::unique_ptr<UIElement> backdrop;
-    const std::string layoutText = ReadLayoutText();
-    if (layoutText.empty() || !UIParsing::XMLParser::ParseLayoutFromString(layoutText, backdrop, kLayoutAssetPath) ||
-        !backdrop)
-    {
-        Logger::Log::Error("PlayModeEntryModal: {} did not load from the editor asset mount, so play mode waits "
-                           "for the script build without a dialog. Check that it is staged.",
-                           kLayoutAssetPath);
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
         return;
-    }
     m_Backdrop = backdrop.get();
     m_Backdrop->SetFocusable(true);
     m_Title = dynamic_cast<Label*>(m_Backdrop->FindById("play-entry-title"_sid));

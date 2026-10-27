@@ -39,6 +39,7 @@ void ScatterBNode::DeclareForView(ViewDeclare& d)
     t.Color = d.ViewColor;
     t.Depth = d.ViewDepth;
     t.Resolve = d.ViewResolve;
+    t.BloomSampleDelta = d.ViewBloomSampleDelta;
     t.DepthResolved = d.ViewDepthResolved;
     t.OccluderDepthResolved = d.ViewOccluderDepthResolved;
     t.GTAO = d.ResolveTexture(Names::View::GTAO);

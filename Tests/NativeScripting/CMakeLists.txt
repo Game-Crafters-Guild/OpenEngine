@@ -162,7 +162,8 @@ if(WIN32)
     target_link_libraries(NativeModuleLoggerTests PRIVATE Engine Types GTest::gtest_main)
     target_include_directories(NativeModuleLoggerTests PRIVATE
         ${CMAKE_SOURCE_DIR}/Engine/Include
-        ${CMAKE_SOURCE_DIR}/Engine/Modules/Logger/Tests)
+        ${CMAKE_SOURCE_DIR}/Engine/Modules/Logger/Tests
+        ${CMAKE_SOURCE_DIR}/Engine/Modules/Logger/Source)
     ge_set_output_tests(NativeModuleLoggerTests)
     ge_stage_runtime_dependencies(NativeModuleLoggerTests)
     add_dependencies(NativeModuleLoggerTests NativeLoggerModuleProbe)
@@ -171,6 +172,27 @@ if(WIN32)
             $<TARGET_FILE_DIR:NativeModuleLoggerTests>/$<TARGET_FILE_NAME:NativeLoggerModuleProbe>)
     add_test(NAME NativeModuleLoggerTests COMMAND $<TARGET_FILE:NativeModuleLoggerTests>)
     set_tests_properties(NativeModuleLoggerTests PROPERTIES TIMEOUT 60 LABELS "Logger;NativeScripting;DLL")
+
+    # Values built by a module, through the real loader: the probe DLL returns a
+    # value from a job or cancels a job with continuations, NativeScriptManager
+    # rejects and unmaps it, then the pool is destroyed; once through EngineCore.
+    add_library(JobResultModuleProbe SHARED JobResultModuleProbe.cpp)
+    set_target_properties(JobResultModuleProbe PROPERTIES UNITY_BUILD OFF)
+    target_link_libraries(JobResultModuleProbe PRIVATE Engine)
+
+    add_executable(NativeModuleJobResultTests NativeModuleJobResultTests.cpp)
+    set_target_properties(NativeModuleJobResultTests PROPERTIES UNITY_BUILD OFF)
+    target_link_libraries(NativeModuleJobResultTests PRIVATE Engine Types GTest::gtest_main)
+    target_include_directories(NativeModuleJobResultTests PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Include
+        ${CMAKE_SOURCE_DIR}/Engine/Tests)  # EngineLogCapture.h
+    ge_set_output_tests(NativeModuleJobResultTests)
+    ge_stage_runtime_dependencies(NativeModuleJobResultTests)
+    add_dependencies(NativeModuleJobResultTests JobResultModuleProbe)
+    add_custom_command(TARGET NativeModuleJobResultTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:JobResultModuleProbe>
+            $<TARGET_FILE_DIR:NativeModuleJobResultTests>/$<TARGET_FILE_NAME:JobResultModuleProbe>)
+    add_test(NAME NativeModuleJobResultTests COMMAND $<TARGET_FILE:NativeModuleJobResultTests>)
+    set_tests_properties(NativeModuleJobResultTests PROPERTIES TIMEOUT 60 LABELS "JobSystem;NativeScripting;DLL")
 endif()
 
 # ---------------------------------------------------------------------------

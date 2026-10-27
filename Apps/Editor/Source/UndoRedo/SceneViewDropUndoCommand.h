@@ -3,20 +3,25 @@
 #include "UndoRedo/DeleteEntitiesCommand.h"
 #include "UndoRedo/IEditorCommand.h"
 
+#include "Components/Name.h"
 #include "ECS/Entity.h"
+#include "ECS/World.h"
 #include "UI/Interaction/Types.h"
 
 #include <algorithm>
+#include <format>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
 namespace GameEngine::Editor
 {
 
-// Single undo step for a Scene View asset drop: removes spawned entities on Undo (same capture
-// semantics as DeleteEntitiesCommand) and restores hierarchy selection before/after the drop.
+// Single undo step for an asset drop on the Scene View or the Hierarchy: removes spawned entities on
+// Undo (same capture semantics as DeleteEntitiesCommand) and restores hierarchy selection
+// before/after the drop.
 class SceneViewDropUndoCommand final : public IEditorCommand
 {
   public:
@@ -41,6 +46,15 @@ class SceneViewDropUndoCommand final : public IEditorCommand
     {
         std::vector<ECS::EntityHandle> merged = MergeDroppedSubtrees(*world, droppedRoots);
         m_Delete = std::make_unique<DeleteEntitiesCommand>(m_Name, world, notifications, std::move(merged));
+    }
+
+    // The step's name for the user: "Place Crate" for one dropped root, "Place 3 Entities" for more.
+    static std::string NameFor(const ECS::World& world, const std::vector<ECS::EntityHandle>& droppedRoots)
+    {
+        if (droppedRoots.size() != 1)
+            return std::format("Place {} Entities", droppedRoots.size());
+        const auto* name = world.GetComponent<Components::Name>(droppedRoots.front());
+        return (name && !name->View().empty()) ? std::format("Place {}", name->View()) : std::string("Place Entity");
     }
 
     const char* GetName() const override { return m_Name.c_str(); }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/Settings/ProjectUIScaleBinding.h"
+#include "EditorChangeNotifications.h"
 #include "Engine/Rendering/CameraAspectRatio.h"
 #include "Engine/Rendering/Camera.h"
 #include "GameViewMovieCapture.h"
@@ -12,7 +13,6 @@
 #include "UI/UITargetSpace.h"
 
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <optional>
 
@@ -51,8 +51,10 @@ class GameUIHost;
 class GameViewController
 {
   public:
+    // The view rebuilds its HUD host when `notifications` reports a project switch, so the host
+    // resolves its font through the new project's mounts. Null notifications: the host is kept.
     GameViewController(Engine::Renderer::RenderServices* renderServices,
-                       std::filesystem::path editorAssetsDirectory);
+                       Editor::EditorChangeNotifications* notifications);
     ~GameViewController();
 
     GameViewController(const GameViewController&) = delete;
@@ -167,10 +169,12 @@ class GameViewController
                                                         uint32_t width,
                                                         uint32_t height);
     void EnsureGameUI();
+    void RebuildGameUI();
     void UpdateExposureReadback(bool enabled);
 
     Engine::Renderer::RenderServices* m_RenderServices = nullptr; // non-owning
-    std::filesystem::path m_EditorAssetsDirectory;
+    Editor::EditorChangeNotifications* m_ChangeNotifications = nullptr; // non-owning
+    Editor::EditorChangeNotifications::SubscriptionToken m_ProjectSwitchedSub{};
 
     // Composite the game UI (UIDocument entities) onto `target` in `targetSpace` —
     // ensuring the host exists, re-asserting it as the active one, and feeding the

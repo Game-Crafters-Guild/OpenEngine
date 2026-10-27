@@ -69,25 +69,75 @@ inline std::array<float, 3> PlanetBaseNoiseGradient(float dx, float dy, float dz
     return {gx, gy, gz};
 }
 
-// Multi-octave (fBM) relief in metres at direction (dx,dy,dz). amplitude scales the whole
-// stack; frequency is the base angular frequency (wavelength ~= 2*pi*R/frequency). octaves
-// 0 is treated as 1. Normalized by the amplitude sum so the envelope is +/- kReliefEnvelope
-// * amplitude for any octave count.
+// The highest angular frequency in PlanetBaseNoise, as a multiple of its f (the s4 term).
+inline constexpr float kReliefHighestFrequencyFactor = 2.1f;
+
+// Multi-octave (fBM) relief in metres at direction (dx,dy,dz), inside +/- kReliefEnvelope x amplitude
+// for any octave count (0 counts as 1). An octave whose shortest wavelength on the unit sphere is
+// under minResolvedArc radians adds its mean, 0; minResolvedArc 0 evaluates every octave.
 inline float PlanetRelief(float dx, float dy, float dz, float amplitude, float frequency,
-                          uint32_t octaves)
+                          uint32_t octaves, float minResolvedArc = 0.0f)
 {
     if (amplitude <= 0.0f)
         return 0.0f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
     const uint32_t oct = octaves < 1u ? 1u : octaves;
     float total = 0.0f, a = 1.0f, f = frequency, ampSum = 0.0f;
     for (uint32_t i = 0; i < oct; ++i)
     {
-        total += a * PlanetBaseNoise(dx, dy, dz, f);
+        if (kReliefHighestFrequencyFactor * f * minResolvedArc <= kTwoPi)
+            total += a * PlanetBaseNoise(dx, dy, dz, f);
         ampSum += a;
         a *= kReliefPersistence;
         f *= kReliefLacunarity;
     }
     return amplitude * total / ampSum;
+}
+
+// An upper bound of |gradient| of PlanetBaseNoise, as a multiple of its f: the norm of the per-axis
+// bounds of PlanetBaseNoiseGradient (2.05, 2.15, 0.7), rounded up. The three never peak together.
+inline constexpr float kPlanetBaseNoiseSlope = 3.06f;
+
+// The rounding allowance of PlanetReliefRange, as a fraction of the amplitude.
+inline constexpr float kPlanetReliefRangeRounding = 1.0e-4f;
+
+// The lowest and highest relief in metres over a region of directions.
+struct PlanetReliefRange
+{
+    float Min = 0.0f;
+    float Max = 0.0f;
+};
+
+// The range of PlanetRelief (CPU only) within `chord`, a straight-line distance, of unit direction
+// (dx,dy,dz), at `minResolvedArc` and at 0. Conservative: an octave changes by at most
+// kPlanetBaseNoiseSlope x f x chord inside its envelope; an octave dropped at minResolvedArc adds 0.
+inline PlanetReliefRange PlanetReliefRangeNear(float dx, float dy, float dz, float chord, float amplitude,
+                                               float frequency, uint32_t octaves, float minResolvedArc)
+{
+    if (amplitude <= 0.0f)
+        return {};
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const uint32_t oct = octaves < 1u ? 1u : octaves;
+    float low = 0.0f, high = 0.0f, a = 1.0f, f = frequency, ampSum = 0.0f;
+    for (uint32_t i = 0; i < oct; ++i)
+    {
+        const float value = PlanetBaseNoise(dx, dy, dz, f);
+        const float reach = kPlanetBaseNoiseSlope * f * chord;
+        float octaveLow = std::fmax(value - reach, -kReliefEnvelope);
+        float octaveHigh = std::fmin(value + reach, kReliefEnvelope);
+        if (kReliefHighestFrequencyFactor * f * minResolvedArc > kTwoPi)
+        {
+            octaveLow = std::fmin(octaveLow, 0.0f);
+            octaveHigh = std::fmax(octaveHigh, 0.0f);
+        }
+        low += a * octaveLow;
+        high += a * octaveHigh;
+        ampSum += a;
+        a *= kReliefPersistence;
+        f *= kReliefLacunarity;
+    }
+    const float rounding = kPlanetReliefRangeRounding * amplitude;
+    return {amplitude * low / ampSum - rounding, amplitude * high / ampSum + rounding};
 }
 
 // The 3D gradient d(relief)/d(dir) of the multi-octave relief. Project out the radial

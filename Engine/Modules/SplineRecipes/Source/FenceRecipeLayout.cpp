@@ -1,10 +1,35 @@
 #include "SplineRecipes/FenceRecipeLayout.h"
 
+#include "SplineRecipes/RecipeBuildStates.h"
+
+#include <algorithm>
+
 namespace GameEngine::SplineRecipes
 {
 
-SplineLayout::FenceLayoutParams FenceLayoutParamsOf(const Components::SplineFence& recipe,
-                                      const FenceRecipePieces& pieces)
+FencePool FencePoolOf(const Components::SplineFence& recipe, Components::SplineFencePartKind kind)
+{
+    FencePool pool;
+    for (const Components::SplineFencePart& part : recipe.Parts)
+    {
+        if (part.Kind == kind && !part.Mesh.IsNull())
+            pool.Meshes[pool.Count++] = part.Mesh;
+    }
+    return pool;
+}
+
+std::string_view FenceNothingToPlaceReason(const Components::SplineFence& recipe)
+{
+    const bool hasPart = std::any_of(std::begin(recipe.Parts), std::end(recipe.Parts),
+                                     [](const Components::SplineFencePart& part)
+                                     {
+                                         return part.Kind == Components::SplineFencePartKind::Span ||
+                                                part.Kind == Components::SplineFencePartKind::Post;
+                                     });
+    return hasPart ? kNoFencePartMeshReason : kNoFencePartReason;
+}
+
+SplineLayout::FenceLayoutParams FenceLayoutParamsOf(const Components::SplineFence& recipe, const FenceRecipePieces& pieces)
 {
     SplineLayout::FenceLayoutParams layout;
     layout.PostPitch = recipe.PostPitch;

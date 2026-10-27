@@ -3,10 +3,12 @@
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/RuntimeOnlyEntity.h"
+#include "Components/Spline/SplineComponent.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "Editor/Entities/EditorComponentTraits.h"
 #include "Scene/SceneRaycast.h"
+#include "SceneView/SplineToolStripEntry.h"
 
 #include <gtest/gtest.h>
 
@@ -25,7 +27,7 @@ protected:
     void SetUp() override
     {
         EditorComponentTraits traits;
-        traits.IsPickInstanceRoot = true;
+        traits.IsPickClimbRoot = true;
         EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<GeneratedShapeRoot>(), traits);
         Owner = World.CreateEntity();
         World.AddComponentImmediate(Owner, GeneratedShapeRoot{});
@@ -74,10 +76,43 @@ TEST_F(PickRootResolverTest, RepeatClicksNeverDrillIntoGeneratedFillOrEdges)
 TEST_F(PickRootResolverTest, AuthoredChildrenAndUnownedRuntimeMeshesRemainIndependent)
 {
     const auto authored = CreatePiece(false);
-    EXPECT_EQ(ResolvePickRoot(World, authored), authored);
+    std::vector<Scene::PickHit> hits(1);
+    hits[0].Entity = authored;
+    std::vector<ECS::EntityHandle> candidates;
+    BuildPickCandidates(World, hits, false, candidates);
+    EXPECT_EQ(candidates, (std::vector<ECS::EntityHandle>{Owner, authored}));
     const auto generated = CreatePiece(true);
     World.RemoveComponentImmediate<GeneratedShapeRoot>(Owner);
     EXPECT_EQ(ResolvePickRoot(World, generated), generated);
     EXPECT_EQ(ResolvePickRoot(World, ECS::EntityHandle{}), ECS::EntityHandle{});
 }
+
+TEST_F(PickRootResolverTest, NestedGeneratedPiecesCollapseToTheOutermostAuthoringRoot)
+{
+    const auto inner = CreatePiece(true);
+    World.AddComponentImmediate(inner, GeneratedShapeRoot{});
+    const auto piece = CreatePiece(true);
+    World.GetComponentForWrite<Components::Parent>(piece)->Entity = inner;
+    std::vector<Scene::PickHit> hits(2);
+    hits[0].Entity = piece;
+    hits[1].Entity = inner;
+    std::vector<ECS::EntityHandle> candidates;
+    BuildPickCandidates(World, hits, false, candidates);
+    EXPECT_EQ(candidates, (std::vector<ECS::EntityHandle>{Owner}));
+}
+
+TEST_F(PickRootResolverTest, SplineToolActivationPreservesTheToolForAuthoringContainers)
+{
+    World.AddComponentImmediate(Owner, Components::SplineComponent{});
+    const auto ordinary = World.CreateEntity();
+    World.AddComponentImmediate(ordinary, Components::SplineComponent{});
+    const auto entry = MakeSplineToolStripEntry();
+    ASSERT_TRUE(entry.ActivatesForSelection);
+    EXPECT_FALSE(entry.ActivatesForSelection(World, Owner, {Owner}));
+    EXPECT_FALSE(entry.ActivatesForSelection(World, ordinary, {ordinary, Owner}));
+    EXPECT_TRUE(entry.ActivatesForSelection(World, ordinary, {ordinary}));
+    EXPECT_TRUE(entry.ActivatesForSelection(World, {}, {ordinary}));
+    EXPECT_FALSE(entry.ActivatesForSelection(World, {}, {}));
+}
+
 }

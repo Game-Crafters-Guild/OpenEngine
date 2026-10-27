@@ -1,80 +1,51 @@
 #include "Panels/DownloadInProgressModal.h"
-#include "Assets/PolyhavenDownloadManager.h"
 
+#include "Assets/PolyhavenDownloadManager.h"
+#include "Input/KeyCodes.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
-#include "Input/KeyCodes.h"
+
+#include <array>
+#include <memory>
+#include <string_view>
 
 namespace GameEngine
 {
+
+namespace
+{
+constexpr const char* kLayoutAssetPath = "UI/controls/DownloadInProgressModal/DownloadInProgressModal.uxml";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 5> kRequiredIds = {
+    "download-progress-title",
+    "download-progress-message",
+    "download-progress-cancel",
+    "download-progress-proceed",
+    "download-progress-wait",
+};
+} // namespace
 
 DownloadInProgressModal::DownloadInProgressModal()
 {
     AddClass("modal-overlay");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
 
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
     m_Backdrop = backdrop.get();
-    m_Backdrop->AddClass("modal-backdrop");
     m_Backdrop->SetFocusable(true);
-
-    auto window = std::make_unique<UIElement>();
-    m_Window = window.get();
-    m_Window->AddClass("modal-window");
-    m_Window->AddClass("modal-window-shadow");
-    m_Window->AddClass("modal-window-520");
-
-    // Header
-    {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("modal-header");
-        auto title = std::make_unique<Label>();
-        m_Title = title.get();
-        title->SetText("Downloads In Progress");
-        title->AddClass("modal-title");
-        header->AddChild(std::move(title));
-        m_Window->AddChild(std::move(header));
-    }
-
-    // Content
-    {
-        auto content = std::make_unique<UIElement>();
-        content->AddClass("modal-content");
-        auto msg = std::make_unique<Label>();
-        m_Message = msg.get();
-        msg->SetText("Polyhaven assets are still downloading...");
-        msg->AddClass("modal-message");
-        content->AddChild(std::move(msg));
-        m_Window->AddChild(std::move(content));
-    }
-
-    // Footer buttons
-    {
-        auto footer = std::make_unique<UIElement>();
-        footer->AddClass("modal-footer");
-
-        auto cancel = std::make_unique<Button>();
-        cancel->SetText("Cancel");
-        cancel->AddClass("secondary");
+    m_Title = m_Backdrop->FindById("download-progress-title"_sid);
+    m_Message = m_Backdrop->FindById("download-progress-message"_sid);
+    if (auto* cancel = dynamic_cast<Button*>(m_Backdrop->FindById("download-progress-cancel"_sid)))
         cancel->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
-
-        auto proceed = std::make_unique<Button>();
-        proceed->SetText("Proceed Anyway");
-        proceed->AddClass("secondary");
+    if (auto* proceed = dynamic_cast<Button*>(m_Backdrop->FindById("download-progress-proceed"_sid)))
         proceed->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnProceedClicked(); });
-
-        auto wait = std::make_unique<Button>();
-        wait->SetText("Wait");
-        wait->AddClass("primary");
+    if (auto* wait = dynamic_cast<Button*>(m_Backdrop->FindById("download-progress-wait"_sid)))
         wait->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnWaitClicked(); });
-
-        footer->AddChild(std::move(cancel));
-        footer->AddChild(std::move(proceed));
-        footer->AddChild(std::move(wait));
-        m_Window->AddChild(std::move(footer));
-    }
 
     m_Backdrop->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
     {
@@ -85,7 +56,6 @@ DownloadInProgressModal::DownloadInProgressModal()
         }
     });
 
-    m_Backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 
@@ -93,6 +63,8 @@ void DownloadInProgressModal::Show(const std::string& /*actionName*/,
                                     PolyhavenDownloadManager* downloadManager,
                                     std::function<void()> onProceed)
 {
+    if (!m_Backdrop)
+        return;
     m_Visible = true;
     m_DownloadManager = downloadManager;
     m_OnProceed = std::move(onProceed);

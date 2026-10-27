@@ -156,7 +156,7 @@ constexpr float kSliderTrackPaddingPx = InspectorDrag::kInspectorSliderTrackPadd
 constexpr float kKelvinGradientLoK = 1500.0f;
 constexpr float kKelvinGradientHiK = 12000.0f;
 
-// The swatch colour of a light colour. A colour with a channel above 1 (a sky's hue at unit brightness)
+// The swatch color of a light color. A color with a channel above 1 (a sky's hue at unit brightness)
 // is scaled down by its largest channel, so the swatch keeps its hue instead of clipping it.
 static uint32_t LightColorToArgb(const float (&c)[3])
 {
@@ -356,9 +356,9 @@ static std::string SkyDriverNoticeText(const ECS::World& world, ECS::EntityHandl
     using namespace Components::SkySunIlluminance;
     const std::string who = DrivingSkyDisplayName(world, sky);
     if (fields & kDrivesIntensity)
-        return who + ((fields & kDrivesColor) ? " sets this light's direction, colour and intensity from the time of day."
+        return who + ((fields & kDrivesColor) ? " sets this light's direction, color and intensity from the time of day."
                                               : " sets this light's direction and intensity from the time of day.");
-    return who + " sets this light's direction and colour from the time of day. Intensity is the sun's "
+    return who + " sets this light's direction and color from the time of day. Intensity is the sun's "
                  "illuminance with the sun overhead.";
 }
 
@@ -549,10 +549,10 @@ void RegisterLightInspector()
             AddIntensityReferenceGuide(ctx.Parent);
 
         // Editable: Color temperature (Kelvin) — tints the light color when enabled. Read-only while a
-        // sky drives the colour: the drive divides the temperature out, so an edit would change nothing.
+        // sky drives the color: the drive divides the temperature out, so an edit would change nothing.
         const std::string temperatureTooltip = colorDrivenBySky
             ? "Set aside while " + DrivingSkyDisplayName(*w, drivingSky) +
-                  " drives this light's colour: the sky's colour already includes it."
+                  " drives this light's color: the sky's color already includes it."
             : std::string("Tint the light color by a blackbody color temperature (Kelvin)");
         Toggle* useTemperature = AddToggleRow(ctx.Parent, "Use Color Temperature", light->UseColorTemperature,
             [w, e, n, undo, extras](bool v) {
@@ -720,15 +720,15 @@ void RegisterLightInspector()
         {
             UIElement* row = InspectorUI::AddRow(ctx.Parent);
             const std::string drivenColorMeaning = intensityDrivenBySky
-                ? " Under its sun illuminance curve the colour is a hue at unit brightness, so a channel can read "
+                ? " Under its sun illuminance curve the color is a hue at unit brightness, so a channel can read "
                   "above 1: the brightness is in Intensity."
-                : " From the light the colour also carries the dimming of a low sun and the night, so it darkens "
+                : " From the light the color also carries the dimming of a low sun and the night, so it darkens "
                   "while Intensity stays the sun overhead.";
             const std::string colorTooltip = colorDrivenBySky
                 ? "Set by " + DrivingSkyDisplayName(*w, drivingSky) +
                       " every frame while it drives this light: the sun's color through the atmosphere by day, "
                       "moonlight at night." + drivenColorMeaning +
-                      " Turn off its Sky sets the light's colour (under a custom illuminance curve) or its Sky "
+                      " Turn off its Sky sets the light's color (under a custom illuminance curve) or its Sky "
                       "drives sun light to author the color here."
                 : std::string("Light color (click to open color picker; double-click to reset to white)");
             Label* colorLabel = InspectorUI::AddLabel(row, "Color", colorTooltip.c_str());

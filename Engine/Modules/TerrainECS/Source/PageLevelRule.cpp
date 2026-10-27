@@ -63,22 +63,22 @@ float32 PageParentBlend(float32 level)
     return Math::Clamp01((inRing - kBlendStart) / (1.0f - kBlendStart));
 }
 
-uint32 FirstPinnedPageLevel(const PageRequestTerrain& terrain, std::span<const PageStreaming::PageStoreLevel> levels)
+uint32 FirstPinnedPageLevel(std::span<const PageStreaming::PageStoreLevel> levels, uint32 faces, float32 level0Texel,
+                            uint32 cacheSlots)
 {
     if (levels.empty())
         return 0;
-    const uint64 cap = terrain.CacheSlots / kPinWholePyramidCacheFraction;
-    const uint64 pages = static_cast<uint64>(levels.back().FirstEntry) + levels.back().PagesX * levels.back().PagesZ;
+    const uint64 cap = cacheSlots / kPinWholePyramidCacheFraction;
+    const uint64 pages = faces * PageStreaming::DensePageCount(levels);
     if (pages <= cap)
         return 0;
     // Coarsest first while the pinned pages stay within the cap and the level's texel is at least
     // kPinnedPageTexelMeters; the top level always, so every fallback walk ends on a page.
-    const float32 texel = std::max(terrain.Level0TexelX, terrain.Level0TexelZ);
     uint32 first = static_cast<uint32>(levels.size()) - 1u;
-    uint64 pinned = static_cast<uint64>(levels.back().PagesX) * levels.back().PagesZ;
-    while (first > 0 && texel * static_cast<float32>(1u << (first - 1u)) >= kPinnedPageTexelMeters)
+    uint64 pinned = faces * static_cast<uint64>(levels.back().PagesX) * levels.back().PagesZ;
+    while (first > 0 && level0Texel * static_cast<float32>(1u << (first - 1u)) >= kPinnedPageTexelMeters)
     {
-        const uint64 finer = static_cast<uint64>(levels[first - 1u].PagesX) * levels[first - 1u].PagesZ;
+        const uint64 finer = faces * static_cast<uint64>(levels[first - 1u].PagesX) * levels[first - 1u].PagesZ;
         if (pinned + finer > cap)
             break;
         pinned += finer;
@@ -91,7 +91,8 @@ void HeightPageRequester::Configure(const PageRequestTerrain& terrain)
 {
     m_Terrain = terrain;
     m_Levels = PageStreaming::BuildPageStoreLevels(terrain.SamplesX, terrain.SamplesZ);
-    m_FirstPinned = FirstPinnedPageLevel(terrain, m_Levels);
+    m_FirstPinned = FirstPinnedPageLevel(m_Levels, 1u, std::max(terrain.Level0TexelX, terrain.Level0TexelZ),
+                                         terrain.CacheSlots);
 }
 
 void HeightPageRequester::Build(std::span<const Mathematics::Vector3> cameras, const PageLevelView& view,

@@ -11,6 +11,8 @@
 
 #if LOGGER_ENABLE_FILE_LOGGING
 
+#include "Logger/LogChannel.h"
+
 #include <gtest/gtest.h>
 
 #include <filesystem>
@@ -120,6 +122,25 @@ TEST_F(FileSinkFormatTest, WritesTheLevelWhenSourceLocationIsEnabled)
     EXPECT_NE(content.find("[INFO]"), std::string::npos);
     EXPECT_NE(content.find("[WARN]"), std::string::npos);
     EXPECT_NE(content.find("[ERROR]"), std::string::npos);
+}
+
+// A line names its channel after the severity; a Core line names none, so the lines of the Log:: functions
+// keep their text.
+TEST_F(FileSinkFormatTest, WritesTheChannelNameExceptForCore)
+{
+    const LogChannel channel = RegisterChannel("Tests.FileFormat", LogLevel::Info);
+    {
+        FileSink sink(BaseConfig());
+        LogMessage onChannel(LogLevel::Info, "on-channel");
+        onChannel.Channel = channel.Index;
+        sink.Write(onChannel);
+        sink.Write(LogMessage(LogLevel::Info, "on-core"));
+    }
+    const std::string content = ReadWholeFile(m_LogPath);
+
+    EXPECT_NE(content.find("[INFO] [Tests.FileFormat] "), std::string::npos) << content;
+    EXPECT_EQ(content.find("[Core]"), std::string::npos) << content;
+    EXPECT_NE(content.find("on-core"), std::string::npos) << content;
 }
 
 #if LOGGER_ENABLE_SOURCE_LOCATION

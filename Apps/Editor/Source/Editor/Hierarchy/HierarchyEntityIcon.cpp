@@ -29,6 +29,8 @@
 #include "PhysicsECS/Components/PhysicsCollider.h"
 #include "PhysicsECS/Components/PhysicsWorldSettingsComponent.h"
 #include "Thumbnails/IThumbnailProvider.h"
+#include "UI/Controls/Label.h"
+#include "UI/Controls/TreeView.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIManager.h"
@@ -79,6 +81,18 @@ inline bool IsSpriteMeshRenderer(const MeshRenderer& mr)
     if (matGuid.IsNull() || matGuid == PG::DefaultMaterialGuid())
         return false;
     return true;
+}
+
+// The model the entity draws itself, or a null GUID when it draws none or a primitive.
+GUID ModelGuidDrawnBy(ECS::World& world, ECS::EntityHandle entity)
+{
+    const auto* renderer = world.GetComponent<MeshRenderer>(entity);
+    if (!renderer || !MeshRendererReferencesModelAsset(*renderer))
+        return {};
+    const GUID guid = ModelGuidFromMeshRenderer(*renderer);
+    if (guid.IsNull() || Engine::Renderer::PrimitiveGenerator::IsPrimitive(guid))
+        return {};
+    return guid;
 }
 
 // Resolves the active model-thumb coloring mode from the owning UIManager root.
@@ -155,7 +169,36 @@ bool EntityIconIsCssOnly(const UIElement& element)
         if (element.HasClass(c))
             return true;
     }
+    // A registered row class is a CSS glyph too.
+    const auto registered = Editor::EditorComponentTraitsRegistry::Get().Snapshot();
+    for (const auto& [typeId, traits] : *registered)
+    {
+        (void)typeId;
+        if (!traits.HierarchyRowClass.empty() && element.HasClass(traits.HierarchyRowClass))
+            return true;
+    }
     return false;
+}
+
+void ApplyHierarchyRowDecorations(ECS::World& world, ECS::EntityHandle handle, HierarchyRowParts& parts)
+{
+    const auto registered = Editor::EditorComponentTraitsRegistry::Get().Snapshot();
+    for (const auto& [typeId, traits] : *registered)
+    {
+        (void)typeId;
+        if (traits.DecorateHierarchyRow)
+            traits.DecorateHierarchyRow(world, handle, parts);
+    }
+}
+
+void ApplyHeldHierarchyRowDecorations(ECS::World& world, ECS::EntityHandle entity, const TreeView& tree,
+                                      std::uint64_t treeId)
+{
+    UIElement* row = tree.FindBoundRow(treeId);
+    if (!row || !world.IsValid(entity))
+        return;
+    HierarchyRowParts parts{*row, tree.FindBoundRowTitle(treeId)};
+    ApplyHierarchyRowDecorations(world, entity, parts);
 }
 
 std::filesystem::path TryResolveSpriteAlbedoTexturePath(ECS::World* world,
@@ -251,35 +294,39 @@ std::filesystem::path TryResolveInspectorIconAssetPath(ECS::World* world,
     return {};
 }
 
-GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle)
+GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle,
+                                      EntityChildrenOf childrenOf)
 {
     if (!world || !handle.IsValid() || !world->IsValid(handle))
         return {};
 
-    if (const auto* mr = world->GetComponent<MeshRenderer>(handle))
+    if (const GUID own = ModelGuidDrawnBy(*world, handle); !own.IsNull())
+        return own;
+
+    // Imported models often put the MeshRenderer several levels deep (under an
+    // Armature, or on a submesh under a pivot), so the walk covers the whole subtree.
+    if (!childrenOf)
     {
-        if (MeshRendererReferencesModelAsset(*mr))
+        std::vector<ECS::EntityHandle> descendants;
+        Components::DescendantsOf(*world, handle, descendants);
+        for (const ECS::EntityHandle descendant : descendants)
         {
-            const GUID g = ModelGuidFromMeshRenderer(*mr);
-            if (!g.IsNull() && !Engine::Renderer::PrimitiveGenerator::IsPrimitive(g))
-                return g;
+            if (const GUID guid = ModelGuidDrawnBy(*world, descendant); !guid.IsNull())
+                return guid;
         }
+        return {};
     }
 
-    // Imported models routinely place the MeshRenderer several levels deep
-    // (under an Armature, or on a submesh under a transform pivot), so a
-    // direct-child scan misses them. BFS the full subtree and return the
-    // first non-primitive model GUID we find.
-    std::vector<ECS::EntityHandle> descendants;
-    Components::DescendantsOf(*world, handle, descendants);
-    for (const auto& descendant : descendants)
+    // Each entity is in one parent's list, so the walk reaches each descendant once.
+    std::vector<ECS::EntityHandle> frontier{handle};
+    for (std::size_t next = 0; next < frontier.size(); ++next)
     {
-        const auto* mr = world->GetComponent<MeshRenderer>(descendant);
-        if (!mr || !MeshRendererReferencesModelAsset(*mr))
-            continue;
-        const GUID g = ModelGuidFromMeshRenderer(*mr);
-        if (!g.IsNull() && !Engine::Renderer::PrimitiveGenerator::IsPrimitive(g))
-            return g;
+        for (const ECS::EntityHandle child : childrenOf(frontier[next]))
+        {
+            if (const GUID guid = ModelGuidDrawnBy(*world, child); !guid.IsNull())
+                return guid;
+            frontier.push_back(child);
+        }
     }
     return {};
 }
@@ -337,7 +384,8 @@ void ClearHierarchyEntityIconClasses(UIElement* row)
     // above and cannot be — packages register them at runtime. Clearing them
     // from the same registry Apply reads means a row recycled from an entity
     // whose type came from a package does not keep that package's icon.
-    for (const auto& [typeId, traits] : Editor::EditorComponentTraitsRegistry::Get().Snapshot())
+    const auto registered = Editor::EditorComponentTraitsRegistry::Get().Snapshot();
+    for (const auto& [typeId, traits] : *registered)
     {
         (void)typeId;
         if (!traits.HierarchyRowClass.empty())
@@ -345,11 +393,24 @@ void ClearHierarchyEntityIconClasses(UIElement* row)
     }
 }
 
-void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::EntityHandle handle)
+void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::EntityHandle handle,
+                                     EntityChildrenOf childrenOf)
 {
     ClearHierarchyEntityIconClasses(row);
     if (!world || !row || !handle.IsValid() || !world->IsValid(handle))
         return;
+
+    // A component's registered row class leads the chain: its owner chose the
+    // glyph, as a prefab instance root shows the prefab glyph over its mesh.
+    const auto registered = Editor::EditorComponentTraitsRegistry::Get().Snapshot();
+    for (const auto& [typeId, traits] : *registered)
+    {
+        if (!traits.HierarchyRowClass.empty() && world->HasComponent(handle, typeId))
+        {
+            row->AddClass(traits.HierarchyRowClass);
+            return;
+        }
+    }
 
     if (world->GetComponent<Components::Camera>(handle) != nullptr)
     {
@@ -462,17 +523,6 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::Ent
         return;
     }
 
-    // Plugin-owned components (editor packages) contribute row classes via
-    // registered traits.
-    for (const auto& [typeId, traits] : Editor::EditorComponentTraitsRegistry::Get().Snapshot())
-    {
-        if (!traits.HierarchyRowClass.empty() && world->HasComponent(handle, typeId))
-        {
-            row->AddClass(traits.HierarchyRowClass);
-            return;
-        }
-    }
-
     if (world->GetComponent<Components::OceanSurface>(handle) != nullptr)
     {
         row->AddClass("hierarchy-entity-ocean");
@@ -544,7 +594,7 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::Ent
         return;
     }
 
-    const GUID childModelGuid = FindModelGuidForEntityOrChildren(world, handle);
+    const GUID childModelGuid = FindModelGuidForEntityOrChildren(world, handle, childrenOf);
     if (!childModelGuid.IsNull())
     {
         row->AddClass("hierarchy-entity-model");
@@ -555,9 +605,10 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::Ent
 }
 
 void ApplyHierarchyEntityIconClassesToIcon(ECS::World* world, UIElement* icon,
-                                           ECS::EntityHandle handle)
+                                           ECS::EntityHandle handle,
+                                           EntityChildrenOf childrenOf)
 {
-    ApplyHierarchyEntityIconClasses(world, icon, handle);
+    ApplyHierarchyEntityIconClasses(world, icon, handle, childrenOf);
     if (!icon)
         return;
     /* Only the glyph-drawing element gets the marker, so `.entity-icon` plus the

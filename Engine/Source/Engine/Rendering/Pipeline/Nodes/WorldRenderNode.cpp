@@ -82,6 +82,7 @@ void WorldRenderNode::DeclareForView(ViewDeclare& d)
     t.Color = d.ViewColor;
     t.Depth = d.ViewDepth;
     t.Resolve = d.ViewResolve;
+    t.BloomSampleDelta = d.ViewBloomSampleDelta;
     t.DepthResolved = d.ViewDepthResolved;
     // The contact shadows march the occluders' depth, which has no grass heads (DepthResolveNode).
     t.OccluderDepthResolved = d.ViewOccluderDepthResolved;

@@ -2145,7 +2145,7 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
         });
 
     if (canResolveColor && result.Pass.IsValid())
-        Rendering::Passes::AddMsaaColorResolvePassRG(frame, targets.Color, targets.Resolve,
+        Rendering::Passes::AddMsaaColorResolvePassRG(frame, targets.Color, targets.Resolve, targets.BloomSampleDelta,
                                                      (passName + ".ColorResolve").c_str());
     return result;
 }
@@ -2542,7 +2542,7 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
         });
 
     if (canResolveColor && drawPass.IsValid())
-        Rendering::Passes::AddMsaaColorResolvePassRG(frame, targets.Color, targets.Resolve,
+        Rendering::Passes::AddMsaaColorResolvePassRG(frame, targets.Color, targets.Resolve, targets.BloomSampleDelta,
                                                      (debugName + ".ColorResolve").c_str());
     return drawPass;
 }

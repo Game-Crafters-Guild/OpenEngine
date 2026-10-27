@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
+#include <optional>
 
 namespace GameEngine::UI::Layout
 {
@@ -34,6 +36,42 @@ inline PopupPosition ClampPopupToViewport(const PopupRect& viewport,
         std::clamp(desiredX, minX, maxX),
         std::clamp(desiredY, minY, maxY),
     };
+}
+
+// The side of its anchor a popup opens on.
+enum class PopupSide : uint8_t
+{
+    Below,
+    Above,
+};
+
+struct AnchoredPopupPosition
+{
+    PopupPosition Position;
+    PopupSide Side = PopupSide::Below;
+};
+
+// Places a popup `gap` below `anchor` with their left edges level. When the popup does not fit below
+// and has more room above, it opens `gap` above the anchor. A given `side` is kept, so the popup does
+// not jump when its height changes. The result is clamped to the viewport inset by `margin`.
+inline AnchoredPopupPosition PlacePopupBelowOrAbove(const PopupRect& viewport,
+                                                    const PopupRect& anchor,
+                                                    float popupWidth,
+                                                    float popupHeight,
+                                                    float margin,
+                                                    float gap,
+                                                    std::optional<PopupSide> side)
+{
+    const float anchorBottom = anchor.Y + anchor.Height;
+    const float viewportBottom = viewport.Y + viewport.Height;
+    if (!side)
+    {
+        const bool fitsBelow = anchorBottom + gap + popupHeight <= viewportBottom - margin;
+        const bool roomierAbove = anchor.Y - viewport.Y > viewportBottom - anchorBottom;
+        side = !fitsBelow && roomierAbove ? PopupSide::Above : PopupSide::Below;
+    }
+    const float desiredY = *side == PopupSide::Above ? anchor.Y - gap - popupHeight : anchorBottom + gap;
+    return {ClampPopupToViewport(viewport, anchor.X, desiredY, popupWidth, popupHeight, margin), *side};
 }
 
 // Where a submenu opens from: the menu panel that holds its parent row, and that row.

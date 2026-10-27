@@ -14,6 +14,12 @@ namespace GameEngine::Rendering
 class IDevice;
 }
 
+namespace GameEngine::Components
+{
+struct Terrain;
+struct TerrainPlanetRelief;
+}
+
 namespace GameEngine::PageStreaming
 {
 struct GeneratedHeightLattice;
@@ -54,9 +60,18 @@ void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::ID
                                     float32 targetPixelError, std::span<const Mathematics::Vector3> cameras,
                                     float32 focalScale);
 
+/// Requests the height pages of planet entity `planet` at the world origin for world-space `cameras`. The wide
+/// arm draws the pages of render handle index `renderTerrain` (kNoRenderTerrain: none yet); the narrow arm
+/// streams them and draws the closed form. `focalScale` 0 requests none; an unrequested planet stops streaming.
+void RequestPlanetHeightPages(TerrainService& service, const Rendering::IDevice& device, uint32 planet,
+                              uint32 renderTerrain, std::string_view name, const Components::Terrain& terrain,
+                              const Components::TerrainPlanetRelief& relief,
+                              std::span<const Mathematics::Vector3> cameras, float32 focalScale);
+
 /// After every terrain's requests: one residency frame (a terrain not requested this frame stops
 /// being paged), its uploads and page tables published to `pages`, and the rects whose height
-/// changed source published into the CBT's dirty-rect accumulator of `terrainFeature`.
+/// changed source published into the CBT's dirty-rect accumulator of `terrainFeature`, a planet's
+/// into `service`'s sphere dirty union.
 void UpdateHeightPages(TerrainService& service, TerrainRenderFeature& terrainFeature, TerrainHeightPageFeature& pages,
                        uint64 frameIndex, float32 deltaSeconds, uint32 framesInFlight);
 

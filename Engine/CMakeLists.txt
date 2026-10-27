@@ -102,6 +102,7 @@ set(ENGINE_SOURCES
     Source/Scene/TerrainPicking.cpp
     Source/Scene/PrefabPlacement.cpp
     Source/Scene/PrefabSpawn.cpp
+    Source/Scene/PrefabAuthoring.cpp
     Source/Scene/PrefabOverrideWriter.cpp
     Source/Scene/KeptComponentResolver.cpp
     Source/Scene/SceneEngineEmbedMaterializer.cpp
@@ -2990,6 +2991,12 @@ endif()
 			    )
 			    ge_set_output_tests(RuntimeHostTests)
 			    ge_stage_runtime_dependencies(RuntimeHostTests)
+			    ge_stage_test_asset(RuntimeHostTests
+			        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Fonts/Roboto-Regular.ttf"
+			        "Assets/Fonts/Roboto-Regular.ttf")
+			    ge_stage_test_asset(RuntimeHostTests
+			        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/Fonts/RobotoMono-Regular.ttf"
+			        "Assets/Fonts/RobotoMono-Regular.ttf")
 			    # The frame's finalize and terminal encode load "Shaders/<name>.shaderpkg" from the
 			    # build root; the edge resolves at generate time.
 			    add_dependencies(RuntimeHostTests CompileShaderPkgs)

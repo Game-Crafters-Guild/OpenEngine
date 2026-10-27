@@ -96,11 +96,14 @@ struct SplinePlacement
     // Metres between tile centers along the conformed (draped) centerline —
     // true 3D distance over the ground, not authored-curve arc length.
     float32 Spacing = 2.0f;
+    // @ge-tooltip Fit To Length rounds the number of tiles so that they fill the spline exactly. Fixed Pitch steps exactly Spacing meters and cuts the last partial step.
     SplinePlacementFit Fit = SplinePlacementFit::FitToLength;
+    // @ge-tooltip How the tiles meet the surface under the spline. None keeps the frame of the spline. Height puts each tile on the surface and keeps it upright. Height And Slope also tilts it with the surface.
     SplinePlacementConform ConformMode = SplinePlacementConform::HeightAndSlope;
     // What the conform ray may land on. Scene (the default) is every pickable
     // surface; TerrainOnly makes scenery transparent so pieces do not ride the
     // roofs of the props they pass under.
+    // @ge-tooltip What the tiles stand on. Scene takes the nearest surface of any kind, so a tile under a cart or a canopy sits on top of it. Terrain Only ignores scenery, so the tiles follow the ground under it. With Terrain Only the drawn line of the spline can still ride over scenery that the tiles pass under.
     SplineConformTarget ConformTarget = SplineConformTarget::Scene;
     // Which plane of the tile lands on the conform hit. BoundsMin lifts the
     // lowest vertex onto the surface; PivotPlane lands local y=0 and lets what

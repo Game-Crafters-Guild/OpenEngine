@@ -58,7 +58,6 @@
 #include "Logger/Logger.h"
 #include "Picking/ScenePick.h"
 #include "Picking/PickRootResolver.h"
-#include "Editor/Entities/EditorComponentTraits.h"
 #include "UI/Controls/Widgets/CameraBookmarksWidget.h"
 #include "Editor/Settings/SceneViewSettings.h"
 #include "SceneView/SceneViewFraming.h"
@@ -778,7 +777,12 @@ SceneViewController::~SceneViewController()
     {
         m_ChangeNotifications->Unsubscribe(m_ChangeSub);
     }
+    if (m_ChangeNotifications)
+    {
+        m_ChangeNotifications->Unsubscribe(m_ProjectSwitchedSub);
+    }
     m_ChangeSub = {};
+    m_ProjectSwitchedSub = {};
     m_ChangeNotifications = nullptr;
 }
 
@@ -892,14 +896,23 @@ void SceneViewController::SetChangeNotifications(Editor::EditorChangeNotificatio
     {
         m_ChangeNotifications->Unsubscribe(m_ChangeSub);
     }
+    if (m_ChangeNotifications)
+    {
+        m_ChangeNotifications->Unsubscribe(m_ProjectSwitchedSub);
+    }
 
     m_ChangeNotifications = notifications;
     m_ChangeSub = {};
+    m_ProjectSwitchedSub = {};
 
     if (!m_ChangeNotifications)
     {
         return;
     }
+
+    // The overlay builds the HUD host again on its next frame, so the host resolves
+    // its font through the new project's mounts.
+    m_ProjectSwitchedSub = m_ChangeNotifications->SubscribeProjectSwitched([this]() { m_GameUI.reset(); });
 
     const ECS::ComponentTypeId transformType = ECS::GetComponentTypeId<Components::Transform>();
     m_ChangeSub = m_ChangeNotifications->SubscribeComponentChanged(
@@ -1142,13 +1155,6 @@ std::string_view SceneViewController::GetActiveRegisteredToolId() const
 void SceneViewController::ActivateRegisteredToolForSelection(ECS::EntityHandle primary)
 {
     ECS::World* world = &GetWorld();
-    if (!world->IsValid(primary))
-        return;
-    for (const auto& [type, traits] : Editor::EditorComponentTraitsRegistry::Get().Snapshot())
-    {
-        if (traits.PreserveSceneToolOnSelection && world->HasComponent(primary, type))
-            return;
-    }
     for (const Editor::SceneViewToolStripEntry& entry : Editor::SceneViewToolStripRegistry::Get().Entries())
     {
         if (entry.ActivatesForSelection && entry.ActivatesForSelection(*world, primary, m_SelectedEntities))

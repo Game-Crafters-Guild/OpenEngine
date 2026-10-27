@@ -1,0 +1,11 @@
+<!-- AddTagModal (Apps/Editor/Include/Panels/AddTagModal.h): the tag picker window. The header is the drag
+     handle. The ids are the contract with AddTagModal.cpp; the tag list (AddTagModalList.uxml) goes into
+     the scroll view's viewport in code. -->
+<UIElement class="add-tag-modal-backdrop">
+  <UIElement id="add-tag-window" class="modal-window add-tag-modal-window">
+    <UIElement id="add-tag-header" class="add-tag-modal-header">
+      <Label class="add-tag-modal-title" text="Tags" />
+    </UIElement>
+    <ScrollView id="add-tag-scroll" class="add-tag-modal-scroll" />
+  </UIElement>
+</UIElement>

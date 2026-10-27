@@ -1,4 +1,8 @@
 #include "Panels/HierarchyPanel.h"
+#include "Prefabs/PrefabService.h"
+#include "SceneView/SceneViewDropPlacement.h"
+#include "SceneView/SceneViewNoticeOverlay.h"
+#include "UndoRedo/SceneViewDropUndoCommand.h"
 #include "AssetCore/Asset.h"
 #include "AssetCore/AssetTypes.h"
 #include "AssetCore/GUID.h"
@@ -37,7 +41,6 @@
 #include "Components/Rendering/Skybox.h"
 #include "Components/Rendering/WindVolume.h"
 #include "Components/RuntimeOnlyEntity.h"
-#include "Components/PrefabInstance.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/Terrain.h"
@@ -61,6 +64,7 @@
 #include "Editor/Hierarchy/HierarchyLightIconTint.h"
 #include "Editor/Hierarchy/HierarchyRenderLayerEdit.h"
 #include "Inspectors/RenderLayerField.h"
+#include "Editor/Entities/EditorComponentTraits.h"
 #include "Editor/Hierarchy/HierarchyEntityIcon.h"
 #include "Editor/Hierarchy/HierarchyOrdering.h"
 #include "Editor/Hierarchy/HierarchyNavigationBar.h"
@@ -133,6 +137,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -987,6 +992,15 @@ class HierarchyPanel::HierarchyDataProvider final : public TreeChangeTrackingPro
         return it == m_GhostChildren.end() ? 0 : static_cast<int>(it->second.size());
     }
 
+    // The entity's children in the order the tree lists them; empty when it has none.
+    std::span<const EntityHandle> ChildrenOf(const EntityHandle& entity) const
+    {
+        const auto it = m_Children.find(static_cast<uint32_t>(Encode(entity)));
+        if (it == m_Children.end())
+            return {};
+        return it->second;
+    }
+
     // ITreeDataProvider
     int GetRootCount() const override { return 1; }
     TreeId GetRootId(int) const override { return kRootId; }
@@ -1587,7 +1601,9 @@ HierarchyPanel::HierarchyPanel()
 	        else
 	            row->RemoveClass("entity-runtime");
 
-	        Editor::ApplyHierarchyEntityIconClasses(m_World, row, handle);
+	        // The provider's child lists are the tree the rows show.
+	        auto childrenOf = [this](ECS::EntityHandle parent) { return m_Provider->ChildrenOf(parent); };
+	        Editor::ApplyHierarchyEntityIconClasses(m_World, row, handle, childrenOf);
 
             // Keep the preview icon separate from the title so it can have its own
             // hover state.  TreeView rows are pooled, so create the child once and
@@ -1608,6 +1624,8 @@ HierarchyPanel::HierarchyPanel()
             }
             if (m_VcsController)
                 m_VcsController->DecorateRow(handle, *row);
+            Editor::HierarchyRowParts rowParts{*row, titleEl};
+            Editor::ApplyHierarchyRowDecorations(*m_World, handle, rowParts);
             if (titleEl && !previewIconEl)
             {
                 auto previewIcon = std::make_unique<UIElement>();
@@ -1713,7 +1731,7 @@ HierarchyPanel::HierarchyPanel()
                    the Inspector header and the Bookmarks row. The row keeps its
                    own copy of the kind class for IsCssGlyphEntity and the
                    row-level rules. */
-                Editor::ApplyHierarchyEntityIconClassesToIcon(m_World, previewIconEl, handle);
+                Editor::ApplyHierarchyEntityIconClassesToIcon(m_World, previewIconEl, handle, childrenOf);
 
                 Editor::ApplyHierarchyLightIconTint(*m_World, handle, *previewIconEl);
 
@@ -1818,7 +1836,7 @@ HierarchyPanel::HierarchyPanel()
                     {
                         // Check entity itself or its children for a model asset (submesh models
                         // have MeshRenderer on children, not the parent).
-                        const GUID modelGuid = Editor::FindModelGuidForEntityOrChildren(m_World, handle);
+                        const GUID modelGuid = Editor::FindModelGuidForEntityOrChildren(m_World, handle, childrenOf);
                         if (!modelGuid.IsNull() &&
                             m_Context && m_Context->Thumbnails && !m_Context->UIReplayActive)
                             {
@@ -1956,6 +1974,8 @@ HierarchyPanel::HierarchyPanel()
                 return {false, "No editor context"};
             if (assetPayload->paths.empty())
                 return {false, "Empty payload"};
+            if (std::string refusal = Editor::DescribeRefusedDrop(assetPayload->paths); !refusal.empty())
+                return {false, std::move(refusal)};
             return {true, {}};
         }
 
@@ -2357,7 +2377,13 @@ HierarchyPanel::HierarchyPanel()
                                  {
                                      if (m_EntityRename.GetTitle())
                                          return;
-                                     const std::uint32_t command = Editor::HierarchyEntityCommandForKey(e.Key, e.Mods);
+                                     std::uint32_t command = Editor::HierarchyEntityCommandForKey(e.Key, e.Mods);
+                                     if (command == 0)
+                                     {
+                                         // A plugin's key acts on the selection, as its menu entry does.
+                                         command = Editor::EditorPluginRegistry::Get().HierarchyCommandForKey(e.Key, e.Mods);
+                                         m_ContextTargetEntity = command != 0 ? FirstSelectedEntity() : m_ContextTargetEntity;
+                                     }
                                      if (command != 0 && HandleCommand(command))
                                          e.Stop(); });
 
@@ -2584,13 +2610,15 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             }
         }
 
+        const std::vector<UI::Interaction::ItemId> selectionBefore = GetSelectionItemIds();
+        const UI::Interaction::ItemId anchorBefore = GetSelectionAnchor();
+        std::vector<ECS::EntityHandle> droppedRoots;
         ECS::EntityHandle lastCreated{};
         for (const auto& absPath : payload->paths)
         {
             if (absPath.empty())
                 continue;
 
-            // Detect model files and use ModelEntityFactory for direct instantiation.
             const std::string ext = absPath.extension().string();
             if (GetAssetTypeFromExtension(ext) == AssetType::LensFlareDefinition && m_Context->Assets)
             {
@@ -2621,13 +2649,13 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                         }
 
                         lastCreated = flareEntity;
+                        droppedRoots.push_back(flareEntity);
                     }
                 }
                 continue;
             }
 
-            const bool isModel = (ext == ".glb" || ext == ".gltf" || ext == ".obj" || ext == ".fbx"
-                               || ext == ".GLB" || ext == ".GLTF" || ext == ".OBJ" || ext == ".FBX");
+            const bool isModel = Editor::IsPlacedModelFile(absPath);
 
             if (isModel && m_Context->Assets && m_Context->RenderServices && m_World)
             {
@@ -2682,35 +2710,25 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                                 ctx->OnSceneDirty();
                         },
                         absPath.filename().string());
-                    continue; // Skip PrefabInstance fallback.
+                    continue;
                 }
             }
 
-            // Fallback: create an entity marked with PrefabInstance for non-model files.
-            ECS::EntityHandle e = m_World->CreateEntity();
-            if (!e.IsValid())
-                continue;
-
-            lastCreated = e;
-
-            // Name from file stem.
-            Components::Name nm{};
-            std::memset(nm.value, 0, sizeof(nm.value));
-            const std::string stem = absPath.stem().string();
-            std::strncpy(nm.value, stem.c_str(), sizeof(nm.value) - 1);
-            m_World->AddComponentImmediate(e, nm);
-
-            // The marker names the source by GUID; the next load fills the instance from it.
-            Components::PrefabInstance inst{};
-            inst.Source = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(absPath);
-            m_World->AddComponentImmediate(e, inst);
-
-            if (parent.IsValid())
+            if (GetAssetTypeFromExtension(ext) == AssetType::Prefab && m_Context->Assets)
             {
-                Parent p{};
-                p.Entity = parent;
-                m_World->AddComponentImmediate(e, p);
+                Components::Transform at{};
+                at.SetIdentity();
+                at.SetScale(parentInvScale.x, parentInvScale.y, parentInvScale.z);
+                const ECS::EntityHandle root = Editor::PrefabService(*m_Context->Assets).Place(*m_World, absPath, at, parent);
+                if (root.IsValid())
+                {
+                    lastCreated = root;
+                    droppedRoots.push_back(root);
+                }
+                continue;
             }
+
+            Editor::ShowSceneViewNotice(Editor::DescribeUnplaceableFile(absPath));
         }
 
         NotifyWorldStructure(m_ChangeNotifications, m_World);
@@ -2722,6 +2740,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
         m_Tree->RefreshFromProvider();
         if (lastCreated.IsValid())
             SelectEntity(lastCreated);
+        CommitDropStep(droppedRoots, selectionBefore, anchorBefore);
         return;
     }
 
@@ -3133,6 +3152,40 @@ void HierarchyPanel::DeleteSelectedEntities()
     auto onRevived = [applySelection, selectionBefore, anchorBefore]() { applySelection(selectionBefore, anchorBefore); };
     Editor::DeleteHierarchySelection(*m_World, m_Undo, m_ChangeNotifications, selected, std::move(onDeleted),
                                      std::move(onRevived));
+}
+
+std::vector<ECS::EntityHandle> HierarchyPanel::ContextTargetEntities() const
+{
+    std::vector<ECS::EntityHandle> targets{m_ContextTargetEntity};
+    if (!m_Selection || !m_World)
+        return targets;
+    const auto selected = m_Selection->GetSelection();
+    if (std::find(selected.begin(), selected.end(), HierarchyDataProvider::Encode(m_ContextTargetEntity)) ==
+        selected.end())
+        return targets;
+    targets.clear();
+    for (const auto id : selected)
+    {
+        const TreeId treeId = static_cast<TreeId>(id);
+        const ECS::EntityHandle entity = treeId == kRootId ? ECS::EntityHandle{} : HierarchyDataProvider::Decode(treeId);
+        if (entity.IsValid() && m_World->IsValid(entity))
+            targets.push_back(entity);
+    }
+    return targets;
+}
+
+ECS::EntityHandle HierarchyPanel::FirstSelectedEntity() const
+{
+    if (!m_Selection || !m_World)
+        return {};
+    for (const auto id : m_Selection->GetSelection())
+    {
+        const TreeId treeId = static_cast<TreeId>(id);
+        const ECS::EntityHandle entity = treeId == kRootId ? ECS::EntityHandle{} : HierarchyDataProvider::Decode(treeId);
+        if (entity.IsValid() && m_World->IsValid(entity))
+            return entity;
+    }
+    return {};
 }
 
 void HierarchyPanel::DuplicateSelectedEntities()
@@ -3561,9 +3614,12 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         pluginCtx.World = m_World;
         pluginCtx.TargetEntity = m_ContextTargetEntity;
         pluginCtx.HasTargetEntity = m_ContextTargetEntity.IsValid() && m_World && m_World->IsValid(m_ContextTargetEntity);
+        if (pluginCtx.HasTargetEntity)
+            pluginCtx.TargetEntities = ContextTargetEntities();
         pluginCtx.EditorCtx = m_Context;
         pluginCtx.ChangeNotifications = m_ChangeNotifications;
         pluginCtx.Undo = m_Undo;
+        pluginCtx.DialogHost = this;
         pluginCtx.SelectEntity = [this](ECS::EntityHandle entity)
         {
             if (m_OnSelectEntity)
@@ -3580,6 +3636,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             if (m_Context && m_Context->OnSceneDirty)
                 m_Context->OnSceneDirty();
         };
+        pluginCtx.PingAsset = m_PingAsset;
         return Editor::EditorPluginRegistry::Get().HandleHierarchyCommand(cmd, pluginCtx);
     };
 
@@ -3591,21 +3648,8 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         if (!m_ContextTargetEntity.IsValid() || !world->IsValid(m_ContextTargetEntity))
             return;
 
-        // The whole selection when the clicked row is part of it, the clicked row alone otherwise.
-        std::vector<ECS::EntityHandle> targets{m_ContextTargetEntity};
-        if (m_Selection)
-        {
-            const auto selected = m_Selection->GetSelection();
-            const UI::Interaction::ItemId clicked = HierarchyDataProvider::Encode(m_ContextTargetEntity);
-            if (std::find(selected.begin(), selected.end(), clicked) != selected.end())
-            {
-                targets.clear();
-                for (const auto id : selected)
-                    targets.push_back(HierarchyDataProvider::Decode(static_cast<TreeId>(id)));
-            }
-        }
-
-        Editor::EmptyParentResult created = Editor::CreateEmptyParent(*world, m_ChangeNotifications, targets, MakeName("Empty Parent"));
+        Editor::EmptyParentResult created =
+            Editor::CreateEmptyParent(*world, m_ChangeNotifications, ContextTargetEntities(), MakeName("Empty Parent"));
         if (!created.NewParent.IsValid())
         {
             Logger::Log::Warning("[Hierarchy] Create Empty Parent: a generated entity takes no authored children; select entities outside it");
@@ -4062,6 +4106,10 @@ HierarchyPanel::~HierarchyPanel()
     {
         m_ChangeNotifications->Unsubscribe(m_NameChangedSub);
     }
+    if (m_ChangeNotifications && m_DecorationChangedSub)
+    {
+        m_ChangeNotifications->Unsubscribe(m_DecorationChangedSub);
+    }
 }
 
 void HierarchyPanel::SetContext(const EditorContext* ctx)
@@ -4090,12 +4138,17 @@ void HierarchyPanel::SetChangeNotifications(Editor::EditorChangeNotifications* n
     {
         m_ChangeNotifications->Unsubscribe(m_NameChangedSub);
     }
+    if (m_ChangeNotifications && m_DecorationChangedSub)
+    {
+        m_ChangeNotifications->Unsubscribe(m_DecorationChangedSub);
+    }
 
     m_ChangeNotifications = notifications;
     m_StructureSub = {};
     m_LightChangedSub = {};
     m_MeshRendererChangedSub = {};
     m_NameChangedSub = {};
+    m_DecorationChangedSub = {};
 
     if (!m_ChangeNotifications)
     {
@@ -4146,6 +4199,22 @@ void HierarchyPanel::SetChangeNotifications(Editor::EditorChangeNotifications* n
                              {
                                  m_RefreshQueued = false;
                                  this->Refresh(false); });
+        });
+
+    // A committed edit can change what a registered row decoration shows on the edited entity's
+    // row; the decorations run again on that row in place, after the edit returns.
+    m_DecorationChangedSub = m_ChangeNotifications->SubscribeComponentChanged(
+        [this](const Editor::EditorChangeNotifications::ComponentChangedEvent& e)
+        {
+            if (e.world != m_World || e.kind == Editor::EditorChangeNotifications::ChangeKind::Preview)
+                return;
+            const ECS::EntityHandle entity = e.entity;
+            this->PostAction([this, entity]()
+                             {
+                                 if (m_World && m_Tree)
+                                     Editor::ApplyHeldHierarchyRowDecorations(*m_World, entity, *m_Tree,
+                                                                              HierarchyDataProvider::Encode(entity));
+                             });
         });
 
     // Label text comes from Name; inspector edits notify Commit without always sending
@@ -5317,11 +5386,27 @@ UI::Interaction::DropFeedback HierarchyPanel::CanDrop(const UI::Interaction::Dro
     // Asset paths (textures, models, etc.) from Assets panel
     if (const auto* pathsPl = request.payload.TryGet<Editor::AssetPathsDragPayload>())
     {
-        if (!pathsPl->paths.empty())
-            return {true, {}};
+        if (pathsPl->paths.empty())
+            return {false, "Empty payload"};
+        if (std::string refusal = Editor::DescribeRefusedDrop(pathsPl->paths); !refusal.empty())
+            return {false, std::move(refusal)};
+        return {true, {}};
     }
 
     return {false, "Wrong payload"};
+}
+
+void HierarchyPanel::CommitDropStep(const std::vector<ECS::EntityHandle>& droppedRoots,
+                                    const std::vector<UI::Interaction::ItemId>& selectionBefore,
+                                    UI::Interaction::ItemId anchorBefore)
+{
+    if (!m_Undo || !m_World || droppedRoots.empty())
+        return;
+    m_Undo->CommitAlreadyApplied(std::make_unique<Editor::SceneViewDropUndoCommand>(
+        Editor::SceneViewDropUndoCommand::NameFor(*m_World, droppedRoots), m_World, m_ChangeNotifications,
+        droppedRoots, selectionBefore, anchorBefore, GetSelectionItemIds(), GetSelectionAnchor(),
+        [this](const std::vector<UI::Interaction::ItemId>& ids, UI::Interaction::ItemId anchor)
+        { ApplySelectionProgrammatic(ids, anchor); }));
 }
 
 void HierarchyPanel::DeferFileDrop(const std::filesystem::path& assetPath, const GUID& assetGuid,
@@ -5479,8 +5564,30 @@ void HierarchyPanel::PerformDrop(const UI::Interaction::DropRequest& request)
         const bool isModel = (ext == ".glb" || ext == ".gltf" || ext == ".obj" || ext == ".fbx");
         const bool isLensFlare = GetAssetTypeFromExtension(ext) == AssetType::LensFlareDefinition;
 
-        if (!isTexture && !isModel && !isLensFlare)
+        if (GetAssetTypeFromExtension(ext) == AssetType::Prefab && m_Context->Assets)
+        {
+            const std::vector<UI::Interaction::ItemId> selectionBefore = GetSelectionItemIds();
+            const UI::Interaction::ItemId anchorBefore = GetSelectionAnchor();
+            Components::Transform at{};
+            at.SetIdentity();
+            const ECS::EntityHandle root = Editor::PrefabService(*m_Context->Assets).Place(*m_World, assetPath, at, {});
+            if (!root.IsValid())
+                return;
+            NotifyWorldStructure(m_ChangeNotifications, m_World);
+            if (m_Context->OnSceneDirty)
+                m_Context->OnSceneDirty();
+            if (m_Provider)
+                m_Provider->Rebuild();
+            m_Tree->RefreshFromProvider();
+            SelectEntity(root);
+            CommitDropStep({root}, selectionBefore, anchorBefore);
             return;
+        }
+        if (!isTexture && !isModel && !isLensFlare)
+        {
+            Editor::ShowSceneViewNotice(Editor::DescribeUnplaceableFile(assetPath));
+            return;
+        }
 
         auto& am = *m_Context->Assets;
         const GUID assetGuid = am.ResolveAssetGuid(assetPath);

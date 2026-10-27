@@ -7,9 +7,13 @@
 
 #include "SceneView/SceneViewGizmos.h"
 #include "SceneView/SceneViewNoticeOverlay.h"
+#include "SceneViewNoticeRecorder.h"
 #include "SceneViewController.h"
 #include "UI/Controls/ScenePostFxMenu.h"
 #include "Mathematics/Vector3.h"
+
+#include <string>
+#include <utility>
 
 namespace GameEngine
 {
@@ -62,9 +66,14 @@ namespace GameEngine
 
 namespace GameEngine::Editor
 {
-    // The Mark-up tool's play-mode notice (real impl in SceneViewNoticeOverlay.cpp, a view
-    // overlay); the mark-up tests read the refusal instead.
-    void ShowSceneViewNotice(std::string) {}
+    // The real notice is a view overlay (SceneViewNoticeOverlay.cpp); the tests read the last text.
+    std::string& TestStubs::LastSceneViewNotice()
+    {
+        static std::string s_Text;
+        return s_Text;
+    }
+
+    void ShowSceneViewNotice(std::string text) { TestStubs::LastSceneViewNotice() = std::move(text); }
 }
 
 namespace GameEngine::Editor

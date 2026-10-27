@@ -233,7 +233,7 @@ bool BuildReproField(World& world, const std::vector<SG::SplineStripStation>& st
     SG::SplineFillParams params;
     params.MaxHalfWidth = reach;
     params.EdgeDrop = std::max(0.0f, recipe.EdgeDrop);
-    params.SeaLevelFloor = recipe.SeaLevelFloor;
+    params.FloorHeight = recipe.FloorHeight;
     out.Field = SG::BuildSplineFillField(stations, out.Grid, params);
     return true;
 }

@@ -798,6 +798,9 @@ class RenderServices
         Rendering::RenderGraph::RGTexture Color{};   // primary (MSAA or 1-sample)
         Rendering::RenderGraph::RGTexture Depth{};   // EFFECTIVE depth (caller applied any override)
         Rendering::RenderGraph::RGTexture Resolve{}; // effective resolve; invalid = none
+        // Receives the plain sample mean minus the weighted mean at the MSAA resolve, for bloom.
+        // Invalid = the resolve writes only Resolve.
+        Rendering::RenderGraph::RGTexture BloomSampleDelta{};
         Rendering::RenderGraph::RGRange ColorRange = Rendering::RenderGraph::RGRange::All();
         Rendering::RenderGraph::RGRange DepthRange = Rendering::RenderGraph::RGRange::All();
         // 1-sample R32F bound as ge_sceneDepth; invalid = falls back to Depth.

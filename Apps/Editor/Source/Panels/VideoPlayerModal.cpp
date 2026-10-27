@@ -2,6 +2,7 @@
 
 #include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/UIManager.h"
@@ -14,10 +15,12 @@
 #include "Platform/Shell.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <cstring>
 
 namespace GameEngine
@@ -26,6 +29,22 @@ namespace GameEngine
 namespace {
 constexpr int kRetiredTextureFrames = 4;
 constexpr const char* kVideoPlayerFrameTextureName = "video_player_frame";
+constexpr const char* kLayoutAssetPath = "UI/controls/VideoPlayerModal/VideoPlayerModal.uxml";
+constexpr const char* kStyleAssetPath = "UI/controls/VideoPlayerModal/VideoPlayerModal.css";
+// The ids BuildUI looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 11> kRequiredIds = {
+    "vpm-window",
+    "vpm-header",
+    "vpm-title",
+    "vpm-close",
+    "vpm-video-area",
+    "vpm-seek-bar",
+    "vpm-seek-fill",
+    "vpm-time",
+    "vpm-play-pause",
+    "vpm-stop",
+    "vpm-fullscreen",
+};
 
 Rendering::TextureFormat TextureFormatForVideo(Video::VideoPixelFormat format)
 {
@@ -86,6 +105,7 @@ void VideoPlayerModal::BuildUI()
     // collapse when its containing block also derives its size by percentage.
     AddClass("video-player-modal");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
+    RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
     SetFocusable(true);
     RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
     {
@@ -106,31 +126,20 @@ void VideoPlayerModal::BuildUI()
         }
     });
 
-    // Backdrop (semi-transparent dimmer + centering container).
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
     m_Backdrop = backdrop.get();
-    m_Backdrop->AddClass("vpm-backdrop");
-
-    // Window card.
-    auto window = std::make_unique<UIElement>();
-    m_Window = window.get();
-    m_Window->AddClass("modal-window");
-    m_Window->AddClass("vpm-window");
+    m_Window = backdrop->FindById("vpm-window"_sid);
 
     // ── Header ──────────────────────────────────────────────────
     {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("vpm-header");
+        BindDragHandle(backdrop->FindById("vpm-header"_sid));
 
-        BindDragHandle(header.get());
-
-        auto titleLabel = std::make_unique<Label>();
-        m_TitleLabel = titleLabel.get();
-        m_TitleLabel->SetText("Video");
-        m_TitleLabel->AddClass("vpm-title");
-        m_TitleLabel->AddClass("vpm-title-action");
-        m_TitleLabel->SetTooltip("Reveal in file manager");
-        m_TitleLabel->RegisterEventHandler(kEventMouseDown, [this](UIEvent& e)
+        UIElement* titleElement = backdrop->FindById("vpm-title"_sid);
+        m_TitleLabel = dynamic_cast<Label*>(titleElement);
+        titleElement->SetTooltip("Reveal in file manager");
+        titleElement->RegisterEventHandler(kEventMouseDown, [this](UIEvent& e)
         {
             if (e.Button != 0 || !m_Open)
                 return;
@@ -139,28 +148,15 @@ void VideoPlayerModal::BuildUI()
             RevealVideoInFileManager();
             e.Stop();
         });
-        header->AddChild(std::move(titleLabel));
 
-        auto titleSpacer = std::make_unique<UIElement>();
-        titleSpacer->AddClass("vpm-title-spacer");
-        header->AddChild(std::move(titleSpacer));
-
-        auto closeBtn = std::make_unique<Button>();
-        m_CloseBtn = closeBtn.get();
-        m_CloseBtn->AddClass("vpm-close-btn");
-        m_CloseBtn->AddClass("icon-button");
-        m_CloseBtn->AddClass("xclose-icon");
-        m_CloseBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { Close(); });
-        header->AddChild(std::move(closeBtn));
-
-        m_Window->AddChild(std::move(header));
+        UIElement* closeButton = backdrop->FindById("vpm-close"_sid);
+        m_CloseBtn = dynamic_cast<Button*>(closeButton);
+        closeButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { Close(); });
     }
 
     // ── Video area ───────────────────────────────────────────────
     {
-        auto videoArea = std::make_unique<UIElement>();
-        m_VideoArea = videoArea.get();
-        m_VideoArea->AddClass("vpm-video-area");
+        m_VideoArea = backdrop->FindById("vpm-video-area"_sid);
         // Background-image bound at runtime via UIManager external texture.
         m_VideoArea->Styles()
             .SetBackgroundResourceName(kVideoPlayerFrameTextureName)
@@ -194,20 +190,12 @@ void VideoPlayerModal::BuildUI()
             TogglePlayback();
             e.Stop();
         });
-
-        m_Window->AddChild(std::move(videoArea));
     }
 
     // ── Seek bar ─────────────────────────────────────────────────
     {
-        auto seekBar = std::make_unique<UIElement>();
-        m_SeekBar = seekBar.get();
-        m_SeekBar->AddClass("vpm-seek-bar");
-
-        auto seekFill = std::make_unique<UIElement>();
-        m_SeekFill = seekFill.get();
-        m_SeekFill->AddClass("vpm-seek-fill");
-        seekBar->AddChild(std::move(seekFill));
+        m_SeekBar = backdrop->FindById("vpm-seek-bar"_sid);
+        m_SeekFill = backdrop->FindById("vpm-seek-fill"_sid);
 
         // Click / drag to seek.
         m_SeekBar->RegisterEventHandler(kEventMouseDown, [this](UIEvent& e)
@@ -240,60 +228,27 @@ void VideoPlayerModal::BuildUI()
             m_SeekDragging = false;
             (void)e;
         });
-
-        m_Window->AddChild(std::move(seekBar));
     }
 
     // ── Controls row ─────────────────────────────────────────────
     {
-        auto controls = std::make_unique<UIElement>();
-        controls->AddClass("vpm-controls");
+        m_TimeLabel = dynamic_cast<Label*>(backdrop->FindById("vpm-time"_sid));
 
-        auto timeLabel = std::make_unique<Label>();
-        m_TimeLabel = timeLabel.get();
-        m_TimeLabel->SetText("0:00 / 0:00");
-        m_TimeLabel->AddClass("vpm-time-label");
-        controls->AddChild(std::move(timeLabel));
+        UIElement* stopButton = backdrop->FindById("vpm-stop"_sid);
+        m_StopBtn = dynamic_cast<Button*>(stopButton);
+        stopButton->SetTooltip("Stop");
+        stopButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { StopPlayback(); });
 
-        auto controlGroup = std::make_unique<UIElement>();
-        controlGroup->AddClass("vpm-control-group");
+        UIElement* playPauseButton = backdrop->FindById("vpm-play-pause"_sid);
+        m_PlayPause = dynamic_cast<Button*>(playPauseButton);
+        playPauseButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { TogglePlayback(); });
 
-        auto stop = std::make_unique<Button>();
-        m_StopBtn = stop.get();
-        m_StopBtn->AddClass("vpm-ctrl-btn");
-        m_StopBtn->AddClass("icon-button");
-        m_StopBtn->AddClass("stop-icon");
-        m_StopBtn->SetTooltip("Stop");
-        m_StopBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { StopPlayback(); });
-        controlGroup->AddChild(std::move(stop));
-
-        auto playPause = std::make_unique<Button>();
-        m_PlayPause = playPause.get();
-        m_PlayPause->AddClass("vpm-ctrl-btn");
-        m_PlayPause->AddClass("icon-button");
-        m_PlayPause->AddClass("play-icon");
-        m_PlayPause->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { TogglePlayback(); });
-        controlGroup->AddChild(std::move(playPause));
-
-        controls->AddChild(std::move(controlGroup));
-
-        auto rightSpacer = std::make_unique<UIElement>();
-        rightSpacer->AddClass("vpm-controls-right-spacer");
-        controls->AddChild(std::move(rightSpacer));
-
-        auto fullscreen = std::make_unique<Button>();
-        m_FullscreenBtn = fullscreen.get();
-        m_FullscreenBtn->AddClass("vpm-ctrl-btn");
-        m_FullscreenBtn->AddClass("icon-button");
-        m_FullscreenBtn->AddClass("fullscreen-icon");
-        m_FullscreenBtn->SetTooltip("Fullscreen");
-        m_FullscreenBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { ToggleFullscreen(); });
-        controls->AddChild(std::move(fullscreen));
-
-        m_Window->AddChild(std::move(controls));
+        UIElement* fullscreenButton = backdrop->FindById("vpm-fullscreen"_sid);
+        m_FullscreenBtn = dynamic_cast<Button*>(fullscreenButton);
+        fullscreenButton->SetTooltip("Fullscreen");
+        fullscreenButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { ToggleFullscreen(); });
     }
 
-    m_Backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 

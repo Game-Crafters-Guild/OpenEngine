@@ -869,11 +869,13 @@
       "id": "BloomThreshold",
       "inputs": {
         "uDepth": "View.DepthResolved",
-        "uHDR": "HDRUpscaled"
+        "uHDR": "HDRUpscaled",
+        "uSampleDelta": "View.BloomSampleDelta"
       },
       "inputUsages": {
         "uDepth": "Sampled"
       },
+      "optionalInputs": [ "uSampleDelta" ],
       "output": "BloomA",
       "ppOverrides": true,
       "pushConstants": {
@@ -890,7 +892,8 @@
       },
       "samplers": {
         "uDepth": "PointClamp",
-        "uHDR": "LinearClamp"
+        "uHDR": "LinearClamp",
+        "uSampleDelta": "LinearClamp"
       },
       "shaderPkg": "Shaders/bloom_threshold.shaderpkg",
       "skipWhen": {
@@ -1124,11 +1127,13 @@
       "id": "ScatteringThreshold",
       "inputs": {
         "uDepth": "View.DepthResolved",
-        "uHDR": "HDRUpscaled"
+        "uHDR": "HDRUpscaled",
+        "uSampleDelta": "View.BloomSampleDelta"
       },
       "inputUsages": {
         "uDepth": "Sampled"
       },
+      "optionalInputs": [ "uSampleDelta" ],
       "output": "ScatteringA",
       "ppOverrides": true,
       "pushConstants": {
@@ -1145,7 +1150,8 @@
       },
       "samplers": {
         "uDepth": "PointClamp",
-        "uHDR": "LinearClamp"
+        "uHDR": "LinearClamp",
+        "uSampleDelta": "LinearClamp"
       },
       "shaderPkg": "Shaders/bloom_threshold.shaderpkg",
       "skipWhen": {

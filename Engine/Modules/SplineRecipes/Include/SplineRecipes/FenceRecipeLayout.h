@@ -4,9 +4,32 @@
 #include "SplineLayout/FenceLayout.h"
 
 #include <span>
+#include <string_view>
 
 namespace GameEngine::SplineRecipes
 {
+
+// The meshes of a fence's parts of one kind, in list order: that role's pool.
+// Parts without a mesh are not in it. Index n is the PoolSlot an override
+// names.
+struct FencePool
+{
+    Components::ModelRef Meshes[Components::kSplineFenceMaxParts];
+    uint32 Count = 0;
+};
+
+[[nodiscard]] FencePool FencePoolOf(const Components::SplineFence& recipe, Components::SplineFencePartKind kind);
+
+// The bounds a fence rebuild measured one part's mesh by, keyed by the mesh.
+struct FenceMeshBounds
+{
+    Components::ModelRef Mesh;
+    SplineLayout::FencePieceBounds Bounds;
+};
+
+// Why a fence with no Span or Post part with a mesh places nothing: kNoFencePartReason when it has
+// no such part, else kNoFencePartMeshReason.
+[[nodiscard]] std::string_view FenceNothingToPlaceReason(const Components::SplineFence& recipe);
 
 // The bounds a fence recipe's resolved pools present to the layout, each in
 // active-slot order. The post family lays its stations out on one footprint —

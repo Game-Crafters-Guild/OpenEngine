@@ -3,8 +3,8 @@
 #include "HeightPageCodec.h"
 #include "PageCodec.h"
 #include "PageFieldFilter.h"
-#include "PageStreaming/PageStoreWriter.h"
-#include "PageStoreSerialization.h"
+#include "PageStreaming/PageStore/PageStoreWriter.h"
+#include "PageStore/PageStoreSerialization.h"
 
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Mathematics/Matrix3x3.h"

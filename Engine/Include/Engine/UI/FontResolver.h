@@ -87,11 +87,11 @@ class FontFamilyIndex
   private:
     struct Candidate
     {
-        GUID guid = GUID::Null();
-        std::filesystem::path path; // absolute
-        int weight = 400;
-        FontStyle style = FontStyle::Normal;
-        std::string debugName;
+        GUID Guid = GUID::Null();
+        std::filesystem::path Path; // absolute
+        int Weight = 400;
+        FontStyle Style = FontStyle::Normal;
+        std::string DebugName;
     };
 
     AssetRegistry& m_Registry;
@@ -99,16 +99,12 @@ class FontFamilyIndex
     size_t m_SourceFontCount = 0; // registry font count at last Rebuild
     std::unordered_map<std::string, std::vector<Candidate>> m_CandidatesByKey; // normalized family key -> candidates
 
-    static void DeriveCandidateTraitsFromFilename(const std::filesystem::path& p, int& outWeight, FontStyle& outStyle);
+    static void DeriveCandidateTraitsFromStem(const std::string& stem, int& outWeight, FontStyle& outStyle);
 };
 
-// High-level resolver that returns font bytes for a requested family name.
-// Step 1: resolve the registry's Font assets by family names and traits derived
-// from their filenames.
-// Step 2 (later): fall back to OS system fonts (platform-specific).
-//
-// This resolver is async-capable: if constructed with a JobSystem, it will read
-// file bytes off-thread; otherwise it resolves synchronously on the caller thread.
+// Returns font bytes for a requested family name: first a registered Font asset, matched by the
+// aliases and traits derived from its asset name, then an installed system font.
+// With a JobSystem it reads the file bytes off-thread; otherwise it reads on the caller's thread.
 class FontResolver
 {
   public:

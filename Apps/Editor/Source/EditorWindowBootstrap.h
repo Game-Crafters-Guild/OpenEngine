@@ -24,9 +24,6 @@ Rendering::GraphicsAPI LoadPreferredGraphicsApi();
 // wiring + HDR UI paper-white/black-lift derivation + fast-path policy).
 void ApplyUiRuntimeConfig(GameEngine::UIManager* ui);
 
-// True if the current UI focus is in a TextField/TextArea (hotkey routing).
-bool IsFocusInTextField(UIManager* ui);
-
 // Apply a WindowDescriptor's role/capabilities/title to a window context.
 void ApplyWindowDescriptor(EditorApplication::EditorWindowContext& ctx,
                            const EditorApplication::WindowDescriptor& desc,

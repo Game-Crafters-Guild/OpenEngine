@@ -79,7 +79,7 @@ TEST(SplineExtrudeRecipe, EveryFieldParticipatesInEquality)
         {"WidthMode",
          [](SplineExtrude& e) { e.WidthMode = SplineExtrudeWidthMode::FitToBanks; }},
         {"MaxHalfWidth", [](SplineExtrude& e) { e.MaxHalfWidth = 21.5f; }},
-        {"SeaLevelFloor", [](SplineExtrude& e) { e.SeaLevelFloor = 2.0f; }},
+        {"FloorHeight", [](SplineExtrude& e) { e.FloorHeight = 2.0f; }},
         {"EndTaperMetres", [](SplineExtrude& e) { e.EndTaperMetres = 6.25f; }},
         {"ConformMode",
          [](SplineExtrude& e) { e.ConformMode = Components::SplinePlacementConform::None; }},
@@ -128,14 +128,14 @@ TEST(SplineExtrudeRecipe, DefaultsDescribeAUsablePathOnTheFirstTry)
     // No material means the controller mints its own default rather than
     // rendering nothing.
     EXPECT_EQ(recipe.Material.ToGuid(), GUID::Null());
-    // The sea-level floor is OFF by default, and "off" is the arithmetic
+    // The floor height is OFF by default, and "off" is the arithmetic
     // identity of the clamp that applies it rather than a magic value compared
     // for equality -- so it survives a scene round-trip without special casing.
-    EXPECT_EQ(recipe.SeaLevelFloor, Components::kNoSeaLevelFloor);
-    EXPECT_TRUE(std::isfinite(recipe.SeaLevelFloor))
+    EXPECT_EQ(recipe.FloorHeight, Components::kNoFloorHeight);
+    EXPECT_TRUE(std::isfinite(recipe.FloorHeight))
         << "a non-finite default would make the recipe unequal to itself and re-arm the "
            "settle rebuild forever";
-    EXPECT_EQ(std::max(-12.5f, recipe.SeaLevelFloor), -12.5f)
+    EXPECT_EQ(std::max(-12.5f, recipe.FloorHeight), -12.5f)
         << "the disabled floor must leave any waterline untouched";
 }
 
@@ -223,8 +223,8 @@ TEST(SplineExtrudeRecipe, TheWaterCaseIsAuthorableWithoutANewProfileShape)
     EXPECT_NE(water.Material.ToGuid(), GUID::Null());
 }
 
-// An unmarked field of the extrude recipe shows no tooltip, so ConformTarget's tooltip depends on its "@ge-tooltip"
-// marker, the component scanner and the reflection registry. This asserts what the registry holds at runtime.
+// An unmarked field shows no tooltip, so ConformTarget's tooltip depends on its "@ge-tooltip" marker, the
+// component scanner and the reflection registry. This asserts what the registry holds at runtime.
 TEST(SplineExtrudeRecipe, ConformTargetCarriesItsAuthorTooltipThroughReflection)
 {
     const ECS::ComponentTypeId typeId = ECS::GetComponentTypeId<SplineExtrude>();
@@ -248,11 +248,17 @@ TEST(SplineExtrudeRecipe, ConformTargetCarriesItsAuthorTooltipThroughReflection)
         << "the tooltip no longer warns that the drape line ignores the conform target; it reads: "
         << field->Tooltip;
 
-    // Positive control: an unmarked sibling field must still be bare, or the
-    // assertion above would pass on a registry that hands every field a string.
-    const auto unmarked = std::find_if(fields.begin(), fields.end(),
-                                       [](const ECS::FieldInfo& f) { return f.Name == "LateralOffset"; });
-    ASSERT_NE(unmarked, fields.end());
+    // Every row of the extrude explains itself.
+    for (const ECS::FieldInfo& each : fields)
+        EXPECT_FALSE(each.Tooltip.empty()) << each.Name << " has no tooltip";
+
+    // Positive control: an unmarked field must still be bare, or the assertions
+    // above would pass on a registry that hands every field a string.
+    const std::span<const ECS::FieldInfo> provisioned =
+        ECS::ComponentFieldRegistry::Get(ECS::GetComponentTypeId<Components::SplineGroundProvisioned>());
+    const auto unmarked = std::find_if(provisioned.begin(), provisioned.end(),
+                                       [](const ECS::FieldInfo& f) { return f.Name == "Flatten"; });
+    ASSERT_NE(unmarked, provisioned.end());
     EXPECT_TRUE(unmarked->Tooltip.empty())
         << "an unmarked field carries tooltip text, so this test cannot tell a harvested marker "
            "from a default";

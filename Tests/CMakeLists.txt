@@ -445,7 +445,7 @@ if(Python3_Interpreter_FOUND)
             --root ${CMAKE_SOURCE_DIR})
   set_tests_properties(CleanupGateTests PROPERTIES TIMEOUT 300)
   add_test(NAME CleanupGateRuleTests
-    COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/Tools/CleanupGate/test_rule_comments.py)
+    COMMAND ${Python3_EXECUTABLE} -I -m unittest discover -s ${CMAKE_SOURCE_DIR}/Tools/CleanupGate -p "test_rule_*.py")
   set_tests_properties(CleanupGateRuleTests PROPERTIES TIMEOUT 60)
 else()
   message(STATUS "Python 3 not found - CleanupGateTests and CleanupGateRuleTests not registered")
@@ -1255,6 +1255,20 @@ foreach(_block TYPES RESOLVE)
     VERBATIM)
   list(APPEND _GE_PAGE_RESOLVE_HEADERS ${_out})
 endforeach()
+# The df64 arithmetic and the page store's equal-angle map the sphere's vertices sample by.
+set(_GE_EQUAL_ANGLE_GLSL ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT/cbt_deep_decode.glsl)
+set(_GE_EQUAL_ANGLE_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/EqualAngleExtracted.h)
+add_custom_command(
+  OUTPUT ${_GE_EQUAL_ANGLE_HEADER}
+  COMMAND ${CMAKE_COMMAND} -DSRC=${_GE_EQUAL_ANGLE_GLSL}
+                           -DOUT=${_GE_EQUAL_ANGLE_HEADER}
+                           "-DBEGIN_MARKER=// GE_SHARED_EQUAL_ANGLE_BEGIN"
+                           "-DEND_MARKER=// GE_SHARED_EQUAL_ANGLE_END"
+                           -P ${_GE_EXTRACT_SHADER_BLOCK}
+  DEPENDS ${_GE_EQUAL_ANGLE_GLSL} ${_GE_EXTRACT_SHADER_BLOCK}
+  COMMENT "Extracting the equal-angle map from cbt_deep_decode.glsl"
+  VERBATIM)
+list(APPEND _GE_PAGE_RESOLVE_HEADERS ${_GE_EQUAL_ANGLE_HEADER})
 
 # The resolve's device probe: cbt_page.glsl in a compute kernel, so the device parity test runs the
 # shipped resolve with the hardware's bilinear tap.
@@ -1273,7 +1287,10 @@ add_executable(TerrainAtlasTests
   # The paged height source: the level rule, the page cache, the residency, the resolve mirror and
   # the shipped GLSL resolve against it, on the host and on the device.
   TerrainPageResidencyTests.cpp
+  TerrainPlanetPageRequesterTests.cpp
   TerrainPageResolveGpuTests.cpp
+  # The GLSL equal-angle map against the page store's CPU map.
+  TerrainEqualAngleMapTests.cpp
   # The height source of a tiled terrain and the main-thread half of its height pages.
   TerrainHeightPagesTests.cpp
   # The CPU height pages and the query the CPU readers sample them through.

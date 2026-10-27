@@ -16,16 +16,9 @@ class World;
 namespace GameEngine::Scene
 {
 
-/// Spawns an instance of the prefab asset `prefab` into `world`: a batch copy of its template in
-/// the engine's prefab library, the entities in template order, the root at `at` under `parent`
-/// (no parent when invalid) and marked with its source. `at` is relative to `parent`, or to the
-/// world when `parent` is invalid. Returns the root.
-///
-/// The prefab must be resident: placed by a loaded scene, or named by a PrefabRef field of a
-/// component in a loaded scene. Otherwise nothing is created, the handle returned is invalid and
-/// the fix is logged once per prefab. A spawn never reads a file.
-///
-/// Call it from the main thread, outside a system or a job.
+/// Spawns an instance of `prefab` into `world`: the root at `at`, relative to `parent` (the world when invalid).
+/// The prefab must be resident: a loaded scene places it or names it in a PrefabRef field. Otherwise returns an
+/// invalid handle and logs the fix once. Reads no file. Main thread only, outside a system or a job.
 ECS::EntityHandle SpawnPrefab(ECS::World& world, const GUID& prefab, const Components::Transform& at,
                               ECS::EntityHandle parent);
 

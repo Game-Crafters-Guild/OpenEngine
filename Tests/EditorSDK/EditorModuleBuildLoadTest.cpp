@@ -366,11 +366,11 @@ TEST(EditorModuleBuildLoad, EztreeEditorModuleBuildsAndRegistersRealPlugin)
     // Traits registered at module load: find by display name (the test does
     // not compile against the package's component headers).
     const auto traitsSnapshot = ed::EditorComponentTraitsRegistry::Get().Snapshot();
-    const auto treeTraits = std::find_if(traitsSnapshot.begin(), traitsSnapshot.end(),
+    const auto treeTraits = std::find_if(traitsSnapshot->begin(), traitsSnapshot->end(),
                                          [](const auto& entry) {
                                              return entry.second.DisplayName == "Tree Generator";
                                          });
-    ASSERT_NE(treeTraits, traitsSnapshot.end());
+    ASSERT_NE(treeTraits, traitsSnapshot->end());
     EXPECT_EQ(treeTraits->second.HierarchyRowClass, "hierarchy-entity-tree-generator");
     EXPECT_EQ(treeTraits->second.InspectorIconClass, "inspector-section-icon-tree-generator");
     EXPECT_TRUE(treeTraits->second.IsPickInstanceRoot);

@@ -1,85 +1,53 @@
 #include "Panels/SaveSceneChangesModal.h"
 
+#include "Input/KeyCodes.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
-#include "Input/KeyCodes.h"
+
+#include <array>
+#include <memory>
+#include <string_view>
 
 namespace GameEngine
 {
+
+namespace
+{
+constexpr const char* kLayoutAssetPath = "UI/controls/SaveSceneChangesModal/SaveSceneChangesModal.uxml";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 5> kRequiredIds = {
+    "save-changes-title",
+    "save-changes-message",
+    "save-changes-cancel",
+    "save-changes-dont-save",
+    "save-changes-save",
+};
+} // namespace
 
 SaveSceneChangesModal::SaveSceneChangesModal()
 {
     AddClass("modal-overlay");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
 
-    // Backdrop
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
     m_Backdrop = backdrop.get();
-    m_Backdrop->AddClass("modal-backdrop");
     m_Backdrop->SetFocusable(true);
-
-    // Window
-    auto window = std::make_unique<UIElement>();
-    m_Window = window.get();
-    m_Window->AddClass("modal-window");
-    m_Window->AddClass("modal-window-shadow");
-    m_Window->AddClass("modal-window-520");
-
-    // Header
-    {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("modal-header");
-        auto title = std::make_unique<Label>();
-        m_Title = title.get();
-        title->SetText("Save changes?");
-        title->AddClass("modal-title");
-        header->AddChild(std::move(title));
-        m_Window->AddChild(std::move(header));
-    }
-
-    // Content
-    {
-        auto content = std::make_unique<UIElement>();
-        content->AddClass("modal-content");
-        auto msg = std::make_unique<Label>();
-        m_Message = msg.get();
-        msg->SetText("The scene has unsaved changes.");
-        msg->AddClass("modal-message");
-        content->AddChild(std::move(msg));
-        m_Window->AddChild(std::move(content));
-    }
-
-    // Footer buttons
-    {
-        auto footer = std::make_unique<UIElement>();
-        footer->AddClass("modal-footer");
-
-        auto cancel = std::make_unique<Button>();
-        cancel->SetText("Cancel");
-        cancel->AddClass("secondary");
-        cancel->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
-
-        auto dontSave = std::make_unique<Button>();
-        dontSave->SetText("Don't Save");
-        dontSave->AddClass("secondary");
-        dontSave->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnDontSaveClicked(); });
-
-        auto save = std::make_unique<Button>();
-        save->SetText("Save");
-        save->AddClass("primary");
-        save->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnSaveClicked(); });
-
-        m_CancelButton = cancel.get();
-        m_DontSaveButton = dontSave.get();
-        m_SaveButton = save.get();
-
-        footer->AddChild(std::move(dontSave));
-        footer->AddChild(std::move(cancel));
-        footer->AddChild(std::move(save));
-        m_Window->AddChild(std::move(footer));
-    }
+    m_Title = m_Backdrop->FindById("save-changes-title"_sid);
+    m_Message = m_Backdrop->FindById("save-changes-message"_sid);
+    m_CancelButton = m_Backdrop->FindById("save-changes-cancel"_sid);
+    m_DontSaveButton = m_Backdrop->FindById("save-changes-dont-save"_sid);
+    m_SaveButton = m_Backdrop->FindById("save-changes-save"_sid);
+    if (m_CancelButton)
+        m_CancelButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
+    if (m_DontSaveButton)
+        m_DontSaveButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnDontSaveClicked(); });
+    if (m_SaveButton)
+        m_SaveButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnSaveClicked(); });
 
     m_Backdrop->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
     {
@@ -97,13 +65,14 @@ SaveSceneChangesModal::SaveSceneChangesModal()
         }
     });
 
-    m_Backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 
 void SaveSceneChangesModal::Show(const std::string& title, const std::string& message,
                                  const SaveSceneChangesModalLabels& labels)
 {
+    if (!m_Backdrop)
+        return;
     m_Visible = true;
     if (auto* t = dynamic_cast<Label*>(m_Title))
         t->SetText(title);

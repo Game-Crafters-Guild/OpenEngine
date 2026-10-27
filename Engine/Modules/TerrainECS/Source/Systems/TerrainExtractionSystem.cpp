@@ -414,6 +414,19 @@ void DriveAtlasResidency(AtlasResidencyController& ctrl, const TiledTerrainData&
     ctrl.Update(frame, deltaSeconds, resident, kAtlasMaxAssignsPerFrame);
 }
 
+// The render handle index the CBT draws spherical terrain `terrain` with, as of its last extraction:
+// its terrain data's, or its tiled terrain's global handle; kNoRenderTerrain before it has one.
+uint32 PlanetRenderTerrain(TerrainService& service, const Components::Terrain& terrain)
+{
+    if (terrain.TerrainDataHandle != 0 || terrain.TerrainDataGeneration != 0)
+        return terrain.TerrainDataHandle;
+    const TiledTerrainData* tiled =
+        service.GetTiledTerrainData(TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
+    if (tiled && (tiled->GlobalGpuHandleIndex != 0 || tiled->GlobalGpuHandleGeneration != 0))
+        return tiled->GlobalGpuHandleIndex;
+    return kNoRenderTerrain;
+}
+
 } // namespace
 
 TerrainExtractionSystem::TerrainExtractionSystem(Engine::Renderer::RenderServices* renderServices)
@@ -706,6 +719,18 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                   Components::Terrain& terrain,
                   const Components::WorldTransform& worldXf)
         {
+            if (terrain.Domain == Components::TerrainDomain::Spherical)
+            {
+                GE_CPU_PROFILE_SCOPE("Terrain.PlanetHeightPages");
+                const auto* name = world.GetComponent<Components::Name>(entity);
+                const auto* relief = world.GetComponent<Components::TerrainPlanetRelief>(entity);
+                RequestPlanetHeightPages(*terrainService, *device, entity.id,
+                                         PlanetRenderTerrain(*terrainService, terrain),
+                                         name ? name->View() : std::string_view{}, terrain,
+                                         relief ? *relief : Components::TerrainPlanetRelief{}, viewCameraPositions,
+                                         pageFocalScale);
+            }
+
             // Grass placement is planar-only (TerrainGrassSupportsDomain): the compute roots blades
             // on a flat XZ grid, which floats off a cube-sphere planet's curved surface. Source no
             // grass for a spherical terrain until radial placement lands, nor for grass that is

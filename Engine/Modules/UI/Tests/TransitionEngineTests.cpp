@@ -543,11 +543,8 @@ TEST_F(TransitionEngineTest, TransitionEndEventFires)
 }
 
 // ---------------------------------------------------------------------------
-// Repro: project-picker main-page card. Mirrors the exact structure of the
-// recent/new/open cards in ProjectFolderPickerModal: a high-z modal wrapper,
-// a ScrollView, and a Button card whose hover styling (top lift + background)
-// comes from CSS rules copied from ProjectPicker.css. The template cards (no
-// ScrollView) animate; these must too.
+// A project picker library card: a high-z modal wrapper, a ScrollView and a Button card
+// with the hover rules of ProjectPicker.css (top lift and background). The hover animates.
 // ---------------------------------------------------------------------------
 
 TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesInsideModalScrollView)
@@ -642,10 +639,8 @@ TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesInsideModalScrollView)
         << "preview should follow the descendant hover rule";
 }
 
-// Same repro but with the editor's exact inline overrides applied to the card
-// (ApplyProjectCardFrame in ProjectFolderPickerModal.cpp). Inline overrides
-// take precedence over CSS, so this variant catches any interaction where an
-// override suppresses the :hover restyle or its transition.
+// The same card with inline frame overrides. An inline override takes precedence over CSS;
+// the :hover restyle and its transition still run.
 TEST_F(TransitionEngineTest, ProjectCardHoverAnimatesWithInlineFrameOverrides)
 {
     const std::string xml = R"(<uielement id='root'>

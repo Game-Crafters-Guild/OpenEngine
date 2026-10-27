@@ -117,9 +117,13 @@ When the prefab is not loaded, a spawn creates nothing: `Scene::SpawnPrefab` ret
 Prefab Soldier.prefab is not loaded. Reference it from a PrefabRef field of a component in the scene, or place an instance in the scene.
 ```
 
+## Place an instance in a scene
+
+`Scene::PlacePrefab`, in `Scene/PrefabAuthoring.h`, takes the same arguments as `Scene::SpawnPrefab` and is for tools that build a scene, such as the editor when you drop a prefab into the Scene View. It loads the prefab from its file when the prefab is not loaded, and keeps it loaded while `world` exists, together with the prefabs that its `PrefabRef` fields name, as a scene load does. It also gives the instance a scene identity, so a save of the scene writes the instance as a reference to the prefab. A game spawns with `Scene::SpawnPrefab`, which never reads a file.
+
 ## Threads
 
-Call `Scene::SpawnPrefab` from the main thread, outside a system or a job. Call `EntityCommands.Spawn` from a C# system: C# systems run on the main thread. A call from a job or from a thread of your own is refused. The engine changes its templates on the main thread: when a scene loads and when a prefab file changes on disk.
+Call `Scene::SpawnPrefab` and `Scene::PlacePrefab` from the main thread, outside a system or a job. Call `EntityCommands.Spawn` from a C# system: C# systems run on the main thread. A call from a job or from a thread of your own is refused. The engine changes its templates on the main thread: when a scene loads and when a prefab file changes on disk.
 
 A spawn runs at once, also inside a C# system, where the other structural changes wait for the end of the update: it adds new entities and moves no entity that already exists.
 

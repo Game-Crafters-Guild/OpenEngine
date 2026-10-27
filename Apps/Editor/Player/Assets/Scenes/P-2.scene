@@ -1,0 +1,68 @@
+[scene name="P-2" version=1]
+; P-2: a 2 km planet (radius 2000 m), its relief 50 m of amplitude (up to
+; 75 m either way), 2 samples a meter. The planet's center is the world origin.
+; The recorded poses: the camera's position and rotation (x, y, z, w), the scene view's yaw and
+; pitch in degrees (world +Y up), and the relief height under an eye pose:
+;   landing eye: position (0, 1994.173, 0), rotation (0, 0, 0, 1); yaw 0, pitch -5; relief -7.53 m
+;   cube corner eye: position (1150.838, 1150.838, 1150.838), rotation (0.46009, 0.33185, -0.19058, 0.80117);
+;     yaw 45, pitch -59.736 (5 degrees under the local horizon); relief -8.39 m
+;   500 m: position (0, 2492.473, 0), rotation (0.25882, 0, 0, 0.96593); yaw 90, pitch -30
+;   3 km: position (0, 4992.473, 0), rotation (0.25882, 0, 0, 0.96593); yaw 90, pitch -30 (down at the relief)
+;   orbit: position (0, 0, -4000), rotation (0, 0, 0, 1); yaw 90, pitch 0
+; An eye pose is 1.7 m above the relief under it. The camera starts at the landing eye, over the +Y pole.
+; The sky is planar (world +Y) until a planet sky lands (#5092): dark over the pole, tilted at the corners.
+
+[entity id="e_cam"]
+Camera.enabled = true
+Camera.perspective = true
+Camera.fovY = 60
+Camera.nearZ = 0.1
+Camera.farZ = 1000
+Camera.visibleLayers = all
+Camera.volumeLayers = all
+Name.value = "Main Camera"
+Transform.position = (0, 1994.173, 0)
+Transform.rotation = (0, 0, 0, 1)
+Transform.scale = (1, 1, 1)
+
+[entity id="e_sun"]
+Light.enabled = true
+Light.type = 0
+Light.color = (1, 1, 1)
+Light.intensity = 3
+Light.castsLight = true
+Light.castsShadows = true
+Light.cascadeCount = 4
+Name.value = "Sun"
+Transform.position = (0, 0, 0)
+Transform.rotation = (0.51504, 0, 0, 0.85717)
+Transform.scale = (1, 1, 1)
+
+[entity id="e_sky"]
+SkyEnvironment.enabled = true
+SkyEnvironment.TimeOfDayHours = 12
+SkyEnvironment.Latitude = 0
+Name.value = "Sky Environment"
+
+[entity id="e_planet"]
+Name.value = "Planet P-2"
+Terrain.terrainAssetType = 0
+Terrain.baseSource = 2
+Terrain.enabled = true
+Terrain.sizeX = 128
+Terrain.sizeZ = 128
+Terrain.heightScale = 20
+Terrain.samplesPerMeter = 2
+Terrain.domain = 1
+Terrain.planetRadius = 2000
+Terrain.targetPixelError = 11
+Terrain.renderLayers = [0]
+Terrain.castShadows = true
+Terrain.receiveShadows = true
+TerrainGrass.enabled = false
+TerrainPlanetRelief.amplitude = 50
+TerrainPlanetRelief.frequency = 6
+TerrainPlanetRelief.octaves = 4
+Transform.position = (0, 0, 0)
+Transform.rotation = (0, 0, 0, 1)
+Transform.scale = (1, 1, 1)

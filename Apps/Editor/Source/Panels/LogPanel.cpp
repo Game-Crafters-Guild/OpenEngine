@@ -1,13 +1,14 @@
 #include "Panels/LogPanel.h"
 
-#include "Editor/EditorPaths.h"
 #include "EditorContextMenu/UIContextMenu.h"
 #include "Logger/Logger.h"
 #include "Panels/BacktraceFrameView.h"
+#include "Panels/LogChannelPopover.h"
 #include "Panels/LogView.h"
 #include "Platform/Clipboard.h"
 #include "Platform/ContextMenu.h"
 #include "ScriptEditor/SourceLocation.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/ScrollView.h"
@@ -18,15 +19,16 @@
 #include "UI/EditorIcons.h"
 #include "UI/EditorSearchBars.h"
 #include "UI/PanelSearchBar.h"
-#include "UI/Parsers/XMLParser.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
 #include "UI/UIPlatform.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace GameEngine {
@@ -35,6 +37,33 @@ namespace {
 
 constexpr const char* kLayoutAssetPath = "UI/panels/LogPanel/LogPanel.uxml";
 constexpr const char* kStyleAssetPath = "UI/panels/LogPanel/LogPanel.css";
+// The ids BuildFromLayout looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 24> kRequiredIds = {
+    "LogFilterError",
+    "LogFilterWarning",
+    "LogFilterInfo",
+    "LogFilterDebug",
+    "LogChannels",
+    "LogClear",
+    "LogPause",
+    "LogCopyAll",
+    "LogSearchHost",
+    "LogSplit",
+    "LogListPane",
+    "LogCopyNotice",
+    "LogDetailSplitter",
+    "LogDetailPane",
+    "LogDetailGlyph",
+    "LogDetailSeverity",
+    "LogDetailChannel",
+    "LogDetailTime",
+    "LogDetailSource",
+    "LogDetailScroll",
+    "LogDetailBody",
+    "LogDetailMessage",
+    "LogDetailTraceTitle",
+    "LogDetailFrames",
+};
 constexpr const char* kHiddenClass = "hidden";
 constexpr const char* kFilterOnClass = "active";
 constexpr const char* kFilterOffClass = "log-filter-off";
@@ -55,7 +84,6 @@ constexpr float kSideBySideExitAspect = 0.9f;
 /// in the detail header.
 constexpr std::array<const char*, LogModel::kSeverityCount> kSeverityNames{"Debug", "Info", "Warnings", "Errors"};
 constexpr std::array<const char*, LogModel::kSeverityCount> kSeverityLineNames{"debug", "info", "warning", "error"};
-constexpr std::array<const char*, LogModel::kSeverityCount> kSeverityTitles{"Debug", "Info", "Warning", "Error"};
 constexpr std::array<const char*, LogModel::kSeverityCount> kDetailGlyphClasses{
     "log-row-glyph-debug", "log-row-glyph-info", "log-row-glyph-warning", "log-row-glyph-error"};
 
@@ -88,6 +116,8 @@ LogModel::SearchField SearchFieldFromKey(const std::string& key)
         return LogModel::SearchField::Message;
     if (key == "level")
         return LogModel::SearchField::Level;
+    if (key == "channel")
+        return LogModel::SearchField::Channel;
     if (key == "source")
         return LogModel::SearchField::Source;
     if (key == "function")
@@ -145,15 +175,9 @@ LogPanel::~LogPanel()
 
 void LogPanel::BuildFromLayout()
 {
-    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / kLayoutAssetPath;
-    std::unique_ptr<UIElement> root;
-    if (!UIParsing::XMLParser::ParseLayoutFromFile(path.string(), root) || !root)
-    {
-        Logger::Log::Error("Log panel: {} did not load, so the panel is empty. Check that it is staged under the "
-                           "editor asset mount.",
-                           path.generic_string());
+    std::unique_ptr<UIElement> root = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!root)
         return;
-    }
 
     m_LogView = FindIn<LogView>(*root, "LogView");
     m_Notice = FindIn<EditorUI::TransientNotice>(*root, "LogCopyNotice");
@@ -163,12 +187,14 @@ void LogPanel::BuildFromLayout()
     m_DetailPane = FindIn<WeightedPane>(*root, "LogDetailPane");
     m_DetailGlyph = FindIn<UIElement>(*root, "LogDetailGlyph");
     m_DetailSeverity = FindIn<Label>(*root, "LogDetailSeverity");
+    m_DetailChannel = FindIn<Label>(*root, "LogDetailChannel");
     m_DetailTime = FindIn<Label>(*root, "LogDetailTime");
     m_DetailSource = FindIn<Button>(*root, "LogDetailSource");
     m_DetailMessage = FindIn<TextArea>(*root, "LogDetailMessage");
     m_DetailTraceTitle = FindIn<UIElement>(*root, "LogDetailTraceTitle");
     m_DetailFrames = FindIn<UIElement>(*root, "LogDetailFrames");
     m_PauseButton = FindIn<Button>(*root, "LogPause");
+    m_ChannelsButton = FindIn<Button>(*root, "LogChannels");
     auto* detailScroll = FindIn<ScrollView>(*root, "LogDetailScroll");
     UIElement* detailBody = FindIn<UIElement>(*root, "LogDetailBody");
     UIElement* searchHost = FindIn<UIElement>(*root, "LogSearchHost");
@@ -190,6 +216,11 @@ void LogPanel::BuildFromLayout()
     WireFilterToggle(*root, LogModel::Severity::Warning, "LogFilterWarning");
     WireFilterToggle(*root, LogModel::Severity::Info, "LogFilterInfo");
     WireFilterToggle(*root, LogModel::Severity::Debug, "LogFilterDebug");
+    if (m_ChannelsButton)
+    {
+        m_ChannelsButton->SetTooltip("Show or hide the lines of each channel, and set the level a channel logs at.");
+        m_ChannelsButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { ShowChannelList(); });
+    }
     if (auto* clear = FindIn<Button>(*root, "LogClear"))
     {
         clear->SetTooltip("Remove every line from the log.");
@@ -213,6 +244,9 @@ void LogPanel::BuildFromLayout()
     m_LogView->SetOnEntriesChanged([this]() { SyncFilterToggles(); });
 
     AddChild(std::move(root));
+    auto popover = std::make_unique<LogChannelPopover>(*m_LogView);
+    m_ChannelPopover = popover.get();
+    AddChild(std::move(popover));
     SyncFilterToggles();
 }
 
@@ -226,8 +260,8 @@ void LogPanel::BuildSearchBar(UIElement& host)
                 m_LogView->SetSearch(text);
         },
         {},
-        {{"all", "All fields"}, {"message", "Message"}, {"level", "Severity"}, {"source", "Source"},
-         {"function", "Function"}},
+        {{"all", "All fields"}, {"message", "Message"}, {"level", "Severity"}, {"channel", "Channel"},
+         {"source", "Source"}, {"function", "Function"}},
         [this](const std::string& key)
         {
             if (m_LogView)
@@ -263,6 +297,13 @@ void LogPanel::SyncFilterToggles()
     if (!m_LogView)
         return;
     const LogModel& model = m_LogView->GetModel();
+    if (m_ChannelsButton)
+    {
+        const size_t hidden = model.CountHiddenChannels();
+        const std::string text = hidden == 0 ? "Channels" : "Channels (" + std::to_string(hidden) + " hidden)";
+        if (m_ChannelsButton->GetText() != text)
+            m_ChannelsButton->SetText(text);
+    }
     for (size_t index = 0; index < LogModel::kSeverityCount; ++index)
     {
         Button* toggle = m_FilterToggles[index];
@@ -346,7 +387,9 @@ void LogPanel::ShowDetail(const LogModel::Entry& entry)
         m_DetailGlyph->AddClass(kDetailGlyphClasses[severity]);
     }
     if (m_DetailSeverity)
-        m_DetailSeverity->SetText(kSeverityTitles[severity]);
+        m_DetailSeverity->SetText(Logger::LogLevelDisplayName(entry.Level));
+    if (m_DetailChannel)
+        m_DetailChannel->SetText(std::string(LogModel::ChannelName(entry)));
     if (m_DetailTime)
         m_DetailTime->SetText(LogModel::FormatTime(entry));
     if (m_DetailSource)
@@ -501,6 +544,12 @@ void LogPanel::OpenSource(const std::string& file, int line)
 {
     if (!file.empty() && m_OnOpenSourceFile)
         m_OnOpenSourceFile(file, line);
+}
+
+void LogPanel::ShowChannelList()
+{
+    if (m_ChannelPopover && m_ChannelsButton)
+        m_ChannelPopover->Open(*m_ChannelsButton);
 }
 
 void LogPanel::ShowContextMenu(float x, float y)

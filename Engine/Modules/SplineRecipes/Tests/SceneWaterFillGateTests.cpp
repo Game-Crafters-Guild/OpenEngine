@@ -286,22 +286,22 @@ RefusalField SolveRefusalField(const std::vector<SG::SplineStripStation>& statio
     SG::SplineFillParams params;
     params.MaxHalfWidth = reach;
     params.EdgeDrop = std::max(0.0f, recipe.EdgeDrop);
-    params.SeaLevelFloor = recipe.SeaLevelFloor;
+    params.FloorHeight = recipe.FloorHeight;
     out.Field = SG::BuildSplineFillField(stations, out.Grid, params);
     out.Built = true;
     return out;
 }
 
 // The waterline floor the shipped fill actually applies. BuildSplineFillField
-// lifts the authored level by kSeaLevelFloorLiftMetres so a mouth that merges
+// lifts the authored level by kFloorHeightLiftMetres so a mouth that merges
 // with a sea sits ON it rather than IN its surface (SplineFillField.cpp, the
 // `seaFloor` it derives once and clamps every waterline to). A recount reading
-// Recipe.SeaLevelFloor raw would judge this field against a floor 2 cm below the
-// one that built it. Safe when the floor is disabled: at kNoSeaLevelFloor's
+// Recipe.FloorHeight raw would judge this field against a floor 2 cm below the
+// one that built it. Safe when the floor is disabled: at kNoFloorHeight's
 // magnitude the addition is below one ULP.
 float32 ShippedSeaFloor(const Components::SplineExtrude& recipe)
 {
-    return recipe.SeaLevelFloor + SG::kSeaLevelFloorLiftMetres;
+    return recipe.FloorHeight + SG::kFloorHeightLiftMetres;
 }
 
 // The level holding water up at a corner -- the rim it could escape over, or the
@@ -482,7 +482,7 @@ RefusalTally ReportRefusals(const FittedRun& run, const TerrainECS::SurfaceHeigh
     // The field parity check above says this is the same FIELD; this says the
     // predicate above is the same PREDICATE. Both are needed, and only the
     // second one moves when the shipped containment term changes underneath a
-    // transcription of it -- which is exactly how a stale sea-level floor and a
+    // transcription of it -- which is exactly how a stale floor height and a
     // missing post-seal skip sat here unnoticed, printing a wrong total beside
     // the right one.
     EXPECT_EQ(counted, production.OverBankCorners)
@@ -715,7 +715,7 @@ TEST_F(SceneWaterFillGate, TheSceneLoadsAndCarriesItsAuthoredComponents)
                     "edgeDrop=%.2f seaFloor=%.3f conform=%d\n",
                     run.Name.c_str(), run.Data->Points.size(), run.Data->TotalArcLength,
                     run.Recipe.MaxHalfWidth, run.Recipe.VerticalOffset, run.Recipe.EdgeDrop,
-                    run.Recipe.SeaLevelFloor, static_cast<int>(run.Recipe.ConformMode));
+                    run.Recipe.FloorHeight, static_cast<int>(run.Recipe.ConformMode));
     EXPECT_FALSE(runs.empty()) << "no FitToBanks SplineExtrude survived the load";
 }
 

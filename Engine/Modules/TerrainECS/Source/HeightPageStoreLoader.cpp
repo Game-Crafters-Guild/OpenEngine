@@ -3,7 +3,7 @@
 #include "TerrainECS/RawHeightmap.h"
 #include "PageStreaming/HeightPageCooker.h"
 #include "PageStreaming/HeightStoreCache.h"
-#include "PageStreaming/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
 #include "PageStreaming/TerrainPageContainer.h"
 #include "Core/Engine.h"
 #include "Assets/AssetManager.h"

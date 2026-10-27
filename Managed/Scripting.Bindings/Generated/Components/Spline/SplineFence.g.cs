@@ -18,11 +18,47 @@ namespace GameEngine.Scripting
         Sheared = 2,
     }
 
+    public enum SplineFencePartKind : byte
+    {
+        None = 0,
+        Post = 1,
+        Span = 2,
+        Gate = 3,
+        Crest = 4,
+        Cap = 5,
+    }
+
     public enum SplineSpanOverrideKind : byte
     {
         None = 0,
         Gate = 1,
-        ExplicitPiece = 2,
+        ExplicitPart = 2,
+    }
+
+    [StructLayout(LayoutKind.Explicit, Size = 17)]
+    [BuiltInComponent("GameEngine::Components::SplineFencePart")]
+    public partial struct SplineFencePart
+    {
+        /// <summary>
+        /// Creates the value with the engine's defaults.
+        /// </summary>
+        public SplineFencePart()
+        {
+            this = global::GameEngine.ECS.ComponentType<SplineFencePart>.Default;
+        }
+
+        [FieldOffset(0)]
+        public AssetGuid Mesh;
+
+        [FieldOffset(16)]
+        private SplineFencePartKind m_Kind;
+        public SplineFencePartKind Kind
+        {
+            readonly get => m_Kind;
+            set => m_Kind = (byte)value <= 5
+                ? value
+                : throw new ArgumentOutOfRangeException(nameof(value), value, "SplineFencePart.Kind is None, Post, Span, Gate, Crest or Cap.");
+        }
     }
 
     [StructLayout(LayoutKind.Explicit, Size = 8)]
@@ -50,14 +86,14 @@ namespace GameEngine.Scripting
             readonly get => m_Kind;
             set => m_Kind = (byte)value <= 2
                 ? value
-                : throw new ArgumentOutOfRangeException(nameof(value), value, "SplineSpanOverride.Kind is None, Gate or ExplicitPiece.");
+                : throw new ArgumentOutOfRangeException(nameof(value), value, "SplineSpanOverride.Kind is None, Gate or ExplicitPart.");
         }
 
         [FieldOffset(7)]
         public byte PoolSlot;
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 740)]
+    [StructLayout(LayoutKind.Explicit, Size = 724)]
     [BuiltInComponent("GameEngine::Components::SplineFence")]
     public partial struct SplineFence : IComponent
     {
@@ -69,58 +105,22 @@ namespace GameEngine.Scripting
             this = global::GameEngine.ECS.ComponentType<SplineFence>.Default;
         }
 
-        [InlineArray(7)]
-        public struct PostPoolArray
+        [InlineArray(32)]
+        public struct PartsArray
         {
-            private AssetGuid m_Element;
+            private SplineFencePart m_Element;
         }
 
         [FieldOffset(0)]
-        public PostPoolArray PostPool;
+        public PartsArray Parts;
 
-        [InlineArray(7)]
-        public struct SpanPoolArray
-        {
-            private AssetGuid m_Element;
-        }
-
-        [FieldOffset(112)]
-        public SpanPoolArray SpanPool;
-
-        [InlineArray(7)]
-        public struct GatePoolArray
-        {
-            private AssetGuid m_Element;
-        }
-
-        [FieldOffset(224)]
-        public GatePoolArray GatePool;
-
-        [InlineArray(7)]
-        public struct CrestPoolArray
-        {
-            private AssetGuid m_Element;
-        }
-
-        [FieldOffset(336)]
-        public CrestPoolArray CrestPool;
-
-        [InlineArray(7)]
-        public struct CapPoolArray
-        {
-            private AssetGuid m_Element;
-        }
-
-        [FieldOffset(448)]
-        public CapPoolArray CapPool;
-
-        [FieldOffset(560)]
+        [FieldOffset(544)]
         public float PostPitch;
 
-        [FieldOffset(564)]
+        [FieldOffset(548)]
         public float CrestPitch;
 
-        [FieldOffset(568)]
+        [FieldOffset(552)]
         private SplinePlacementConform m_ConformMode;
         public SplinePlacementConform ConformMode
         {
@@ -130,7 +130,7 @@ namespace GameEngine.Scripting
                 : throw new ArgumentOutOfRangeException(nameof(value), value, "SplineFence.ConformMode is None, Height or HeightAndSlope.");
         }
 
-        [FieldOffset(572)]
+        [FieldOffset(556)]
         private SplineConformTarget m_ConformTarget;
         public SplineConformTarget ConformTarget
         {
@@ -140,13 +140,13 @@ namespace GameEngine.Scripting
                 : throw new ArgumentOutOfRangeException(nameof(value), value, "SplineFence.ConformTarget is Scene or TerrainOnly.");
         }
 
-        [FieldOffset(576)]
+        [FieldOffset(560)]
         public float SlopeBlend;
 
-        [FieldOffset(580)]
+        [FieldOffset(564)]
         public float SpanMaxStretch;
 
-        [FieldOffset(584)]
+        [FieldOffset(568)]
         private SplinePlantMode m_PlantMode;
         public SplinePlantMode PlantMode
         {
@@ -156,7 +156,7 @@ namespace GameEngine.Scripting
                 : throw new ArgumentOutOfRangeException(nameof(value), value, "SplineFence.PlantMode is BoundsMin or PivotPlane.");
         }
 
-        [FieldOffset(588)]
+        [FieldOffset(572)]
         private SplineSpanGrade m_SpanGrade;
         public SplineSpanGrade SpanGrade
         {
@@ -172,13 +172,13 @@ namespace GameEngine.Scripting
             private SplineSpanOverride m_Element;
         }
 
-        [FieldOffset(592)]
+        [FieldOffset(576)]
         public OverridesArray Overrides;
 
-        [FieldOffset(720)]
+        [FieldOffset(704)]
         public uint Seed;
 
-        [FieldOffset(724)]
+        [FieldOffset(708)]
         public AssetGuid OverrideMaterial;
     }
 }

@@ -151,6 +151,7 @@ add_executable(EditorThumbnailRoutingTests
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/ModelThumbnailPreviewScene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/ModelThumbnailRenderLanes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Thumbnails/ShaderGraphThumbnailMaterial.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Prefabs/PrefabThumbnailHandler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../Source/Editor/Assets/ShaderGlslOpen.cpp
 )
 

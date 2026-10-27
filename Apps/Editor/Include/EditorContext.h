@@ -14,7 +14,7 @@ class EditorVersionControlService;
 class MissingAssetTracker;
 namespace Platform { class Window; }
 class PolyhavenDownloadManager;
-namespace Editor { class UndoRedoService; class PlayModeManager; class RenderGraphTickRegistry; }
+namespace Editor { class EditorChangeNotifications; class UndoRedoService; class PlayModeManager; class RenderGraphTickRegistry; }
 namespace Engine::Renderer { class RenderServices; }
 namespace ECS { class World; }
 
@@ -27,6 +27,7 @@ struct EditorContext {
     uint64_t              ThumbnailHostWindowId = 0;
     Platform::Window*     MainWindow = nullptr; // optional (host window for editor UI)
     Editor::UndoRedoService* UndoRedo = nullptr; // optional (for undoable editor actions)
+    Editor::EditorChangeNotifications* ChangeNotifications = nullptr; // optional (world and component change events)
     EditorVersionControlService* VcsService = nullptr; // optional (VCS init + status notifications)
     Engine::Renderer::RenderServices* RenderServices = nullptr; // optional (for model instantiation, GPU resource access)
     Editor::PlayModeManager* PlayMode = nullptr; // optional (play mode state for runtime entity distinction)
@@ -46,6 +47,8 @@ struct EditorContext {
     ECS::World*           World = nullptr;
     std::function<void()> OnSceneDirty; // optional (mark scene dirty from drop handlers)
     std::function<bool()> IsSceneView2D; // optional (true if the active scene view is in 2D mode)
+    // Optional: the absolute folder the Assets panel lists; empty when no Assets panel lists a folder.
+    std::function<std::filesystem::path()> AssetsPanelFolder;
     // Optional: query deferred scene-build progress for the scene-view load
     // indicator. Returns true (filling processed/total) while a replace-open's
     // entity resolve drains across frames; false when no build is active.
