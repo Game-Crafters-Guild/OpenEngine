@@ -103,7 +103,7 @@ TEST(HierarchyModelThumbnail, AReparentByValueWriteNeedsTheIndexDropped)
     // index cannot see it and still answers from the old tree, which is why the
     // panel drops its index whenever it applies such a move (and on every full
     // refresh).
-    world.GetComponentForWrite<Parent>(unit.pivot)->parent = elsewhere;
+    world.GetComponentForWrite<Parent>(unit.pivot)->Entity = elsewhere;
     EXPECT_TRUE(FindModelGuidForEntityOrChildren(&world, unit.root).IsNull());
     EXPECT_EQ(FindModelGuidForEntityOrChildren(&world, unit.root, &index), model);
     index.Invalidate();
