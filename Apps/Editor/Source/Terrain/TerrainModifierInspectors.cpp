@@ -28,7 +28,7 @@
 #include "Inspectors/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
-#include "Inspectors/TerrainVolumeNotices.h"
+#include "Terrain/TerrainVolumeNotices.h"
 #include "SceneView/TerrainBrushTool.h"
 #include "Terrain/TerrainInteractiveModifierEdit.h"
 #include "Terrain/TerrainLayers.h"

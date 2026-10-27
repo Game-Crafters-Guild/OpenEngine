@@ -1,0 +1,18 @@
+<!-- ConfirmActionModal (Apps/Editor/Include/Panels/ConfirmActionModal.h): a confirmation with Cancel and
+     Continue, or a notice with one button. The ids are the contract with ConfirmActionModal.cpp. -->
+<UIElement class="modal-backdrop">
+  <UIElement class="modal-window modal-window-shadow modal-window-480">
+    <UIElement class="modal-header">
+      <Label id="confirm-action-title" class="modal-title modal-title-compact" />
+    </UIElement>
+    <UIElement class="modal-content modal-content-column">
+      <Label id="confirm-action-message" class="modal-message modal-message-pre" />
+      <Label id="confirm-action-detail" class="modal-message modal-message-detail modal-message-breakable hidden" />
+      <Label id="confirm-action-closing" class="modal-message modal-message-breakable hidden" />
+    </UIElement>
+    <UIElement class="modal-footer">
+      <Button id="confirm-action-cancel" class="secondary" text="Cancel" />
+      <Button id="confirm-action-confirm" class="primary" text="Continue" />
+    </UIElement>
+  </UIElement>
+</UIElement>

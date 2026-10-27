@@ -54,7 +54,7 @@
 #include "UI/Controls/Slider.h"
 #include "UI/Controls/TextField.h"
 #include "UI/Controls/TreeView.h"
-#include "UI/Interaction/FocusIsInside.h"
+#include "UI/Interaction/FocusQueries.h"
 #include "UI/Interaction/Selection.h"
 #include "UI/ToolbarDragDrop.h"
 #include "UI/UIManager.h"

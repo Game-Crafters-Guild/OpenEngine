@@ -1,0 +1,17 @@
+<!-- SaveSceneChangesModal (Apps/Editor/Include/Panels/SaveSceneChangesModal.h): Don't Save, Cancel and Save
+     for a scene with unsaved changes. The ids are the contract with SaveSceneChangesModal.cpp. -->
+<UIElement class="modal-backdrop">
+  <UIElement class="modal-window modal-window-shadow modal-window-520">
+    <UIElement class="modal-header">
+      <Label id="save-changes-title" class="modal-title" text="Save changes?" />
+    </UIElement>
+    <UIElement class="modal-content">
+      <Label id="save-changes-message" class="modal-message" text="The scene has unsaved changes." />
+    </UIElement>
+    <UIElement class="modal-footer">
+      <Button id="save-changes-dont-save" class="secondary" text="Don't Save" />
+      <Button id="save-changes-cancel" class="secondary" text="Cancel" />
+      <Button id="save-changes-save" class="primary" text="Save" />
+    </UIElement>
+  </UIElement>
+</UIElement>

@@ -12,6 +12,7 @@
 #include "ECS/Entity.h"
 #include "Engine/GameUI/GameUIHost.h"
 #include "Engine/GameUI/GameplayUI.h"
+#include "EditorChangeNotifications.h"
 #include "GameViewController.h"
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
@@ -56,7 +57,7 @@ class GameViewControllerInputTests : public testing::Test
 {
   protected:
     GameUIHost OtherHost{nullptr, nullptr, nullptr};
-    GameViewController Controller{nullptr, {}};
+    GameViewController Controller{nullptr, nullptr};
     GameUIHost* Host = nullptr;
     ECS::World* World = nullptr;
     Button* Target = nullptr;
@@ -250,13 +251,27 @@ TEST_F(GameViewControllerInputTests, PressBeforeValidExtentCannotArmOnLaterHeldM
     EXPECT_EQ(Clicks, 1);
 }
 
+TEST(GameViewControllerProjectSwitchTests, AProjectSwitchReleasesTheHudHost)
+{
+    Editor::EditorChangeNotifications notifications;
+    GameViewController controller{nullptr, &notifications};
+    GameUIHost& host = GameViewControllerTestAccess::InstallHost(controller);
+    GameUI::SetHost(&host);
+
+    notifications.NotifyProjectSwitched();
+
+    // The view has no device, so it cannot build the next host.
+    EXPECT_EQ(controller.GetGameUI(), nullptr);
+    EXPECT_EQ(GameUI::GetHost(), nullptr);
+}
+
 class GameViewControllerReadbackTests : public testing::Test
 {
   protected:
     std::unique_ptr<Rendering::IDevice> Device;
     Engine::Renderer::RenderServices Services;
     ECS::World World;
-    GameViewController Controller{nullptr, {}};
+    GameViewController Controller{nullptr, nullptr};
     ECS::EntityHandle CameraEntity;
     std::unique_ptr<Rendering::RenderGraph::RGResourcePool> Persistent;
     std::unique_ptr<Rendering::RenderGraph::RGTransientPool> Transient;

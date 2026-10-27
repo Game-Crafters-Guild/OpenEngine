@@ -51,6 +51,18 @@ RGPass AddFullscreenPass(RGFrame& frame, const RGFullscreenDesc& desc)
         buffers[i] = desc.Buffers[i];
 
     const RGResourceDesc& target = frame.Graph().ResourceDesc(desc.Target.Id);
+    if (desc.SecondTarget.IsValid())
+    {
+        const RGResourceDesc& second = frame.Graph().ResourceDesc(desc.SecondTarget.Id);
+        if (second.Width != target.Width || second.Height != target.Height || second.SampleCount != target.SampleCount)
+        {
+            Logger::Log::Error("AddFullscreenPass '{}': the second target is {}x{} x{} and the target is {}x{} x{}; "
+                               "give both the same size and sample count. The pass is not declared",
+                               desc.Name, second.Width, second.Height, second.SampleCount, target.Width,
+                               target.Height, target.SampleCount);
+            return {};
+        }
+    }
     uint32_t width = desc.Width;
     uint32_t height = desc.Height;
     if (width == 0 || height == 0)
@@ -82,6 +94,8 @@ RGPass AddFullscreenPass(RGFrame& frame, const RGFullscreenDesc& desc)
                            buffers[i].IsStorage ? RGBufferRead::Storage : RGBufferRead::Uniform);
             }
             p.AttachColor(0, desc.Target, ops);
+            if (desc.SecondTarget.IsValid())
+                p.AttachColor(1, desc.SecondTarget, ops);
         },
         [textures, textureCount, buffers, bufferCount, pipeline = desc.Pipeline,
          layout = desc.Layout, width, height](RGContext& ctx)

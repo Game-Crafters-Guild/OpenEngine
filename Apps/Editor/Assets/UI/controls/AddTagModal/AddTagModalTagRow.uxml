@@ -1,0 +1,6 @@
+<!-- One tag row of AddTagModal (Apps/Editor/Include/Panels/AddTagModal.h): the tag's color and its name.
+     The classes are the contract with AddTagModal.cpp, which sets the color and the name of each row. -->
+<UIElement class="add-tag-modal-tag-row">
+  <UIElement class="add-tag-modal-circle" />
+  <Label class="add-tag-modal-label" />
+</UIElement>

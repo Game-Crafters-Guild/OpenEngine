@@ -13,6 +13,8 @@
 // What is locked is the routing — which container each group's rows are added to — not the
 // declarations. Restyle and reword freely.
 
+#include "Types/StringUtils.h"
+
 #include <gtest/gtest.h>
 
 #include <filesystem>
@@ -71,15 +73,6 @@ std::string Span(const std::string& source, const std::string& from, const std::
     if (end == std::string::npos)
         return {};
     return source.substr(start, end - start);
-}
-
-size_t CountOf(const std::string& haystack, const std::string& needle)
-{
-    size_t n = 0;
-    for (size_t pos = haystack.find(needle); pos != std::string::npos;
-         pos = haystack.find(needle, pos + needle.size()))
-        ++n;
-    return n;
 }
 
 // Every container a sky row is added to. A row names its container as the first argument of the
@@ -151,9 +144,9 @@ TEST(SkyInspectorSections, SectionsRememberTheirExpansionRatherThanHardcodingIt)
     // so the property to hold is "no hardcoded state", not "no call".
     const std::string panel = SkyInspector();
     ASSERT_FALSE(panel.empty());
-    EXPECT_EQ(CountOf(panel, "SetExpanded(true)"), 0u)
+    EXPECT_EQ(GameEngine::CountOccurrences(panel, "SetExpanded(true)"), 0u)
         << "a sky foldout is pinned open, so it reopens on every panel rebuild";
-    EXPECT_EQ(CountOf(panel, "SetExpanded(false)"), 0u)
+    EXPECT_EQ(GameEngine::CountOccurrences(panel, "SetExpanded(false)"), 0u)
         << "a sky foldout is pinned shut, so the user's choice to open it is discarded on every "
            "panel rebuild";
 }
@@ -203,12 +196,12 @@ TEST(SkyInspectorSections, EachSectionContainsTheRowsItTook)
         {
             if (std::string(container) == g.container)
                 continue;
-            EXPECT_EQ(CountOf(span, AddedTo(container)), 0u)
+            EXPECT_EQ(GameEngine::CountOccurrences(span, AddedTo(container)), 0u)
                 << "a row inside the " << g.container << " group is added to " << container
                 << " instead, so it renders outside its section while its siblings moved";
         }
         // The old shared container, in any call shape rather than only the first-argument one.
-        EXPECT_EQ(CountOf(span, "stylistic"), 0u)
+        EXPECT_EQ(GameEngine::CountOccurrences(span, "stylistic"), 0u)
             << "a row inside the " << g.container
             << " group is still added to the Stylistic container, so it renders outside its "
                "section while its siblings moved";
@@ -278,7 +271,7 @@ TEST(SkyInspectorSections, SunIlluminanceRowIsRoutedThroughTheHelper)
     ASSERT_NE(row, std::string::npos) << "the Sun illuminance row is not in the Physical section";
     EXPECT_GT(row, picker) << "the Sun illuminance row must follow the Sun Light picker";
 
-    const std::string rowSource = Flattened(ReadEditorFile("Source/Inspectors/SkySunIlluminanceRow.cpp"));
+    const std::string rowSource = Flattened(ReadEditorFile("Source/Inspectors/SkySun/SkySunIlluminanceRow.cpp"));
     ASSERT_FALSE(rowSource.empty()) << "the row source did not read; this test is vacuous";
     for (const char* call : {"SunIlluminance::EditableSunLight(", "SunIlluminance::ResolvedSunLight(",
                              "SunIlluminance::LuxFromLightIntensity(", "SunIlluminance::LightIntensityFromLux(",
@@ -309,7 +302,7 @@ TEST(SkyInspectorSections, MoonlightIsRoutedInTheSunAndMoonGroup)
     EXPECT_GT(moonlight, showMoon) << "Moonlight must follow Show Moon";
     EXPECT_EQ(panel.find("AddTextBlock(", showMoon) > moonlight, true)
         << "Moonlight must sit in the Moon rows, before the next sub-header";
-    EXPECT_EQ(CountOf(panel, "AddSkyMoonlightRow("), 1u) << "one Moonlight row";
+    EXPECT_EQ(GameEngine::CountOccurrences(panel, "AddSkyMoonlightRow("), 1u) << "one Moonlight row";
 }
 
 // The ground albedo, brightness and night color feed the ground bounce in every Below Horizon mode

@@ -1,0 +1,25 @@
+<!-- VideoPlayerModal (Apps/Editor/Include/Panels/VideoPlayerModal.h): the video window. The header is the
+     drag handle, the video area shows the frame texture, and the seek bar and the controls row sit
+     below it. The ids are the contract with VideoPlayerModal.cpp. -->
+<UIElement class="vpm-backdrop">
+  <UIElement id="vpm-window" class="modal-window vpm-window">
+    <UIElement id="vpm-header" class="vpm-header">
+      <Label id="vpm-title" class="vpm-title vpm-title-action" text="Video" />
+      <UIElement class="vpm-title-spacer" />
+      <Button id="vpm-close" class="vpm-close-btn icon-button xclose-icon" />
+    </UIElement>
+    <UIElement id="vpm-video-area" class="vpm-video-area" />
+    <UIElement id="vpm-seek-bar" class="vpm-seek-bar">
+      <UIElement id="vpm-seek-fill" class="vpm-seek-fill" />
+    </UIElement>
+    <UIElement class="vpm-controls">
+      <Label id="vpm-time" class="vpm-time-label" text="0:00 / 0:00" />
+      <UIElement class="vpm-control-group">
+        <Button id="vpm-stop" class="vpm-ctrl-btn icon-button stop-icon" />
+        <Button id="vpm-play-pause" class="vpm-ctrl-btn icon-button play-icon" />
+      </UIElement>
+      <UIElement class="vpm-controls-right-spacer" />
+      <Button id="vpm-fullscreen" class="vpm-ctrl-btn icon-button fullscreen-icon" />
+    </UIElement>
+  </UIElement>
+</UIElement>

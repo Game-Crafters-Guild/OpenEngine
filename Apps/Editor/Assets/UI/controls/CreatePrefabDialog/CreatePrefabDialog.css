@@ -1,0 +1,45 @@
+/* CreatePrefabDialog: the file names, the folder row, the references list and the message line. The
+   window, header, fields and footer come from Modal.css. */
+
+/* The files that several roots make, one after the other, beside their label. */
+.create-prefab-files {
+	flex: 1 1 auto;
+	font-size: 13px;
+}
+
+.create-prefab-folder-row {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+}
+
+/* The folder is a read-only field box beside Browse, so it reads as a value. */
+.create-prefab-folder-row .create-prefab-folder-field {
+	flex: 1 1 auto;
+	width: auto;
+	overflow: hidden;
+	font-size: 13px;
+}
+
+/* The references that leave the prefab, one per line under the sentence; hidden while there are none. */
+.create-prefab-note {
+	display: none;
+	color: var(--ui_color_warning_text);
+	font-size: 13px;
+}
+
+.create-prefab-note.visible {
+	display: block;
+}
+
+/* Hidden until a conflict or an error has something to say. */
+.create-prefab-message {
+	display: none;
+	color: var(--ui_color_warning_text);
+	font-size: 13px;
+}
+
+.create-prefab-message.visible {
+	display: block;
+}

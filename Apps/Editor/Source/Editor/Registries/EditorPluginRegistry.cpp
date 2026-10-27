@@ -150,6 +150,16 @@ bool EditorPluginRegistry::HandleHierarchyCommand(uint32_t commandId,
     return false;
 }
 
+uint32_t EditorPluginRegistry::HierarchyCommandForKey(int key, int mods) const
+{
+    for (const IEditorPlugin* plugin : GetEnabledPlugins())
+    {
+        if (const uint32_t command = plugin->HierarchyCommandForKey(key, mods); command != 0)
+            return command;
+    }
+    return 0;
+}
+
 const std::vector<IEditorPlugin*>& EditorPluginRegistry::MaskContributors() const
 {
     if (m_MaskContributorsDirty)

@@ -1,17 +1,14 @@
 #include "Thumbnails/FolderBakeStatus.h"
 
-#include "Editor/EditorPaths.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Logger/Logger.h"
 #include "Thumbnails/IThumbnailProvider.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
-#include "UI/Parsers/XMLParser.h"
 #include "UI/UIEvents.h"
 
-#include <filesystem>
-#include <fstream>
-#include <sstream>
+#include <memory>
 #include <utility>
 
 namespace GameEngine
@@ -25,22 +22,6 @@ constexpr const char* kTextClass = "folder-bake-status-text";
 constexpr const char* kDismissClass = "folder-bake-status-dismiss";
 constexpr const char* kHiddenClass = "hidden";
 
-std::string ReadLayoutText()
-{
-    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / kLayoutAssetPath;
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-    {
-        Logger::Log::Error("FolderBakeStatus: {} did not read, so folder bakes report to the log only. Check "
-                           "that it is staged under the editor asset mount.",
-                           path.generic_string());
-        return {};
-    }
-    std::ostringstream text;
-    text << in.rdbuf();
-    return text.str();
-}
-
 } // namespace
 
 FolderBakeStatus::FolderBakeStatus(IThumbnailProvider& provider)
@@ -50,10 +31,8 @@ FolderBakeStatus::FolderBakeStatus(IThumbnailProvider& provider)
     AddClass(kHiddenClass);
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    const std::string layoutText = ReadLayoutText();
-    std::unique_ptr<UIElement> plate;
-    if (layoutText.empty() ||
-        !UIParsing::XMLParser::ParseLayoutFromString(layoutText, plate, kLayoutAssetPath) || !plate)
+    std::unique_ptr<UIElement> plate = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, {});
+    if (!plate)
         return;
     UIElement* plateRaw = plate.get();
     AddChild(std::move(plate));

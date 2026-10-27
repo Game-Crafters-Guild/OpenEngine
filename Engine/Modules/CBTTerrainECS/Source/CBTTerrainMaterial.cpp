@@ -32,8 +32,10 @@ MaterialDocument BuildCBTTerrainMaterialDocument()
 
 MaterialKeyword CBTTerrainMaterialKeywords()
 {
-    // Lit Forward+ (matches the world pass set-0 layout).
-    return MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL;
+    // Lit Forward+ (matches the world pass set-0 layout). The inputs are read at the pixel center:
+    // the terrain's fields are continuous across its facets (cbt_surface.glsl refuses the centroid).
+    return MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL |
+           MaterialKeyword::SurfaceInputsAtPixelCenter;
 }
 
 } // namespace GameEngine::CBTTerrainECS

@@ -1,0 +1,29 @@
+<!-- SaveSceneAsModal (Apps/Editor/Include/Panels/SaveSceneAsModal.h): the scene name and folder, with
+     Cancel and Save. The ids are the contract with SaveSceneAsModal.cpp. The folder list holds the
+     in-project folder rows when the project storage is sandboxed; it is empty otherwise. -->
+<UIElement class="modal-backdrop">
+  <UIElement class="modal-window modal-window-shadow modal-window-560">
+    <UIElement class="modal-header">
+      <Label class="modal-title" text="Save Scene As" />
+    </UIElement>
+    <UIElement class="modal-content modal-content-column">
+      <UIElement class="modal-field-row">
+        <Label class="modal-field-label" text="Scene name" />
+        <TextField id="save-scene-as-name" class="modal-text-field" value="NewScene" />
+      </UIElement>
+      <UIElement class="modal-field-row">
+        <Label class="modal-field-label" text="Folder" />
+        <UIElement class="save-scene-as-directory-row">
+          <Button id="save-scene-as-browse" class="secondary" text="Browse..." />
+          <Label id="save-scene-as-directory" class="save-scene-as-directory-label" text="(none)" />
+        </UIElement>
+      </UIElement>
+      <UIElement id="save-scene-as-folders" class="save-scene-as-folder-list" />
+      <Label id="save-scene-as-warning" class="save-scene-as-warning" text="" />
+    </UIElement>
+    <UIElement class="modal-footer">
+      <Button id="save-scene-as-cancel" class="secondary" text="Cancel" />
+      <Button id="save-scene-as-save" class="primary" text="Save" />
+    </UIElement>
+  </UIElement>
+</UIElement>

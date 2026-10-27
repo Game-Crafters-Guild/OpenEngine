@@ -179,7 +179,8 @@ CbtComposeOutcome ComposeCbtTerrainSurface(int forcedBlendMaterials)
 
     const auto result = BuildMaterialToShaderPackage(
         doc, shaderRoot / "CBTTerrain.material", "CBTTerrain", ctx, ShaderSourceKind::SpirV,
-        MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL);
+        MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL |
+            MaterialKeyword::SurfaceInputsAtPixelCenter);
 
     fs::remove_all(ctx.CacheRoot, ec);
     fs::remove_all(shaderRoot.parent_path(), ec);

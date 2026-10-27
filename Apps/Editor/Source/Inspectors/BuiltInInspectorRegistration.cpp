@@ -16,8 +16,8 @@
 #include "Inspectors/ColorGradeEffectInspector.h"
 #include "Inspectors/ContrastAdaptiveSharpenEffectInspector.h"
 #include "Inspectors/CrtEffectInspector.h"
-#include "Inspectors/CubeLutAssetInspector.h"
-#include "Inspectors/CubeLutEffectInspector.h"
+#include "Inspectors/CubeLut/CubeLutAssetInspector.h"
+#include "Inspectors/CubeLut/CubeLutEffectInspector.h"
 #include "Inspectors/DebandEffectInspector.h"
 #include "Inspectors/DepthOfFieldEffectInspector.h"
 #include "Inspectors/ExposureAdjustmentEffectInspector.h"
@@ -30,9 +30,9 @@
 #include "Inspectors/LightInspector.h"
 #include "Inspectors/MaterialInspector.h"
 #include "Inspectors/MeasureInspector.h"
-#include "Inspectors/NavigationAgentInspector.h"
-#include "Inspectors/NavigationSourceComponentTraits.h"
-#include "Inspectors/NavigationSurfaceInspector.h"
+#include "Inspectors/Navigation/NavigationAgentInspector.h"
+#include "Inspectors/Navigation/NavigationSourceComponentTraits.h"
+#include "Inspectors/Navigation/NavigationSurfaceInspector.h"
 #include "Inspectors/MeshRendererInspector.h"
 #include "Inspectors/ModelInspector.h"
 #include "Inspectors/NativeSourceInspector.h"
@@ -44,7 +44,6 @@
 #include "Inspectors/PhysicsColliderInspector.h"
 #include "Inspectors/PostProcessVolumeInspector.h"
 #include "Inspectors/RenderPipelineInspector.h"
-#include "Inspectors/TerrainMaterialLibraryInspector.h"
 #include "Inspectors/RetargetMapInspector.h"
 #include "Inspectors/ScreenSpaceReflectionsEffectInspector.h"
 #include "Inspectors/ScriptInspector.h"
@@ -54,11 +53,11 @@
 #include "Inspectors/SkinnedMeshRendererInspector.h"
 #include "Inspectors/SkyEnvironmentInspector.h"
 #include "Inspectors/SkyboxInspector.h"
-#include "Inspectors/SplineFenceInspector.h"
-#include "Inspectors/SplineFenceSpanPieceInspector.h"
-#include "Inspectors/SplineInspector.h"
-#include "Inspectors/SplinePlacementInspector.h"
-#include "Inspectors/TextureInspector.h"
+#include "Inspectors/SplineFence/SplineFenceInspector.h"
+#include "Inspectors/SplineFence/SplineFenceSpanPieceInspector.h"
+#include "Inspectors/Spline/SplineInspector.h"
+#include "Inspectors/Spline/SplinePlacementInspector.h"
+#include "Inspectors/Texture/TextureInspector.h"
 #include "Inspectors/TransformInspector.h"
 #include "Inspectors/ValueCurveInspector.h"
 #include "Inspectors/VhsEffectInspector.h"
@@ -69,6 +68,7 @@
 #include "Terrain/TerrainHeightmapInspector.h"
 #include "Terrain/TerrainInspector.h"
 #include "Terrain/TerrainColorZoneInspector.h"
+#include "Terrain/TerrainMaterialLibraryInspector.h"
 #include "Terrain/TerrainModifierInspectors.h"
 
 namespace GameEngine
@@ -97,7 +97,8 @@ void RegisterBuiltInInspectors()
     RegisterWindVolumeInspector();
     RegisterNavigationAgentInspector();
     RegisterNavigationSurfaceInspector();
-    RegisterSplineRecipeInspectors();
+    RegisterSplineWallInspector();
+    RegisterSplineExtrudeInspector();
     RegisterNavigationSourceComponentTraits();
     RegisterBloomEffectInspector();
     RegisterChromaticAberrationEffectInspector();

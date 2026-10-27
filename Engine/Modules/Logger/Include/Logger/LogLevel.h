@@ -45,6 +45,24 @@ inline const char* LogLevelToString(LogLevel level) {
 }
 
 /**
+ * @brief The level's name as a person reads it in a menu or a label: "Warning", not "WARN"
+ * @param level Log level to name
+ * @return Title-case name of the level
+ */
+inline const char* LogLevelDisplayName(LogLevel level) {
+    switch (level) {
+        case LogLevel::Trace:    return "Trace";
+        case LogLevel::Debug:    return "Debug";
+        case LogLevel::Info:     return "Info";
+        case LogLevel::Warning:  return "Warning";
+        case LogLevel::Error:    return "Error";
+        case LogLevel::Critical: return "Critical";
+        case LogLevel::Off:      return "Off";
+        default:                 return "Unknown";
+    }
+}
+
+/**
  * @brief Convert LogLevel to short string representation (for compact output)
  * @param level Log level to convert
  * @return Short string representation of the log level

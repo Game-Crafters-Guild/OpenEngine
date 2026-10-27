@@ -378,6 +378,23 @@ TEST(ShaderVariantKeyTest, DiffuseTransmission_GeneratesDefineAndReservesIt)
     EXPECT_EQ(ReservedEngineDefines().count("GE_DIFFUSE_TRANSMISSION_ENABLED"), 1u);
 }
 
+TEST(ShaderVariantKeyTest, SurfaceInputsAtPixelCenter_GeneratesDefineAndReservesIt)
+{
+    ShaderVariantKey key{};
+    key.vertexFlags = VertexAttributeFlags::StandardMesh;
+    key.lightingModel = LightingModel::kStandardPBR;
+
+    auto has = [](const std::vector<std::string>& defs, const std::string& d)
+    { return std::find(defs.begin(), defs.end(), d) != defs.end(); };
+
+    // Off by default: every material reads its surface inputs at the centroid on desktop.
+    EXPECT_FALSE(has(GenerateDefines(key, "StandardPBR"), "GE_SURFACE_INPUTS_AT_PIXEL_CENTER"));
+    key.materialKeywords = MaterialKeyword::SurfaceInputsAtPixelCenter;
+    EXPECT_TRUE(has(GenerateDefines(key, "StandardPBR"), "GE_SURFACE_INPUTS_AT_PIXEL_CENTER"));
+    // A user keyword cannot take the engine's name.
+    EXPECT_EQ(ReservedEngineDefines().count("GE_SURFACE_INPUTS_AT_PIXEL_CENTER"), 1u);
+}
+
 TEST(ShaderComposerTest, Compose_ForwardPlus_InjectsDefine)
 {
     const auto adapterDir = GameEngine::Rendering::Tests::GetAdapterShaderDir();

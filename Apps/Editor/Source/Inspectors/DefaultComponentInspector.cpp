@@ -12,16 +12,19 @@
 #include "UI/Controls/MaskField.h"
 #include "UI/Controls/TextField.h"            // editable String / uint rows
 #include "UI/Controls/Dropdown.h"             // enum name dropdown (scanner-detected enum fields)
+#include "UI/Controls/Label.h"                // the entity header's badge text
 #include "UI/Controls/Slider.h"               // compact ocean planar reflection strength slider
 #include "UI/StyleProperties.h"               // Style::* for the Color swatch drawer
 #include "UI/UIManager.h"                      // GetFocusedElementId for the live-refresh focus skip
 
+#include "ECS/ComponentFactory.h"            // GetDefaultBytes (the None value of a float row)
 #include "ECS/ComponentFieldRegistry.h"
 #include "ECS/FieldAccess.h"             // ReadFieldInteger / WriteFieldInteger
 #include "ECS/Reflection.h"               // FieldInfo, FieldTypeId, FieldElementSize
 
 #include <limits>                          // quiet_NaN for the clamped-range float row
 #include "ECS/Entity.h"                   // World (CaptureComponentBytes / ApplyComponentBytesImmediate)
+#include "Components/Name.h"              // the entity name the header marks
 #include "Components/Transform.h"         // Euler <-> Quaternion helpers for the Quat drawer
 #include "Core/Engine.h"                  // EngineCore::GetInstance().GetAssetManager() for the asset picker
 #include "Assets/AssetRegistry.h"         // AssetRegistry for AssetGuid field pickers
@@ -191,7 +194,8 @@ void WireEdit(const std::shared_ptr<std::optional<Editor::UndoRedoService::Inter
     };
 }
 
-// Row label for a reflected field: its "// @ge-label" text, otherwise its identifier as words.
+} // namespace
+
 std::string FieldDisplayName(const ECS::FieldInfo& field)
 {
     if (!field.Label.empty())
@@ -199,13 +203,14 @@ std::string FieldDisplayName(const ECS::FieldInfo& field)
     return IdentifierToWords(field.Name);
 }
 
-// Option label for an enumerator: its "// @ge-label" text, otherwise its identifier as words.
 std::string EnumDisplayName(const ECS::EnumNameValue& value)
 {
     if (!value.Label.empty())
         return std::string(value.Label);
     return IdentifierToWords(value.Name);
 }
+
+namespace {
 
 // "Mesh 1" for the first of several elements: counted from one, as the rest of the inspector counts slots.
 std::string ElementLabel(std::string_view name, std::uint32_t index, std::uint32_t count)
@@ -459,7 +464,8 @@ void EmitFloatRow(UIElement* parent, RefreshPlan* plan, const Snapshot& bytes,
                   const FieldEditContext& fecBase,
                   const std::string& label, std::size_t offset, bool mixed, bool& any,
                   bool hasRange = false, float minValue = 0.0f, float maxValue = 0.0f,
-                  bool useSlider = false, const char* tooltip = nullptr)
+                  bool useSlider = false, const char* tooltip = nullptr,
+                  std::optional<float> noneValue = std::nullopt)
 {
     float cur = 0.0f;
     ReadPod(bytes, offset, cur);
@@ -497,11 +503,22 @@ void EmitFloatRow(UIElement* parent, RefreshPlan* plan, const Snapshot& bytes,
             : InspectorDrag::AddFloatRowWithDrag(parent, fec.Label, cur, std::move(onChanging),
                                                  std::move(onChanged),
                                                  std::numeric_limits<float>::quiet_NaN(), tooltip);
+        if (f && noneValue)
+            f->SetNoneValue(*noneValue);
         if (mixed && f)
             f->SetMixed();
         RecordFloatFieldRefresh(plan, f, offset);
     }
     any = true;
+}
+
+// The value a float row offers as None: the field's default, when that default is at a float limit.
+std::optional<float> NoneValueOf(const Snapshot& defaults, std::size_t offset)
+{
+    float value = 0.0f;
+    if (!ReadPod(defaults, offset, value) || !FloatField::IsAtFloatLimit(value))
+        return std::nullopt;
+    return value;
 }
 
 const ECS::FieldInfo* FindField(std::span<const ECS::FieldInfo> fields, std::string_view name)
@@ -1431,6 +1448,62 @@ std::string FormatReadOnlyValue(const Snapshot& bytes, const ECS::FieldInfo& fie
 
 } // namespace
 
+namespace
+{
+
+// The rows of one reflected field, which carry its override marks.
+struct FieldRows
+{
+    std::string Field;
+    std::vector<UIElement*> Rows;
+};
+
+// Adds the rows `parent` holds from child `begin` on to `rows`.
+void CollectRows(UIElement* parent, std::size_t begin, std::vector<UIElement*>& rows)
+{
+    const auto& children = parent->GetChildren();
+    for (std::size_t index = begin; index < children.size(); ++index)
+        rows.push_back(children[index].get());
+}
+
+void SetFieldRowMarks(const std::vector<FieldRows>& fields, const ComponentOverrides& overrides)
+{
+    for (const FieldRows& field : fields)
+        for (UIElement* row : field.Rows)
+            InspectorUI::SetRowOverridden(row, overrides.IsFieldOverridden(field.Field));
+}
+
+// The header's declared badge (InspectorPanel::MountHeaderTrailingSlot) shows `text`; an empty `text` hides it.
+void SetEntityHeaderBadge(UIElement& header, const std::string& text, const std::string& tooltip)
+{
+    auto* badge = dynamic_cast<Label*>(header.FindById("inspector-header-badge"_sid));
+    if (!badge)
+        return;
+    badge->SetText(text);
+    badge->SetTooltip(tooltip);
+    if (text.empty())
+        badge->AddClass("hidden");
+    else
+        badge->RemoveClass("hidden");
+}
+
+} // namespace
+
+void UpdateEntityNameOverrideMark(UIElement& header, UIElement& nameField, ECS::World& world, ECS::EntityHandle entity)
+{
+    const ECS::ComponentTypeId nameType = ECS::GetComponentTypeId<Components::Name>();
+    const ComponentOverrides answer = InspectorRegistry::Get().QueryComponentOverrides(world, entity, nameType);
+    SetEntityHeaderBadge(header, answer.Badge, answer.BadgeTooltip);
+    if (answer.Overridden)
+    {
+        header.AddClass("inspector-header-container-overridden");
+        nameField.AddClass("inspector-header-overridden");
+        return;
+    }
+    header.RemoveClass("inspector-header-container-overridden");
+    nameField.RemoveClass("inspector-header-overridden");
+}
+
 // The rows of `typeId`'s reflected fields, or of only the fields `onlyFields` names (declaration
 // order either way).
 static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId typeId,
@@ -1489,9 +1562,19 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
     const ECS::ComponentRegistry::ComponentInfo* componentInfo = ECS::ComponentRegistry::GetComponentInfo(typeId);
     const bool keepsEnabledField =
         componentInfo && ECS::HasAnyFlag(componentInfo->Flags, ECS::ComponentFlags::KeepsOwnEnabledField);
+    Snapshot defaults;
+    ECS::ComponentFactory::GetDefaultBytes(typeId, defaults);
+
+    // The marks follow the primary entity only: a multi-selection shows no source.
+    const bool marksOverrides = fecBase.Extras.empty();
+    std::vector<FieldRows> fieldRows;
+    // The first row of the last field; the rows up to the next field's are its rows.
+    std::optional<std::size_t> fieldRowsBegin;
 
     for (const ECS::FieldInfo& field : fields)
     {
+        if (fieldRowsBegin)
+            CollectRows(parent, *std::exchange(fieldRowsBegin, std::nullopt), fieldRows.back().Rows);
         if (!onlyFields.empty() && std::find(onlyFields.begin(), onlyFields.end(), field.Name) == onlyFields.end())
             continue;
         const std::string tooltip(field.Tooltip);
@@ -1503,6 +1586,11 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
         // toward the live value.
         Editor::AddPreservedFieldNotice(parent, *ctx.World, ctx.Entity, typeId, field.Name,
                                         ctx.RequestInspectorRefresh);
+        if (marksOverrides)
+        {
+            fieldRows.push_back({std::string(field.Name), {}});
+            fieldRowsBegin = parent->GetChildren().size();
+        }
 
         // Per-field policy: Hidden fields are omitted; ReadOnly fields render as a
         // non-editable value line (and set_component skips them — see DebugHandlers).
@@ -1586,7 +1674,7 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                                  ElementLabel(FieldDisplayName(field), i, count), offset,
                                  SpanDiffers(bytes, extraBytes, offset, sizeof(float)), any,
                                  field.HasRange, field.MinValue, field.MaxValue,
-                                 /*useSlider*/ count > 1, tooltipPtr);
+                                 /*useSlider*/ count > 1, tooltipPtr, NoneValueOf(defaults, offset));
                 }
                 break;
             }
@@ -1861,6 +1949,17 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
                 break;
             }
         }
+    }
+
+    if (fieldRowsBegin)
+        CollectRows(parent, *fieldRowsBegin, fieldRows.back().Rows);
+    if (marksOverrides)
+    {
+        SetFieldRowMarks(fieldRows, InspectorRegistry::Get().QueryComponentOverrides(*ctx.World, ctx.Entity, typeId));
+        if (ctx.OverrideMarkRefreshCallbacks)
+            ctx.OverrideMarkRefreshCallbacks->push_back(
+                [world = ctx.World, entity = ctx.Entity, typeId, fields = std::move(fieldRows)]()
+                { SetFieldRowMarks(fields, InspectorRegistry::Get().QueryComponentOverrides(*world, entity, typeId)); });
     }
 
     // One sim-refresh callback for the whole section: re-capture the component bytes

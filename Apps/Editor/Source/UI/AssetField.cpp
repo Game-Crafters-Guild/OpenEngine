@@ -10,6 +10,7 @@
 #include "Types/StringUtils.h"
 #include "UI/Controls/SearchDialog.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
+#include "UI/Registration/ElementRegistration.h"
 #include "UI/Interaction/Payload.h"
 
 #include <any>
@@ -326,3 +327,9 @@ void AssetField::PerformDrop(const UI::Interaction::DropRequest& request)
 }
 
 } // namespace GameEngine
+
+namespace RegisterAssetField
+{
+static auto s_RegisterAssetField = GameEngine::UIRegistration::RegisterWithFactory<GameEngine::AssetField>(
+    "AssetField", []() { return std::make_unique<GameEngine::AssetField>(); });
+}

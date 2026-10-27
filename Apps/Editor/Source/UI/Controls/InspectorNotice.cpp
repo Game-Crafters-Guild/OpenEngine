@@ -1,11 +1,10 @@
 #include "UI/Controls/InspectorNotice.h"
 
 #include "Inspectors/InspectorDragHelpers.h"
-#include "Inspectors/InspectorUIHelpers.h"
 #include "Logger/Logger.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
-#include "UI/Parsers/XMLParser.h"
 #include "UI/UIEvents.h"
 
 #include <memory>
@@ -72,22 +71,12 @@ InspectorNotice::InspectorNotice(const std::string& text, Kind kind)
     AddClass(std::string("inspector-notice-") + kindSuffix);
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    // Read once per process: a notice is built on every inspector rebuild that shows one, and parsing
-    // the few nodes of the layout is cheap where a disk read each time is not.
-    static const std::string s_LayoutText = InspectorUI::ReadEditorLayoutText(kLayoutAssetPath);
-    const std::string& layoutText = s_LayoutText;
-    if (layoutText.empty())
-        return;
-
     // The parsed plate is added whole rather than having its children moved onto this element:
     // construction has to work inside an event dispatch too, where TakeChild refuses to move
     // anything.
-    std::unique_ptr<UIElement> plate;
-    if (!UIParsing::XMLParser::ParseLayoutFromString(layoutText, plate, kLayoutAssetPath) || !plate)
-    {
-        Logger::Log::Error("InspectorNotice: {} did not parse, so the notice is an empty plate.", kLayoutAssetPath);
+    std::unique_ptr<UIElement> plate = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, {});
+    if (!plate)
         return;
-    }
     UIElement* plateRaw = plate.get();
     AddChild(std::move(plate));
 

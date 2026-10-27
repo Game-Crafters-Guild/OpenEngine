@@ -1,0 +1,19 @@
+<!-- PlayModeChangeReviewModal (Apps/Editor/Include/Panels/PlayModeChangeReviewModal.h): the changes made in
+     play mode, one toggle each, with Discard and Apply Selected. The ids are the contract with
+     PlayModeChangeReviewModal.cpp; the change list goes into the scroll view's viewport in code. -->
+<UIElement class="pmcr-backdrop">
+  <UIElement class="modal-window pmcr-window">
+    <UIElement class="pmcr-header">
+      <Label class="pmcr-title" text="Play Mode Changes" />
+      <Label class="pmcr-subtitle" text="Select the changes you want to apply back to the scene." />
+    </UIElement>
+    <UIElement class="pmcr-content">
+      <Label class="pmcr-help" text="One Undo reverts all the applied changes." />
+      <ScrollView id="pmcr-scroll" class="pmcr-scroll" />
+    </UIElement>
+    <UIElement class="pmcr-footer">
+      <Button id="pmcr-discard" class="secondary" text="Discard" />
+      <Button id="pmcr-apply" class="primary" text="Apply Selected" />
+    </UIElement>
+  </UIElement>
+</UIElement>

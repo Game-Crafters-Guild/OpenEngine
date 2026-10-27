@@ -15,7 +15,7 @@
 #include "PageStreaming/HeightPageOverlay.h"
 #include "PageStreaming/PageResidency.h"
 #include "PageStreaming/PageSampleRect.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "PageStreaming/PageTableEntry.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <format>
 #include <memory>
@@ -114,8 +115,8 @@ TEST(TerrainHeightSource, EveryTerrainWithAPageSourceOnTheLatticeHasCpuPages)
 TEST(TerrainHeightPages, PackedWordsCarryTheShapeFadesAndEntriesWhereTheResolveReadsThem)
 {
     PageTable table;
-    table.Reset(257, 257, 4, PageTableBudget{kDesktopHeightPages.DenseTableWords, 1u, 1u});
-    table.SetEntry(0, 1, 2, PageStreaming::PackPageEntry(2, 0));
+    table.Reset(257, 257, 1u, 4, PageTableBudget{kDesktopHeightPages.DenseTableWords, 1u, 1u});
+    table.SetEntry(PageStreaming::PageAddress{0, 0, 1, 2}, PageStreaming::PackPageEntry(2, 0));
     table.SetSlotFade(2, 0.25f);
     const PageCacheGeometry geometry = MakePageCacheGeometry(4);
 
@@ -148,7 +149,7 @@ TEST(TerrainHeightPages, ATableThatFitsItsDenseBudgetPacksTheDenseWordsByteForBy
     // first entry and pages, the fades, then every entry level-major and row-major.
     constexpr uint32 kSlots = 64u;
     PageTable table;
-    table.Reset(8193, 2049, kSlots, PageTableBudget{kDesktopHeightPages.DenseTableWords, 1u, 1u});
+    table.Reset(8193, 2049, 1u, kSlots, PageTableBudget{kDesktopHeightPages.DenseTableWords, 1u, 1u});
     ASSERT_EQ(table.FloorLevel(), 0u);
     const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(8193, 2049);
     std::vector<uint32> entries(levels.back().FirstEntry + levels.back().PagesX * levels.back().PagesZ,
@@ -160,7 +161,7 @@ TEST(TerrainHeightPages, ATableThatFitsItsDenseBudgetPacksTheDenseWordsByteForBy
                 if ((x * 7u + z * 3u + level) % 5u == 0u && slot < kSlots)
                 {
                     const uint32 entry = PageStreaming::PackPageEntry(slot++, level);
-                    table.SetEntry(level, x, z, entry);
+                    table.SetEntry(PageStreaming::PageAddress{0, static_cast<uint8>(level), x, z}, entry);
                     entries[levels[level].FirstEntry + z * levels[level].PagesX + x] = entry;
                 }
     table.SetSlotFade(5, 0.5f);
@@ -527,7 +528,7 @@ TEST(TerrainHeightPages, The60By15KmTerrainAtAQuarterMeterKeepsOneTierOnDesktopA
     // 60 x 15 km at 0.25 m is 240,001 x 60,001 samples: 1,174,877 dense words with the desktop's 512
     // slots, within its 2^21; 1,174,621 with the Deck's 256, past its 2^19, so the Deck tiers it.
     PageTable desktop;
-    desktop.Reset(240001, 60001, kDesktopHeightPages.Slots,
+    desktop.Reset(240001, 60001, 1u, kDesktopHeightPages.Slots,
                   PageTableBudget{kDesktopHeightPages.DenseTableWords, kDesktopHeightPages.TableMidBlocks,
                                   kDesktopHeightPages.TableLeafBlocks});
     EXPECT_EQ(desktop.FloorLevel(), 0u);
@@ -535,7 +536,7 @@ TEST(TerrainHeightPages, The60By15KmTerrainAtAQuarterMeterKeepsOneTierOnDesktopA
     EXPECT_EQ(CBTTerrain::kCBTPageFadeOffsetWords + kDesktopHeightPages.Slots + desktop.Words().size(), 1174877u);
 
     PageTable deck;
-    deck.Reset(240001, 60001, kSteamDeckHeightPages.Slots,
+    deck.Reset(240001, 60001, 1u, kSteamDeckHeightPages.Slots,
                PageTableBudget{kSteamDeckHeightPages.DenseTableWords, kSteamDeckHeightPages.TableMidBlocks,
                                kSteamDeckHeightPages.TableLeafBlocks});
     EXPECT_GT(deck.FloorLevel(), 0u);
@@ -682,4 +683,216 @@ TEST(TerrainHeightPageFeature, TheCacheTextureIsReadableOnlyFromTheLatchAfterIts
         EXPECT_TRUE(feature.CacheTexture().IsValid());
     }
     device->Shutdown();
+}
+
+namespace
+{
+
+// Planet 7: a flat 2 km planet at 2 m (a dense six-face table), drawn by render terrain 3.
+PlanetPagedRequest FlatPlanetRequest(bool gpuPages)
+{
+    PageStreaming::GeneratedPlanetLattice lattice;
+    lattice.ReferenceRadius = 2000.0;
+    lattice.FaceSamples = PlanetFaceSamples(lattice.ReferenceRadius, 2.0f);
+    lattice.Height = [](const Mathematics::Vector3&, float32) { return 0.0f; };
+    lattice.HeightRange = [](const Mathematics::Vector3&, float32, float32) { return PageStreaming::PageHeightRange{}; };
+    PlanetPagedRequest request;
+    request.Planet = 7;
+    request.RenderTerrain = 3;
+    request.GpuPages = gpuPages;
+    request.SourceIdentity = 1;
+    request.Name = "planet";
+    request.Source.Generated = std::make_shared<const PageStreaming::GeneratedHeightPageProvider>(lattice);
+    request.Shape.ReferenceRadius = lattice.ReferenceRadius;
+    request.Shape.FaceSamples = lattice.FaceSamples;
+    return request;
+}
+
+} // namespace
+
+TEST(TerrainHeightPages, APlanetTheGpuDoesNotDrawStreamsItsWantedPagesUploadsNoneAndIsForgottenWhenNotRequested)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{512, kDesktopHeightPages.DenseTableWords});
+    const PlanetPagedRequest request = FlatPlanetRequest(false);
+    const uint32 faceSamples = request.Shape.FaceSamples;
+    const Mathematics::Vector3 camera{2005.0f, 0.0f, 0.0f};
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
+
+    pages.Update(1, 1.0f / 60.0f, false, 2); // configures the field's cache
+    for (uint64 frame = 2; frame < 40; ++frame)
+    {
+        EXPECT_EQ(pages.NeedsPlanetSource(request.Planet, request.SourceIdentity), frame == 2);
+        pages.RequestPlanet(request, {&camera, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+        EXPECT_TRUE(pages.Uploads().empty()) << "the narrow arm draws no planet page";
+        EXPECT_TRUE(pages.DirtyRects().empty());
+        EXPECT_EQ(pages.PlanetDirtyRegions().Count, 0u);
+    }
+    std::vector<uint32> paged;
+    pages.PagedTerrains(paged);
+    EXPECT_TRUE(paged.empty());
+    uint64 version = 0;
+    EXPECT_EQ(pages.TableWords(request.RenderTerrain, version), nullptr);
+    std::vector<HeightPageStreamCounts> streams;
+    pages.StreamCounts(streams);
+    ASSERT_EQ(streams.size(), 1u);
+    EXPECT_TRUE(streams[0].Planet);
+    EXPECT_EQ(streams[0].Label, "planet");
+    ASSERT_EQ(streams[0].Levels.size(), PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples).size());
+    uint32 wanted = 0;
+    for (const HeightPageLevelCounts& level : streams[0].Levels)
+    {
+        EXPECT_EQ(level.Resident, level.Wanted);
+        wanted += level.Wanted;
+    }
+    EXPECT_GT(streams[0].Levels.front().Wanted, 0u) << "the camera 5 m up needs level 0";
+    EXPECT_GT(wanted, 6u);
+    EXPECT_EQ(pages.Residency().FieldCache(kHeightPageField).ResidentCount(), wanted);
+
+    pages.Update(40, 1.0f / 60.0f, false, 2);
+    pages.StreamCounts(streams);
+    EXPECT_TRUE(streams.empty());
+}
+
+TEST(TerrainHeightPages, APlanetsResidentPagesReachItsTableWordsUploadsAndDirtyFacesUnderItsRenderTerrain)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{512, kDesktopHeightPages.DenseTableWords});
+    const PlanetPagedRequest request = FlatPlanetRequest(true);
+    const Mathematics::Vector3 camera{2005.0f, 0.0f, 0.0f};
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
+
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    std::vector<uint32> uploadedSlots;
+    std::array<bool, PageStreaming::kPageStoreMaxFaces> dirtyFaces{};
+    for (uint64 frame = 2; frame < 40; ++frame)
+    {
+        pages.RequestPlanet(request, {&camera, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+        for (const HeightPageUpload& upload : pages.Uploads())
+        {
+            EXPECT_EQ(upload.Bytes.size(), PageStreaming::kPageSampleCount * sizeof(float32));
+            uploadedSlots.push_back(upload.Slot);
+        }
+        pages.Uploads().clear();
+        const CBTTerrain::SphereEditRegions& dirty = pages.PlanetDirtyRegions();
+        for (uint32 i = 0; i < dirty.Count; ++i)
+        {
+            const CBTTerrain::SphereFaceUVRect& rect = dirty.Rects[i];
+            ASSERT_LT(rect.Face, PageStreaming::kPageStoreMaxFaces);
+            EXPECT_FALSE(rect.IsEmpty());
+            EXPECT_GE(rect.MinU, 0.0f);
+            EXPECT_LE(rect.MaxU, 1.0f);
+            dirtyFaces[rect.Face] = true;
+        }
+        pages.PlanetDirtyRegions() = {};
+        EXPECT_TRUE(pages.DirtyRects().empty()) << "a planet's changes are face rects, not terrain-UV rects";
+    }
+    for (uint32 face = 0; face < PageStreaming::kPageStoreMaxFaces; ++face)
+        EXPECT_TRUE(dirtyFaces[face]) << "face " << face << ": the switch to pages re-evaluates every face";
+
+    std::vector<uint32> paged;
+    pages.PagedTerrains(paged);
+    ASSERT_EQ(paged, std::vector<uint32>{request.RenderTerrain});
+    uint64 version = 0;
+    const std::vector<uint32>* words = pages.TableWords(request.RenderTerrain, version);
+    ASSERT_NE(words, nullptr);
+    EXPECT_GT(version, 0u);
+    ASSERT_EQ((*words)[6], 0u) << "a 2 km planet at 2 m keeps a dense table";
+
+    // Every resident page of the stream is its dense entry in the words, and its slot was uploaded;
+    // no other entry is set.
+    const PageStreaming::PageCache& cache = pages.Residency().FieldCache(kHeightPageField);
+    const uint32 slots = (*words)[4];
+    const uint32 entriesOffset = CBTTerrain::kCBTPageFadeOffsetWords + slots;
+    std::sort(uploadedSlots.begin(), uploadedSlots.end());
+    uint32 resident = 0;
+    for (const PageStreaming::CachedPage& page : cache.Resident())
+    {
+        const PageStreaming::PageAddress& address = page.Address;
+        const uint32* shape = words->data() + CBTTerrain::kCBTPageHeaderWords + 4u * address.Level;
+        const uint32 index = shape[0] + (address.Face * shape[2] + address.Z) * shape[1] + address.X;
+        const uint32 slot = cache.SlotOf(page);
+        EXPECT_EQ((*words)[entriesOffset + index], PageStreaming::PackPageEntry(slot, address.Level))
+            << "face " << int(address.Face) << " L" << int(address.Level) << " (" << address.X << ","
+            << address.Z << ")";
+        EXPECT_TRUE(std::binary_search(uploadedSlots.begin(), uploadedSlots.end(), slot));
+        ++resident;
+    }
+    uint32 set = 0;
+    for (std::size_t i = entriesOffset; i < words->size(); ++i)
+        set += (*words)[i] != PageStreaming::kNoPage ? 1u : 0u;
+    EXPECT_GT(resident, 6u);
+    EXPECT_EQ(set, resident);
+}
+
+namespace
+{
+
+// The wanted pages per level of planet 7 (a flat 2 km planet at 0.5 m, the camera 1.7 m up) after
+// 40 frames on a cache of `slots`, with the narrow arm's fit or without it.
+std::vector<HeightPageLevelCounts> FlatPlanetCounts(uint32 slots, bool fitToSlots)
+{
+    TerrainHeightPages pages(nullptr, nullptr, HeightPageProfile{slots, kDesktopHeightPages.DenseTableWords});
+    PageStreaming::GeneratedPlanetLattice lattice;
+    lattice.ReferenceRadius = 2000.0;
+    lattice.FaceSamples = PlanetFaceSamples(lattice.ReferenceRadius, 0.5f);
+    lattice.Height = [](const Mathematics::Vector3&, float32) { return 0.0f; };
+    lattice.HeightRange = [](const Mathematics::Vector3&, float32, float32) { return PageStreaming::PageHeightRange{}; };
+    PlanetPagedRequest request;
+    request.Planet = 7;
+    request.SourceIdentity = 1;
+    request.Name = "planet";
+    request.Source.Generated = std::make_shared<const PageStreaming::GeneratedHeightPageProvider>(lattice);
+    request.Shape.ReferenceRadius = lattice.ReferenceRadius;
+    request.Shape.FaceSamples = lattice.FaceSamples;
+    request.FitToSlots = fitToSlots;
+    const Mathematics::Vector3 camera{2001.7f, 0.0f, 0.0f};
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
+    pages.Update(1, 1.0f / 60.0f, false, 2);
+    for (uint64 frame = 2; frame < 40; ++frame)
+    {
+        pages.RequestPlanet(request, {&camera, 1}, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+    }
+    std::vector<HeightPageStreamCounts> streams;
+    pages.StreamCounts(streams);
+    EXPECT_EQ(streams.size(), 1u);
+    return streams.empty() ? std::vector<HeightPageLevelCounts>{} : streams[0].Levels;
+}
+
+uint32 Wanted(const std::vector<HeightPageLevelCounts>& levels)
+{
+    uint32 wanted = 0;
+    for (const HeightPageLevelCounts& level : levels)
+        wanted += level.Wanted;
+    return wanted;
+}
+
+} // namespace
+
+TEST(TerrainHeightPages, TheNarrowArmFitsAPlanetToItsSlotsALevelCoarserAndChangesNothingThatFits)
+{
+    constexpr uint32 kSlots = 32u;
+    const std::vector<HeightPageLevelCounts> overflowing = FlatPlanetCounts(kSlots, false);
+    ASSERT_GT(Wanted(overflowing), kSlots) << "the pose must pass the slots for the fit to act";
+    uint32 overflowingResident = 0;
+    for (const HeightPageLevelCounts& level : overflowing)
+        overflowingResident += level.Resident;
+    EXPECT_LT(overflowingResident, Wanted(overflowing)) << "past its slots a wanted page is never resident";
+
+    const std::vector<HeightPageLevelCounts> fitted = FlatPlanetCounts(kSlots, true);
+    EXPECT_LE(Wanted(fitted), kSlots);
+    for (const HeightPageLevelCounts& level : fitted)
+        EXPECT_EQ(level.Resident, level.Wanted) << "every page the fitted request wants is resident";
+    EXPECT_GT(fitted.front().Wanted, 0u) << "the camera 1.7 m up still needs level 0";
+    EXPECT_LT(fitted.front().Wanted, overflowing.front().Wanted);
+    RecordProperty("overflowing_wanted", static_cast<int>(Wanted(overflowing)));
+    RecordProperty("overflowing_resident", static_cast<int>(overflowingResident));
+    RecordProperty("fitted_wanted", static_cast<int>(Wanted(fitted)));
+
+    const std::vector<HeightPageLevelCounts> desktop = FlatPlanetCounts(kDesktopHeightPages.Slots, false);
+    const std::vector<HeightPageLevelCounts> narrow = FlatPlanetCounts(kDesktopHeightPages.Slots, true);
+    ASSERT_EQ(desktop.size(), narrow.size());
+    for (std::size_t level = 0; level < desktop.size(); ++level)
+        EXPECT_EQ(narrow[level].Wanted, desktop[level].Wanted) << "level " << level;
 }

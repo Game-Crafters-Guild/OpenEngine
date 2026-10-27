@@ -1,0 +1,19 @@
+<!-- SplineFenceOverrideRow (Apps/Editor/Include/Inspectors/SplineFence/SplineFenceOverrideRow.h): one override of
+     a fence's Span Overrides list. The classes are the contract with SplineFenceOverrideRow.cpp. -->
+<UIElement class="spline-fence-override-body">
+  <UIElement class="inspector-row spline-fence-override-head">
+    <UIElement class="spline-fence-override-kind-cell">
+      <Dropdown class="inspector-dropdown spline-fence-override-kind" />
+    </UIElement>
+    <UIElement class="inspector-field spline-fence-override-field">
+      <Dropdown class="inspector-dropdown spline-fence-override-part" />
+      <ListItemActions class="spline-fence-override-actions" />
+    </UIElement>
+  </UIElement>
+  <UIElement class="inspector-row spline-fence-override-place">
+    <Label class="spline-fence-override-label" text="Point" />
+    <IntField class="spline-fence-override-number spline-fence-override-point" />
+    <Label class="spline-fence-override-label" text="Span" />
+    <IntField class="spline-fence-override-number spline-fence-override-span" />
+  </UIElement>
+</UIElement>

@@ -9,6 +9,7 @@
 #include "Components/Spline/SplineFence.h"
 #include "SplineLayout/FenceLayout.h"
 #include "SplineRecipes/FenceRecipeLayout.h"
+#include "SplineRecipes/RecipeBuildStates.h"
 #include "SplineRecipes/RecipeValidation.h"
 
 #include <algorithm>
@@ -114,7 +115,7 @@ TEST(FenceRecipeLayout, AGateOnTheOnlyWallReachesTheEmptyRegisteredRowMessage)
     pieces.Spans = spans;
     pieces.Gates = gates;
     pieces.Crests = battlements;
-    const std::string message = "a reserved stretch reaches every wall they stand on";
+    const std::string message = "A reserved stretch reaches every span they stand on";
 
     SplineFence walled;
     const FenceLayoutResult control = BuildOneWallRun(walled, pieces);
@@ -164,4 +165,60 @@ TEST(FenceRecipeLayout, EveryRecipeFieldTheLayoutReadsIsCarriedOver)
 
     recipe.ConformMode = Components::SplinePlacementConform::Height;
     EXPECT_FALSE(SplineRecipes::FenceLayoutParamsOf(recipe, pieces).AlignToSurfaceNormal);
+}
+
+// A role's pool is the parts of that kind with a mesh, in list order, so an
+// override's PoolSlot n names the n-th of them. A part without a mesh places
+// nothing and does not take a slot.
+TEST(FenceRecipeLayout, ThePartsOfOneKindAreThatRolesPoolInListOrder)
+{
+    using Components::SplineFencePartKind;
+    const auto mesh = [](uint8 ordinal)
+    {
+        GUID::Data data{};
+        data[0] = ordinal;
+        data[15] = 0x5A;
+        return Components::ModelRef(GUID(data));
+    };
+    SplineFence fence{};
+    fence.Parts[0] = {mesh(1), SplineFencePartKind::Span};
+    fence.Parts[1] = {mesh(2), SplineFencePartKind::Post};
+    fence.Parts[2] = {Components::ModelRef{}, SplineFencePartKind::Span};
+    fence.Parts[3] = {mesh(3), SplineFencePartKind::Span};
+    fence.Parts[5] = {mesh(4), SplineFencePartKind::Gate};
+
+    const SplineRecipes::FencePool spans = SplineRecipes::FencePoolOf(fence, SplineFencePartKind::Span);
+    ASSERT_EQ(spans.Count, 2u);
+    EXPECT_EQ(spans.Meshes[0], mesh(1));
+    EXPECT_EQ(spans.Meshes[1], mesh(3));
+    EXPECT_EQ(SplineRecipes::FencePoolOf(fence, SplineFencePartKind::Post).Count, 1u);
+    const SplineRecipes::FencePool gates = SplineRecipes::FencePoolOf(fence, SplineFencePartKind::Gate);
+    ASSERT_EQ(gates.Count, 1u) << "a part after an empty slot is still listed";
+    EXPECT_EQ(gates.Meshes[0], mesh(4));
+    EXPECT_EQ(SplineRecipes::FencePoolOf(fence, SplineFencePartKind::Crest).Count, 0u);
+}
+
+// A new fence lists one Span part with no mesh: the row an author fills first.
+TEST(FenceRecipeLayout, ANewFenceListsOneEmptySpanPart)
+{
+    const SplineFence fence{};
+    EXPECT_EQ(fence.Parts[0].Kind, Components::SplineFencePartKind::Span);
+    EXPECT_TRUE(fence.Parts[0].Mesh.IsNull());
+    for (uint32 i = 1; i < Components::kSplineFenceMaxParts; ++i)
+        EXPECT_EQ(fence.Parts[i].Kind, Components::SplineFencePartKind::None) << i;
+    EXPECT_EQ(SplineRecipes::FencePoolOf(fence, Components::SplineFencePartKind::Span).Count, 0u);
+}
+
+// A fence with nothing to place names the fix that exists: Add Part when it has no Span or Post
+// part, a mesh when it has one with no mesh.
+TEST(FenceRecipeLayout, ANothingToPlaceReasonNamesTheFixThatExists)
+{
+    SplineFence noPart{};
+    noPart.Parts[0] = {Components::ModelRef{}, Components::SplineFencePartKind::Gate};
+    EXPECT_EQ(SplineRecipes::FenceNothingToPlaceReason(noPart), SplineRecipes::kNoFencePartReason);
+    EXPECT_NE(SplineRecipes::kNoFencePartReason.find("Add Part"), std::string_view::npos);
+
+    SplineFence noMesh{};
+    noMesh.Parts[0] = {Components::ModelRef{}, Components::SplineFencePartKind::Post};
+    EXPECT_EQ(SplineRecipes::FenceNothingToPlaceReason(noMesh), SplineRecipes::kNoFencePartMeshReason);
 }

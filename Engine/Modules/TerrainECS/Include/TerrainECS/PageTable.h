@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PageStreaming/PageAddress.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Types/Types.h"
 
 #include <span>
@@ -11,18 +11,19 @@
 // page of every level, in the words the GPU reads at binding 22 (CBTLayout.h) and the CPU mirror
 // walks (PagedHeightSampler).
 //
-// A field whose dense table fits the budget keeps one tier: an entry for every page of every level,
-// level-major, row-major. A larger field keeps that dense tier only from its top level down to the
-// floor level whose cumulative entries fit a quarter of the budget. Below the floor, blocks hold
-// one page's descendants for up to six levels, from a mid pool and a leaf pool,
+// A field has one face (a planar terrain) or six (a planet, PageStoreFormat.h's face order). A field
+// whose dense table fits the budget keeps one tier: an entry for every page of every level and face,
+// level-major, then face-major, then row-major. A larger field keeps that dense tier only from its top level
+// down to the floor level whose cumulative entries over every face fit a quarter of the budget. Below the
+// floor, blocks hold one page's descendants for up to six levels, from a mid pool and a leaf pool,
 // and exist only while a page under them is resident. A lookup reads the floor's directory, then
 // each tier's block (its entries, or its directory of the next tier's blocks): at most three
 // dependent reads to 12 levels below the floor. cbt_page.glsl's CBT_PageTableEntry is the same walk.
 //
 // The words: one descriptor of four words per tier (the root level, the block's levels, the block's
 // words, the pool's first word), the dense levels, the floor directory (one block index per floor
-// page, kNoPageBlock in PageTable.cpp when none), then the pools. A block holds its levels' entries,
-// level k below its root at ((4^k - 4) / 3) on a 2^k x 2^k grid, then, when a tier follows, a
+// page of each face, face-major, kNoPageBlock in PageTable.cpp when none), then the pools. A block holds
+// its levels' entries, level k below its root at ((4^k - 4) / 3) on a 2^k x 2^k grid, then, when a tier follows, a
 // directory of 4^levels block indices, one per page of its deepest level. A dense table has no
 // descriptor, directory or pool: its words are the entries alone.
 namespace GameEngine::TerrainECS
@@ -39,15 +40,15 @@ struct PageTableBudget
 class PageTable
 {
 public:
-    /// An empty table (no page resident) for a field of samplesX x samplesZ level-0 samples and a
-    /// cache of slotCount slots.
-    void Reset(uint32 samplesX, uint32 samplesZ, uint32 slotCount, const PageTableBudget& budget);
+    /// An empty table (no page resident) for a field of `faces` faces (1 or 6) of samplesX x samplesZ
+    /// level-0 samples each and a cache of slotCount slots.
+    void Reset(uint32 samplesX, uint32 samplesZ, uint32 faces, uint32 slotCount, const PageTableBudget& budget);
 
     /// The entry of a page: PackPageEntry(slot, level), or kNoPage.
-    uint32 Entry(uint32 level, uint32 pageX, uint32 pageZ) const;
+    uint32 Entry(const PageStreaming::PageAddress& page) const;
     /// Sets the entry of a page. A resident page below the floor whose pool is full waits, reading
     /// kNoPage (its first resident ancestor answers), until a block frees.
-    void SetEntry(uint32 level, uint32 pageX, uint32 pageZ, uint32 entry);
+    void SetEntry(const PageStreaming::PageAddress& page, uint32 entry);
     void SetSlotFade(uint32 slot, float32 fade) { m_SlotFade[slot] = fade; }
 
     /// Appends every page with an entry.
@@ -56,6 +57,7 @@ public:
     void TakeLateEntries(std::vector<PageStreaming::PageAddress>& out);
 
     std::span<const PageStreaming::PageStoreLevel> Levels() const { return m_Levels; }
+    uint32 Faces() const { return m_Faces; }
     /// Each level's first word: its dense entries, or its offset inside a block.
     std::span<const uint32> LevelOffsets() const { return m_LevelOffsets; }
     std::span<const uint32> Words() const { return m_Words; }
@@ -85,6 +87,7 @@ private:
         std::vector<uint32> Parent;    ///< per block: its parent block in the tier above (kNoPageBlock: the floor's)
         std::vector<uint32> RootX;     ///< per block: the page it hangs under, at its tier's root level
         std::vector<uint32> RootZ;
+        std::vector<uint8> RootFace;
     };
 
     struct Waiting
@@ -93,19 +96,20 @@ private:
         uint32 Entry = 0;
     };
 
-    uint32 DenseWord(uint32 level, uint32 pageX, uint32 pageZ) const;
-    uint32 FloorDirectoryWord(uint32 level, uint32 pageX, uint32 pageZ) const;
+    uint32 DenseWord(const PageStreaming::PageAddress& page) const;
+    uint32 FloorDirectoryWord(const PageStreaming::PageAddress& page) const;
     /// The word of `tier`'s block `block` on the walk to a page: its entry when the page's level is in
     /// the block, else the next tier's directory word. (rootX, rootZ) is the page at the tier's root
     /// level that the block hangs under.
     uint32 BlockWord(const Tier& tier, uint32 block, uint32 rootX, uint32 rootZ, uint32 level, uint32 pageX,
                      uint32 pageZ) const;
-    bool Insert(uint32 level, uint32 pageX, uint32 pageZ, uint32 entry);
-    void Remove(uint32 level, uint32 pageX, uint32 pageZ);
+    bool Insert(const PageStreaming::PageAddress& page, uint32 entry);
+    void Remove(const PageStreaming::PageAddress& page);
     void Release(uint32 tier, uint32 block);
     void RetryWaiting();
 
     std::vector<PageStreaming::PageStoreLevel> m_Levels;
+    uint32 m_Faces = 1;
     std::vector<uint32> m_LevelOffsets;
     std::vector<uint32> m_Words;
     std::vector<float32> m_SlotFade;

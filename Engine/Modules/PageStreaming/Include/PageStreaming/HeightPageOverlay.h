@@ -2,7 +2,7 @@
 
 #include "PageStreaming/PageAddress.h"
 #include "PageStreaming/PageSampleRect.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Types/Types.h"
 
 #include <span>

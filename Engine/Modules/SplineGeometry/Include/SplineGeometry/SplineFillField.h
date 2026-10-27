@@ -69,9 +69,9 @@ inline constexpr float32 kWaterlineRiseToleranceMetres = 0.05f;
 // disabled state needs neither a branch nor an equality test -- which matters,
 // because a sentinel compared for equality would have to survive a scene text
 // round-trip to keep working.
-inline constexpr float32 kNoSeaLevelFloor = std::numeric_limits<float32>::lowest();
+inline constexpr float32 kNoFloorHeight = std::numeric_limits<float32>::lowest();
 
-// Metres the sea-level floor is lifted above the level it names. A floor set to
+// Metres the floor height is lifted above the level it names. A floor set to
 // the sea's own altitude makes the mouth EXACTLY coplanar with the sea surface,
 // and two coincident planes with different tessellations resolve per pixel: the
 // junction reads as lattice-aligned stripes rather than as water meeting water.
@@ -79,9 +79,9 @@ inline constexpr float32 kNoSeaLevelFloor = std::numeric_limits<float32>::lowest
 // invisible; the stripes are not.
 //
 // Added unconditionally, with no branch and no equality test, because the
-// disabled state is arithmetically immune: at kNoSeaLevelFloor's magnitude one
+// disabled state is arithmetically immune: at kNoFloorHeight's magnitude one
 // ULP is ~2e31 metres, so this addition cannot move it.
-inline constexpr float32 kSeaLevelFloorLiftMetres = 0.02f;
+inline constexpr float32 kFloorHeightLiftMetres = 0.02f;
 
 struct SplineFillParams
 {
@@ -101,7 +101,7 @@ struct SplineFillParams
     // The waterline never falls below this, so a river mouth meeting a sea at a
     // known level merges into the shoreline instead of interpenetrating it.
     // Defaults to no floor.
-    float32 SeaLevelFloor = kNoSeaLevelFloor;
+    float32 FloorHeight = kNoFloorHeight;
     // Hard ceiling on the region. A run that exceeds it BUILDS NOTHING and says
     // so rather than silently coarsening: a water surface whose resolution
     // changed with its size would be a worse bug than a refusal.
@@ -199,8 +199,8 @@ struct SplineFillCorner
     //   min(phi + EdgeDrop, MaxHalfWidth - Distance, max(Escape, seaFloor) - Waterline)
     // the ground, the corridor and the containment constraints intersected. A sea
     // level contains water the way a bank does, so it JOINS the escape rather than
-    // being overruled by it; seaFloor is SeaLevelFloor as the fill applies it,
-    // lifted by kSeaLevelFloorLiftMetres, not the authored level.
+    // being overruled by it; seaFloor is FloorHeight as the fill applies it,
+    // lifted by kFloorHeightLiftMetres, not the authored level.
     // Positive is inside. The mesher interpolates it to place shoreline
     // vertices, which is what makes the shoreline sub-cell rather than a
     // staircase of whole cells.

@@ -416,7 +416,8 @@ inline bool TryComputeEditorPivotForEntity(World* world, EntityHandle entity, Ve
 
     // Plugin-owned components whose gizmo pivots at the entity origin
     // (registered traits) short-circuit the rendered-content anchors below.
-    for (const auto& [typeId, traits] : Editor::EditorComponentTraitsRegistry::Get().Snapshot())
+    const auto registered = Editor::EditorComponentTraitsRegistry::Get().Snapshot();
+    for (const auto& [typeId, traits] : *registered)
     {
         if (traits.GizmoPivotAtEntityOrigin && world->HasComponent(entity, typeId))
         {

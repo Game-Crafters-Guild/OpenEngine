@@ -11,8 +11,11 @@
 #include "Physics/PhysicsQuery.h"
 #include "PhysicsECS/PhysicsWorldService.h"
 #include "Picking/ScenePick.h"
+#include "AssetCore/AssetTypes.h"
+#include "Types/StringUtils.h"
 
 #include <cmath>
+#include <format>
 
 namespace GameEngine::Editor
 {
@@ -133,6 +136,48 @@ SceneViewDropMesh PickSceneViewDropMesh(const Mathematics::Ray3D& cameraRay,
     mesh.Entity = pick.Best.Entity;
     mesh.Pending = pick.Best.MeshBvhPending;
     return mesh;
+}
+
+bool IsPlacedModelFile(const std::filesystem::path& file)
+{
+    const std::string extension = ToLowerAscii(file.extension().string());
+    return extension == ".glb" || extension == ".gltf" || extension == ".obj" || extension == ".fbx";
+}
+
+std::string DescribeUnplaceableFile(const std::filesystem::path& file)
+{
+    const AssetType type = GetAssetTypeFromExtension(file.extension().string());
+    if (type == AssetType::NavigationGrid)
+        return "Navigation Grid files cannot be placed in a scene. Add a Navigation Surface component and "
+               "assign the file to its Authored Cells.";
+    // A model format the drop does not import, or a file of no known type, is named by its extension.
+    if (type == AssetType::Model || type == AssetType::Unknown)
+        return std::format("{} files cannot be placed in a scene.", file.extension().string());
+    return std::format("{} files cannot be placed in a scene.", IdentifierToWords(AssetTypeToString(type)));
+}
+
+std::string DescribeRefusedDrop(std::span<const std::filesystem::path> files)
+{
+    const std::filesystem::path* firstFile = nullptr;
+    for (const std::filesystem::path& file : files)
+    {
+        if (file.empty())
+            continue;
+        const AssetType type = GetAssetTypeFromExtension(file.extension().string());
+        if (IsPlacedModelFile(file) || type == AssetType::Prefab || type == AssetType::LensFlareDefinition)
+            return {};
+        if (!firstFile)
+            firstFile = &file;
+    }
+    if (!firstFile)
+        return "Nothing to drop.";
+    if (files.size() == 1)
+    {
+        const AssetType type = GetAssetTypeFromExtension(firstFile->extension().string());
+        if (type == AssetType::Texture || type == AssetType::Material)
+            return {};
+    }
+    return DescribeUnplaceableFile(*firstFile);
 }
 
 } // namespace GameEngine::Editor

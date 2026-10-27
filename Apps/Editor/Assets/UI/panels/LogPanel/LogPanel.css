@@ -218,6 +218,16 @@
 	flex-shrink: 0;
 }
 
+.log-row-channel {
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+	white-space: nowrap;
+	width: 96px;
+	flex-shrink: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 .log-row-message {
 	font-size: var(--ui_font_size_list);
 	white-space: nowrap;
@@ -258,6 +268,10 @@
 	background-color: var(--ui_color_bg_tabbar);
 	border-bottom: 1px solid var(--ui_color_border_panel);
 	flex-shrink: 0;
+}
+
+.log-detail-channel {
+	color: var(--ui_color_text_dim);
 }
 
 .log-detail-severity {

@@ -705,7 +705,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
     // dispatch before any liveness flag is read. Engine.dll and Editor.exe are
     // never in the set these ranges describe, so an engine-registered handler
     // cannot be revoked here; the discrimination is structural.
-    m_NativeScriptManager->SetModuleImageObserver([] {
+    m_NativeScriptManager->SetModuleImageObserver([this] {
         NativeScripting::NativeScriptManager::ModuleImageObserver observer;
         observer.ImageMapBegin = [] { UI::OpenImageAttribution(); };
         observer.ImageMapEnd = [](uint64 base, uint64 size) {
@@ -735,8 +735,11 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
             }
             return pins;
         };
-        observer.ImageUnmapping = [](uint64 base, uint64 size) {
+        // A finished job's result and callbacks can be the image's code; the pool
+        // releases the ones only its registry still holds.
+        observer.ImageUnmapping = [this](uint64 base, uint64 size) {
             UI::RevokeHandlersOwnedByImage(base, size);
+            m_JobSystem->ReleaseFinishedTasks();
         };
         observer.ImageUnmapped = [](uint64 base) { UI::RetractHotSwappableImage(base); };
         return observer;

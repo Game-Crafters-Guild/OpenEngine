@@ -7,7 +7,7 @@
 
 #include "PageStreaming/HeightPageOverlay.h"
 #include "PageStreaming/PageSampleRect.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 
 #include <algorithm>
 #include <atomic>

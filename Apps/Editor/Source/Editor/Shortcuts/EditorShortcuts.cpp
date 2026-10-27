@@ -270,6 +270,8 @@ const std::vector<ShortcutCatalogEntry>& GetShortcutCatalog()
         {"Hierarchy", "Delete",    0, 0, kKeyCode_Delete, 0, false},
         {"Hierarchy", "Rename",    0, 0, kKeyCode_F2,     0, false,
                                    kRenameAlternateKey, 0},
+        {"Hierarchy", "Create Prefab", 0, 0, kKeyCode_P, kDefaultPrimaryShortcutModifier | kModShift, false,
+                                       kKeyCode_P, kAlternatePrimaryShortcutModifier | kModShift},
 
         // --- Assets Panel (hardcoded) -------------------------------------
         {"Assets", "Toggle Preview", 0, 0, kKeyCode_F, kModShift, false},

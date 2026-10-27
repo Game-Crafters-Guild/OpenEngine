@@ -40,7 +40,7 @@ public:
     void OnEvent(UIEvent& e) override;
 
 private:
-    void AddTile(const std::string& layoutText, const Choice& choice, size_t index);
+    void AddTile(const Choice& choice, size_t index);
     void OnTilePressed(UIEvent& e, size_t index);
     void Select(size_t index);
     void SyncSelectedClasses();

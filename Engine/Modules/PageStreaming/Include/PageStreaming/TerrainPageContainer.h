@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 
 #include <filesystem>
 #include <span>

@@ -1,0 +1,18 @@
+<!-- DownloadInProgressModal (Apps/Editor/Include/Panels/DownloadInProgressModal.h): the downloads that are
+     still running, with Cancel, Proceed Anyway and Wait. The ids are the contract with
+     DownloadInProgressModal.cpp. -->
+<UIElement class="modal-backdrop">
+  <UIElement class="modal-window modal-window-shadow modal-window-520">
+    <UIElement class="modal-header">
+      <Label id="download-progress-title" class="modal-title" text="Downloads In Progress" />
+    </UIElement>
+    <UIElement class="modal-content">
+      <Label id="download-progress-message" class="modal-message" text="Polyhaven assets are still downloading..." />
+    </UIElement>
+    <UIElement class="modal-footer">
+      <Button id="download-progress-cancel" class="secondary" text="Cancel" />
+      <Button id="download-progress-proceed" class="secondary" text="Proceed Anyway" />
+      <Button id="download-progress-wait" class="primary" text="Wait" />
+    </UIElement>
+  </UIElement>
+</UIElement>

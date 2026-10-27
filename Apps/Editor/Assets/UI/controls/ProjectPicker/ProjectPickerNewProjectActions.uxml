@@ -1,0 +1,10 @@
+<!-- The create page's action row in the stacked footer. The ids are the contract with
+     ProjectPickerModal.cpp; the styles are in ProjectPicker.css. -->
+<UIElement id="new-project-actions">
+  <Button id="new-project-cancel"
+          class="new-project-cancel-button project-picker-button project-picker-button-filled-secondary secondary project-picker-button-compact project-picker-button-w130"
+          text="Cancel" />
+  <Button id="create-project-button"
+          class="project-picker-button project-picker-button-primary primary project-picker-button-compact"
+          text="Create project" />
+</UIElement>

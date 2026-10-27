@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8">
+<!-- The prefab member badge: the prefab cube in miniature. The CSS tint colors the three faces; the outline stays dark. -->
+<path d="M4 0.5L7.5 2.35L4 4.2L0.5 2.35Z" fill="#ffffff"/>
+<path d="M0.5 2.35L4 4.2V7.5L0.5 5.65Z" fill="#949494"/>
+<path d="M4 4.2L7.5 2.35V5.65L4 7.5Z" fill="#c8c8c8"/>
+<path d="M4 0.5L7.5 2.35V5.65L4 7.5L0.5 5.65V2.35Z" fill="none" stroke="#141414" stroke-width="0.9" stroke-linejoin="round"/>
+</svg>

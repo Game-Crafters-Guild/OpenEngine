@@ -21,7 +21,7 @@ struct SplineFenceSpanPiece
 {
     uint32 Run = 0;
     uint32 OrdinalInRun = 0;
-    // The active pool slot the piece draws: a SpanPool slot, or a GatePool slot
+    // The active pool slot the piece draws: a Span pool slot, or a Gate pool slot
     // when IsGate.
     uint32 PoolSlot = 0;
     bool IsGate = false;

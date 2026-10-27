@@ -1,0 +1,17 @@
+<!-- RestoreSceneBackupModal (Apps/Editor/Include/Panels/RestoreSceneBackupModal.h): the choice to restore or
+     discard an autosaved scene. The ids are the contract with RestoreSceneBackupModal.cpp. -->
+<UIElement class="modal-backdrop">
+  <UIElement class="modal-window modal-window-shadow modal-window-520">
+    <UIElement class="modal-header">
+      <Label id="restore-backup-title" class="modal-title" text="Restore unsaved changes?" />
+    </UIElement>
+    <UIElement class="modal-content">
+      <Label id="restore-backup-message" class="modal-message"
+             text="This scene has autosaved changes from a previous session." />
+    </UIElement>
+    <UIElement class="modal-footer">
+      <Button id="restore-backup-discard" class="secondary" text="Discard" />
+      <Button id="restore-backup-restore" class="primary" text="Restore" />
+    </UIElement>
+  </UIElement>
+</UIElement>

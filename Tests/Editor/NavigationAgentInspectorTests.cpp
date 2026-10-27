@@ -4,7 +4,7 @@
 
 #include "Editor/Entities/EditorComponentTraits.h"
 #include "InspectorRegistry.h"
-#include "Inspectors/NavigationAgentInspector.h"
+#include "Inspectors/Navigation/NavigationAgentInspector.h"
 
 #include "Core/Application.h"
 #include "Core/Engine.h"

@@ -1,16 +1,31 @@
 #include "Panels/ConfirmActionModal.h"
 
+#include "Input/KeyCodes.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
-#include "Input/KeyCodes.h"
+
+#include <array>
+#include <memory>
+#include <string_view>
 
 namespace GameEngine
 {
 
 namespace
 {
+constexpr const char* kLayoutAssetPath = "UI/controls/ConfirmActionModal/ConfirmActionModal.uxml";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 6> kRequiredIds = {
+    "confirm-action-title",
+    "confirm-action-message",
+    "confirm-action-detail",
+    "confirm-action-closing",
+    "confirm-action-cancel",
+    "confirm-action-confirm",
+};
 // The editor's generic hide class (theme/core.css `.hidden.hidden`, specificity
 // 0,2,0, which outranks Button.css's `.button { display: flex }`). Takes the
 // Cancel button out of layout while the modal is a notice, and a notice-only
@@ -45,77 +60,21 @@ ConfirmActionModal::ConfirmActionModal()
     AddClass("modal-overlay");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
 
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
     m_Backdrop = backdrop.get();
-    m_Backdrop->AddClass("modal-backdrop");
     m_Backdrop->SetFocusable(true);
-
-    auto window = std::make_unique<UIElement>();
-    window->AddClass("modal-window");
-    window->AddClass("modal-window-shadow");
-    window->AddClass("modal-window-480");
-
-    // Header
-    {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("modal-header");
-        auto title = std::make_unique<Label>();
-        m_Title = title.get();
-        title->AddClass("modal-title");
-        title->AddClass("modal-title-compact");
-        header->AddChild(std::move(title));
-        window->AddChild(std::move(header));
-    }
-
-    // Content: the message, then a notice's muted detail and its closing text.
-    {
-        auto content = std::make_unique<UIElement>();
-        content->AddClass("modal-content");
-        content->AddClass("modal-content-column");
-        auto msg = std::make_unique<Label>();
-        m_Message = msg.get();
-        msg->AddClass("modal-message");
-        msg->AddClass(kPreformattedMessageClass);
-        content->AddChild(std::move(msg));
-
-        auto detail = std::make_unique<Label>();
-        m_Detail = detail.get();
-        detail->AddClass("modal-message");
-        detail->AddClass(kDetailMessageClass);
-        detail->AddClass(kBreakableMessageClass);
-        detail->AddClass(kHiddenClass);
-        content->AddChild(std::move(detail));
-
-        auto closing = std::make_unique<Label>();
-        m_Closing = closing.get();
-        closing->AddClass("modal-message");
-        closing->AddClass(kBreakableMessageClass);
-        closing->AddClass(kHiddenClass);
-        content->AddChild(std::move(closing));
-        window->AddChild(std::move(content));
-    }
-
-    // Footer
-    {
-        auto footer = std::make_unique<UIElement>();
-        footer->AddClass("modal-footer");
-
-        auto cancel = std::make_unique<Button>();
-        m_CancelBtn = cancel.get();
-        cancel->SetText("Cancel");
-        cancel->AddClass("secondary");
-        cancel->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
-
-        auto confirm = std::make_unique<Button>();
-        m_ConfirmBtn = confirm.get();
-        confirm->SetText("Continue");
-        confirm->AddClass("primary");
-        confirm->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnConfirmClicked(); });
-
-        footer->AddChild(std::move(cancel));
-        footer->AddChild(std::move(confirm));
-        window->AddChild(std::move(footer));
-    }
+    m_Title = m_Backdrop->FindById("confirm-action-title"_sid);
+    m_Message = m_Backdrop->FindById("confirm-action-message"_sid);
+    m_Detail = m_Backdrop->FindById("confirm-action-detail"_sid);
+    m_Closing = m_Backdrop->FindById("confirm-action-closing"_sid);
+    m_CancelBtn = dynamic_cast<Button*>(m_Backdrop->FindById("confirm-action-cancel"_sid));
+    m_ConfirmBtn = dynamic_cast<Button*>(m_Backdrop->FindById("confirm-action-confirm"_sid));
+    if (m_CancelBtn)
+        m_CancelBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
+    if (m_ConfirmBtn)
+        m_ConfirmBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnConfirmClicked(); });
 
     // Enter and Escape reach this handler from the backdrop (Show focuses it)
     // and bubble up to it from the dismiss button (ShowNotice focuses that,
@@ -135,7 +94,6 @@ ConfirmActionModal::ConfirmActionModal()
         }
     });
 
-    m_Backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 
@@ -171,6 +129,8 @@ void ConfirmActionModal::ShowNotice(const Notice& notice)
 void ConfirmActionModal::Present(const std::string& title, const std::string& message,
                                  const std::string& confirmLabel, UIElement* focusTarget)
 {
+    if (!m_Backdrop)
+        return;
     m_Visible = true;
     if (auto* lbl = dynamic_cast<Label*>(m_Title))
         lbl->SetText(title);

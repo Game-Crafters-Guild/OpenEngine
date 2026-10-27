@@ -2,10 +2,9 @@
 
 #include "Input/KeyCodes.h"
 #include "Inspectors/InspectorDragHelpers.h"
-#include "Inspectors/InspectorUIHelpers.h"
 #include "Logger/Logger.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Label.h"
-#include "UI/Parsers/XMLParser.h"
 #include "UI/UIEvents.h"
 
 #include <memory>
@@ -33,18 +32,15 @@ PictureChoiceField::PictureChoiceField(std::vector<Choice> choices, size_t selec
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
     // One Tab stop for the group, as for radio buttons; the arrows move the selection.
     SetFocusable(true);
-    // Read once per process: an inspector rebuild builds the field again, and parsing the few nodes of a
-    // tile is cheap where a disk read each time is not.
-    static const std::string s_LayoutText = InspectorUI::ReadEditorLayoutText(kLayoutAssetPath);
     for (size_t i = 0; i < choices.size(); ++i)
-        AddTile(s_LayoutText, choices[i], i);
+        AddTile(choices[i], i);
     SyncSelectedClasses();
 }
 
-void PictureChoiceField::AddTile(const std::string& layoutText, const Choice& choice, size_t index)
+void PictureChoiceField::AddTile(const Choice& choice, size_t index)
 {
-    std::unique_ptr<UIElement> tile;
-    if (layoutText.empty() || !UIParsing::XMLParser::ParseLayoutFromString(layoutText, tile, kLayoutAssetPath) || !tile)
+    std::unique_ptr<UIElement> tile = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, {});
+    if (!tile)
         return;
 
     UIElement* picture = InspectorDrag::FindChildByClass(tile.get(), kPictureClass);

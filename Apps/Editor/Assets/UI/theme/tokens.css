@@ -108,6 +108,9 @@
   --ui_color_accent_highlight: rgba(0, 111, 255, 0.3);
   --ui_color_accent_translucent: rgba(0, 111, 255, 0.2);
   --ui_color_accent_green: #4CAF50;
+  /* Prefab instances in the Hierarchy: the glyph and the names. Teal, not the accent blue,
+     so an instance never reads as focused or selected. Icons/PrefabAsset.svg has the same color. */
+  --ui_color_prefab: #2EC4B6;
   --ui_color_accent_blue: #006FFF;
   --ui_color_accent_blue_hover: #4C9AFF;
   --ui_color_accent_blue_pressed: #0053BF;
@@ -225,6 +228,8 @@
   --ui_tree_foldout_size: 15px;
   --ui_tree_icon_padding: 28px;
   --ui_tree_icon_padding_rtl: 20px;
+  /* A badge on the tree icon's corner (EditorTreeTitleIconVars.cpp scales it with the icon). */
+  --ui_tree_icon_badge_size: 8px;
 
   /* Radii */
   --ui_radius_sm: 4px;

@@ -129,7 +129,7 @@ if(BUILD_TESTING)
         Tests/SplineExtrudeCoverageTests.cpp
         # The water fill through its rebuild entry point, against a real terrain: the
         # ROI lands on the terrain's own sample lattice, and EndTaperMetres is
-        # IGNORED in FitToBanks (asserted as byte identity, with the sea-level floor
+        # IGNORED in FitToBanks (asserted as byte identity, with the floor height
         # as the positive control that the comparison can fail at all).
         Tests/SplineFillRebuildTests.cpp
         # The refusal warnings themselves: a count and a magnitude locate nothing, so

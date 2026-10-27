@@ -1,7 +1,7 @@
 #pragma once
 
 #include "AssetCore/GUID.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Types/Types.h"
 
 #include <array>
@@ -13,7 +13,7 @@
 namespace GameEngine::TerrainECS
 {
 
-struct TiledTerrainData;
+struct TiledTerrainConfig;
 
 /// The planes of a tiled terrain's surface stores (design page-streaming 3.8).
 inline constexpr std::array<PageStreaming::PageFieldKind, 4> kSurfacePlanes = {
@@ -23,11 +23,11 @@ inline constexpr std::array<PageStreaming::PageFieldKind, 4> kSurfacePlanes = {
 /// The word of `plane` in a surface store's name: splat, normal, grass or color.
 const char* SurfacePlaneName(PageStreaming::PageFieldKind plane);
 
-/// The header of a tiled terrain's `plane` store under `key`, on the terrain's height lattice: Splat
+/// The header of the `plane` store under `key` of a tiled terrain of `config`, on its height lattice: Splat
 /// (RGBA8 weights, the weights tent), Normal (Bc5, the normal tent), GrassControl (Rg8, the tent) or
 /// Color (premultiplied sRGB RGBA8, the premultiplied tent).
-PageStreaming::PageStoreHeader MakeSurfaceStoreHeader(const TiledTerrainData& tiled, PageStreaming::PageFieldKind plane,
-                                                      uint64 key);
+PageStreaming::PageStoreHeader MakeSurfaceStoreHeader(const TiledTerrainConfig& config,
+                                                      PageStreaming::PageFieldKind plane, uint64 key);
 
 /// The cache beside the Normal store at `store`: its unencoded samples, from which its coarser pages
 /// are filtered. The bake makes it again; an export never packs it.

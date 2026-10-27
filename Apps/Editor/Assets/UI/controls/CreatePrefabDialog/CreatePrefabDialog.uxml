@@ -1,0 +1,35 @@
+<!-- CreatePrefabDialog (Apps/Editor/Source/Prefabs/CreatePrefabDialog.h): the name, or the file names for
+     several roots, and the folder of the new prefabs, their entity count, the references that leave them,
+     and a message line. The ids are the contract with CreatePrefabDialog.cpp. -->
+<UIElement class="modal-backdrop">
+  <UIElement class="modal-window modal-window-shadow modal-window-480">
+    <UIElement class="modal-header">
+      <Label class="modal-title" text="Create Prefab" />
+    </UIElement>
+    <UIElement class="modal-content modal-content-column">
+      <UIElement id="create-prefab-name-row" class="modal-field-row">
+        <Label class="modal-field-label" text="Name" />
+        <TextField id="create-prefab-name" class="modal-text-field" />
+      </UIElement>
+      <UIElement id="create-prefab-files-row" class="modal-field-row hidden">
+        <Label class="modal-field-label" text="Files" />
+        <Label id="create-prefab-files" class="create-prefab-files modal-message-breakable" />
+      </UIElement>
+      <UIElement class="modal-field-row">
+        <Label class="modal-field-label" text="Folder" />
+        <UIElement class="create-prefab-folder-row">
+          <Label id="create-prefab-folder" class="modal-text-field create-prefab-folder-field" />
+          <Button id="create-prefab-browse" class="secondary" text="Browse..." />
+        </UIElement>
+      </UIElement>
+      <Label id="create-prefab-count" class="modal-message-detail" />
+      <Label id="create-prefab-references" class="create-prefab-note modal-message-breakable" />
+      <Label id="create-prefab-message" class="create-prefab-message modal-message-breakable" />
+    </UIElement>
+    <UIElement class="modal-footer">
+      <UIElement class="modal-footer-spacer" />
+      <Button id="create-prefab-cancel" class="secondary" text="Cancel" />
+      <Button id="create-prefab-create" class="primary" text="Create" />
+    </UIElement>
+  </UIElement>
+</UIElement>

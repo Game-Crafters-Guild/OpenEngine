@@ -59,6 +59,16 @@ public:
     void SetHeaderBadge(const std::string& text, const std::string& tooltip = "",
                         BadgeKind kind = BadgeKind::Warning);
 
+    // Shows or hides the override edge at the Inspector's left gutter, which marks the header of a
+    // component that differs from the entity's source.
+    void SetOverridden(bool overridden);
+
+    // Fades the title and the icon, so the header reads as a component the entity does not have.
+    void Fade();
+
+    // Removes the options button at the right of the header, for a header that has no options.
+    void HideOptions();
+
     UIElement* GetContentRoot() const { return m_ContentRoot; }
 
     // Remove every inspector-built row from the body while keeping the section's

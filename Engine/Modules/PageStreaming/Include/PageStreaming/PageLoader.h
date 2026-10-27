@@ -26,14 +26,17 @@ namespace GameEngine::PageStreaming
 {
 
 class GeneratedHeightPageProvider;
+class PageStoreAccess;
 class PageStoreReader;
 
-/// Where one field's pages come from: a cooked store (read through the asset reader threads) or a
-/// generated provider (evaluated on Background jobs). Exactly one is set.
+/// Where one field's pages come from: a cooked store (read through the asset reader threads), a
+/// generated provider (evaluated on Background jobs) or a store that a bake writes while it is read
+/// (read on Background jobs). Exactly one is set.
 struct PageSource
 {
     std::shared_ptr<const PageStoreReader> Store;
     std::shared_ptr<const GeneratedHeightPageProvider> Generated;
+    std::shared_ptr<const PageStoreAccess> Access;
 
     /// The bytes each loaded page of this source holds: PagePayloadBytes of the store's format, or
     /// of a height page for the generated provider.
@@ -55,7 +58,8 @@ struct PageFetchOutcome
 uint64 NextPageFetchRetryFrame(uint64 frameIndex, uint32 failedAttempts);
 
 /// Fetches page `address` of `source` on the calling thread: a store's read and decode, or the
-/// generated provider's evaluation. Thread-safe.
+/// generated provider's evaluation. Thread-safe. A PageStoreAccess read waits while its bake
+/// changes the store's layout.
 PageFetchOutcome FetchPage(const PageSource& source, const PageAddress& address);
 
 /// One asynchronous page load.

@@ -1,0 +1,58 @@
+<!-- The project picker's import page: the title row with the back button, the Folder, Archive and Git URL tabs,
+     one panel per tab, the destination row and the error label. The ids are the contract with
+     ProjectPickerModal.cpp; the styles are in ProjectPicker.css. -->
+<UIElement id="import-project-view">
+  <UIElement id="import-header" class="project-import-header">
+    <Button id="import-back"
+            class="project-picker-button project-picker-button-secondary secondary project-picker-back-button"
+            text="‹" />
+    <UIElement class="project-import-heading">
+      <Label id="import-title" class="project-picker-page-title" text="Import project" />
+    </UIElement>
+    <Label class="project-import-subtitle"
+           text="Bring in an existing project from a folder, a .zip archive, or a Git URL." />
+  </UIElement>
+  <UIElement class="project-import-tabs">
+    <Button id="import-folder-tab" class="project-import-tab" text="Folder" />
+    <Button id="import-archive-tab" class="project-import-tab" text="Archive" />
+    <Button id="import-git-tab" class="project-import-tab" text="Git URL" />
+  </UIElement>
+  <UIElement id="import-folder-panel" class="project-import-panel project-import-panel-folder">
+    <Button id="import-folder-drop" class="project-import-dropzone project-import-dropzone-folder"
+            text="Choose a project folder">
+      <Button id="import-folder-browse"
+              class="project-picker-button project-picker-button-primary primary project-picker-button-compact project-picker-button-w140 project-picker-button-center"
+              text="Browse" />
+    </Button>
+    <Button id="import-reference-option" class="project-import-option selected">
+      <UIElement class="project-import-option-indicator" />
+      <Label class="project-import-option-label" text="Reference in place - keep the project where it is" />
+    </Button>
+    <Button class="project-import-option disabled">
+      <UIElement class="project-import-option-indicator" />
+      <Label class="project-import-option-label" text="Copy into workspace - unavailable in this build" />
+    </Button>
+  </UIElement>
+  <UIElement id="import-archive-panel" class="project-import-panel">
+    <Button id="import-archive-drop" class="project-import-dropzone" text="Choose a .zip archive">
+      <Button id="import-archive-browse"
+              class="project-picker-button project-picker-button-primary primary project-picker-button-compact project-picker-button-w140 project-picker-button-center"
+              text="Browse" />
+    </Button>
+  </UIElement>
+  <UIElement id="import-git-panel" class="project-import-panel project-import-panel-git">
+    <Label class="project-picker-field-label" text="REPOSITORY URL" />
+    <TextField id="import-git-url-field" class="project-picker-text-field project-picker-text-field-fill" />
+    <Label id="import-git-hint" class="project-import-git-hint" />
+  </UIElement>
+  <UIElement id="import-destination-row">
+    <Label class="project-picker-field-label project-picker-field-label-nudged" text="CREATE IN" />
+    <UIElement class="project-picker-field-controls">
+      <TextField id="import-destination-field" class="project-picker-text-field project-picker-text-field-grow" />
+      <Button id="import-destination-browse"
+              class="project-picker-button project-picker-button-primary primary project-picker-button-compact project-picker-button-w140 project-picker-button-noshrink"
+              text="Browse" />
+    </UIElement>
+  </UIElement>
+  <Label id="import-error" class="project-picker-error" />
+</UIElement>

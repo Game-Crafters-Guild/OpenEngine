@@ -945,8 +945,14 @@ public:
     // collapsing to only the last edit's footprint, which would leave the earlier dabs' geometry
     // stale until a later edit overlaps them (the same neighbour-stale seam class as the cross-face
     // fix). Separate from the physics accumulator (m_PlanetSculptFaces) so the two consumers drain
-    // at their own rates. Non-const — it clears what it returns.
+    // at their own rates. The union also holds the planet's height page changes
+    // (AccumulatePlanetPageDirtyRegions). Non-const — it clears what it returns.
     bool ConsumeSphereSculptDirtyRegions(CBTTerrain::SphereEditRegions& out);
+
+    /// Adds the planet's height page changes (TerrainHeightPages::PlanetDirtyRegions) to the render
+    /// per-face dirty union ConsumeSphereSculptDirtyRegions drains, so the CBT re-evaluates the
+    /// bisectors over them. The physics union does not take them: no collider reads the pages.
+    void AccumulatePlanetPageDirtyRegions(const CBTTerrain::SphereEditRegions& regions);
 
     // The CPU-authoritative sculpt height (metres) at a world direction — the editable layer
     // the GPU VertexEval also samples, COMPOSED with the analytic modifier set (S2). The editor

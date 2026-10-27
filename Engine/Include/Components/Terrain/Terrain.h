@@ -46,7 +46,7 @@ enum class TerrainDebugView : uint32
                      // fallback) — visualizes the fragment splat/normal resolve path (quality-sweep slice 1)
 };
 
-// "No sea level" for Terrain::SeaLevel. The lowest finite float, as SplineExtrude::SeaLevelFloor
+// "No sea level" for Terrain::SeaLevel. The lowest finite float, as SplineExtrude::FloorHeight
 // chose it: every finite height is above it, so the renderer's "corner below the water" test is
 // simply never true and the unset state needs no flag and no equality test.
 inline constexpr float32 kNoTerrainSeaLevel = std::numeric_limits<float32>::lowest();

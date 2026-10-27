@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <concepts>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -12,8 +13,6 @@
 #include <string_view>
 #include <vector>
 
-#include "AssetCore/SharedFileRead.h"
-#include "Editor/EditorPaths.h"
 #include "Logger/Logger.h"
 #include "UI/AssetField.h"
 #include "UI/Controls/CollapsibleInfoCard.h"
@@ -72,6 +71,39 @@ inline UIElement* AddFieldContainer(UIElement* row)
     UIElement* raw = field.get();
     row->AddChild(std::move(field));
     return raw;
+}
+
+// Shows or hides the marks of a field that differs from the entity's source on `row`: a bold label,
+// and the override edge, which its modifier class moves from the row's left to the Inspector's gutter.
+inline void SetRowOverridden(UIElement* row, bool overridden)
+{
+    if (!row)
+        return;
+    UIElement* mark = nullptr;
+    for (const auto& cell : row->GetChildren())
+    {
+        if (cell->HasClass("inspector-override-mark"))
+            mark = cell.get();
+        if (!cell->HasClass("inspector-label-cell"))
+            continue;
+        for (const auto& label : cell->GetChildren())
+        {
+            if (!label->HasClass("inspector-label"))
+                continue;
+            if (overridden)
+                label->AddClass("inspector-label-overridden");
+            else
+                label->RemoveClass("inspector-label-overridden");
+        }
+    }
+    if (!overridden && mark)
+        row->RemoveChild(mark);
+    if (!overridden || mark)
+        return;
+    auto newMark = std::make_unique<UIElement>();
+    newMark->AddClass("inspector-override-mark");
+    newMark->AddClass("inspector-override-mark-row");
+    row->AddChild(std::move(newMark));
 }
 
 // A row that holds one action in the value column: an empty label cell and one field cell. Adds
@@ -218,6 +250,18 @@ T* AddFieldRow(UIElement* parent, const std::string& labelText, std::unique_ptr<
     return raw;
 }
 
+// Adds `control`, a control that builds itself from its own layout, to `parent`. Returns the control,
+// or null when `parent` is null.
+template <typename T>
+T* AddControl(UIElement* parent, std::unique_ptr<T> control)
+{
+    if (!parent)
+        return nullptr;
+    T* raw = control.get();
+    parent->AddChild(std::move(control));
+    return raw;
+}
+
 inline Dropdown* AddDropdownRow(UIElement* parent, const std::string& labelText,
                                 const std::vector<Dropdown::Option>& options, int selectedIndex,
                                 const char* tooltip = nullptr)
@@ -320,20 +364,6 @@ inline EntityField* AddEntityFieldRow(UIElement* parent, const std::string& labe
     return raw;
 }
 
-/// The text of an editor control's layout file, a path under the editor's install assets
-/// ("UI/controls/<Control>/<Control>.uxml"), for the control to parse. Empty, with an error that
-/// names the file, when it does not read.
-inline std::string ReadEditorLayoutText(const char* layoutAssetPath)
-{
-    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / layoutAssetPath;
-    std::string text;
-    if (!ReadFileTextShared(path, text))
-        Logger::Log::Error("{} did not read, so the control it lays out is empty. Check that it is staged under "
-                           "the editor asset mount.",
-                           path.generic_string());
-    return text;
-}
-
 inline std::string AssetPathExtensionText(std::string_view text)
 {
     const size_t slash = text.find_last_of("/\\");
@@ -416,17 +446,28 @@ inline void AddInfoCard(UIElement* parent, const std::string& text)
     parent->AddChild(std::make_unique<EditorUI::CollapsibleInfoCard>(text));
 }
 
+// A full-width row for `control`, a preview of what the rows around it set, such as a recipe's
+// preview strip under its build notice. Returns the control, or null when `parent` is null.
+template <typename T>
+    requires std::derived_from<T, UIElement>
+T* AddPreviewRow(UIElement* parent, std::unique_ptr<T> control)
+{
+    if (!parent)
+        return nullptr;
+    auto row = std::make_unique<UIElement>();
+    row->AddClass("inspector-preview-row");
+    T* raw = control.get();
+    row->AddChild(std::move(control));
+    parent->AddChild(std::move(row));
+    return raw;
+}
+
 // A notice of `kind` with `text`: a state or a problem of the inspected object. Returns the
 // notice, or null when `parent` is null.
 inline EditorUI::InspectorNotice* AddNotice(UIElement* parent, const std::string& text,
                                             EditorUI::InspectorNotice::Kind kind)
 {
-    if (!parent)
-        return nullptr;
-    auto notice = std::make_unique<EditorUI::InspectorNotice>(text, kind);
-    EditorUI::InspectorNotice* result = notice.get();
-    parent->AddChild(std::move(notice));
-    return result;
+    return AddControl(parent, std::make_unique<EditorUI::InspectorNotice>(text, kind));
 }
 
 inline const char* BoolToString(bool v) { return v ? "true" : "false"; }

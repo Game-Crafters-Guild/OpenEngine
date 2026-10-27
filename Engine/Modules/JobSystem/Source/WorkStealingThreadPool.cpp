@@ -203,14 +203,9 @@ WorkStealingThreadPool::ThreadJobState& WorkStealingThreadPool::CurrentJobState(
     return state != nullptr ? *state : s_OwnJobState;
 }
 
-// Thread-local deferred cleanup buffer. CleanupTaskData() pushes entries
-// here without locking; the buffer is drained the next time the same thread
-// hits the owning pool's registry mutex (in GetOrCreateTaskData) or when the
-// owning pool's share overflows the flush threshold. Reduces mutex-op count
-// per task ~2× by batching erases with the unavoidable Submit-side insert.
-// The TaskData shared_ptr stays alive in the registry until drain; this is
-// fine because TaskIds are monotonic and never revisited, so no one looks up
-// a "stale" entry.
+// CleanupTaskData() pushes here without a lock; the same thread drains at its next GetOrCreateTaskData()
+// or when its share reaches kPendingCleanupBatch, so the registry mutex stays off the completion path.
+// An idle worker keeps up to kPendingCleanupBatch - 1 finished tasks until ReleaseFinishedTasks or that drain.
 //
 // Entries are TAGGED with their owning pool and drained ONLY by it. One
 // thread legitimately produces cleanups for several pools (sequential test
@@ -1401,6 +1396,39 @@ void WorkStealingThreadPool::UnregisterChannel(const Detail::JobChannelState* ch
     if (m_BlockingThreads) {
         m_BlockingThreads->AddDemand(-static_cast<int64>(maxRunning));
     }
+}
+
+void WorkStealingThreadPool::ReleaseFinishedTasks() {
+    // At use_count() == 1 only the registry holds the task and no reference can be minted without
+    // m_TaskDataMutex (the drain's proof). A Completed or Failed task's envelope already ran, so the
+    // erase cannot resurrect it (F12); its id left in a cleanup batch drains later as a duplicate.
+    Vector<SharedPtr<TaskHandle::TaskData>> released;
+    size_t stillHeld = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_TaskDataMutex);
+        for (auto it = m_TaskDataRegistry.begin(); it != m_TaskDataRegistry.end();) {
+            const TaskStatus status = it->second->Status.load(std::memory_order_acquire);
+            if (status != TaskStatus::Completed && status != TaskStatus::Failed) {
+                ++it;
+                continue;
+            }
+            if (it->second.use_count() != 1) {
+                ++stillHeld;
+                ++it;
+                continue;
+            }
+            released.push_back(std::move(it->second));
+            it = m_TaskDataRegistry.erase(it);
+        }
+    }
+    // Pair with the dying owners' release-decrements, as the drain does.
+    std::atomic_thread_fence(std::memory_order_acquire);
+    // Outside the lock: the reset runs the results' and callbacks' destructors.
+    for (auto& data : released) {
+        RecycleTaskData(std::move(data));
+    }
+    Logger::Log::Debug("JobSystem: released {} finished task(s); {} finished task(s) still referenced",
+                       released.size(), stillHeld);
 }
 
 void WorkStealingThreadPool::FlushPendingCleanupOnThisThread() {

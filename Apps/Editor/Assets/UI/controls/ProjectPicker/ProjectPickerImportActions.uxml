@@ -1,0 +1,10 @@
+<!-- The import page's action row in the stacked footer. The ids are the contract with
+     ProjectPickerModal.cpp; the styles are in ProjectPicker.css. -->
+<UIElement id="import-project-actions">
+  <Button id="import-cancel"
+          class="project-picker-button project-picker-button-filled-secondary secondary project-picker-button-compact project-picker-button-w140"
+          text="Cancel" />
+  <Button id="import-project-button"
+          class="project-picker-button project-picker-button-primary primary project-picker-button-compact project-picker-button-w140"
+          text="Confirm" />
+</UIElement>

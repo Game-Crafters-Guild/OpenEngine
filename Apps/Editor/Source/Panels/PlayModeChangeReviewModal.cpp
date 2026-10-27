@@ -1,92 +1,62 @@
 #include "Panels/PlayModeChangeReviewModal.h"
 
-#include "UI/Controls/Button.h"
+#include "Inspectors/InspectorDragHelpers.h"
+#include "Logger/Logger.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/Toggle.h"
+#include "UI/UIEvents.h"
 #include "UI/UIManager.h"
+
+#include <array>
+#include <memory>
+#include <string_view>
 
 namespace GameEngine
 {
 
+namespace
+{
+constexpr const char* kLayoutAssetPath = "UI/controls/PlayModeChangeReviewModal/PlayModeChangeReviewModal.uxml";
+constexpr const char* kStyleAssetPath = "UI/controls/PlayModeChangeReviewModal/PlayModeChangeReviewModal.css";
+constexpr const char* kRowLayoutAssetPath = "UI/controls/PlayModeChangeReviewModal/PlayModeChangeReviewRow.uxml";
+constexpr const char* kRowToggleClass = "pmcr-toggle";
+constexpr const char* kRowLabelClass = "pmcr-row-label";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 3> kRequiredIds = {
+    "pmcr-scroll",
+    "pmcr-discard",
+    "pmcr-apply",
+};
+} // namespace
+
 PlayModeChangeReviewModal::PlayModeChangeReviewModal()
 {
-    // Styling is owned by editor theme CSS (Assets/UI/theme/core.css).
-    // This keeps modal presentation tweakable without recompiling the editor.
     AddClass("playmode-change-review-modal");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
+    RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    // Backdrop
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
     m_Backdrop = backdrop.get();
-    m_Backdrop->AddClass("pmcr-backdrop");
     m_Backdrop->SetFocusable(true);
+    m_Backdrop->FindById("pmcr-discard"_sid)
+        ->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnDiscardClicked(); });
+    m_Backdrop->FindById("pmcr-apply"_sid)
+        ->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnApplyClicked(); });
 
-    // Window
-    auto window = std::make_unique<UIElement>();
-    m_Window = window.get();
-    m_Window->AddClass("modal-window");
-    m_Window->AddClass("pmcr-window");
-
-    // Header
+    // A scroll view takes its content through its viewport, which a layout file cannot name.
+    auto* scroll = dynamic_cast<ScrollView*>(m_Backdrop->FindById("pmcr-scroll"_sid));
+    if (scroll)
     {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("pmcr-header");
-        auto title = std::make_unique<Label>();
-        title->SetText("Play Mode Changes");
-        title->AddClass("pmcr-title");
-        auto subtitle = std::make_unique<Label>();
-        subtitle->SetText("Select the changes you want to apply back to the scene.");
-        subtitle->AddClass("pmcr-subtitle");
-
-        header->AddChild(std::move(title));
-        header->AddChild(std::move(subtitle));
-        m_Window->AddChild(std::move(header));
-    }
-
-    // Content: list + help
-    {
-        auto content = std::make_unique<UIElement>();
-        content->AddClass("pmcr-content");
-
-        auto help = std::make_unique<Label>();
-        help->SetText("Applied changes are pushed onto the Undo stack as a single compound action.");
-        help->AddClass("pmcr-help");
-        content->AddChild(std::move(help));
-
-        auto scroll = std::make_unique<ScrollView>();
-        scroll->AddClass("pmcr-scroll");
-
         auto listRoot = std::make_unique<UIElement>();
         listRoot->AddClass("pmcr-list");
         m_ListRoot = listRoot.get();
         scroll->AddContent(std::move(listRoot));
-
-        content->AddChild(std::move(scroll));
-        m_Window->AddChild(std::move(content));
     }
 
-    // Footer
-    {
-        auto footer = std::make_unique<UIElement>();
-        footer->AddClass("pmcr-footer");
-
-        auto discard = std::make_unique<Button>();
-        discard->SetText("Discard");
-        discard->AddClass("secondary");
-        discard->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnDiscardClicked(); });
-
-        auto apply = std::make_unique<Button>();
-        apply->SetText("Apply Selected");
-        apply->AddClass("primary");
-        apply->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnApplyClicked(); });
-
-        footer->AddChild(std::move(discard));
-        footer->AddChild(std::move(apply));
-        m_Window->AddChild(std::move(footer));
-    }
-
-    m_Backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 
@@ -126,21 +96,20 @@ void PlayModeChangeReviewModal::RebuildList(const std::vector<std::string>& chan
 
     for (const auto& name : changeNames)
     {
-        auto row = std::make_unique<UIElement>();
-        row->AddClass("pmcr-row");
-
-        auto toggle = std::make_unique<Toggle>();
-        auto* t = toggle.get();
-        t->SetChecked(true);
-        t->AddClass("pmcr-toggle");
-        m_Toggles.push_back(t);
-
-        auto label = std::make_unique<Label>();
+        std::unique_ptr<UIElement> row = Editor::ControlLayoutLoader::Load(kRowLayoutAssetPath, {});
+        if (!row)
+            return;
+        auto* toggle = dynamic_cast<Toggle*>(InspectorDrag::FindChildByClass(row.get(), kRowToggleClass));
+        auto* label = dynamic_cast<Label*>(InspectorDrag::FindChildByClass(row.get(), kRowLabelClass));
+        if (!toggle || !label)
+        {
+            Logger::Log::Error("Play Mode Changes: {} needs the '{}' toggle and the '{}' label.", kRowLayoutAssetPath,
+                               kRowToggleClass, kRowLabelClass);
+            return;
+        }
+        toggle->SetChecked(true);
+        m_Toggles.push_back(toggle);
         label->SetText(name);
-        label->AddClass("pmcr-row-label");
-
-        row->AddChild(std::move(toggle));
-        row->AddChild(std::move(label));
         m_ListRoot->AddChild(std::move(row));
     }
 }

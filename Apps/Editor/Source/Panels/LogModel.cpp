@@ -1,6 +1,7 @@
 #include "Panels/LogModel.h"
 
 #include "Logger/LogSink.h"
+#include "Logger/Logger.h"
 #include "ScriptEditor/SourceLocation.h"
 #include "Types/StringUtils.h"
 
@@ -50,6 +51,7 @@ LogModel::Entry LogModel::MakeEntry(const Logger::LogMessage& message)
     entry.SourceFile = message.SourceFile;
     entry.SourceLine = message.SourceLine;
     entry.Function = message.Function;
+    entry.Channel = message.Channel;
     entry.Backtrace = message.Backtrace;
     return entry;
 }
@@ -80,7 +82,7 @@ LogModel::AppendResult LogModel::Append(std::deque<Entry>& batch)
         for (size_t index = m_Entries.size() - std::min(result.Appended, m_Entries.size()); index < m_Entries.size();
              ++index)
         {
-            if (PassesSeverityFilter(m_Entries[index]) && MatchesSearch(m_Entries[index]))
+            if (IsShown(m_Entries[index]))
                 ++result.AppendedVisible;
         }
         return result;
@@ -140,6 +142,20 @@ bool LogModel::IsSeverityFilterActive() const
     return std::find(m_Shown.begin(), m_Shown.end(), false) != m_Shown.end();
 }
 
+void LogModel::SetChannelsShown(std::span<const uint16_t> channels, bool shown)
+{
+    bool changed = false;
+    for (const uint16_t channel : channels)
+    {
+        if (channel >= m_HiddenChannels.size() || IsChannelShown(channel) == shown)
+            continue;
+        m_HiddenChannels.set(channel, !shown);
+        changed = true;
+    }
+    if (changed)
+        Refilter();
+}
+
 void LogModel::SetSearch(std::string_view text)
 {
     if (text == m_Search)
@@ -158,7 +174,7 @@ void LogModel::SetSearchField(SearchField field)
 
 bool LogModel::IsFiltered() const
 {
-    return !m_Search.empty() || IsSeverityFilterActive();
+    return !m_Search.empty() || IsSeverityFilterActive() || m_HiddenChannels.any();
 }
 
 size_t LogModel::GetVisibleCount() const
@@ -218,9 +234,25 @@ const std::string& LogModel::FormatLine(const Entry& entry)
         entry.LineCache += "] [";
         entry.LineCache += Logger::LogLevelToString(entry.Level);
         entry.LineCache += "] ";
+        if (const std::string_view channel = ChannelLabel(entry); !channel.empty())
+        {
+            entry.LineCache += '[';
+            entry.LineCache += channel;
+            entry.LineCache += "] ";
+        }
         entry.LineCache += entry.Text;
     }
     return entry.LineCache;
+}
+
+std::string_view LogModel::ChannelName(const Entry& entry)
+{
+    return Logger::Log::GetChannelName(entry.Channel);
+}
+
+std::string_view LogModel::ChannelLabel(const Entry& entry)
+{
+    return entry.Channel == Logger::CoreLog().Index ? std::string_view{} : ChannelName(entry);
 }
 
 std::string LogModel::FormatSource(const Entry& entry)
@@ -312,6 +344,8 @@ bool LogModel::MatchesSearch(const Entry& entry) const
     }
     case SearchField::Function:
         return ContainsIgnoreCase(entry.Function, m_Search);
+    case SearchField::Channel:
+        return ContainsIgnoreCase(ChannelName(entry), m_Search);
     case SearchField::All:
     default:
         return ContainsIgnoreCase(FormatLine(entry), m_Search) || ContainsIgnoreCase(entry.SourceFile, m_Search) ||
@@ -332,7 +366,7 @@ void LogModel::CountAndFilter(size_t firstIndex)
     for (size_t index = firstIndex; index < m_Entries.size(); ++index)
     {
         const Entry& entry = m_Entries[index];
-        if (!MatchesSearch(entry))
+        if (!IsChannelShown(entry.Channel) || !MatchesSearch(entry))
             continue;
         ++m_SearchCounts[static_cast<size_t>(SeverityOf(entry.Level))];
         if (filtered && PassesSeverityFilter(entry))

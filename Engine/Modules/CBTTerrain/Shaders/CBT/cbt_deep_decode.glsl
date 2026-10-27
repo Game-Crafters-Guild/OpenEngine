@@ -33,6 +33,11 @@ const uint CBT_DEEP_NUM_SUBDIV = 50u;
 // Exact 1/1024 (mirror DeepDecode kInvSector; CBT_SECTOR_SIZE lives in cbt_layout.glsl).
 const float CBT_DEEP_INV_SECTOR = 1.0 / 1024.0;
 
+// GE_SHARED_EQUAL_ANGLE_BEGIN
+// The block from here to GE_SHARED_EQUAL_ANGLE_END is compiled as C++ by TerrainAtlasTests
+// (GlslShim.h) and swept against the CPU map: float literals suffixed `f`, no swizzles. It reads
+// CBTPagePoint from cbt_page.glsl.
+
 // df64 ("double-float"): an unevaluated fp32 pair Hi + Lo, |Lo| <= 0.5 ulp(Hi). Mirror of
 // DeepDecode::DF.
 struct CBTDf
@@ -95,6 +100,91 @@ CBTDf CBT_DfFromI64(int64_t v)
     float lo = float(v - int64_t(hi));
     return CBTDf(hi, lo);
 }
+
+// r(t) of the page store's equal-angle map (mirror PageStreaming::EqualAngleFaceCoordinate,
+// PageStoreFormat.cpp): each float64 coefficient of the cubic as an fp32 pair.
+CBTDf CBT_EqualAngleRemainder(CBTDf t)
+{
+    CBTDf r = CBT_DfAdd(CBT_DfMul(t, CBTDf(0.02328246831893921f, -5.819869586254356e-10f)),
+                        CBTDf(-0.07874228805303574f, -3.2064537691667283e-09f));
+    r = CBT_DfAdd(CBT_DfMul(t, r), CBTDf(0.14697904884815216f, -2.8555793285534037e-09f));
+    return CBT_DfAdd(CBT_DfMul(t, r), CBTDf(-0.27312028408050537f, -1.334704879951687e-08f));
+}
+
+// A position along one axis of a page store face: a level-0 sample and the offset past it in [0, 1).
+struct CBTFaceTexel
+{
+    uint Texel;
+    float Fraction;
+};
+
+// The equal-angle texel of a = numerator / 2^numSubdiv (exact) on a face of `samples` samples a side, in df64:
+// p(a) = a + a (a^2 - 1) r(a^2), sample i at p = (2 i - (samples - 1)) / (samples - 1); a = -1 and 1 have fraction 0.
+// Within an fp32 ulp of a texel boundary the result is the same texel, or the next texel with fraction 0.
+CBTFaceTexel CBT_EqualAngleTexel(int64_t numerator, uint numSubdiv, uint samples)
+{
+    CBTDf a = CBT_DfMulF(CBT_DfFromI64(numerator), ldexp(1.0f, -int(numSubdiv)));
+    CBTDf t = CBT_DfMul(a, a);
+    CBTDf p = CBT_DfAdd(a, CBT_DfMul(CBT_DfMul(a, CBT_DfAdd(t, CBTDf(-1.0f, 0.0f))), CBT_EqualAngleRemainder(t)));
+    float last = float(samples - 1u);
+    CBTDf x = CBT_DfMulF(CBT_DfAdd(p, CBTDf(1.0f, 0.0f)), last * 0.5f);
+    // Hi - floor(Hi) is exact; Lo moves the sum at most one texel either way.
+    precise float whole = floor(x.Hi);
+    precise float rest = (x.Hi - whole) + x.Lo;
+    precise float carry = floor(rest);
+    whole = whole + carry;
+    rest = rest - carry;
+    if (rest >= 1.0f)
+    {
+        whole = whole + 1.0f;
+        rest = 0.0f;
+    }
+    if (whole < 0.0f)
+    {
+        whole = 0.0f;
+        rest = 0.0f;
+    }
+    if (whole >= last)
+    {
+        whole = last;
+        rest = 0.0f;
+    }
+    CBTFaceTexel result;
+    result.Texel = uint(whole);
+    result.Fraction = rest;
+    return result;
+}
+
+// The page store point of cube point (nx, ny, nz) / 2^numSubdiv of a root on face `rootFace`, `samples` a face side.
+// A point on a cube edge or corner resolves on the lowest face that holds it (planets 3.12): all roots read one face.
+// The face's X and Z axes are those of Mathematics::kCubeFaceAxes, each along +1 on its world axis.
+CBTPagePoint CBT_PlanetPagePoint(uint rootFace, int64_t nx, int64_t ny, int64_t nz, uint numSubdiv, uint samples)
+{
+    int64_t scale = int64_t(1) << numSubdiv;
+    uint face = rootFace;
+    for (uint lower = 0u; lower < rootFace; ++lower)
+    {
+        uint axis = lower >> 1u;
+        int64_t normal = axis == 0u ? nx : axis == 1u ? ny : nz;
+        if (normal == ((lower & 1u) == 0u ? scale : -scale))
+        {
+            face = lower;
+            break;
+        }
+    }
+    int64_t alongX = (face == 0u || face == 5u) ? ny : (face == 1u || face == 2u) ? nz : nx;
+    int64_t alongZ = (face == 0u || face == 3u) ? nz : (face == 1u || face == 4u) ? ny : nx;
+    CBTFaceTexel x = CBT_EqualAngleTexel(alongX, numSubdiv, samples);
+    CBTFaceTexel z = CBT_EqualAngleTexel(alongZ, numSubdiv, samples);
+    CBTPagePoint point;
+    point.Face = face;
+    point.TexelX = x.Texel;
+    point.TexelZ = z.Texel;
+    point.FractionX = x.Fraction;
+    point.FractionZ = z.Fraction;
+    return point;
+}
+// GE_SHARED_EQUAL_ANGLE_END
 
 // Deterministic shared 1/sqrt seed (mirror DeepDecode::RSqrtSeed): exponent-halving bit
 // pattern + three fp32 Newton polishes — pure IEEE add/mul, bit-identical CPU<->GPU

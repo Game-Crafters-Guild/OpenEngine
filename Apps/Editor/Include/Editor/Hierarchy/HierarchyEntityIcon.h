@@ -2,21 +2,35 @@
 
 #include "AssetCore/GUID.h"
 #include "ECS/ECS.h"
+#include "Scene/FunctionRef.h"
 
+#include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 
 namespace GameEngine {
 
 class AssetManager;
+class TreeView;
 class UIElement;
 class UIManager;
 struct EditorContext;
 
 namespace Editor {
 
+struct HierarchyRowParts;
+
+/// The children of an entity, for a subtree walk; an empty span when it has none.
+/// The lists must form a forest: each entity in at most one list, no list reaching
+/// an ancestor. The walk has no cycle guard. The span stays valid until the next call.
+using EntityChildrenOf = Scene::FunctionRef<std::span<const ECS::EntityHandle>(ECS::EntityHandle)>;
+
 void ClearHierarchyEntityIconClasses(UIElement* element);
-void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* element, ECS::EntityHandle handle);
+/// \p childrenOf, when given, answers the model-GUID subtree walk (see
+/// FindModelGuidForEntityOrChildren).
+void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* element, ECS::EntityHandle handle,
+                                     EntityChildrenOf childrenOf = {});
 /// Same, for the element that actually draws the glyph. Adds the shared
 /// `entity-icon` marker on top of the kind class, so one CSS selector
 /// (`.entity-icon.hierarchy-entity-*`) styles the Hierarchy tree's preview
@@ -24,7 +38,8 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* element, ECS:
 /// the plain overload above: a row carrying the marker would paint the glyph
 /// as its own background.
 void ApplyHierarchyEntityIconClassesToIcon(ECS::World* world, UIElement* icon,
-                                           ECS::EntityHandle handle);
+                                           ECS::EntityHandle handle,
+                                           EntityChildrenOf childrenOf = {});
 
 /// True when \p element carries a hierarchy-entity CSS class that renders as a pure CSS
 /// glyph (lights, cameras, primitives, empties, terrain, ocean, physics, etc.) rather than
@@ -33,7 +48,20 @@ void ApplyHierarchyEntityIconClassesToIcon(ECS::World* world, UIElement* icon,
 /// row bind and the Inspector header icon consult it.
 bool EntityIconIsCssOnly(const UIElement& element);
 
-GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle);
+/// Runs every registered EditorComponentTraits::DecorateHierarchyRow on a row as it binds.
+void ApplyHierarchyRowDecorations(ECS::World& world, ECS::EntityHandle handle, HierarchyRowParts& parts);
+
+/// Runs the decorations again, in place, on the row `tree` holds for `treeId` (the row showing
+/// `entity`), and does nothing when the tree holds none. A committed component edit changes what
+/// a decoration shows without a rebind.
+void ApplyHeldHierarchyRowDecorations(ECS::World& world, ECS::EntityHandle entity, const TreeView& tree,
+                                      std::uint64_t treeId);
+
+/// The first non-primitive model that the entity or a descendant draws, breadth first.
+/// With \p childrenOf the walk follows those lists. Without it, the walk reads every
+/// Parent in the world: use that for one lookup, never for each row of a list.
+GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle,
+                                      EntityChildrenOf childrenOf = {});
 
 /// If \p handle is a sprite (plane primitive + file-backed MaterialAsset),
 /// returns the absolute filesystem path of its albedoMap texture. Returns an

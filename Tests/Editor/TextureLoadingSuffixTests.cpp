@@ -2,7 +2,7 @@
 // the texture is preparing while its import cook runs, and nothing otherwise, which leaves the
 // default "Loading" line.
 
-#include "Inspectors/TextureLoadingSuffix.h"
+#include "Inspectors/Texture/TextureLoadingSuffix.h"
 
 #include "InspectorRegistry.h"
 

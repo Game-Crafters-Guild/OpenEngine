@@ -4,6 +4,7 @@
 #include "EditorPanelManager.h"
 #include "EditorWindowBootstrap.h"
 #include "Input/InputSystem.h"
+#include "UI/Interaction/FocusQueries.h"
 #include "UI/UIManager.h"
 
 namespace GameEngine
@@ -19,7 +20,7 @@ bool EditorApplication::TryHandleCatalogGlobalKeyPre(
 
     if (Editor::MatchesCatalogShortcut("Global", "CSS Inspector", key, mods))
     {
-        if (!IsFocusInTextField(ui))
+        if (!ui || !UI::FocusIsInTextInput(*ui))
         {
             m_CssInspector.ToggleEnabled();
             return true;
@@ -29,7 +30,7 @@ bool EditorApplication::TryHandleCatalogGlobalKeyPre(
     if (includeWorkspaceShortcuts &&
         Editor::MatchesCatalogShortcut("Assets", "Toggle Preview", key, mods))
     {
-        if (!IsFocusInTextField(ui))
+        if (!ui || !UI::FocusIsInTextInput(*ui))
         {
             ShowOrFocusAssetViewInSceneTabs(ctx);
             return true;

@@ -45,6 +45,7 @@ namespace GameEngine
         void SetItemIcon(uint32_t commandId, const std::string& imagePath) override;
         void SetSubMenuIcon(uint32_t submenuId, const std::string& imagePath) override;
         void SetItemShortcut(uint32_t commandId, const std::string& keyText) override;
+        void SetItemTooltip(uint32_t commandId, const std::string& text) override;
 
         void SetItemColor(uint32_t commandId, const std::string& hexColor) override;
 
@@ -65,6 +66,7 @@ namespace GameEngine
             std::string iconPath;
             std::string colorHex; // "#RRGGBB": trailing swatch (tag dots, current color of a picker row)
             std::string shortcut; // the key that runs the command, drawn at the row's trailing edge
+            std::string tooltip;  // the text a pointer on the row shows, enabled or not
             std::vector<std::unique_ptr<MenuItem>> children;
         };
 

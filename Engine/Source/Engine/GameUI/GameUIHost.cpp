@@ -99,11 +99,10 @@ GameUIHost::~GameUIHost()
 
 std::unique_ptr<GameUIHost> GameUIHost::CreateForHost(
     Rendering::IDevice* device, AssetManager* assetManager,
-    JobSystem::WorkStealingThreadPool* jobSystem, const std::filesystem::path& fontsDir,
-    bool neverClearTarget)
+    JobSystem::WorkStealingThreadPool* jobSystem, bool neverClearTarget)
 {
     auto host = std::make_unique<GameUIHost>(device, assetManager, jobSystem);
-    host->ConfigureFonts(fontsDir);
+    host->ConfigureFonts();
     host->SetNeverClearTarget(neverClearTarget);
     return host;
 }
@@ -123,13 +122,13 @@ static const std::vector<uint8_t>& ReadDefaultFontBytesCached(const std::string&
     return it->second;
 }
 
-void GameUIHost::ConfigureFonts(const std::filesystem::path& assetsDir)
+void GameUIHost::ConfigureFonts()
 {
     if (!m_AssetManager || !m_UI)
         return;
 
     auto& reg = m_AssetManager->GetRegistry();
-    const std::filesystem::path fontPath = assetsDir / kDefaultFontPath;
+    const std::filesystem::path fontPath = m_AssetManager->ResolveAssetPath(kDefaultFontPath);
     if (!reg.IsAssetRegistered(fontPath))
         reg.RegisterAsset(fontPath);
     const GUID fontGuid = reg.GetAssetGUID(fontPath);

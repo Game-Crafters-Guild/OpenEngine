@@ -1,0 +1,3 @@
+<!-- One folder row of SaveSceneAsModal (Apps/Editor/Include/Panels/SaveSceneAsModal.h): a button that opens
+     the folder. SaveSceneAsModal.cpp sets its text and its click for each folder. -->
+<Button class="save-scene-as-folder-row secondary" />

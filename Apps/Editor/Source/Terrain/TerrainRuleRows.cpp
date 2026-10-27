@@ -13,7 +13,7 @@
 #include "Inspectors/InspectorComponentSection.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
-#include "Inspectors/TerrainRuleNotices.h"
+#include "Terrain/TerrainRuleNotices.h"
 #include "Terrain/TerrainInteractiveModifierEdit.h"
 #include "Terrain/TerrainRoleMaterials.h"
 #include "Terrain/TerrainRuleConditionVocabulary.h"

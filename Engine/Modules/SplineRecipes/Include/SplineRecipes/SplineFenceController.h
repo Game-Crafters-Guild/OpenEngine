@@ -6,6 +6,7 @@
 #include "Mathematics/Matrix4x4.h"
 #include "SplineRecipes/FenceMitreVariants.h"
 #include "SplineRecipes/FencePieceReuse.h"
+#include "SplineRecipes/FenceRecipeLayout.h"
 #include "SplineRecipes/SplineChunkCommit.h"
 #include "SplineRecipes/SplinePieceMaterial.h"
 #include "SplineRecipes/SplineRebuildGate.h"
@@ -40,6 +41,10 @@ public:
     // The span count of each run of the last layout, by the authored point that opens the run; empty for an
     // entity with no layout. The editor's span override remap reads it. Valid until the next Update.
     std::span<const uint32> RunSpanCounts(ECS::EntityHandle entity) const;
+
+    // The bounds of each part's mesh as the last rebuild resolved them, one entry per mesh; empty
+    // before the first rebuild. A mesh not listed is not resolved yet. Valid until the next Update.
+    std::span<const FenceMeshBounds> PartBounds(ECS::EntityHandle entity) const;
 
     // Rebuilds every fence whose spline, transform, recipe or conformed ground changed, once the edit is stable
     // for the settle window. A conforming recipe's first build also waits for its ground (DeferFirstBuild).
@@ -91,6 +96,8 @@ private:
         // The last layout's span count per run, by the authored point opening
         // it: what a point edit re-addresses this recipe's overrides by.
         std::vector<uint32> RunSpanCounts;
+        // The bounds of every mesh the last rebuild resolved, in pool order.
+        std::vector<FenceMeshBounds> PartBounds;
         // The cut variants mitred spans and registered crests draw (fence
         // design section 4c), registered through the chunk commit and released
         // when no piece draws them any more.

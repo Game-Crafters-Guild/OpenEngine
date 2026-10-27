@@ -16,7 +16,7 @@
 #include "UI/Controls/Slider.h"
 #include "UI/Controls/TextField.h"
 #include "UI/Controls/Toggle.h"
-#include "UI/Interaction/FocusIsInside.h"
+#include "UI/Interaction/FocusQueries.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
 #include "UIRgTestHarness.h"

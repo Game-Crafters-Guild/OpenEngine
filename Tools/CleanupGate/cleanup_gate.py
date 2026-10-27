@@ -1,9 +1,10 @@
 """The cleanup gate: the patterns the coding style replaces with an engine piece may only become fewer.
 
 Scans the production sources (gate_common.scope_files: the files git tracks) with the rules of the ten classes (rule_*.py). A
-rule's REPORTED patterns are counted and printed, never compared. The
-sites of a boundary that must stay raw are counted apart, against allowlist.txt: one `path:pattern:count  # boundary` per file and
-pattern. Every other site is counted against baseline.json (class, pattern, file, count).
+rule's REPORTED patterns are counted and printed, never compared; a rule's inventory_lines(sites), when it has one, prints the
+counted sites grouped for a sweep to pick from. The sites of a boundary that must stay raw are counted apart, against
+allowlist.txt: one `path:pattern:count  # boundary` per file and pattern. Every other site is counted against baseline.json (class,
+pattern, file, count).
 
 The gate fails when:
 - a pattern has more sites than its baseline: each file above its own baseline is named with every site of the pattern in it and
@@ -218,6 +219,10 @@ def main():
         print(f"{class_id}: {current} sites, baseline {base}")
     for pattern in sorted(reported_patterns):
         print(f"reported, not gated: {pattern} {reported[pattern]}")
+    for module in kRuleModules:
+        if hasattr(module, "inventory_lines"):
+            for line in module.inventory_lines(counted):
+                print(f"inventory: {line}")
 
     rises = find_rises(counts, baseline, sites_by_key)
     allowlist_rises, allowlist_drops = compare_allowlist(allowlist_lines, allowlisted, sites_by_key)

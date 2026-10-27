@@ -1,7 +1,6 @@
-/* CubeLutPreview (Apps/Editor/Include/Inspectors/CubeLutPreview.h) and its enlarged view,
-   CubeLutPreviewPopover: the exposure ramp and the saturated probes, each the look alone over the
-   look and the LUT, with the probes' names under them. Band heights match the textures'
-   (CubeLutPreview.cpp, PreviewExtents). */
+/* CubeLutPreview (Inspectors/CubeLut/CubeLutPreview.h) and its enlarged view, CubeLutPreviewPopover:
+   the exposure ramp and the saturated probes, each band the look alone above the look with the LUT,
+   probe names below. Band heights match the texture heights (CubeLutPreview.cpp, PreviewExtents). */
 .cube-lut-strip {
 	display: flex;
 	flex-direction: column;

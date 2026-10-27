@@ -40,7 +40,7 @@ The search: `ls Engine/Modules/`, then `grep -rn "<verb or noun>" Engine/Modules
 ## 3. Placement and names
 
 - One class per file, named for the class; a free function in its module's utility header beside its kin, never a header of its own; nothing new in a hub (`EditorApplication`, `EditorContext`, `SettingsPanel`, `InspectorPanel`, `HierarchyPanel`, `SceneViewPanel`, `RenderServices`, `UIManager`, `UIElement`, `core.css`).
-- The file lives with its owner: the module that owns the concept, under the folder its siblings use (`UI/Controls`, `UI/Inspectors`, `Systems`, `Shaders/<Area>`).
+- The file lives with its owner: the module that owns the concept, under the folder its siblings use (`UI/Controls`, `UI/Inspectors`, `Systems`, `Shaders/<Area>`), and inside the feature's own folder when the feature has more than one file (`Panels/ProjectPicker/`, not loose in `Panels/`); a change that adds a second file to a feature creates the folder and moves the first file with it. The table names the folder of every added file.
 - Names say what the thing does for the caller, in full words, PascalCase for types and functions, `m_PascalCase` for private members, `kPascalCase` for constants; a name that needs a comment to be understood is the wrong name.
 
 ## 4. The public surface, one question set per symbol

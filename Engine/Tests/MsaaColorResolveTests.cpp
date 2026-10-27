@@ -15,6 +15,7 @@
 #include "Rendering/Materials/ShaderLayoutShape.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -27,7 +28,8 @@ using namespace GameEngine::Engine::Renderer;
 namespace
 {
 constexpr uint32_t kSize = 16;
-constexpr uint32_t kSamples = 8;
+constexpr uint32_t kMaxSamples = 8;
+constexpr uint32_t kForcedSamples = 4; // every Apple GPU and Mesa lavapipe stop at 4x
 constexpr float kBright = 25.0f; // the helmet's white metal face against the sky, in sky units
 constexpr float kDim = 1.0f;
 
@@ -52,9 +54,28 @@ TextureDesc ColorDesc(uint32_t samples, uint32_t extraUsage)
     return d;
 }
 
+// The blend of the tonemapped samples of a pixel with one sample at kBright and the rest at kDim.
+float IdealBlend(uint32_t samples)
+{
+    return (Tonemap(kBright) + static_cast<float>(samples - 1) * Tonemap(kDim)) / static_cast<float>(samples);
+}
+
+// The plain average of the samples of a pixel with one sample at kBright and the rest at kDim.
+float PlainAverage(uint32_t samples)
+{
+    return (kBright + static_cast<float>(samples - 1) * kDim) / static_cast<float>(samples);
+}
+
+// The tonemap of the plain average of the same samples, which the weighted resolve must not give.
+float PlainAverageTonemapped(uint32_t samples)
+{
+    return Tonemap(PlainAverage(samples));
+}
+
 // A full-screen draw that writes kBright into sample 0 of each pixel in the left half (gl_SampleMask = 1)
-// over a target cleared to kDim: a left-half pixel is one bright sample in eight, a right-half pixel is flat.
-PipelineHandle CreateBrightSamplePipeline(IDevice& device, std::string& why)
+// over a target cleared to kDim: a left-half pixel is one bright sample in `samples`, a right-half pixel
+// is flat.
+PipelineHandle CreateBrightSamplePipeline(IDevice& device, uint32_t samples, std::string& why)
 {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / ("ge_msaa_resolve_probe_" + GUID::Generate().ToString());
@@ -95,7 +116,7 @@ void main()
     desc.vertexShader = result.stageBytes.at("vs");
     desc.pixelShader = result.stageBytes.at("fs");
     desc.colorAttachmentFormats = {static_cast<uint32_t>(TextureFormat::R16G16B16A16_FLOAT)};
-    desc.rasterizationSamples = kSamples;
+    desc.rasterizationSamples = samples;
     desc.rasterizationState.cullMode = CullModeFlagBits::None;
     desc.depthStencilState.depthTestEnable = false;
     desc.depthStencilState.depthWriteEnable = false;
@@ -111,10 +132,11 @@ float RedAt(const ViewReadbackResult& image, uint32_t x, uint32_t y)
     return Mathematics::HalfToFloat(bits);
 }
 
-// One view of an empty scene with an 8x color and its resolve, and the passes the tests declare around
-// the world pass. A depth clear declares the world pass of an empty scene; the color is not cleared, so
-// the pass loads the samples the test wrote. The targets carry no depth, so nothing is cleared.
-class MsaaColorResolveTest : public testing::Test
+// One view of an empty scene with a multisampled color and its resolve, and the passes the tests declare
+// around the world pass. The parameter caps the sample count; the test runs at min(cap, device maximum).
+// A depth clear declares the world pass of an empty scene; the color is not cleared, so the pass loads
+// the samples the test wrote. The targets carry no depth, so nothing is cleared.
+class MsaaColorResolveTest : public testing::TestWithParam<uint32_t>
 {
   protected:
     void SetUp() override
@@ -122,8 +144,9 @@ class MsaaColorResolveTest : public testing::Test
         m_Device = CreateVulkanDeviceFast();
         if (!m_Device)
             GTEST_SKIP() << "No Vulkan device";
-        if (m_Device->GetCapabilities().maxMSAASamples < kSamples)
-            GTEST_SKIP() << "the device supports fewer than 8 samples";
+        m_Samples = std::min(GetParam(), m_Device->GetCapabilities().maxMSAASamples);
+        if (m_Samples < 2)
+            GTEST_SKIP() << "the device has no multisampled color";
         if (!ShaderCompileService::IsCompilerAvailable())
             GTEST_SKIP() << "no shader compiler in this build";
         m_Services = std::make_unique<RenderServices>();
@@ -143,7 +166,7 @@ class MsaaColorResolveTest : public testing::Test
         m_Services->Views().SetViewTargets(m_View, 0, 0, 0, clear);
 
         std::string why;
-        m_Probe = CreateBrightSamplePipeline(*m_Device, why);
+        m_Probe = CreateBrightSamplePipeline(*m_Device, m_Samples, why);
         ASSERT_TRUE(m_Probe.IsValid()) << why;
         m_Persistent = std::make_unique<RenderGraph::RGResourcePool>(m_Device.get());
         m_Transient = std::make_unique<RenderGraph::RGTransientPool>(m_Device.get());
@@ -151,9 +174,11 @@ class MsaaColorResolveTest : public testing::Test
         m_Frame = std::make_unique<RenderGraph::RGFrame>(m_Device.get(), m_Persistent.get(), m_Transient.get(),
                                                         m_Ring.get());
         m_Frame->BeginFrame(0);
-        m_Color = m_Frame->ImportPersistentTexture("MsaaResolve.Color", ColorDesc(kSamples, 0));
+        m_Color = m_Frame->ImportPersistentTexture("MsaaResolve.Color", ColorDesc(m_Samples, 0));
         m_Resolve = m_Frame->ImportPersistentTexture("MsaaResolve.Resolve",
                                                      ColorDesc(1, static_cast<uint32_t>(TextureUsage::TransferSrc)));
+        m_BloomSampleDelta = m_Frame->ImportPersistentTexture(
+            "MsaaResolve.BloomSampleDelta", ColorDesc(1, static_cast<uint32_t>(TextureUsage::TransferSrc)));
         m_Services->BeginWorldDrawFrame();
         m_Services->BuildWorldBatchKeys();
     }
@@ -203,11 +228,13 @@ class MsaaColorResolveTest : public testing::Test
             });
     }
 
-    bool DeclareWorld()
+    bool DeclareWorld(bool withBloomSampleDelta = false)
     {
         RenderServices::WorldPassTargetsRG targets{};
         targets.Color = m_Color;
         targets.Resolve = m_Resolve;
+        if (withBloomSampleDelta)
+            targets.BloomSampleDelta = m_BloomSampleDelta;
         const RenderServices::WorldPassRG world = m_Services->AddWorldPassForView(*m_Frame, m_View, targets);
         return world.Pass.IsValid() && world.EffectiveColor.Id == m_Resolve.Id;
     }
@@ -215,6 +242,11 @@ class MsaaColorResolveTest : public testing::Test
     std::shared_ptr<RGReadbackTicket> DeclareReadback(const char* name)
     {
         return RequestTextureReadbackRG(m_Device.get(), *m_Frame, m_Resolve, name);
+    }
+
+    std::shared_ptr<RGReadbackTicket> DeclareDeltaReadback(const char* name)
+    {
+        return RequestTextureReadbackRG(m_Device.get(), *m_Frame, m_BloomSampleDelta, name);
     }
 
     void Execute()
@@ -295,22 +327,26 @@ class MsaaColorResolveTest : public testing::Test
     std::unique_ptr<RenderGraph::RGTransientPool> m_Transient;
     std::unique_ptr<RenderGraph::RGUploadRing> m_Ring;
     std::unique_ptr<RenderGraph::RGFrame> m_Frame;
+    uint32_t m_Samples = 0;
     ViewId m_View{};
     PipelineHandle m_Probe{};
     SamplerHandle m_OceanSampler{};
     RenderGraph::RGTexture m_Color{};
     RenderGraph::RGTexture m_Resolve{};
+    RenderGraph::RGTexture m_BloomSampleDelta{};
 };
 
-// The blend of the tonemapped samples: (Tonemap(25) + 7 * Tonemap(1)) / 8.
-const float kIdealBlend = (Tonemap(kBright) + (kSamples - 1) * Tonemap(kDim)) / kSamples;
+std::string SampleCapName(const testing::TestParamInfo<uint32_t>& info)
+{
+    return "UpTo" + std::to_string(info.param) + "x";
+}
 
 } // namespace
 
 // The world pass resolve on the path every view takes (RenderServices::AddWorldPassForView). One sample
-// at 25 and seven at 1 must tonemap to the blend of the tonemapped samples (0.558), not to the plain
-// average's 0.80.
-TEST_F(MsaaColorResolveTest, OneBrightSampleInEightResolvesToTheTonemappedBlend)
+// at 25 and the rest at 1 must tonemap to the blend of the tonemapped samples (0.558 at 8x, 0.615 at
+// 4x), not to the tonemap of the plain average (0.80 at 8x, 0.875 at 4x).
+TEST_P(MsaaColorResolveTest, OneBrightSampleResolvesToTheTonemappedBlend)
 {
     DeclareSamples(kDim, true);
     ASSERT_TRUE(DeclareWorld());
@@ -319,17 +355,37 @@ TEST_F(MsaaColorResolveTest, OneBrightSampleInEightResolvesToTheTonemappedBlend)
 
     ViewReadbackResult image{};
     ASSERT_TRUE(Read(ticket, image));
-    const float plainAverage = (kBright + (kSamples - 1) * kDim) / kSamples;
     const float edge = RedAt(image, kSize / 4, kSize / 2);
-    EXPECT_NEAR(Tonemap(edge), kIdealBlend, 0.01f)
-        << "resolved " << edge << "; a plain average resolves " << plainAverage << ", which tonemaps to "
-        << Tonemap(plainAverage);
+    EXPECT_NEAR(Tonemap(edge), IdealBlend(m_Samples), 0.01f)
+        << m_Samples << "x resolved " << edge << "; a plain average tonemaps to " << PlainAverageTonemapped(m_Samples);
     EXPECT_FLOAT_EQ(RedAt(image, 3 * kSize / 4, kSize / 2), kDim) << "a flat pixel resolves to its value";
+}
+
+// With a bloom sample delta target, the resolve still writes the weighted mean, and the delta is the
+// plain average minus it: bloom adds the two and gets the plain average (4.0 at 8x, 6.25 at 4x).
+TEST_P(MsaaColorResolveTest, TheBloomSampleDeltaAddsTheWeightedMeanUpToThePlainAverage)
+{
+    DeclareSamples(kDim, true);
+    ASSERT_TRUE(DeclareWorld(true));
+    const auto resolved = DeclareReadback("MsaaResolve.WeightedReadback");
+    const auto delta = DeclareDeltaReadback("MsaaResolve.DeltaReadback");
+    Execute();
+
+    ViewReadbackResult weightedImage{};
+    ASSERT_TRUE(Read(resolved, weightedImage));
+    ViewReadbackResult deltaImage{};
+    ASSERT_TRUE(Read(delta, deltaImage));
+    const float weighted = RedAt(weightedImage, kSize / 4, kSize / 2);
+    EXPECT_NEAR(Tonemap(weighted), IdealBlend(m_Samples), 0.01f) << "the scene color keeps the weighted mean";
+    const float bloomInput = weighted + RedAt(deltaImage, kSize / 4, kSize / 2);
+    EXPECT_NEAR(bloomInput, PlainAverage(m_Samples), 0.01f * PlainAverage(m_Samples))
+        << m_Samples << "x: weighted " << weighted << " plus the delta gives " << bloomInput;
+    EXPECT_FLOAT_EQ(RedAt(deltaImage, 3 * kSize / 4, kSize / 2), 0.0f) << "a flat pixel has no delta";
 }
 
 // Each pass that draws into the color declares a resolve. The graph culls one that the next resolve
 // overwrites before any read. A read between two resolves keeps the first, and the last always runs.
-TEST_F(MsaaColorResolveTest, AResolveReadBeforeTheNextOneRunsAndTheLastOneAlwaysRuns)
+TEST_P(MsaaColorResolveTest, AResolveReadBeforeTheNextOneRunsAndTheLastOneAlwaysRuns)
 {
     constexpr float kLater = 3.0f;
     DeclareSamples(kDim, true);
@@ -343,7 +399,7 @@ TEST_F(MsaaColorResolveTest, AResolveReadBeforeTheNextOneRunsAndTheLastOneAlways
 
     ViewReadbackResult image{};
     ASSERT_TRUE(Read(between, image));
-    EXPECT_NEAR(Tonemap(RedAt(image, kSize / 4, kSize / 2)), kIdealBlend, 0.01f) << "the read resolve ran";
+    EXPECT_NEAR(Tonemap(RedAt(image, kSize / 4, kSize / 2)), IdealBlend(m_Samples), 0.01f) << "the read resolve ran";
     ASSERT_TRUE(Read(last, image));
     EXPECT_FLOAT_EQ(RedAt(image, kSize / 4, kSize / 2), kLater) << "the last resolve ran";
     EXPECT_FLOAT_EQ(RedAt(image, 3 * kSize / 4, kSize / 2), kLater);
@@ -352,7 +408,7 @@ TEST_F(MsaaColorResolveTest, AResolveReadBeforeTheNextOneRunsAndTheLastOneAlways
 
 // The ocean's copy of the multisampled color blends like the scene color resolve, so refraction and
 // the underwater view see the same edges.
-TEST_F(MsaaColorResolveTest, TheOceanCopyResolvesToTheTonemappedBlend)
+TEST_P(MsaaColorResolveTest, TheOceanCopyResolvesToTheTonemappedBlend)
 {
     DeclareSamples(kDim, true);
     std::string why;
@@ -363,6 +419,8 @@ TEST_F(MsaaColorResolveTest, TheOceanCopyResolvesToTheTonemappedBlend)
     ViewReadbackResult image{};
     ASSERT_TRUE(Read(ticket, image));
     const float edge = RedAt(image, kSize / 4, kSize / 2);
-    EXPECT_NEAR(Tonemap(edge), kIdealBlend, 0.01f) << "resolved " << edge;
+    EXPECT_NEAR(Tonemap(edge), IdealBlend(m_Samples), 0.01f) << m_Samples << "x resolved " << edge;
     EXPECT_FLOAT_EQ(RedAt(image, 3 * kSize / 4, kSize / 2), kDim) << "a flat pixel resolves to its value";
 }
+
+INSTANTIATE_TEST_SUITE_P(SampleCaps, MsaaColorResolveTest, testing::Values(kMaxSamples, kForcedSamples), SampleCapName);

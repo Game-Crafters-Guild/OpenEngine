@@ -189,6 +189,20 @@ bool TooltipOverlay::UpdateText(const std::string& text)
     return true;
 }
 
+// True when a child of `element` is a popup on an overlay layer that shows now, as a dropdown's open list is.
+static bool HasOpenPopup(const UIElement& element)
+{
+    for (const auto& child : element.GetChildren())
+    {
+        if (child->GetOverlayLayer() == OverlayLayer::None)
+            continue;
+        const ResolvedStyle& style = child->GetResolvedStyle();
+        if (style.Layout.DisplayMode != DisplayMode::None && style.Visual.Visible)
+            return true;
+    }
+    return false;
+}
+
 const std::string* TooltipOverlay::FindTooltipText(UIElement* element, UIElement** outSource)
 {
     // An authored tooltip anywhere on the ancestor chain is the answer. Only
@@ -203,13 +217,18 @@ const std::string* TooltipOverlay::FindTooltipText(UIElement* element, UIElement
         const std::string& t = el->GetTooltip();
         if (!t.empty())
         {
+            // A control with an open popup shows no tooltip, so the tooltip does not cover the popup.
+            if (HasOpenPopup(*el))
+            {
+                if (outSource)
+                    *outSource = nullptr;
+                return nullptr;
+            }
             if (outSource)
                 *outSource = el;
             return &t;
         }
-        if (truncatedText)
-            continue;
-        if (const ITextMeasurable* tm = el->GetTextMeasurable();
+        if (const ITextMeasurable* tm = truncatedText ? nullptr : el->GetTextMeasurable();
             tm && tm->WasLastRunEllipsized())
         {
             // GetTextContent is the same accessor emission truncated, and it
@@ -221,6 +240,9 @@ const std::string* TooltipOverlay::FindTooltipText(UIElement* element, UIElement
                 truncatedText = &content;
             }
         }
+        // A popup does not show the tooltip of the control that opened it.
+        if (el->GetOverlayLayer() != OverlayLayer::None)
+            break;
     }
 
     if (outSource)

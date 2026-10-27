@@ -37,8 +37,7 @@ uint32 UpdatePageTable(const PageStreaming::PageCache& cache, uint32 stream, Pag
         const uint32 slot = cache.SlotOf(page);
         const bool resident = slot != PageStreaming::kNoResidentSlot;
         const PageStreaming::PageAddress& address = page.Address;
-        table.SetEntry(address.Level, address.X, address.Z,
-                       resident ? PageStreaming::PackPageEntry(slot, address.Level) : kNoPage);
+        table.SetEntry(address, resident ? PageStreaming::PackPageEntry(slot, address.Level) : kNoPage);
         if (resident)
             table.SetSlotFade(slot, cache.FadeOf(page));
         ++writes;
@@ -102,7 +101,8 @@ float32 PagedHeightSampler::SampleLevel(float32 u, float32 v, uint32 level, uint
     for (uint32 walk = level; walk < levels; ++walk)
     {
         const PageTexel texel = LocatePageTexel(Table->Levels(), walk, u, v);
-        const uint32 entry = Table->Entry(walk, texel.PageX, texel.PageZ);
+        const PageStreaming::PageAddress page{0, static_cast<uint8>(walk), texel.PageX, texel.PageZ};
+        const uint32 entry = Table->Entry(page);
         if (entry == kNoPage)
             continue; // the fallback walk: the first resident ancestor answers
         const uint32 slot = PageStreaming::PageEntrySlot(entry);

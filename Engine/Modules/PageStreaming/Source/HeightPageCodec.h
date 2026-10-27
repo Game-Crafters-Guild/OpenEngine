@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PageCodec.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 
 #include <span>
 #include <vector>

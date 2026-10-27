@@ -41,7 +41,7 @@ Components::SplineExtrude SanitizeExtrudeRecipe(const Components::SplineExtrude&
     clean.MaxHalfWidth = SanitizedFloat(authored.MaxHalfWidth, defaults.MaxHalfWidth);
     // A non-finite floor falls back to the DISABLED value, which is finite, so a
     // poisoned field can never leave a NaN in a recipe compared against itself.
-    clean.SeaLevelFloor = SanitizedFloat(authored.SeaLevelFloor, defaults.SeaLevelFloor);
+    clean.FloorHeight = SanitizedFloat(authored.FloorHeight, defaults.FloorHeight);
     clean.EndTaperMetres = SanitizedFloat(authored.EndTaperMetres, defaults.EndTaperMetres);
     clean.LateralOffset = SanitizedFloat(authored.LateralOffset, defaults.LateralOffset);
     clean.VerticalOffset = SanitizedFloat(authored.VerticalOffset, defaults.VerticalOffset);

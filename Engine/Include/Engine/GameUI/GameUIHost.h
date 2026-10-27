@@ -7,7 +7,6 @@
 #include "UI/UITargetSpace.h"
 
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <unordered_map>
 
@@ -43,7 +42,7 @@ class UIElement;
 class GameUIHost
 {
   public:
-    /// The default game UI font, relative to the asset root ConfigureFonts reads it from.
+    /// The default game UI font, resolved through the asset mounts with the project first.
     /// A packaged game ships it as an asset manifest entry (AssetCollector::CollectDefaultUIFont).
     static constexpr const char* kDefaultFontPath = "Fonts/Roboto-Regular.ttf";
 
@@ -53,16 +52,12 @@ class GameUIHost
     GameUIHost(const GameUIHost&) = delete;
     GameUIHost& operator=(const GameUIHost&) = delete;
 
-    // Build a host for one integration site: construct, install the default UI
-    // font from `fontsDir`, and record whether it composites onto a target it
-    // doesn't own. One factory so the bootstrap can't drift across the three
-    // call sites (Player, editor Game View, editor Scene View). `fontsDir` is
-    // the root containing Fonts/Roboto-Regular.ttf — the project asset root for a
-    // shipping game, the staged editor Assets for an editor preview.
+    // Build a host for one call site (Player, editor Game View, editor Scene View):
+    // install the default UI font and record whether the host composites onto a
+    // target it does not own. The mounts supply the font, the project's copy first.
     static std::unique_ptr<GameUIHost> CreateForHost(
         Rendering::IDevice* device, AssetManager* assetManager,
-        JobSystem::WorkStealingThreadPool* jobSystem,
-        const std::filesystem::path& fontsDir, bool neverClearTarget);
+        JobSystem::WorkStealingThreadPool* jobSystem, bool neverClearTarget);
 
     // Per-frame phase 1: reconcile subtrees from the world's UIDocument set.
     // Returns whether any documents exist this frame, BEFORE any pass is
@@ -213,8 +208,8 @@ class GameUIHost
     // Construction-time setup, driven only by CreateForHost.
 
     // Install the default UI font + async resolver (mirrors the editor's font
-    // bootstrap). assetsDir is the root containing Fonts/Roboto-Regular.ttf.
-    void ConfigureFonts(const std::filesystem::path& assetsDir);
+    // bootstrap).
+    void ConfigureFonts();
 
     // When true, RenderRG always composites with Load even for Fullscreen
     // documents — for a host compositing onto a target it doesn't own (the editor

@@ -10,12 +10,29 @@
 #include "ECS/World.h"
 #include "Logger/Logger.h"
 #include "Scene/PrefabLibrary.h"
+#include "Scene/PrefabPlacement.h"
 #include "Scripting/AbiMainThread.h"
 
 #include <cassert>
 
 namespace GameEngine::Scene
 {
+
+ECS::EntityHandle SpawnTemplate(ECS::World& world, const PrefabLibrary& library, const PrefabTemplate& prefab,
+                                const GUID& source, const Components::Transform& at, ECS::EntityHandle parent,
+                                ECS::EntityRemap& remap)
+{
+    if (!world.CreateBatchFromWorld(library.GetWorld(), prefab.Plan, remap))
+        return {};
+    const ECS::EntityHandle root = remap.GetTargets().front();
+    world.AddComponentImmediate(root, at);
+    if (parent.IsValid())
+        world.AddComponentImmediate(root, Components::Parent{parent});
+    Components::PrefabInstance marker{};
+    marker.Source = source;
+    world.AddComponentImmediate(root, marker);
+    return root;
+}
 
 ECS::EntityHandle SpawnPrefab(ECS::World& world, const GUID& prefab, const Components::Transform& at,
                               ECS::EntityHandle parent)
@@ -34,18 +51,8 @@ ECS::EntityHandle SpawnPrefab(ECS::World& world, const GUID& prefab, const Compo
         library->ReportNotResident(prefab);
         return {};
     }
-
     thread_local ECS::EntityRemap remap;
-    if (!world.CreateBatchFromWorld(library->GetWorld(), prefabTemplate->Plan, remap))
-        return {};
-    const ECS::EntityHandle root = remap.GetTargets().front();
-    world.AddComponentImmediate(root, at);
-    if (parent.IsValid())
-        world.AddComponentImmediate(root, Components::Parent{parent});
-    Components::PrefabInstance marker{};
-    marker.Source = prefab;
-    world.AddComponentImmediate(root, marker);
-    return root;
+    return SpawnTemplate(world, *library, *prefabTemplate, prefab, at, parent, remap);
 }
 
 void DespawnPrefab(ECS::World& world, ECS::EntityHandle root)

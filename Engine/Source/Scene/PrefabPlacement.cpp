@@ -2,8 +2,10 @@
 
 #include "Components/Hierarchy.h"
 #include "Components/PrefabInstance.h"
+#include "Components/SceneEntityTag.h"
 #include "ECS/ComponentFieldRegistry.h"
 #include "ECS/ECSTemplates.h"
+#include "ECS/Query.h"
 #include "ECS/World.h"
 #include "Logger/Logger.h"
 #include "Scene/PrefabLibrary.h"
@@ -333,14 +335,23 @@ static void CollectPrefabRefs(const ECS::World& world, std::span<const ECS::Enti
     }
 }
 
-void HoldReferencedPrefabs(PrefabPlacement& placement, std::span<const ECS::EntityHandle> entities)
+std::unordered_set<std::string> CollectSceneIdentities(ECS::World& world)
+{
+    std::unordered_set<std::string> used;
+    world.Query<ECS::Read<Components::SceneEntityTag>>().IncludeDisabled().Each(
+        [&used](ECS::EntityHandle, const Components::SceneEntityTag& tag) { used.emplace(tag.View()); });
+    return used;
+}
+
+void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const LoadOptions& options,
+                           std::span<const ECS::EntityHandle> entities)
 {
     const auto fields = CollectPrefabRefFields();
     if (fields.empty())
         return;
-    PrefabLibrary& library = LibraryOf(placement);
+    // Each GUID enters `pending` once, so a prefab that names itself or a cycle of prefabs ends.
     std::vector<GUID> pending;
-    CollectPrefabRefs(placement.world, entities, fields, pending);
+    CollectPrefabRefs(world, entities, fields, pending);
     for (std::size_t next = 0; next < pending.size(); ++next)
     {
         const GUID source = pending[next];
@@ -349,7 +360,7 @@ void HoldReferencedPrefabs(PrefabPlacement& placement, std::span<const ECS::Enti
         {
             std::filesystem::path path;
             AssetType type = AssetType::Unknown;
-            ISceneAssetResolver* resolver = placement.options.assetResolver;
+            ISceneAssetResolver* resolver = options.assetResolver;
             if (!resolver || !resolver->TryGetPathAndType(resolver->ResolveGuid(source), path, type))
             {
                 Logger::Log::Error("Scene: a PrefabRef names the asset {}, which the project does not have. Assign "
@@ -358,7 +369,7 @@ void HoldReferencedPrefabs(PrefabPlacement& placement, std::span<const ECS::Enti
                 continue;
             }
             std::string error;
-            prefab = BuildTemplateFromFile(library, path.lexically_normal(), source, placement.options, error);
+            prefab = BuildTemplateFromFile(library, path.lexically_normal(), source, options, error);
             if (!prefab)
             {
                 Logger::Log::Error("Scene: a PrefabRef names a prefab that could not be loaded: {}", error);
@@ -366,7 +377,7 @@ void HoldReferencedPrefabs(PrefabPlacement& placement, std::span<const ECS::Enti
             }
             CollectPrefabRefs(library.GetWorld(), prefab->Entities, fields, pending);
         }
-        library.Hold(placement.world, *prefab);
+        library.Hold(world, *prefab);
     }
 }
 

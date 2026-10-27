@@ -10,7 +10,8 @@ constexpr float kMaxEditorAssetsTreeIconSizePx = 32.0f;
 constexpr float kMinEditorTreeRowHeightPx = 16.0f;
 constexpr float kMaxEditorTreeRowHeightPx = 80.0f;
 
-/** Sets --ui_tree_icon_* custom properties on \p scope so `.tree-title` folder icons match TreeView icon size. */
+/** Sets --ui_tree_icon_* custom properties on \p scope so `.tree-title` folder icons match TreeView icon size,
+    and the `tree-icons-show-badges` class when the icons are 20 px or more, large enough for a corner badge. */
 void ApplyTreeTitleIconLayoutVars(UIElement* scope, float iconSizePx);
 
 /** Row height derived from icon size when Settings keeps icon and row in sync (hierarchy up to 64 px icon). */

@@ -94,7 +94,7 @@ class PrefabLibrary
     ECS::World& GetWorld() { return *m_World; }
     const ECS::World& GetWorld() const { return *m_World; }
 
-    /// The newest generation of the prefab at `path` (absolute, lexically normal), or null.
+    /// The newest generation of the prefab at `path` (absolute, in any spelling of the file), or null.
     const PrefabTemplate* FindByPath(const std::filesystem::path& path) const;
     /// The newest generation of the prefab asset `source`, or null when it is not resident.
     const PrefabTemplate* FindByGuid(const GUID& source) const;
@@ -142,7 +142,7 @@ class PrefabLibrary
     void DestroyTemplate(const PrefabTemplate& prefab);
 
     std::unique_ptr<ECS::World> m_World;
-    FastHashMap<std::string, std::unique_ptr<Record>> m_Records; // by Path.generic_string()
+    FastHashMap<std::string, std::unique_ptr<Record>> m_Records; // by the registry key of Path
     FastHashMap<GUID, std::string> m_KeyBySource;
     FastHashMap<std::uint64_t, WorldHolds> m_HoldsByWorld;
 

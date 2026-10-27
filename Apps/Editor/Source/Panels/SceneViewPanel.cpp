@@ -1,4 +1,5 @@
 #include "Panels/SceneViewPanel.h"
+#include "Prefabs/PrefabService.h"
 #include "Panels/SceneCameraSettingsPopup.h"
 #include "SceneViewController.h"
 #include "SceneView/SceneViewEvents.h"
@@ -230,12 +231,6 @@ static const SceneToolbarIconToggle kSceneToolbarIconToggles[] = {
 constexpr uint32_t kCmdSceneToolbarToggleBase = 0x5301;
 constexpr uint32_t kCmdSceneToolbarFpsToggle  = 0x5401;
 constexpr uint32_t kCmdSceneFpsToggleVsync    = 0x5402;
-
-bool IsModelFileExtension(const std::string& ext)
-{
-    return ext == ".glb" || ext == ".gltf" || ext == ".obj" || ext == ".fbx" || ext == ".GLB" || ext == ".GLTF" || ext == ".OBJ"
-           || ext == ".FBX";
-}
 
 void ApplyRootWorldPosition(ECS::World& world, ECS::EntityHandle root, const Mathematics::Vector3& worldPos)
 {
@@ -3709,7 +3704,7 @@ UI::Interaction::DropFeedback SceneViewPanel::CanDrop(const UI::Interaction::Dro
         std::filesystem::path absPath = metadata.Path;
         if (!absPath.is_absolute() && !m_Context->AssetsRoot.empty())
             absPath = m_Context->AssetsRoot / absPath;
-        const bool isModel = IsModelFileExtension(absPath.extension().string());
+        const bool isModel = Editor::IsPlacedModelFile(absPath);
         if (isModel && !ResolveRenderServices())
             return {false, "No render services"};
         return {true, {}, isModel};
@@ -3728,12 +3723,14 @@ UI::Interaction::DropFeedback SceneViewPanel::CanDrop(const UI::Interaction::Dro
     const auto* pl = request.payload.TryGet<Editor::AssetPathsDragPayload>();
     if (!pl || pl->paths.empty())
         return {false, "Empty payload"};
+    if (std::string refusal = Editor::DescribeRefusedDrop(pl->paths); !refusal.empty())
+        return {false, std::move(refusal)};
     bool needsModelPipeline = false;
     for (const auto& p : pl->paths)
     {
         if (p.empty())
             continue;
-        if (IsModelFileExtension(p.extension().string()))
+        if (Editor::IsPlacedModelFile(p))
         {
             needsModelPipeline = true;
             break;
@@ -4365,7 +4362,7 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             continue;
         }
 
-        const bool isModel = IsModelFileExtension(ext);
+        const bool isModel = Editor::IsPlacedModelFile(absPath);
 
         if (isModel)
         {
@@ -4400,38 +4397,25 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             continue;
         }
 
-        ECS::EntityHandle e = world->CreateEntity();
-        if (!e.IsValid())
-            continue;
-
-        Components::Name nm{};
-        std::memset(nm.value, 0, sizeof(nm.value));
-        const std::string stem = absPath.stem().string();
-        std::strncpy(nm.value, stem.c_str(), sizeof(nm.value) - 1);
-        world->AddComponentImmediate(e, nm);
-
+        if (assetType == AssetType::Prefab)
         {
-            Components::Transform dropXf{};
-            dropXf.SetIdentity();
-            dropXf.matrix[12] = worldPos.x;
-            dropXf.matrix[13] = worldPos.y;
-            dropXf.matrix[14] = worldPos.z;
-            world->AddComponentImmediate(e, dropXf);
+            Components::Transform at{};
+            at.SetIdentity();
+            at.Translate(worldPos.x, worldPos.y, worldPos.z);
+            const ECS::EntityHandle root = Editor::PrefabService(am).Place(*world, absPath, at, {});
+            if (root.IsValid())
+                droppedRoots.push_back(root);
+            continue;
         }
 
-        // The marker names the source by GUID; the next load fills the instance from it.
-        Components::PrefabInstance inst{};
-        inst.Source = EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(absPath);
-        world->AddComponentImmediate(e, inst);
-        Editor::AppendUnorderedRootsToHierarchyEnd(*world, std::span(&e, 1));
-        droppedRoots.push_back(e);
+        Editor::ShowSceneViewNotice(Editor::DescribeUnplaceableFile(absPath));
     }
 
     NotifyWorldStructure(m_ChangeNotifications, world);
     if (m_Context && m_Context->OnSceneDirty)
         m_Context->OnSceneDirty();
 
-    // Run immediately (not PostAction). Deferring pushed the Scene Drop undo after later edits
+    // Run immediately (not PostAction). Deferring pushed the drop's undo step after later edits
     // (e.g. hierarchy selection), so Undo would remove the drop before the selection change.
     if (!droppedRoots.empty() && m_OnSceneAssetDropComplete && viewport)
     {
@@ -4956,7 +4940,7 @@ void SceneViewPanel::SetDropPreview(const UI::Interaction::DropPreviewState& sta
         }
     }
 
-    if (first.empty() || !IsModelFileExtension(first.extension().string()))
+    if (first.empty() || !Editor::IsPlacedModelFile(first))
     {
         ClearDropPreviewModel();
         return;

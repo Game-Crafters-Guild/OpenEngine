@@ -30,10 +30,11 @@ bool FindSectionClaimedByAnotherHost(const EditorComponentTraitsRegistry& regist
                                      ECS::ComponentTypeId& outOtherHostTypeId)
 {
     std::vector<std::pair<ECS::ComponentTypeId, EditorComponentTraits>> otherHosts;
-    for (auto& [typeId, traits] : registry.Snapshot())
+    const auto registered = registry.Snapshot();
+    for (const auto& [typeId, traits] : *registered)
     {
         if (typeId != hostTypeId && traits.HostsInspectorSection)
-            otherHosts.emplace_back(typeId, std::move(traits));
+            otherHosts.emplace_back(typeId, traits);
     }
     if (otherHosts.empty())
         return false;
@@ -82,6 +83,7 @@ void EditorComponentTraitsRegistry::Register(ECS::ComponentTypeId typeId, Editor
     std::lock_guard<std::mutex> lock(m_Mutex);
     m_Traits[typeId] = std::move(traits);
     m_ModuleOwners[typeId] = ECS::GetActiveRegistrationModule();
+    m_Snapshot = std::make_shared<const Entries>(m_Traits.begin(), m_Traits.end());
 }
 
 bool EditorComponentTraitsRegistry::TryGet(ECS::ComponentTypeId typeId, EditorComponentTraits& outTraits) const
@@ -133,10 +135,10 @@ bool EditorComponentTraitsRegistry::TryGetSectionHost(ECS::ComponentTypeId hoste
     return false;
 }
 
-std::vector<std::pair<ECS::ComponentTypeId, EditorComponentTraits>> EditorComponentTraitsRegistry::Snapshot() const
+std::shared_ptr<const EditorComponentTraitsRegistry::Entries> EditorComponentTraitsRegistry::Snapshot() const
 {
     std::lock_guard<std::mutex> lock(m_Mutex);
-    return {m_Traits.begin(), m_Traits.end()};
+    return m_Snapshot;
 }
 
 void EditorComponentTraitsRegistry::AppendModulePins(std::string_view moduleId,

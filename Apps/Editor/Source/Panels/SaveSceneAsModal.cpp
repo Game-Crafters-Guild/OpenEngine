@@ -1,16 +1,21 @@
 #include "Panels/SaveSceneAsModal.h"
 
+#include "Input/KeyCodes.h"
+#include "Logger/Logger.h"
 #include "Platform/Capabilities.h"
 #include "Platform/Shell.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/TextField.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
-#include "Input/KeyCodes.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <memory>
+#include <string_view>
 #include <vector>
 
 namespace GameEngine
@@ -18,6 +23,20 @@ namespace GameEngine
 
 namespace
 {
+constexpr const char* kLayoutAssetPath = "UI/controls/SaveSceneAsModal/SaveSceneAsModal.uxml";
+constexpr const char* kStyleAssetPath = "UI/controls/SaveSceneAsModal/SaveSceneAsModal.css";
+constexpr const char* kFolderRowLayoutAssetPath = "UI/controls/SaveSceneAsModal/SaveSceneAsFolderRow.uxml";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 7> kRequiredIds = {
+    "save-scene-as-name",
+    "save-scene-as-browse",
+    "save-scene-as-directory",
+    "save-scene-as-folders",
+    "save-scene-as-warning",
+    "save-scene-as-cancel",
+    "save-scene-as-save",
+};
+
 static std::string SanitizeFileStem(std::string s)
 {
     // Very small sanitizer: keep alnum, '_' '-' and space; replace others with '_'.
@@ -43,115 +62,24 @@ SaveSceneAsModal::SaveSceneAsModal()
 {
     AddClass("modal-overlay");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
+    RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    auto backdrop = std::make_unique<UIElement>();
-    backdrop->AddClass("modal-backdrop");
-
-    auto window = std::make_unique<UIElement>();
-    window->AddClass("modal-window");
-    window->AddClass("modal-window-shadow");
-    window->AddClass("modal-window-560");
-
-    // Header
-    {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("modal-header");
-        auto title = std::make_unique<Label>();
-        title->SetText("Save Scene As");
-        title->AddClass("modal-title");
-        header->AddChild(std::move(title));
-        window->AddChild(std::move(header));
-    }
-
-    // Content
-    {
-        auto content = std::make_unique<UIElement>();
-        content->AddClass("modal-content");
-        content->AddClass("modal-content-column");
-
-        {
-            auto row = std::make_unique<UIElement>();
-            row->AddClass("modal-field-row");
-            auto label = std::make_unique<Label>();
-            label->SetText("Scene name");
-            label->AddClass("modal-field-label");
-            row->AddChild(std::move(label));
-
-            auto field = std::make_unique<TextField>();
-            m_NameField = field.get();
-            field->SetValue("NewScene");
-            field->AddClass("modal-text-field");
-            field->SetOnCommit([this]() { OnSaveClicked(); });
-            row->AddChild(std::move(field));
-            content->AddChild(std::move(row));
-        }
-
-        {
-            auto row = std::make_unique<UIElement>();
-            row->AddClass("modal-field-row");
-            auto label = std::make_unique<Label>();
-            label->SetText("Folder");
-            label->AddClass("modal-field-label");
-            row->AddChild(std::move(label));
-
-            auto dirRow = std::make_unique<UIElement>();
-            dirRow->AddClass("save-scene-as-directory-row");
-
-            auto browse = std::make_unique<Button>();
-            browse->SetText("Browse...");
-            browse->AddClass("secondary");
-            browse->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnBrowseClicked(); });
-
-            auto dirLabel = std::make_unique<Label>();
-            m_DirLabel = dirLabel.get();
-            dirLabel->SetText("(none)");
-            dirLabel->AddClass("save-scene-as-directory-label");
-
-            dirRow->AddChild(std::move(browse));
-            dirRow->AddChild(std::move(dirLabel));
-            row->AddChild(std::move(dirRow));
-            content->AddChild(std::move(row));
-
-            // Web-only project-folder chooser. Browse drills through the open
-            // project's own subfolders here instead of the OS importer; the rows
-            // are empty (and the block collapses) until Browse is clicked.
-            auto folderList = std::make_unique<UIElement>();
-            m_FolderList = folderList.get();
-            folderList->AddClass("save-scene-as-folder-list");
-            content->AddChild(std::move(folderList));
-        }
-
-        {
-            auto warn = std::make_unique<Label>();
-            m_OverwriteWarningLabel = warn.get();
-            warn->SetText("");
-            warn->AddClass("save-scene-as-warning");
-            content->AddChild(std::move(warn));
-        }
-
-        window->AddChild(std::move(content));
-    }
-
-    // Footer buttons
-    {
-        auto footer = std::make_unique<UIElement>();
-        footer->AddClass("modal-footer");
-
-        auto cancel = std::make_unique<Button>();
-        cancel->SetText("Cancel");
-        cancel->AddClass("secondary");
-        cancel->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
-
-        auto save = std::make_unique<Button>();
-        m_SaveButton = save.get();
-        save->SetText("Save");
-        save->AddClass("primary");
-        save->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnSaveClicked(); });
-
-        footer->AddChild(std::move(cancel));
-        footer->AddChild(std::move(save));
-        window->AddChild(std::move(footer));
-    }
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
+    m_NameField = dynamic_cast<TextField*>(backdrop->FindById("save-scene-as-name"_sid));
+    m_DirLabel = dynamic_cast<Label*>(backdrop->FindById("save-scene-as-directory"_sid));
+    m_FolderList = backdrop->FindById("save-scene-as-folders"_sid);
+    m_OverwriteWarningLabel = dynamic_cast<Label*>(backdrop->FindById("save-scene-as-warning"_sid));
+    m_SaveButton = dynamic_cast<Button*>(backdrop->FindById("save-scene-as-save"_sid));
+    if (m_NameField)
+        m_NameField->SetOnCommit([this]() { OnSaveClicked(); });
+    backdrop->FindById("save-scene-as-browse"_sid)
+        ->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnBrowseClicked(); });
+    backdrop->FindById("save-scene-as-cancel"_sid)
+        ->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
+    backdrop->FindById("save-scene-as-save"_sid)
+        ->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnSaveClicked(); });
 
     backdrop->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
     {
@@ -169,7 +97,6 @@ SaveSceneAsModal::SaveSceneAsModal()
         }
     });
 
-    backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 
@@ -245,40 +172,50 @@ void SaveSceneAsModal::PopulateFolderList()
         return;
     m_FolderList->RemoveAllChildren();
 
-    auto addRow = [this](const std::string& text, const std::filesystem::path& target) {
-        auto btn = std::make_unique<Button>();
-        btn->SetText(text);
-        btn->AddClass("save-scene-as-folder-row");
-        btn->AddClass("secondary");
-        btn->RegisterEventHandler(kEventButtonClick, [this, target](UIEvent&) {
-            m_SelectedDir = target;
-            if (m_DirLabel)
-                m_DirLabel->SetText(m_SelectedDir.string());
-            PopulateFolderList();
-        });
-        m_FolderList->AddChild(std::move(btn));
-    };
-
     // Up one level, bounded at the project root so the destination cannot escape it.
-    if (!m_ProjectRoot.empty() && m_SelectedDir != m_ProjectRoot)
-        addRow("[ .. ]", m_SelectedDir.parent_path());
+    if (!m_ProjectRoot.empty() && m_SelectedDir != m_ProjectRoot && !AddFolderRow("[ .. ]", m_SelectedDir.parent_path()))
+        return;
 
     // Immediate subfolders only: one level is the single read the UI thread may
     // make on every platform (see FileSystem::ListDirectories).
-    std::vector<std::filesystem::path> dirs;
-    std::error_code ec;
-    for (std::filesystem::directory_iterator it(m_SelectedDir, ec), end; !ec && it != end; it.increment(ec))
+    std::vector<std::filesystem::path> folders;
+    std::error_code listError;
+    for (std::filesystem::directory_iterator it(m_SelectedDir, listError), end; !listError && it != end; it.increment(listError))
     {
-        std::error_code de;
-        if (!it->is_directory(de))
+        std::error_code entryError;
+        if (!it->is_directory(entryError))
             continue;
         const std::string name = it->path().filename().string();
         if (!name.empty() && name.front() != '.')
-            dirs.push_back(it->path());
+            folders.push_back(it->path());
     }
-    std::sort(dirs.begin(), dirs.end());
-    for (const auto& d : dirs)
-        addRow(d.filename().string(), d);
+    std::sort(folders.begin(), folders.end());
+    for (const std::filesystem::path& directory : folders)
+        if (!AddFolderRow(directory.filename().string(), directory))
+            return;
+}
+
+bool SaveSceneAsModal::AddFolderRow(const std::string& text, const std::filesystem::path& target)
+{
+    std::unique_ptr<UIElement> row = Editor::ControlLayoutLoader::Load(kFolderRowLayoutAssetPath, {});
+    if (!row)
+        return false;
+    auto* button = dynamic_cast<Button*>(row.get());
+    if (!button)
+    {
+        Logger::Log::Error("Save Scene As: {} needs a Button at its root, so the folder list cannot show.",
+                           kFolderRowLayoutAssetPath);
+        return false;
+    }
+    button->SetText(text);
+    button->RegisterEventHandler(kEventButtonClick, [this, target](UIEvent&) {
+        m_SelectedDir = target;
+        if (m_DirLabel)
+            m_DirLabel->SetText(m_SelectedDir.string());
+        PopulateFolderList();
+    });
+    m_FolderList->AddChild(std::move(row));
+    return true;
 }
 
 void SaveSceneAsModal::ClearOverwritePrompt()

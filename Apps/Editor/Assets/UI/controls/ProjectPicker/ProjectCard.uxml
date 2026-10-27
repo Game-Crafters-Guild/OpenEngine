@@ -1,0 +1,13 @@
+<!-- The content of one project card with a thumbnail: a recent project in the library grid or a catalog entry.
+     ProjectCard.cpp sets the thumbnail, the tint and the text; the ids are the contract with that file. The styles
+     are in ProjectPicker.css and ProjectCard.css. -->
+<UIElement class="project-card-lift">
+  <UIElement id="project-card-preview" class="project-card-preview">
+    <UIElement id="project-card-preview-image" class="project-card-preview-image" />
+  </UIElement>
+  <UIElement class="project-card-body">
+    <Label id="project-card-name" class="project-card-title" />
+    <Label id="project-card-meta" class="project-card-meta" />
+  </UIElement>
+  <UIElement class="project-card-outline" />
+</UIElement>

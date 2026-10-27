@@ -1,7 +1,7 @@
 #pragma once
 
 #include "AssetCore/GUID.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Types/Types.h"
 
 #include <array>

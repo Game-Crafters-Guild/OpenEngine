@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "Inspectors/TextureCoveragePolicyNotice.h"
+#include "Inspectors/Texture/TextureCoveragePolicyNotice.h"
 
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Label.h"

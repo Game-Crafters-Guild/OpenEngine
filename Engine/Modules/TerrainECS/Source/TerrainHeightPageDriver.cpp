@@ -2,19 +2,23 @@
 
 #include "TerrainECS/HeightPageStoreLoader.h"
 #include "TerrainECS/TerrainHeightPageFeature.h"
+#include "TerrainECS/PlanetPageRequester.h"
 #include "TerrainECS/TerrainHeightPages.h"
 #include "TerrainECS/TerrainHeightSource.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainECS/TerrainService.h"
 #include "CBTTerrain/CBTLayout.h"
+#include "CBTTerrain/CBTPlanetShading.h"
 #include "Components/Terrain/Terrain.h"
+#include "Components/Terrain/TerrainPlanetRelief.h"
 #include "PageStreaming/GeneratedHeightPageProvider.h"
-#include "PageStreaming/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
 #include "Rendering/Core/Device.h"
 #include "Types/Fnv1a.h"
 
 #include <bit>
 #include <cmath>
+#include <format>
 
 namespace GameEngine::TerrainECS
 {
@@ -46,6 +50,76 @@ uint64 GeneratedHeightIdentity(const PageStreaming::GeneratedHeightLattice& latt
     hash = HashCombine(hash, lattice.TileSamples);
     hash = HashCombine(hash, lattice.TilesX);
     return HashCombine(hash, lattice.TilesZ);
+}
+
+namespace
+{
+
+uint64 PlanetIdentity(float64 radius, uint32 faceSamples, const Components::TerrainPlanetRelief& relief)
+{
+    uint64 hash = HashCombine(0x2545F4914F6CDD1Dull, std::bit_cast<uint64>(radius));
+    hash = HashCombine(hash, faceSamples);
+    hash = HashCombine(hash, std::bit_cast<uint32>(relief.Amplitude));
+    hash = HashCombine(hash, std::bit_cast<uint32>(relief.Frequency));
+    return HashCombine(hash, relief.Octaves);
+}
+
+} // namespace
+
+void RequestPlanetHeightPages(TerrainService& service, const Rendering::IDevice& device, uint32 planet,
+                              uint32 renderTerrain, std::string_view name, const Components::Terrain& terrain,
+                              const Components::TerrainPlanetRelief& relief,
+                              std::span<const Mathematics::Vector3> cameras, float32 focalScale)
+{
+    if (focalScale <= 0.0f || cameras.empty())
+        return;
+    TerrainHeightPages& pages = service.GetHeightPages();
+    const float64 radius = terrain.PlanetRadius;
+    const float32 texel = terrain.SamplesPerMeter > 0.0f ? 1.0f / terrain.SamplesPerMeter : 0.0f;
+    const uint32 faceSamples = PlanetFaceSamples(radius, texel);
+    if (faceSamples == 0)
+    {
+        pages.ReportRefusal(planet, std::format("{} does not stream height pages: a planet of radius {} m at {} "
+                                                "samples a meter passes the page store's samples a side; lower its "
+                                                "Samples Per Meter",
+                                                name.empty() ? std::string_view("A planet") : name, radius,
+                                                terrain.SamplesPerMeter));
+        return;
+    }
+
+    PlanetPagedRequest request;
+    request.Planet = planet;
+    request.Name = name;
+    request.SourceIdentity = PlanetIdentity(radius, faceSamples, relief);
+    request.Shape.ReferenceRadius = radius;
+    request.Shape.FaceSamples = faceSamples;
+    // The narrow arm (the web) pages a planet as the desktop does, a level coarser where it would pass its
+    // slots, and draws the closed-form relief: it reads no pages.
+    const bool narrow = CBTTerrain::CBTDeviceRunsNarrowArm(
+        device.PreferredShaderSource() == Rendering::ShaderSourceKind::Wgsl, device.GetCapabilities().supportsShaderInt64);
+    request.FitToSlots = narrow;
+    request.GpuPages = !narrow;
+    request.RenderTerrain = renderTerrain;
+    if (pages.NeedsPlanetSource(planet, request.SourceIdentity))
+    {
+        PageStreaming::GeneratedPlanetLattice lattice;
+        lattice.ReferenceRadius = radius;
+        lattice.FaceSamples = faceSamples;
+        lattice.Height = [relief](const Mathematics::Vector3& direction, float32 minResolvedArc) {
+            return CBTTerrain::PlanetRelief(direction.x, direction.y, direction.z, relief.Amplitude, relief.Frequency,
+                                            relief.Octaves, minResolvedArc);
+        };
+        lattice.HeightRange = [relief](const Mathematics::Vector3& direction, float32 chord, float32 minResolvedArc) {
+            const CBTTerrain::PlanetReliefRange range =
+                CBTTerrain::PlanetReliefRangeNear(direction.x, direction.y, direction.z, chord, relief.Amplitude,
+                                                  relief.Frequency, relief.Octaves, minResolvedArc);
+            return PageStreaming::PageHeightRange{range.Min, range.Max};
+        };
+        request.Source.Generated = std::make_shared<const PageStreaming::GeneratedHeightPageProvider>(std::move(lattice));
+    }
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 2.0f * std::atan(1.0f / focalScale),
+                                                 terrain.TargetPixelError);
+    pages.RequestPlanet(request, cameras, view);
 }
 
 void RequestTiledTerrainHeightPages(TerrainService& service, const Rendering::IDevice& device,
@@ -172,6 +246,9 @@ void UpdateHeightPages(TerrainService& service, TerrainRenderFeature& terrainFea
         terrainFeature.AccumulateAtlasHeightDirtyUV(TerrainHandle{rect.Terrain, rect.TerrainGeneration}, rect.MinU,
                                                     rect.MinV, rect.MaxU, rect.MaxV);
     heightPages.DirtyRects().clear();
+    if (heightPages.PlanetDirtyRegions().Count != 0u)
+        service.AccumulatePlanetPageDirtyRegions(heightPages.PlanetDirtyRegions());
+    heightPages.PlanetDirtyRegions() = {};
 }
 
 } // namespace GameEngine::TerrainECS

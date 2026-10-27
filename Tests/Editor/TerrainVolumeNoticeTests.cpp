@@ -25,7 +25,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
-#include "Inspectors/TerrainVolumeNotices.h"
+#include "Terrain/TerrainVolumeNotices.h"
 #include "UI/Controls/InspectorNotice.h"
 #include "UI/Controls/Label.h"
 #include "UI/UIElement.h"

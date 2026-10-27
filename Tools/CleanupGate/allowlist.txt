@@ -13,6 +13,14 @@ Apps/Editor/Source/DeviceLossSurfacer.cpp:std_thread:1                          
 Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:atomic_spin:1                      # a watchdog (must not depend on the pool it watches)
 Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:sleep_poll:1                       # a watchdog (must not depend on the pool it watches)
 Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:std_thread:2                       # a watchdog (must not depend on the pool it watches)
+Apps/Editor/Source/Panels/LogChannelPopover.cpp:add_child_calls:1                            # no layout file can name the search field; #5156
+Apps/Editor/Source/Panels/LogChannelPopover.cpp:control_creations:1                          # no layout file can name the search field; #5156
+Apps/Editor/Source/Panels/LogChannelPopover.cpp:files_assembling_ui:1                        # no layout file can name the search field; #5156
+Apps/Editor/Source/Panels/ProjectPicker/ProjectCard.cpp:named_for_a_function:1               # the class ProjectCard; the rule ignores the classes a file defines (#5208)
+Apps/Editor/Source/Panels/ProjectPicker/ProjectCard.h:named_for_a_function:1                 # the class ProjectCard; the rule ignores the classes a file defines (#5208)
+Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:add_child_calls:3                    # the dialog attaches as the eight before it (modal mount #5071); the two Inspector banners mount their controls
+Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:files_assembling_ui:1                # attaches as the eight dialogs before it; the shared modal mount is #5071
+Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:imperative_no_asset:1                # attaches as the eight dialogs before it; the shared modal mount is #5071
 Apps/Editor/Source/Projects/SubprocessStream.cpp:std_thread:1                                # a process host (pipes block)
 Apps/Editor/Source/main.cpp:debug_output:1                                                   # crash handler: writes to the debugger after the logger may be gone
 Apps/Editor/Source/main.cpp:printf_output:14                                                 # crash handler: writes to stderr after the logger may be gone
@@ -44,10 +52,10 @@ Engine/Modules/JobSystem/Source/JobCounter.cpp:raw_new:1                        
 Engine/Modules/JobSystem/Source/TaskSlabPool.cpp:raw_delete:2                                # the job system's own allocator (task slabs, queues, job records)
 Engine/Modules/JobSystem/Source/TaskSlabPool.cpp:raw_new:1                                   # the job system's own allocator (task slabs, queues, job records)
 Engine/Modules/JobSystem/Source/WorkStealingThreadPool.cpp:raw_new:2                         # the job system's own allocator (task slabs, queues, job records)
-Engine/Modules/Logger/Include/Logger/Logger.h:condition_variable:1                           # the log flush thread (Logger is below JobSystem)
-Engine/Modules/Logger/Include/Logger/Logger.h:future_promise:1                               # the log flush thread (Logger is below JobSystem)
-Engine/Modules/Logger/Include/Logger/Logger.h:std_thread:1                                   # the log flush thread (Logger is below JobSystem)
-Engine/Modules/Logger/Include/Logger/Logger.h:std_thread_id_info:1                           # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Source/LoggerInternals.h:condition_variable:1                           # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Source/LoggerInternals.h:future_promise:1                               # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Source/LoggerInternals.h:std_thread:1                                   # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Logger/Source/LoggerInternals.h:std_thread_id_info:1                           # the log flush thread (Logger is below JobSystem)
 Engine/Modules/Logger/Source/Logger.cpp:future_promise:3                                     # the log flush thread (Logger is below JobSystem)
 Engine/Modules/Logger/Source/Logger.cpp:sleep_poll:1                                         # the log flush thread (Logger is below JobSystem)
 Engine/Modules/Logger/Source/Logger.cpp:std_thread:1                                         # the log flush thread (Logger is below JobSystem)
@@ -99,13 +107,17 @@ Engine/Source/Engine/Video/VideoPlayerFFmpeg.cpp:std_thread:2                   
 Engine/Source/Engine/Video/VideoWriter.mm:sleep_poll:2                                       # polls AVFoundation's readyForMoreMediaData, the encoder's own flag
 Engine/Source/Jobs/CompileServerClient.cpp:sleep_poll:1                                      # a process host (pipes block)
 Engine/Source/Jobs/PipeTransport.cpp:sleep_poll:1                                            # a process host (pipes block)
-Engine/Source/Scene/PrefabOverrideWriter.cpp:std_unordered_map:4                             # keyed per entity of a whole scene (the save context's tag map, the members by entity): a sorted insert is linear
+Engine/Source/Scene/PrefabAuthoring.cpp:std_unordered_map:1                                     # whole-scene id sets built once per command; `AllocateUniqueSceneEntityId` owns the type; the scene id index is #5072
+Engine/Source/Scene/PrefabAuthoring.cpp:string_key_unordered_set:5                              # whole-scene id sets built once per command; `AllocateUniqueSceneEntityId` owns the type; the scene id index is #5072
+Engine/Source/Scene/PrefabOverrideWriter.cpp:std_unordered_map:8                             # keyed per entity of a whole scene (the save context's tag map, the members by entity): a sorted insert is linear
 Engine/Source/Scene/PrefabOverrideWriter.cpp:std_unordered_set:1                             # keyed per entity of a whole scene (the excluded set, the created ids): a sorted insert is linear
 Engine/Source/Scene/PrefabOverrideWriter.cpp:string_key_unordered_set:2                      # the tags of every entity of a whole scene: a sorted insert is linear
 Engine/Source/Scene/PrefabOverrideWriter.h:std_unordered_map:2                               # keyed per entity of a whole scene (the save context's tag map, the members by entity): a sorted insert is linear
 Engine/Source/Scene/PrefabOverrideWriter.h:std_unordered_set:1                               # keyed per entity of a whole scene (the excluded set, the created ids): a sorted insert is linear
 Engine/Source/Scene/PrefabOverrideWriter.h:string_key_unordered_set:1                        # the tags of every entity of a whole scene: a sorted insert is linear
-Engine/Source/Scene/PrefabSpawn.cpp:one_free_function_file:1                                 # SpawnPrefab and DespawnPrefab; the gate does not see SpawnPrefab, whose signature wraps
+Engine/Source/Scene/PrefabPlacement.cpp:string_key_unordered_set:2                           # whole-scene id sets built once per command; `AllocateUniqueSceneEntityId` owns the type; the scene id index is #5072
+Engine/Source/Scene/PrefabPlacement.h:string_key_unordered_set:1                             # whole-scene id sets built once per command; `AllocateUniqueSceneEntityId` owns the type; the scene id index is #5072
+Engine/Source/Scene/PrefabSpawn.cpp:one_free_function_file:1                                 # SpawnTemplate, SpawnPrefab and DespawnPrefab; the gate does not see the two whose signatures wrap
 Engine/Source/Scene/SceneDoc.h:string_key_unordered_set:1                                    # the tags of every entity of a whole scene: a sorted insert is linear
 Engine/Source/Scene/SceneIO.cpp:std_unordered_map:4                                          # keyed per entity of a whole scene (the save context's tag map, the members by entity): a sorted insert is linear
 Engine/Source/Scene/SceneIO.cpp:std_unordered_set:7                                          # keyed per entity of a whole scene (the excluded set, the created ids): a sorted insert is linear

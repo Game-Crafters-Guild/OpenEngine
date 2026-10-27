@@ -1,0 +1,48 @@
+/* SplineFenceOverrideRow: one override as an indented block. The left rule shows where it ends. */
+
+.spline-fence-override-row {
+    border-left-width: 2px;
+    border-left-style: solid;
+    border-left-color: var(--ui_color_border_subtle);
+    padding-left: 6px;
+    margin-bottom: 6px;
+}
+
+/* The kind dropdown is as wide as its longest name, Explicit Part. */
+.spline-fence-override-kind-cell {
+    flex: 0 0 auto;
+    width: 116px;
+    margin-right: 4px;
+}
+
+.spline-fence-override-kind {
+    width: 100%;
+}
+
+/* A narrow inspector moves the list actions under the part dropdown, so the part name stays readable. */
+.spline-fence-override-field {
+    flex: 1 1 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    min-width: 0px;
+}
+
+.spline-fence-override-part {
+    flex: 1 1 0;
+    min-width: 120px;
+}
+
+.spline-fence-override-label {
+    flex: 0 0 auto;
+    font-size: 13px;
+    color: var(--ui_color_text_dim);
+    margin-right: 6px;
+}
+
+.spline-fence-override-number {
+    flex: 1 1 0;
+    min-width: 40px;
+    margin-right: 10px;
+}

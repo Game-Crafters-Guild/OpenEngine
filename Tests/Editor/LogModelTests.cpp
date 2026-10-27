@@ -1,9 +1,10 @@
 // The Log panel's model: what Copy puts on the clipboard for a selected entry, the count beside
-// each severity toggle under a search, the source an entry opens, and that an entry keeps its
-// identity when older entries are dropped.
+// each severity toggle under a search, the channel filter, the source an entry opens, and that an
+// entry keeps its identity when older entries are dropped.
 
 #include <gtest/gtest.h>
 
+#include "Logger/LogChannel.h"
 #include "Logger/LogSink.h"
 #include "Panels/LogModel.h"
 
@@ -162,20 +163,62 @@ TEST(LogModel, AnEntryTakesTheMessageItsSourceAndItsStackTrace)
     message.Level = LogLevel::Error;
     message.Message = "hello";
     message.Timestamp = std::chrono::system_clock::now();
-    message.SetSourceLocation("Foo.cpp", 42, "Bar");
+    message.SourceFile = "Foo.cpp";
+    message.SourceLine = 42;
+    message.Function = "Bar";
+    message.Channel = 7;
     message.Backtrace = std::make_shared<const std::vector<BacktraceFrame>>(std::vector<BacktraceFrame>(2));
     const LogModel::Entry entry = LogModel::MakeEntry(message);
     EXPECT_EQ(entry.Text, "hello");
     EXPECT_EQ(entry.SourceFile, "Foo.cpp");
     EXPECT_EQ(entry.SourceLine, 42);
     EXPECT_EQ(entry.Function, "Bar");
+    EXPECT_EQ(entry.Channel, 7u);
     ASSERT_NE(entry.Backtrace, nullptr);
     EXPECT_EQ(entry.Backtrace->size(), 2u);
 
-    message.SetSourceLocation(nullptr, 0, nullptr);
+    message.SourceFile.clear();
+    message.SourceLine = 0;
+    message.Function.clear();
     const LogModel::Entry bare = LogModel::MakeEntry(message);
     EXPECT_TRUE(bare.SourceFile.empty());
     EXPECT_TRUE(bare.Function.empty());
+}
+
+TEST(LogModel, AHiddenChannelLeavesTheListAndTheCountsAndItsNameIsSearchable)
+{
+    const Logger::LogChannel channel = Logger::RegisterChannel("Tests.LogModel", LogLevel::Info);
+    LogModel model;
+    AppendOne(model, MakeEntry(LogLevel::Info, "on core"));
+    LogModel::Entry onChannel = MakeEntry(LogLevel::Info, "on channel");
+    onChannel.Channel = channel.Index;
+    AppendOne(model, std::move(onChannel));
+    EXPECT_NE(LogModel::FormatLine(*model.GetVisibleEntry(1)).find("[INFO] [Tests.LogModel] on channel"), std::string::npos);
+
+    model.SetChannelsShown({&channel.Index, 1}, false);
+    EXPECT_EQ(model.CountHiddenChannels(), 1u);
+    ASSERT_EQ(model.GetVisibleCount(), 1u);
+    EXPECT_EQ(model.GetVisibleEntry(0)->Text, "on core");
+    EXPECT_EQ(model.CountMatchingSearch(LogModel::Severity::Info), 1u) << "a hidden channel's lines leave the count";
+
+    model.SetChannelsShown({&channel.Index, 1}, true);
+    model.SetSearchField(LogModel::SearchField::Channel);
+    model.SetSearch("tests.logmodel");
+    ASSERT_EQ(model.GetVisibleCount(), 1u);
+    EXPECT_EQ(model.GetVisibleEntry(0)->Text, "on channel");
+    model.SetSearch("core");
+    ASSERT_EQ(model.GetVisibleCount(), 1u);
+    EXPECT_EQ(model.GetVisibleEntry(0)->Text, "on core");
+}
+
+TEST(LogModel, ACoreEntryHasNoChannelLabelAndANamedChannelHasItsName)
+{
+    const Logger::LogChannel channel = Logger::RegisterChannel("Tests.LogModelLabel", LogLevel::Info);
+    LogModel::Entry onCore = MakeEntry(LogLevel::Info, "on core");
+    LogModel::Entry onChannel = MakeEntry(LogLevel::Info, "on channel");
+    onChannel.Channel = channel.Index;
+    EXPECT_EQ(LogModel::ChannelLabel(onCore), "");
+    EXPECT_EQ(LogModel::ChannelLabel(onChannel), "Tests.LogModelLabel");
 }
 
 TEST(LogModel, AnEntryKeepsItsIdentityWhenOlderEntriesAreDropped)

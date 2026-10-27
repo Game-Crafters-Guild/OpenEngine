@@ -1,7 +1,7 @@
 #include "HeightStepPlanner.h"
 
 #include "HeightPageCodec.h"
-#include "PageStoreSerialization.h"
+#include "PageStore/PageStoreSerialization.h"
 
 #include <algorithm>
 #include <cmath>

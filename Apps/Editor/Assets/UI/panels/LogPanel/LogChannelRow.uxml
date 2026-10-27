@@ -1,0 +1,9 @@
+<!-- One channel of the Log panel's Channels list (LogChannelPopover.uxml): the toggle that shows or hides its
+     lines, its name and its level. The ids are the contract with LogChannelPopover.cpp. -->
+<UIElement class="log-channel-row">
+  <UIElement class="log-channel-show-cell">
+    <Toggle id="LogChannelShown" class="log-channel-shown" />
+  </UIElement>
+  <Label id="LogChannelName" class="log-channel-name" />
+  <Dropdown id="LogChannelLevel" class="log-channel-level" />
+</UIElement>

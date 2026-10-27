@@ -78,6 +78,7 @@ enum class MaterialKeyword : uint64_t
     MultiplyBlend      = 1ull << 42, // Derived like PremultipliedBlend: a Blend material that multiplies what is behind it (DstColor, Zero or Zero, SrcColor). The fog fades its colour toward 1, its blend's identity. Read only under HeightFog or VolumetricFog
     UnfoggedBlend      = 1ull << 43, // Derived like PremultipliedBlend: a Blend material whose blend has no identity colour to fade toward (Min, Max, the subtractions, and every other factor pair): the fog leaves it as it is. Read only under HeightFog or VolumetricFog
     VolumetricClouds   = 1ull << 44, // Pass keyword (set on the late transparents of a view whose volumetric clouds composited this frame, drawn after that composite; NarrowColorPassKeywords keeps it only for blended materials): a blended surface beyond the clouds' mean distance at its pixel takes the clouds' transmittance on its contribution, so the clouds stand in front of it (Includes/forward_fog.glsl: ge_volumetricClouds at set-0 b57). A nearer surface is drawn over the clouds. Without the keyword neither binding nor test is in the SPIR-V
+    SurfaceInputsAtPixelCenter = 1ull << 45, // Per material, set by the engine code that registers it (the CBT terrain): the forward adapter interpolates the surface inputs at the pixel center instead of the centroid (GE_SURFACE_INPUTS_AT_PIXEL_CENTER). Set for a surface whose inputs are continuous across its triangles: a partly covered MSAA pixel then reads its fields at the same place as a covered one
 };
 
 inline constexpr MaterialKeyword operator|(MaterialKeyword a, MaterialKeyword b)
@@ -266,6 +267,8 @@ inline std::vector<std::string> GenerateDefines(const ShaderVariantKey& key,
         defs.push_back("GE_SUBSURFACE_ENABLED");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::DiffuseTransmission))
         defs.push_back("GE_DIFFUSE_TRANSMISSION_ENABLED");
+    if (HasKeyword(key.materialKeywords, MaterialKeyword::SurfaceInputsAtPixelCenter))
+        defs.push_back("GE_SURFACE_INPUTS_AT_PIXEL_CENTER");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::DepthOnlyFragment))
         defs.push_back("GE_DEPTH_ONLY_FRAGMENT");
     if (HasKeyword(key.materialKeywords, MaterialKeyword::Transmission))

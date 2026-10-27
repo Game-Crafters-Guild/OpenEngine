@@ -102,7 +102,7 @@ namespace GameEngine.Scripting
         public float MaxHalfWidth;
 
         [FieldOffset(40)]
-        public float SeaLevelFloor;
+        public float FloorHeight;
 
         [FieldOffset(44)]
         public float EndTaperMetres;

@@ -16,6 +16,7 @@ namespace GameEngine {
 class Button;
 class INativeContextMenu;
 class Label;
+class LogChannelPopover;
 class LogView;
 class Splitter;
 class TextArea;
@@ -30,9 +31,10 @@ class TransientNotice;
  * @brief The Log panel: the engine's log as a filterable list with a detail pane for the selected entry.
  *
  * The layout is UI/panels/LogPanel/LogPanel.uxml and the style LogPanel.css beside it. A click
- * selects a row and shows its whole message, source, time and stack trace in the detail pane; a
+ * selects a row and shows its whole message, channel, source, time and stack trace in the detail pane; a
  * double-click opens the source, Ctrl+C copies, the right-click menu copies, opens the source or
- * clears, and every copy is confirmed by a notice over the list. Main thread only.
+ * clears, and every copy is confirmed by a notice over the list. The Channels button shows or hides each
+ * channel's lines and sets the level a channel logs at. Main thread only.
  */
 class LogPanel : public DockPanel {
 public:
@@ -57,6 +59,7 @@ private:
     void WireFilterToggle(UIElement& root, LogModel::Severity severity, const char* id);
     void ToggleSeverity(LogModel::Severity severity);
     void SyncFilterToggles();
+    void ShowChannelList();
     void TogglePause();
     void ClearLog();
 
@@ -85,6 +88,7 @@ private:
     WeightedPane* m_DetailPane = nullptr;
     UIElement* m_DetailGlyph = nullptr;
     Label* m_DetailSeverity = nullptr;
+    Label* m_DetailChannel = nullptr;
     Label* m_DetailTime = nullptr;
     Button* m_DetailSource = nullptr;
     TextArea* m_DetailMessage = nullptr;
@@ -92,9 +96,11 @@ private:
     UIElement* m_DetailFrames = nullptr;
     UIElement* m_SearchBar = nullptr;
     Button* m_PauseButton = nullptr;
+    Button* m_ChannelsButton = nullptr;
     std::array<Button*, LogModel::kSeverityCount> m_FilterToggles{};
 
     std::unique_ptr<INativeContextMenu> m_ContextMenu;
+    LogChannelPopover* m_ChannelPopover = nullptr;
     std::function<void(const std::string&, int)> m_OnOpenSourceFile;
 
     std::uint64_t m_CallbackId = 0;

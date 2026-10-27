@@ -103,8 +103,7 @@ class ThumbnailService : public IThumbnailProvider
     bool RegisterReadyThumbnailsRG(uint64_t windowId, class UIManager* ui,
                                    Rendering::RenderGraph::RGFrame* pureFrame);
 
-    // Registration API for asset-type handlers (image, model, material, etc.).
-    void RegisterHandler(AssetType type, std::unique_ptr<AssetThumbnailHandler> handler);
+    void RegisterHandler(AssetType type, std::unique_ptr<AssetThumbnailHandler> handler) override;
 
   private:
     struct BrowserRequest

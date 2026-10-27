@@ -76,15 +76,15 @@ static std::string FormatByteSize(uintmax_t bytes)
     oss.setf(std::ios::fixed);
     if (bytes >= (uintmax_t)gb)
     {
-        oss << std::setprecision(1) << (bytes / gb) << " Gb";
+        oss << std::setprecision(1) << (bytes / gb) << " GB";
     }
     else if (bytes >= (uintmax_t)mb)
     {
-        oss << std::setprecision(1) << (bytes / mb) << " Mb";
+        oss << std::setprecision(1) << (bytes / mb) << " MB";
     }
     else if (bytes >= (uintmax_t)kb)
     {
-        oss << std::setprecision(0) << (bytes / kb) << " Kb";
+        oss << std::setprecision(0) << (bytes / kb) << " KB";
     }
     else
     {

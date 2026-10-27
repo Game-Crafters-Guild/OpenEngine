@@ -17,7 +17,6 @@ namespace
 // The uncolored icon tint, rgba(200,200,200) in views.css: colored icons change hue and saturation,
 // not perceived brightness.
 constexpr float kColoredIconBrightness = 200.0f / 255.0f;
-constexpr uint32_t kNeutralIconTint = 0xFFC8C8C8u;
 
 uint32_t UnitToByte(float value)
 {
@@ -60,7 +59,8 @@ void ApplyHierarchyLightIconTint(ECS::World& world, ECS::EntityHandle entity, UI
     const auto* light = world.GetComponent<Components::Light>(entity);
     if (!light)
     {
-        icon.Overrides().Set(Style::BackgroundTint, kNeutralIconTint);
+        // The stylesheet tints every other glyph: neutral, or the color its row class sets.
+        icon.Overrides().Reset(Style::BackgroundTint);
         icon.MarkDirty(UIElement::VisualDirty);
         return;
     }

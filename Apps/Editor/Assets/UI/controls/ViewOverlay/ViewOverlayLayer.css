@@ -45,8 +45,11 @@
 	width: 360px;
 }
 
-/* SceneViewNoticeOverlay: a sentence, not a status, so it takes the width its text needs. */
+/* SceneViewNoticeOverlay: a sentence, not a status. It takes the width its text needs up to
+   640 px and wraps past that, so the fix the notice names is never cut off. */
 .scene-view-notice {
 	width: auto;
 	max-width: 640px;
+	white-space: normal;
+	border-radius: var(--ui_radius_md);
 }

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Logger/LogLevel.h"
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -16,39 +15,6 @@ namespace Logger {
  * @brief Structure containing all information about a log message
  */
 struct BacktraceFrame;
-
-// Borrowed C-string → owned string. Never calls unbounded strlen: a dangling
-// __FILE__ / Function (unloaded module) or a non-terminated pointer becomes
-// empty instead of taking the process down. Prefer SetSourceLocation over
-// assigning a raw const char* into SourceFile / Function.
-std::string CopySourceCString(const char* src);
-inline constexpr size_t kMaxSourceCString = 1024;
-
-// An owned snapshot for a stable logging call site. Keep this object at the
-// call site, not in a pointer-keyed global cache: modules may unload or reuse
-// addresses. Queued records copy its strings before returning to the caller.
-class OwnedSourceLocation
-{
-public:
-    OwnedSourceLocation(const char* file, const char* function)
-    {
-        const auto ownedFile = CopySourceCString(file);
-        const auto ownedFunction = CopySourceCString(function);
-        m_FileLength = ownedFile.size();
-        m_FunctionLength = ownedFunction.size();
-        std::memcpy(m_File.data(), ownedFile.data(), m_FileLength);
-        std::memcpy(m_Function.data(), ownedFunction.data(), m_FunctionLength);
-    }
-    std::string_view File() const { return {m_File.data(), m_FileLength}; }
-    std::string_view Function() const { return {m_Function.data(), m_FunctionLength}; }
-private:
-    // Bounded like CopySourceCString. Trivial destruction keeps static call
-    // sites valid during shutdown; no heap-owning static string is torn down.
-    std::array<char, kMaxSourceCString> m_File{};
-    std::array<char, kMaxSourceCString> m_Function{};
-    size_t m_FileLength = 0;
-    size_t m_FunctionLength = 0;
-};
 
 /// Wall-clock time of a log message; system_clock so it converts to time_t.
 using TimePoint = std::chrono::system_clock::time_point;
@@ -65,6 +31,8 @@ struct LogMessage {
     std::string SourceFile;
     std::int32_t SourceLine = 0;
     std::string Function;
+    /// LogChannel::Index of the record's channel; 0 is Core.
+    std::uint16_t Channel = 0;
 
     // Optional captured C++ callstack, auto-filled for Error/Critical.
     std::shared_ptr<const std::vector<BacktraceFrame>> Backtrace;
@@ -79,7 +47,6 @@ struct LogMessage {
         ThreadId[sizeof(ThreadId) - 1] = '\0';
     }
 
-    void SetSourceLocation(const char* file, std::int32_t line, const char* function);
 };
 
 /**

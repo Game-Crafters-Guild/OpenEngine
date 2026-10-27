@@ -1,0 +1,10 @@
+<!-- PrefabBar (Apps/Editor/Source/Prefabs/PrefabBar.h): the prefab and the instance on the first line,
+     the button that selects the prefab file and the override count on the second. PrefabBar.cpp sets the
+     texts; the ids are the contract with it. -->
+<UIElement class="prefab-bar">
+  <Label id="prefab-bar-title" class="prefab-bar-title" />
+  <UIElement class="prefab-bar-actions">
+    <Button id="prefab-bar-select-asset" class="secondary" />
+    <Label id="prefab-bar-count" class="prefab-bar-count" />
+  </UIElement>
+</UIElement>

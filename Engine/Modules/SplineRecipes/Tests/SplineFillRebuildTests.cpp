@@ -240,15 +240,15 @@ TEST_F(SplineFillRebuildTests, EndTaperMetresIsIgnoredInFitToBanks)
 }
 
 // The positive control for the test above: the byte comparison must be able to
-// FAIL, or "no change" proves nothing. A sea-level floor over this run raises
+// FAIL, or "no change" proves nothing. A floor height over this run raises
 // the waterline and must move the surface.
-TEST_F(SplineFillRebuildTests, TheSeaLevelFloorDoesChangeTheFilledSurface)
+TEST_F(SplineFillRebuildTests, TheFloorHeightDoesChangeTheFilledSurface)
 {
     CreateChannel();
 
     Components::SplineExtrude plain = WaterRecipe();
     Components::SplineExtrude floored = WaterRecipe();
-    floored.SeaLevelFloor = 0.5f; // above the run's own waterline of 0
+    floored.FloorHeight = 0.5f; // above the run's own waterline of 0
 
     const GameEngine::SplineRecipes::WaterFillRun a = Build(plain);
     const GameEngine::SplineRecipes::WaterFillRun b = Build(floored);
@@ -261,13 +261,13 @@ TEST_F(SplineFillRebuildTests, TheSeaLevelFloorDoesChangeTheFilledSurface)
         << "a higher waterline must wet more of a V-channel";
 }
 
-TEST_F(SplineFillRebuildTests, TheDefaultSeaLevelFloorIsInert)
+TEST_F(SplineFillRebuildTests, TheDefaultFloorHeightIsInert)
 {
     CreateChannel();
 
     Components::SplineExtrude defaulted = WaterRecipe();
     Components::SplineExtrude explicitlyOff = WaterRecipe();
-    explicitlyOff.SeaLevelFloor = Components::kNoSeaLevelFloor;
+    explicitlyOff.FloorHeight = Components::kNoFloorHeight;
 
     EXPECT_EQ(Bytes(Build(defaulted)), Bytes(Build(explicitlyOff)));
 }

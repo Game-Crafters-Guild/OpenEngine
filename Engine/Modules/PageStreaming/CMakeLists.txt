@@ -8,14 +8,15 @@ project(PageStreaming LANGUAGES CXX)
 # resolve) lives with the terrain renderer in TerrainECS and CBTTerrain.
 add_library(PageStreaming OBJECT
     Source/PageAddress.cpp
-    Source/PageStoreFormat.cpp
-    Source/PageStoreSerialization.cpp
+    Source/PageStore/PageStoreFormat.cpp
+    Source/PageStore/PageStoreSerialization.cpp
     Source/HeightPageCodec.cpp
     Source/PageCodec.cpp
     Source/BytePageCodec.cpp
     Source/Bc5PageCodec.cpp
-    Source/PageStoreWriter.cpp
-    Source/PageStoreReader.cpp
+    Source/PageStore/PageStoreAccess.cpp
+    Source/PageStore/PageStoreWriter.cpp
+    Source/PageStore/PageStoreReader.cpp
     Source/PageLoader.cpp
     Source/PageCache.cpp
     Source/PageResidency.cpp
@@ -27,7 +28,7 @@ add_library(PageStreaming OBJECT
     Source/SourceRangeReader.cpp
     Source/PageFieldFilter.cpp
     Source/PagePyramidBuilder.cpp
-    Source/PageStorePatcher.cpp
+    Source/PageStore/PageStorePatcher.cpp
     Source/HeightStepPlanner.cpp
     Source/HeightCookBands.cpp
     Source/HeightPageCooker.cpp
@@ -51,11 +52,12 @@ target_link_libraries(PageStreaming
     PUBLIC
         Types
         AssetCore
+        # Mathematics::Vector3 in the public headers (PageStoreFormat.h, HeightPageCooker.h).
+        Mathematics
     PRIVATE
         # The loader's reader threads (Assets/AssetIOService.h); objects link once into Engine.
         AssetRuntime
         JobSystem
-        Mathematics
         FileSystem
         FileWatcher
         Terrain

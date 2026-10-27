@@ -5,8 +5,8 @@
 #include <gtest/gtest.h>
 
 #include "InspectorLayoutFixture.h"
-#include "Inspectors/CubeLutPreview.h"
-#include "Inspectors/CubeLutPreviewPopover.h"
+#include "Inspectors/CubeLut/CubeLutPreview.h"
+#include "Inspectors/CubeLut/CubeLutPreviewPopover.h"
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
 

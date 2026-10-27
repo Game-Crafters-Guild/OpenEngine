@@ -27,7 +27,7 @@
 #include <string>
 
 #include "Components/Terrain/TerrainSurfaceRules.h"
-#include "Inspectors/TerrainRuleNotices.h"
+#include "Terrain/TerrainRuleNotices.h"
 #include "Terrain/TerrainInteractiveModifierEdit.h"
 #include "Terrain/TerrainRuleConditionVocabulary.h"
 #include "UI/Controls/InspectorNotice.h"

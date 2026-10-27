@@ -10,7 +10,7 @@
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/PageCache.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 
 #include <algorithm>
 #include <cmath>
@@ -87,7 +87,7 @@ struct PagedField
                         const PageTableBudget& budget = kDenseFieldTable)
     {
         Cache.Configure(slots, 2, fadeSeconds);
-        Table.Reset(samplesX, samplesZ, slots, budget);
+        Table.Reset(samplesX, samplesZ, 1u, slots, budget);
         Geometry = MakePageCacheGeometry(slots);
         Texels.assign(std::size_t(Geometry.CacheDim) * Geometry.CacheDim, 0.0f);
     }

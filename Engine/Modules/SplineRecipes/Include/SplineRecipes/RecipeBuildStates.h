@@ -22,21 +22,23 @@ inline constexpr std::string_view kHeldForTerrainReason =
 inline constexpr std::string_view kHeldForPickingDataReason =
     "A mesh under it is still being prepared. It builds when the mesh is ready.";
 inline constexpr std::string_view kNoRenderDeviceReason =
-    "This run has no render device, so the recipe cannot build its mesh.";
+    "The editor has no render device, so it cannot build the mesh.";
 inline constexpr std::string_view kSplineTooShortReason =
     "The spline has fewer than 2 points. Add points to build it.";
-inline constexpr std::string_view kNoFencePieceReason =
-    "The recipe has no piece to place. Add a mesh to Post 1 or Span 1.";
+inline constexpr std::string_view kNoFencePartReason =
+    "The fence has no Span or Post part. Add a Span part with Add Part.";
+inline constexpr std::string_view kNoFencePartMeshReason =
+    "No Span or Post part of the fence has a mesh. Give one of them a mesh.";
 inline constexpr std::string_view kNoTileReason =
-    "The recipe has no tile to place. Add a mesh to Straight 1.";
+    "There is no tile to place. Add a mesh to Straight 1.";
 inline constexpr std::string_view kBuiltNothingReason =
-    "It made no surface: the spline and the recipe's shape give nothing to build.";
+    "It made no surface: the spline and these settings give nothing to build.";
 inline constexpr std::string_view kNoTerrainToFillReason =
-    "It made no water: no terrain is under the run to fill against. A planet terrain cannot hold it.";
+    "It made no water: Fit To Banks fills against a flat terrain, and there is none under the spline.";
 inline constexpr std::string_view kNoWaterToFillReason =
-    "It made no water: the run found no water its banks can hold. Carve the bed deeper or give it banks.";
+    "It made no water: the spline found no water its banks can hold. Carve the bed deeper or give it banks.";
 inline constexpr std::string_view kFillWindowTooLargeReason =
-    "It made no water: the run is too long for one fill. Split it into shorter splines.";
+    "It made no water: the spline is too long for one fill. Split it into shorter splines.";
 inline constexpr std::string_view kFillOverBudgetReason =
     "It made no water: the water spread past the fill's limit. Reduce Max Half Width or raise the bed.";
 

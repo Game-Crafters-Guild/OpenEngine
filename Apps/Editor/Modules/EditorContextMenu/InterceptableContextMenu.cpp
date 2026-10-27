@@ -260,6 +260,11 @@ void InterceptableContextMenu::SetItemShortcut(uint32_t commandId, const std::st
     m_Inner->SetItemShortcut(commandId, keyText);
 }
 
+void InterceptableContextMenu::SetItemTooltip(uint32_t commandId, const std::string& text)
+{
+    m_Inner->SetItemTooltip(commandId, text);
+}
+
 // Zero is AddSubMenu's failure return, and every leaf and separator carries SubMenuId
 // 0 — stamping it would put the icon on all of them.
 void InterceptableContextMenu::SetSubMenuIcon(uint32_t submenuId, const std::string& imagePath)

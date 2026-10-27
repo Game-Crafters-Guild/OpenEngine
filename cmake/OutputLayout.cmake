@@ -153,6 +153,12 @@ endfunction()
 function(ge_set_output_tests target_name)
   ge_set_target_runtime_output_dir(${target_name} "Tests")
   set_property(TARGET ${target_name} PROPERTY GE_TEST_EXECUTABLE TRUE)
+  # A test compares or opens paths from __FILE__, so its own sources keep the full path in Release too.
+  get_target_property(_ge_test_options ${target_name} COMPILE_OPTIONS)
+  if(_ge_test_options)
+    list(FILTER _ge_test_options EXCLUDE REGEX "d1trimfile|macro-prefix-map")
+    set_property(TARGET ${target_name} PROPERTY COMPILE_OPTIONS "${_ge_test_options}")
+  endif()
 endfunction()
 
 function(ge_set_output_demos target_name)

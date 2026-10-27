@@ -275,6 +275,20 @@ TEST_F(UIContextMenuSubmenuTests, ASubmenuFlipsToTheLeftWhenTheRightSideHasNoRoo
     EXPECT_GE(submenu.X, 0.0f) << "the flipped submenu left the window";
 }
 
+// A disabled row keeps its tooltip, where it says why it is off.
+TEST_F(UIContextMenuSubmenuTests, ADisabledRowShowsItsTooltip)
+{
+    m_Menu->SetItemTooltip(kCmdLeaf, "Leaf is off. Select a root to turn it on.");
+    m_Menu->SetItemEnabled(kCmdLeaf, false);
+    ShowAt(100.0f, 100.0f);
+    const auto panels = OpenPanels(Ui());
+    ASSERT_EQ(panels.size(), 1u) << "the menu did not open";
+    UIElement* leaf = FindRow(panels[0], "Leaf");
+    ASSERT_NE(leaf, nullptr);
+    EXPECT_TRUE(leaf->HasClass("disabled"));
+    EXPECT_EQ(leaf->GetTooltip(), "Leaf is off. Select a root to turn it on.");
+}
+
 TEST_F(UIContextMenuSubmenuTests, ARowShowsItsKeyAfterItsTitle)
 {
     m_Menu->SetItemShortcut(kCmdLeaf, "F2");

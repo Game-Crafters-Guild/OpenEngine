@@ -1,0 +1,120 @@
+/* The preview tints and the looks that only one kind of project card has. A library card (.project-card) is the
+   New project card, the Open project card or a recent project; a catalog card (.project-template-card) is a
+   template or a community project. The other looks that both kinds have are in ProjectPicker.css. */
+
+.project-picker-modal .project-card:hover .project-card-lift {
+	background-color: var(--pp_color_card_hover_tint);
+}
+
+/* New/Open cards: preview panel and glyph brighten with the card. Hover
+   styling lives here (not native handlers) so the .project-card transitions
+   drive the lift/color animation like the template cards. */
+.project-picker-modal .project-card-action:hover .project-card-empty-preview {
+	background-color: var(--pp_color_card_hover_tint);
+}
+
+.project-picker-modal .project-card-new .project-card-action-icon {
+	opacity: 0.175;
+}
+
+.project-picker-modal .project-card-open .project-card-action-icon {
+	opacity: 0.35;
+}
+
+.project-picker-modal .project-card-action:hover .project-card-action-icon {
+	opacity: 1;
+}
+
+.project-picker-modal .project-card-new .project-card-outline {
+	border: 2px dashed var(--pp_color_card_outline_dashed);
+}
+
+.project-picker-modal .project-card:hover .project-card-outline {
+	border-color: var(--pp_color_accent_bright);
+}
+
+.project-picker-modal .project-card-new:hover .project-card-outline {
+	border-style: solid;
+}
+
+.project-picker-modal .project-card-action-icon {
+	transition: opacity 0.16s ease-out;
+}
+
+.project-picker-modal .project-card-empty-preview {
+	background-color: var(--pp_color_surface_preview);
+	transition: background-color 0.16s ease-out;
+}
+
+/* A 24px box that the dim plus glyph fills.
+   Optical centering: the visible art window loses 2px to the outline at the top
+   but only 1px to the divider at the bottom. */
+.project-picker-modal .project-card-plus-icon {
+	background-image: url("editor:Icons/plus.svg");
+	width: 24px;
+	height: 24px;
+	min-width: 24px;
+	min-height: 24px;
+	max-width: 24px;
+	max-height: 24px;
+	padding: 0px;
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+	position: relative;
+	top: 1px;
+}
+
+.project-picker-modal .project-card-folder-icon {
+	background-image: url("editor:Icons/Folder@64px.svg");
+	width: 38px;
+	height: 38px;
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+	position: relative;
+	top: 1px;
+}
+
+/* Catalog cards: the hover outline, and the accent outline on the selected card. */
+.project-picker-modal .project-template-card:hover .project-card-outline {
+	border-color: var(--pp_color_card_outline_hover);
+}
+
+.project-picker-modal .project-template-card.selected .project-card-outline {
+	border-color: var(--pp_color_accent);
+}
+
+.project-picker-modal .project-template-card.selected:hover .project-card-outline {
+	border-color: var(--pp_color_accent_bright);
+}
+
+/* The preview tints. The card at index N has the class project-card-tint-<N modulo 5>. An accent color of a
+   catalog entry replaces the tint. */
+.project-picker-modal .project-card-lift {
+	--pp_color_card_tint_0: #182b3b;
+	--pp_color_card_tint_1: #24203b;
+	--pp_color_card_tint_2: #18372e;
+	--pp_color_card_tint_3: #3a202e;
+	--pp_color_card_tint_4: #202a42;
+}
+
+.project-picker-modal .project-card-tint-0 .project-card-preview {
+	background-color: var(--pp_color_card_tint_0);
+}
+
+.project-picker-modal .project-card-tint-1 .project-card-preview {
+	background-color: var(--pp_color_card_tint_1);
+}
+
+.project-picker-modal .project-card-tint-2 .project-card-preview {
+	background-color: var(--pp_color_card_tint_2);
+}
+
+.project-picker-modal .project-card-tint-3 .project-card-preview {
+	background-color: var(--pp_color_card_tint_3);
+}
+
+.project-picker-modal .project-card-tint-4 .project-card-preview {
+	background-color: var(--pp_color_card_tint_4);
+}

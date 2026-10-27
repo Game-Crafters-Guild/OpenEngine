@@ -986,6 +986,9 @@ bool CBTRenderFeature::BuildFrameParams(RenderServices& rs, Rendering::ViewId vi
         pageCache = {};
     m_BoundTerrainIndex = t.Handle.Index;
     m_HasBoundTerrain = true;
+    // A planet's corners switch between the closed-form relief and its pages: every corner re-evaluates.
+    if (m_DomainConfig.DomainMode == CBTTerrain::kDomainSpherical && pageCache.IsValid() != m_CommittedSourcePaged)
+        m_ForceVertexEval.store(true, std::memory_order_relaxed);
     LogCommittedHeightSource(t.Handle.Index, t.Handle.Generation, pageCache.IsValid(), frameIndex);
     // Invalid until the heightmap uploads; feeds the C5 read edge (the page cache when paged, the
     // atlas when atlas-backed).
