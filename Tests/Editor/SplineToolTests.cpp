@@ -926,19 +926,6 @@ TEST(SplineInteractionStateTests, CollidingHandlesKeepSelectionAndHoverInTheirWo
     EXPECT_EQ(stateB->Selection().PointIndex, 7);
 }
 
-TEST(SplineInteractionStateTests, IndexDoesNotOwnTheStateAfterItsConsumersClose)
-{
-    World world;
-    std::weak_ptr<SplineInteractionState> weak;
-    {
-        const auto state = AcquireSplineInteractionState(world);
-        state->Selection().PointIndex = 4;
-        weak = state;
-    }
-    EXPECT_TRUE(weak.expired());
-    EXPECT_EQ(AcquireSplineInteractionState(world)->Selection().PointIndex, -1);
-}
-
 TEST_F(SplineToolTests, TwoDimensionalBrushDrawsInXYWithoutGroundHit)
 {
     ScopedSplineStickToMeshSetting stickToMesh(false);
@@ -971,3 +958,15 @@ TEST_F(SplineToolTests, TwoDimensionalBrushDrawsInXYWithoutGroundHit)
     EXPECT_EQ(count, 1u);
 }
 
+TEST(SplineInteractionStateTests, IndexDoesNotOwnTheStateAfterItsConsumersClose)
+{
+    World world;
+    std::weak_ptr<SplineInteractionState> weak;
+    {
+        const auto state = AcquireSplineInteractionState(world);
+        state->Selection().PointIndex = 4;
+        weak = state;
+    }
+    EXPECT_TRUE(weak.expired());
+    EXPECT_EQ(AcquireSplineInteractionState(world)->Selection().PointIndex, -1);
+}
