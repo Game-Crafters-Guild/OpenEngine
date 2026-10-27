@@ -26,7 +26,6 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/EditorDebugServer.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/AssistantSessionHandlers.cpp
 	PickRootResolverTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Picking/PickRootResolver.cpp
 	SceneViewToolStripTests.cpp
 	# The tool strip's badge count, laid out over the real editor stylesheets: inside its strip at
 	# every count it can show, in both floating orientations and in the toolbar.
