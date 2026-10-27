@@ -15,6 +15,9 @@ public:
 
     void SetAssetsRoot(const std::filesystem::path& root) override { m_AssetsRoot = root; }
 
+    // Keeps no handlers: every asset type takes the extension fallback.
+    void RegisterHandler(AssetType type, std::unique_ptr<AssetThumbnailHandler> handler) override;
+
     std::string GetOrRequest(const std::filesystem::path& assetPath,
                              int desiredSize,
                              std::function<void(const std::string& relPath)> onReady,

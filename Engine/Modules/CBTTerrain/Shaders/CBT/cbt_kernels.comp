@@ -661,10 +661,9 @@ int CBT_SculptCreaseDemand(CBTFrameParams fp, uint slot, CBT_HEAPID_T h, uint de
     if (!resident)
         return CBT_CREASE_NONE; // no user edit under this facet — the common untouched skip
 
-    // A resident page is a conservative superset of "has non-zero sculpt" (a page is allocated whole),
-    // so evaluate the actual geometric error and let the pixel threshold below self-limit. Isolate the
-    // sculpt layer: subtract the closed-form base relief so a pure relief slope (handled by the area
-    // metric) does not trip the crease term. CBT_PlanetRelief early-returns 0 at amplitude 0.
+    // A resident sculpt page is a superset of non-zero sculpt, so evaluate the error; the pixel threshold self-limits.
+    // Subtract the closed-form relief to isolate the sculpt layer. On the paged wide arm the corners hold page
+    // heights, so sc0 and sc2 also hold the page's difference from the closed form.
     float radius = fp.planetParams.x;
     float h0 = length(wc0) - radius; // composed corner heights (relief + sculpt), from VertexEval
     float h2 = length(wc2) - radius;
@@ -680,12 +679,9 @@ int CBT_SculptCreaseDemand(CBTFrameParams fp, uint slot, CBT_HEAPID_T h, uint de
     float scMid = CBT_SampleSphereSculpt(face, midUV, geom); // the one sculpt sample the term costs
     if (CBT_SphereAnalyticTotal(fp) != 0u)
     {
-        // The corners' sculpt isolation (sc0/sc2) already carries the analytic term (VertexEval
-        // composed it into the corner heights), so the midpoint sample must compose it too — with
-        // the closed-form relief at the midpoint direction, the same cancellation VertexEval uses.
-        // Cell-masked (S3): midDir lies exactly in midUV's cell (the cube->faceUV map is affine
-        // and normalize keeps the direction), so the mask is an exact contributor superset. One
-        // relief eval, only on facets that passed the residency/footprint gate with a live mask.
+        // sc0 and sc2 hold the analytic term (VertexEval composed it), so the midpoint composes it at the
+        // closed-form relief; on the paged wide arm VertexEval composes it at the page height instead.
+        // Cell-masked (S3): midDir lies in midUV's cell, so the mask is an exact contributor superset.
         uint am = CBT_AnalyticCellMask(face, midUV);
         if (am != 0u)
             scMid += CBT_SphereAnalyticOffsetMasked(fp, am, midDir,
@@ -3543,27 +3539,43 @@ void Kernel_VertexEval()
         vec3 dir1 = normalize(cube1);
         vec3 dir2 = normalize(cube2);
         float radius = fp.planetParams.x;
-        // Octave count rides planetParams.w (0 -> single octave, matching the pre-multi-octave
-        // output so the CBTSphereDomainTests on-shell bound stays valid). Vertex displacement
-        // uses the SAME multi-octave relief the fragment shades with, so geometry + normals agree.
-        uint reliefOctaves = uint(max(fp.planetParams.w, 1.0));
-        float relief0 = CBT_PlanetRelief(dir0, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
-        float relief1 = CBT_PlanetRelief(dir1, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
-        float relief2 = CBT_PlanetRelief(dir2, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
+        float relief0;
+        float relief1;
+        float relief2;
+#if !defined(CBT_DECODE_INT32)
+        if (fp.atlasParams1.z == 2.0)
+        {
+            // The planet's height pages (planets 3.7): each corner resolves at its canonical (face,
+            // texel, fraction) from its exact numerator, at the finest resident level (lambda 0, as
+            // the planar resolve), so a stored corner stays valid until the residency changes under it.
+            CBTPageField pageField = CBT_PageFieldOfFrame();
+            uint faceSamples = pageField.Level0SamplesX;
+            CBTPagePoint point0 = CBT_PlanetPagePoint(sphereFace, num0.x, num0.y, num0.z, numSubdiv, faceSamples);
+            CBTPagePoint point1 = CBT_PlanetPagePoint(sphereFace, num1.x, num1.y, num1.z, numSubdiv, faceSamples);
+            CBTPagePoint point2 = CBT_PlanetPagePoint(sphereFace, num2.x, num2.y, num2.z, numSubdiv, faceSamples);
+            relief0 = CBT_PageSamplePoint(point0, 0.0, pageField);
+            relief1 = CBT_PageSamplePoint(point1, 0.0, pageField);
+            relief2 = CBT_PageSamplePoint(point2, 0.0, pageField);
+        }
+        else
+#endif
+        {
+            // The closed-form relief (the narrow arm, and a planet before its pages are drawn). The
+            // octave count rides planetParams.w (0 -> one octave): the same relief the fragment shades.
+            uint reliefOctaves = uint(max(fp.planetParams.w, 1.0));
+            relief0 = CBT_PlanetRelief(dir0, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
+            relief1 = CBT_PlanetRelief(dir1, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
+            relief2 = CBT_PlanetRelief(dir2, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
+        }
         if (pc.sphereSculptEnabled != 0u)
         {
             CBTSculptGeom sculptGeom = CBT_SculptGeomFromFrame(fp);
             float sc0 = CBT_SampleSphereSculpt(sphereFace, fuv0, sculptGeom);
             float sc1 = CBT_SampleSphereSculpt(sphereFace, fuv1, sculptGeom);
             float sc2 = CBT_SampleSphereSculpt(sphereFace, fuv2, sculptGeom);
-            // Analytic sphere modifiers (sculpt shape-accuracy S2): the closed-form set composes on
-            // top of the store sample, evaluated at the corner's BASE relief (relief* still holds
-            // the pure closed form here) so a flatten pad lands exactly on its target radius — the
-            // sample-time twin of the store bake, exact at any planet radius. Cell-masked (S3):
-            // each corner direction lies in its own face-UV's cell, so the mask is an exact
-            // contributor superset — a vertex outside every placement pays one mask read per
-            // corner instead of the all-N eval. An empty set (the GE_TERRAIN_ANALYTIC_MODIFIERS-
-            // off dark-ship) adds no float op.
+            // Analytic sphere modifiers (S2): the closed-form set composes on the store sample at the corner's
+            // base height (relief*: the pages or the closed form), so a flatten pad lands on its target radius.
+            // Cell-masked (S3): a corner outside every placement pays one mask read. An empty set adds no float op.
             if (CBT_SphereAnalyticTotal(fp) != 0u)
             {
                 uint am0 = CBT_AnalyticCellMask(sphereFace, fuv0);

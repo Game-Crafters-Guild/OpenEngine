@@ -979,6 +979,15 @@ else()
 	endif()
 endif()
 
+# Release binaries hold __FILE__ relative to the source root, so no build-machine path ships.
+# Test executables keep full paths (ge_set_output_tests). Other configurations keep full paths.
+if(MSVC)
+	file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}/" _ge_native_source_root)
+	add_compile_options("$<$<CONFIG:Release>:/d1trimfile:${_ge_native_source_root}>")
+else()
+	add_compile_options("$<$<CONFIG:Release>:-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=>")
+endif()
+
 # AddressSanitizer toggle (Debug config by default)
 option(ENABLE_ASAN "Enable AddressSanitizer (applies to Debug config)" OFF)
 if(ENABLE_ASAN)

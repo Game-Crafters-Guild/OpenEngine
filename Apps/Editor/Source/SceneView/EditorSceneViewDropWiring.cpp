@@ -60,7 +60,7 @@ void WireSceneViewAssetDropUndo(SceneViewPanel* sceneViewPanel,
 
             std::vector<ECS::EntityHandle> rootsCopy = droppedRoots;
             undoRedo->CommitAlreadyApplied(std::make_unique<SceneViewDropUndoCommand>(
-                "Scene Drop",
+                SceneViewDropUndoCommand::NameFor(*world, droppedRoots),
                 world,
                 notifications,
                 std::move(rootsCopy),

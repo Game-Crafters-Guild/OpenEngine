@@ -64,7 +64,8 @@ struct PageResidencyBudget
 ///
 /// Each frame a stream's owner states the pages its level rule wants (Request). Update then:
 /// - drains the loads that finished (a failed read is logged once with its reason and retried with
-///   a backoff; only a page absent from its store is never retried);
+///   a backoff; a page absent from its source is fetched again only when its PageStoreAccess
+///   changes its Version);
 /// - orders every stream's wanted pages in one order, pinned first, then nearest, then coarsest,
 ///   and keeps of each field only as many as its cache has slots (what it can place), so the
 ///   terrains of a field divide its slots by that order;
@@ -114,10 +115,9 @@ public:
     /// The pages stream `stream` wants this frame (closed under parents: the level rule's set).
     void Request(uint32 stream, std::span<const PageWant> wanted);
 
-    /// The pages stream `stream`'s CPU readers keep this frame: every page of level
-    /// `firstPinnedLevel` and coarser, and `windowPages` (nearest first; overlapping windows may
-    /// repeat a page, which keeps its first place). The window pages hold for the next Update;
-    /// the pinned levels until the stream is configured again.
+    /// Keeps level `firstPinnedLevel` and coarser for stream `stream`'s CPU readers until the next Configure,
+    /// and `windowPages` (nearest first; a repeated page keeps its first place) until the next Update.
+    /// A stream over a PageStoreAccess has no CPU readers: the call asserts and does nothing.
     void RequestCpu(uint32 stream, uint32 firstPinnedLevel, std::span<const PageAddress> windowPages);
 
     /// Fetches page `address` of stream `stream` now, on the calling thread, when it is not on the
@@ -143,7 +143,8 @@ public:
     /// page's heights through HeightSamples), or null.
     const std::vector<uint8>* Bytes(uint32 stream, const PageAddress& address) const;
     /// Stream `stream`'s CPU page directory, the one way a CPU reader looks a page up (empty when
-    /// the stream is not configured or its source has no levels).
+    /// the stream is not configured or its source has no levels). Call RequestCpu first: a read
+    /// before the stream's first RequestCpu asserts, and gets an empty directory without asserts.
     CpuPageDirectory CpuPages(uint32 stream) const;
     /// The CPU window pages the last Update kept for stream `stream`, each once, nearest first (empty
     /// when the stream is not configured). Valid until the next Update.
@@ -171,6 +172,7 @@ private:
     {
         uint32 Stream = 0;
         uint64 Epoch = 0;
+        uint64 SourceVersion = 0; // the stream's SourceVersion when the load started
         PageFetchOutcome Outcome;
         bool Cpu = false; // counted against the CPU's share of the loads in flight
     };
@@ -182,6 +184,7 @@ private:
         uint32 TopLevel = 0;
         uint32 PageBytes = 0; // every loaded page's bytes: the source's PayloadBytes
         uint64 Epoch = 0; // bumps on Configure, so a restarted stream ignores its old loads
+        uint64 SourceVersion = 0; // the PageStoreAccess Version at which its Absent pages were read
         std::shared_ptr<std::atomic<bool>> Cancel = std::make_shared<std::atomic<bool>>(false);
         std::vector<PageWant> Wanted;
         bool WantedChanged = true;
@@ -221,10 +224,14 @@ private:
         std::vector<Completion> Completions;
     };
 
+    // Clears the absent pages of each stream whose PageStoreAccess changed its Version.
+    void RetryAbsentPages();
     void DrainCompletions(uint64 frameIndex);
     void Land(Stream& stream, uint64 frameIndex, PageFetchOutcome& outcome);
     static CpuPageDirectory DirectoryOf(const Stream& stream);
     static void SetCpuEntry(Stream& stream, const PageAddress& address, const CpuPageEntry& entry);
+    // Allocates the stream's CPU directory and enters its loaded and absent pages.
+    static void BuildCpuDirectory(Stream& stream);
     bool NeedsLoad(const Stream& stream, const PageAddress& address, uint64 frameIndex) const;
     void FetchNow(Stream& stream, uint64 frameIndex, const PageAddress& address);
     void FetchCpuNow(uint64 frameIndex, std::chrono::steady_clock::time_point start);

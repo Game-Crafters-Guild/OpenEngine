@@ -899,6 +899,7 @@ class SceneViewController
     Editor::UndoRedoService* m_UndoRedo = nullptr;
     Editor::EditorChangeNotifications* m_ChangeNotifications = nullptr;
     Editor::EditorChangeNotifications::SubscriptionToken m_ChangeSub{};
+    Editor::EditorChangeNotifications::SubscriptionToken m_ProjectSwitchedSub{};
 };
 
 } // namespace GameEngine

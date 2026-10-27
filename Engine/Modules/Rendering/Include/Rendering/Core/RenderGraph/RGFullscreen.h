@@ -62,6 +62,8 @@ struct RGFullscreenDesc
     std::span<const RGFullscreenTextureInput> Textures{};
     std::span<const RGFullscreenBufferInput> Buffers{};
     RGTexture Target{};
+    // Color attachment 1, with Ops and the size of Target. Invalid = one output.
+    RGTexture SecondTarget{};
     RGAttachmentOps Ops{}; // Load for blend-composite, DontCare for overwrite
     // Viewport/scissor. 0 => the Target's RGResourceDesc dimensions; pass the
     // view's render size explicitly when the physical target is larger (view

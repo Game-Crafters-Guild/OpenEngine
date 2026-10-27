@@ -2,7 +2,7 @@
 
 #include "Inspectors/InspectorComponentSection.h"
 #include "Inspectors/InspectorDragHelpers.h"
-#include "Inspectors/TerrainMaterialLibraryInspector.h"
+#include "Terrain/TerrainMaterialLibraryInspector.h"
 #include "Terrain/TerrainLayers.h"
 #include "UndoRedo/UndoRedoService.h"
 

@@ -41,6 +41,16 @@ static void SendMouse(UIElement& el, EventId id, float x, float y, int button = 
     el.DispatchEvent(e);
 }
 
+// Hovers (x, y) past the hover delay; true when the tooltip bubble is placed in the window.
+bool HoverShowsTooltip(UITesting::IsolatedUIFixture& fixture, float x, float y)
+{
+    fixture.Manager().OnMouseMove(x, y);
+    for (int frame = 0; frame < 4; ++frame)
+        fixture.PumpSeconds(0.3f);
+    const UIElement* bubble = fixture.Element("ui-tooltip-wrapper");
+    return bubble && bubble->GetLayoutWidth() > 0.0f && bubble->GetLayoutX() >= 0.0f && bubble->GetLayoutY() >= 0.0f;
+}
+
 } // namespace
 
 TEST(DropdownTests, UiModeHeaderClickTogglesOpenClass)
@@ -828,4 +838,48 @@ TEST(DropdownTests, AnItemOfAListOpenInsideAPopoverTakesThePress)
     fixture.Manager().OnMouseButton(0, false);
     fixture.StepFrame();
     EXPECT_EQ(dropdown->GetSelectedValue(), std::string("Two"));
+}
+
+// An open list covers the space under its dropdown, so neither the dropdown nor an item of its list
+// brings up the dropdown's tooltip over it; the closed dropdown shows it again.
+TEST(DropdownTests, AnOpenListShowsNoTooltipOverIt)
+{
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(
+        1.0f,
+        R"(<uielement id="root"><uielement id="host"/></uielement>)",
+        R"(
+#root { width: 400px; height: 300px; }
+#host { position: absolute; left: 20px; top: 20px; width: 120px; }
+.dropdown-items { display: none; position: absolute; top: 100%; left: 0px; width: 100%; }
+.dropdown-items.open { display: flex; flex-direction: column; }
+.dropdown-item { height: 20px; }
+)");
+    if (!fixture.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built) << fixture.Diagnostic();
+
+    auto owned = std::make_unique<Dropdown>();
+    Dropdown* dropdown = owned.get();
+    fixture.Element("host")->AddChild(std::move(owned));
+    dropdown->SetOptionsFromString("One,Two,Three");
+    dropdown->SetTooltip("The value this dropdown sets.");
+    fixture.Settle();
+
+    const float headerX = dropdown->GetLayoutX() + 5.0f;
+    const float headerY = dropdown->GetLayoutY() + 5.0f;
+    EXPECT_TRUE(HoverShowsTooltip(fixture, headerX, headerY)) << "the closed dropdown shows its tooltip";
+
+    fixture.Manager().OnMouseMove(300.0f, 250.0f);
+    fixture.PumpSeconds(0.3f);
+    dropdown->OpenMenuUi();
+    fixture.Settle();
+    UIElement* items = dropdown->GetItemsContainer();
+    ASSERT_NE(items, nullptr);
+    ASSERT_EQ(items->GetChildren().size(), 3u);
+    const UIElement* second = items->GetChildren()[1].get();
+    ASSERT_GT(second->GetLayoutHeight(), 0.0f);
+    EXPECT_FALSE(HoverShowsTooltip(fixture, headerX, headerY)) << "the open dropdown shows its tooltip over its list";
+    EXPECT_FALSE(HoverShowsTooltip(fixture, second->GetLayoutX() + 5.0f, second->GetLayoutY() + 5.0f))
+        << "an item of the open list shows the dropdown's tooltip";
 }

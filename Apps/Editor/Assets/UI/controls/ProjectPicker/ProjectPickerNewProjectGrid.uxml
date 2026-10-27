@@ -1,0 +1,24 @@
+<!-- The content of the create page's grid scroll view: the template cards row with its empty text, and the
+     community page with its status, offline banner and card grid. ProjectPickerModal.cpp adds the cards and
+     shows the empty text when there are no templates. The ids are its contract. Styles: ProjectPicker.css. -->
+<UIElement class="project-picker-grid-content">
+  <UIElement id="project-templates">
+    <Label id="project-templates-empty" class="project-templates-empty"
+           text="No templates available — the project is created empty." />
+  </UIElement>
+  <UIElement id="project-community">
+    <UIElement id="project-community-status" class="project-community-status">
+      <UIElement id="project-community-icon" class="project-community-icon" />
+      <Label id="project-community-title" class="project-community-title" text="Community projects" />
+      <Label id="project-community-message" class="project-community-message" />
+      <Button id="project-community-retry"
+              class="project-picker-button project-picker-button-secondary secondary" text="Retry" />
+    </UIElement>
+    <UIElement id="project-community-offline">
+      <Label id="project-community-offline-label" class="project-community-offline-label" />
+      <Button id="project-community-refresh"
+              class="project-picker-button project-picker-button-secondary secondary" text="Refresh" />
+    </UIElement>
+    <UIElement id="project-community-grid" />
+  </UIElement>
+</UIElement>

@@ -1,28 +1,26 @@
 #pragma once
 
-// EditorComponentTraits — data-level editor behavior for a component type,
-// registered by the component's owning editor code or package module. Each
-// field is a per-component hook the editor consults without naming the
-// component: the inspector display name, icon, category and tooltip, whether it has
-// a section of its own, the hierarchy row class, pick-root and gizmo-pivot
-// behavior, whether the section leads the inspector, which sections it hosts,
-// what switching the component off means, and the undo record for what a
-// generic edit makes the component's system overwrite on other entities.
+// EditorComponentTraits: the editor behavior of a component type as data, registered by the code
+// that owns the component. The editor reads each field without naming the component.
 //
-// Lives in EditorSDK.dll so Editor.exe and editor-kind package modules share
-// one registry instance. Registration is replace-by-typeId (module hot-reload
-// re-registers; the old module DLL stays mapped, so replaced callables never
-// dangle).
+// EditorSDK.dll holds the one registry that Editor.exe and package modules share. A registration
+// replaces the one of its type id; a replaced module stays mapped, so its callables stay valid.
 
 #include "ECS/ECS.h"
 #include "ECS/ModuleRegistration.h"
 
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+namespace GameEngine
+{
+class UIElement;
+}
 
 namespace GameEngine::ECS
 {
@@ -36,6 +34,14 @@ class UndoRedoService;
 // Runs once a generic edit is applied, inside the edit's undo step (see
 // EditorComponentTraits::BeforeGenericEdit). `label` names that step.
 using GenericEditUndoRecorder = std::function<void(UndoRedoService& undo, const std::string& label)>;
+
+// The parts of a Hierarchy row a decoration may style (see
+// EditorComponentTraits::DecorateHierarchyRow). Title is null while the row has none.
+struct HierarchyRowParts
+{
+    UIElement& Row;
+    UIElement* Title = nullptr;
+};
 
 struct EditorComponentTraits
 {
@@ -55,9 +61,16 @@ struct EditorComponentTraits
     // CSS class added to the entity's hierarchy row when the component is
     // present (empty = no contribution).
     std::string HierarchyRowClass;
+    // Runs on every Hierarchy row as it binds, whatever its entity holds, for a
+    // component whose editor marks the entities under it too. It sets and clears
+    // only the classes and the tooltip it owns. Unset = no decoration.
+    std::function<void(ECS::World&, ECS::EntityHandle, HierarchyRowParts&)> DecorateHierarchyRow;
     // The entity is its own pick target: the instance-root upward walk stops
     // here instead of grouping it under a model root.
     bool IsPickInstanceRoot = false;
+    // A Scene View click on any entity under the entity climbs to it: the
+    // outermost such ancestor is the pick root, and a second click goes inside.
+    bool IsPickClimbRoot = false;
     // The transform gizmo pivots at the entity origin (the local pivot
     // transformed to world), not at rendered-content anchors.
     bool GizmoPivotAtEntityOrigin = false;
@@ -133,9 +146,11 @@ public:
     bool TryGetSectionHost(ECS::ComponentTypeId hostedTypeId, ECS::ComponentTypeId& outHostTypeId,
                            EditorComponentTraits& outHostTraits) const;
 
-    // Snapshot of (typeId, traits) pairs for presence scans (hierarchy row
-    // classes, pick roots). Small: one entry per plugin-owned component.
-    std::vector<std::pair<ECS::ComponentTypeId, EditorComponentTraits>> Snapshot() const;
+    using Entries = std::vector<std::pair<ECS::ComponentTypeId, EditorComponentTraits>>;
+
+    // The (typeId, traits) pairs for presence scans (hierarchy row classes, pick roots): one
+    // immutable list that Register replaces, so a call copies a pointer and never the traits.
+    std::shared_ptr<const Entries> Snapshot() const;
 
     // C12 editor-kind unload refusal diagnostics: append a description of
     // every entry attributed to `moduleId` (the traits' accessor callables are
@@ -150,6 +165,7 @@ private:
     // step; the claim predicates run outside m_Mutex.
     std::mutex m_RegistrationMutex;
     std::unordered_map<ECS::ComponentTypeId, EditorComponentTraits> m_Traits;
+    std::shared_ptr<const Entries> m_Snapshot = std::make_shared<const Entries>();
     // Module stamp per registration (attribution is registry bookkeeping, not
     // part of the module-facing traits struct).
     std::unordered_map<ECS::ComponentTypeId, ECS::ModuleRegistrationStamp> m_ModuleOwners;

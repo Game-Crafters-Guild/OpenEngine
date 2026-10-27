@@ -16,7 +16,7 @@ namespace GameEngine::InspectorUI
 /// A texture slot's thumbnail, the square the material inspector's slots use: it previews what is
 /// bound, takes a texture drop as a second way to assign one, and outlines as an empty slot when
 /// nothing is. Sits under the field that names it, so the slot reads as a slot rather than as the
-/// word "(None)".
+/// word "None".
 inline void AddTextureSlotPreview(UIElement* parent, const GUID& guid,
                                   std::function<void(const GUID&)> onDropped)
 {

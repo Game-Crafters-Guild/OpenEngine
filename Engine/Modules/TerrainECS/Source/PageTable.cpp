@@ -4,6 +4,7 @@
 #include "PageStreaming/PageTableEntry.h"
 
 #include <algorithm>
+#include <cassert>
 
 namespace GameEngine::TerrainECS
 {
@@ -36,9 +37,11 @@ uint64 LevelEntries(const PageStreaming::PageStoreLevel& level)
 
 } // namespace
 
-void PageTable::Reset(uint32 samplesX, uint32 samplesZ, uint32 slotCount, const PageTableBudget& budget)
+void PageTable::Reset(uint32 samplesX, uint32 samplesZ, uint32 faces, uint32 slotCount, const PageTableBudget& budget)
 {
+    assert((faces == 1u || faces == PageStreaming::kPageStoreMaxFaces) && "a field has one face or six");
     m_Levels = PageStreaming::BuildPageStoreLevels(samplesX, samplesZ);
+    m_Faces = faces;
     m_SlotFade.assign(slotCount, 1.0f);
     m_LevelOffsets.assign(m_Levels.size(), 0u);
     m_Tiers.clear();
@@ -50,21 +53,26 @@ void PageTable::Reset(uint32 samplesX, uint32 samplesZ, uint32 slotCount, const 
     m_Words.clear();
     if (m_Levels.empty())
         return;
-    const uint64 entries = m_Levels.back().FirstEntry + LevelEntries(m_Levels.back());
+    const uint64 entries = faces * (m_Levels.back().FirstEntry + LevelEntries(m_Levels.back()));
     if (CBTTerrain::kCBTPageFadeOffsetWords + slotCount + entries <= budget.DenseWords)
     {
+        uint64 at = 0;
         for (std::size_t level = 0; level < m_Levels.size(); ++level)
-            m_LevelOffsets[level] = static_cast<uint32>(m_Levels[level].FirstEntry);
+        {
+            m_LevelOffsets[level] = static_cast<uint32>(at);
+            at += faces * LevelEntries(m_Levels[level]);
+        }
         m_Words.assign(static_cast<std::size_t>(entries), kNoPage);
         return;
     }
 
-    // The floor: the finest level whose entries, with every coarser level's, fit a quarter of the budget.
+    // The floor: the finest level whose entries over every face, with every coarser level's, fit a
+    // quarter of the budget.
     const uint64 topBudget = budget.DenseWords / kDenseTopTierBudgetFraction;
-    uint64 dense = LevelEntries(m_Levels.back());
+    uint64 dense = faces * LevelEntries(m_Levels.back());
     m_FloorLevel = static_cast<uint32>(m_Levels.size()) - 1u;
-    while (m_FloorLevel > 0 && dense + LevelEntries(m_Levels[m_FloorLevel - 1u]) <= topBudget)
-        dense += LevelEntries(m_Levels[--m_FloorLevel]);
+    while (m_FloorLevel > 0 && dense + faces * LevelEntries(m_Levels[m_FloorLevel - 1u]) <= topBudget)
+        dense += faces * LevelEntries(m_Levels[--m_FloorLevel]);
 
     for (uint32 root = m_FloorLevel; root > 0;)
     {
@@ -76,10 +84,10 @@ void PageTable::Reset(uint32 samplesX, uint32 samplesZ, uint32 slotCount, const 
     for (uint32 level = static_cast<uint32>(m_Levels.size()); level-- > m_FloorLevel;)
     {
         m_LevelOffsets[level] = at;
-        at += static_cast<uint32>(LevelEntries(m_Levels[level]));
+        at += static_cast<uint32>(faces * LevelEntries(m_Levels[level]));
     }
     m_DirectoryOffset = at;
-    at += static_cast<uint32>(LevelEntries(m_Levels[m_FloorLevel]));
+    at += static_cast<uint32>(faces * LevelEntries(m_Levels[m_FloorLevel]));
     m_Pools.resize(m_Tiers.size());
     for (std::size_t tier = 0; tier < m_Tiers.size(); ++tier)
     {
@@ -103,6 +111,7 @@ void PageTable::Reset(uint32 samplesX, uint32 samplesZ, uint32 slotCount, const 
         pool.Parent.assign(shape.Blocks, kNoPageBlock);
         pool.RootX.assign(shape.Blocks, 0u);
         pool.RootZ.assign(shape.Blocks, 0u);
+        pool.RootFace.assign(shape.Blocks, 0u);
     }
     m_Words.assign(at, kNoPage); // kNoPage is also kNoPageBlock: every directory word starts empty
     for (std::size_t tier = 0; tier < m_Tiers.size(); ++tier)
@@ -115,15 +124,17 @@ void PageTable::Reset(uint32 samplesX, uint32 samplesZ, uint32 slotCount, const 
     }
 }
 
-uint32 PageTable::DenseWord(uint32 level, uint32 pageX, uint32 pageZ) const
+uint32 PageTable::DenseWord(const PageStreaming::PageAddress& page) const
 {
-    return m_LevelOffsets[level] + pageZ * m_Levels[level].PagesX + pageX;
+    const PageStreaming::PageStoreLevel& shape = m_Levels[page.Level];
+    return m_LevelOffsets[page.Level] + (page.Face * shape.PagesZ + page.Z) * shape.PagesX + page.X;
 }
 
-uint32 PageTable::FloorDirectoryWord(uint32 level, uint32 pageX, uint32 pageZ) const
+uint32 PageTable::FloorDirectoryWord(const PageStreaming::PageAddress& page) const
 {
-    const uint32 shift = m_FloorLevel - level;
-    return m_DirectoryOffset + (pageZ >> shift) * m_Levels[m_FloorLevel].PagesX + (pageX >> shift);
+    const uint32 shift = m_FloorLevel - page.Level;
+    const PageStreaming::PageStoreLevel& floor = m_Levels[m_FloorLevel];
+    return m_DirectoryOffset + (page.Face * floor.PagesZ + (page.Z >> shift)) * floor.PagesX + (page.X >> shift);
 }
 
 uint32 PageTable::BlockWord(const Tier& tier, uint32 block, uint32 rootX, uint32 rootZ, uint32 level,
@@ -142,14 +153,17 @@ uint32 PageTable::BlockWord(const Tier& tier, uint32 block, uint32 rootX, uint32
            ((pageX >> below) - (rootX << tier.Levels));
 }
 
-uint32 PageTable::Entry(uint32 level, uint32 pageX, uint32 pageZ) const
+uint32 PageTable::Entry(const PageStreaming::PageAddress& page) const
 {
-    if (level >= m_FloorLevel)
-        return m_Words[DenseWord(level, pageX, pageZ)];
+    if (page.Level >= m_FloorLevel)
+        return m_Words[DenseWord(page)];
+    const uint32 level = page.Level;
+    const uint32 pageX = page.X;
+    const uint32 pageZ = page.Z;
     const uint32 shift = m_FloorLevel - level;
     uint32 rootX = pageX >> shift;
     uint32 rootZ = pageZ >> shift;
-    uint32 block = m_Words[FloorDirectoryWord(level, pageX, pageZ)];
+    uint32 block = m_Words[FloorDirectoryWord(page)];
     for (const Tier& tier : m_Tiers)
     {
         if (block == kNoPageBlock)
@@ -165,12 +179,15 @@ uint32 PageTable::Entry(uint32 level, uint32 pageX, uint32 pageZ) const
     return kNoPage;
 }
 
-bool PageTable::Insert(uint32 level, uint32 pageX, uint32 pageZ, uint32 entry)
+bool PageTable::Insert(const PageStreaming::PageAddress& page, uint32 entry)
 {
+    const uint32 level = page.Level;
+    const uint32 pageX = page.X;
+    const uint32 pageZ = page.Z;
     const uint32 shift = m_FloorLevel - level;
     uint32 rootX = pageX >> shift;
     uint32 rootZ = pageZ >> shift;
-    uint32 owner = FloorDirectoryWord(level, pageX, pageZ);
+    uint32 owner = FloorDirectoryWord(page);
     uint32 parent = kNoPageBlock;
     for (uint32 tierIndex = 0; tierIndex < m_Tiers.size(); ++tierIndex)
     {
@@ -194,6 +211,7 @@ bool PageTable::Insert(uint32 level, uint32 pageX, uint32 pageZ, uint32 entry)
             pool.Parent[block] = parent;
             pool.RootX[block] = rootX;
             pool.RootZ[block] = rootZ;
+            pool.RootFace[block] = page.Face;
             m_Words[owner] = block;
             if (parent != kNoPageBlock)
                 ++m_Pools[tierIndex - 1u].Residents[parent];
@@ -215,12 +233,15 @@ bool PageTable::Insert(uint32 level, uint32 pageX, uint32 pageZ, uint32 entry)
     return false;
 }
 
-void PageTable::Remove(uint32 level, uint32 pageX, uint32 pageZ)
+void PageTable::Remove(const PageStreaming::PageAddress& page)
 {
+    const uint32 level = page.Level;
+    const uint32 pageX = page.X;
+    const uint32 pageZ = page.Z;
     const uint32 shift = m_FloorLevel - level;
     uint32 rootX = pageX >> shift;
     uint32 rootZ = pageZ >> shift;
-    uint32 block = m_Words[FloorDirectoryWord(level, pageX, pageZ)];
+    uint32 block = m_Words[FloorDirectoryWord(page)];
     for (uint32 tierIndex = 0; tierIndex < m_Tiers.size(); ++tierIndex)
     {
         if (block == kNoPageBlock)
@@ -264,7 +285,7 @@ void PageTable::RetryWaiting()
     for (std::size_t i = 0; i < m_Waiting.size();)
     {
         const Waiting waiting = m_Waiting[i];
-        if (!Insert(waiting.Address.Level, waiting.Address.X, waiting.Address.Z, waiting.Entry))
+        if (!Insert(waiting.Address, waiting.Entry))
         {
             ++i;
             continue;
@@ -274,31 +295,35 @@ void PageTable::RetryWaiting()
     }
 }
 
-void PageTable::SetEntry(uint32 level, uint32 pageX, uint32 pageZ, uint32 entry)
+void PageTable::SetEntry(const PageStreaming::PageAddress& page, uint32 entry)
 {
-    if (level >= m_FloorLevel)
+    assert(page.Face < m_Faces && "the page's face is in the table");
+    if (page.Level >= m_FloorLevel)
     {
-        m_Words[DenseWord(level, pageX, pageZ)] = entry;
+        m_Words[DenseWord(page)] = entry;
         return;
     }
-    const PageStreaming::PageAddress address{0, static_cast<uint8>(level), pageX, pageZ};
-    std::erase_if(m_Waiting, [&address](const Waiting& waiting) { return waiting.Address == address; });
+    std::erase_if(m_Waiting, [&page](const Waiting& waiting) { return waiting.Address == page; });
     if (entry == kNoPage)
     {
-        Remove(level, pageX, pageZ);
+        Remove(page);
         return;
     }
-    if (!Insert(level, pageX, pageZ, entry))
-        m_Waiting.push_back(Waiting{address, entry});
+    if (!Insert(page, entry))
+        m_Waiting.push_back(Waiting{page, entry});
 }
 
 void PageTable::AppendResident(std::vector<PageStreaming::PageAddress>& out) const
 {
     for (uint32 level = m_FloorLevel; level < m_Levels.size(); ++level)
-        for (uint32 z = 0; z < m_Levels[level].PagesZ; ++z)
-            for (uint32 x = 0; x < m_Levels[level].PagesX; ++x)
-                if (m_Words[DenseWord(level, x, z)] != kNoPage)
-                    out.push_back(PageStreaming::PageAddress{0, static_cast<uint8>(level), x, z});
+        for (uint32 face = 0; face < m_Faces; ++face)
+            for (uint32 z = 0; z < m_Levels[level].PagesZ; ++z)
+                for (uint32 x = 0; x < m_Levels[level].PagesX; ++x)
+                {
+                    const PageStreaming::PageAddress page{static_cast<uint8>(face), static_cast<uint8>(level), x, z};
+                    if (m_Words[DenseWord(page)] != kNoPage)
+                        out.push_back(page);
+                }
     // Below the floor, entries live only in blocks, and a block in use holds at least one.
     for (std::size_t tierIndex = 0; tierIndex < m_Tiers.size(); ++tierIndex)
     {
@@ -315,7 +340,7 @@ void PageTable::AppendResident(std::vector<PageStreaming::PageAddress>& out) con
                 const uint32* words = m_Words.data() + tier.PoolOffset + block * tier.BlockWords + BlockLevelOffset(k);
                 for (uint32 local = 0; local < side * side; ++local)
                     if (words[local] != kNoPage)
-                        out.push_back(PageStreaming::PageAddress{0, static_cast<uint8>(level),
+                        out.push_back(PageStreaming::PageAddress{pool.RootFace[block], static_cast<uint8>(level),
                                                                  (pool.RootX[block] << k) + local % side,
                                                                  (pool.RootZ[block] << k) + local / side});
             }

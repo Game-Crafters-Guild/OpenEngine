@@ -8,8 +8,8 @@
 #include "InspectorLayoutFixture.h"
 #include "EditorChangeNotifications.h"
 #include "InspectorRegistry.h"
-#include "Inspectors/CubeLutEffectInspector.h"
-#include "Inspectors/CubeLutStageNotice.h"
+#include "Inspectors/CubeLut/CubeLutEffectInspector.h"
+#include "Inspectors/CubeLut/CubeLutStageNotice.h"
 
 #include "AssetCore/GUID.h"
 #include "Assets/AssetManager.h"

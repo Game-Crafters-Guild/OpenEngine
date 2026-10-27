@@ -214,6 +214,11 @@ Skipping a stage and gating an input:
   `passthroughInput` names which input is published when the stage has more than one, and
   `"stitchWhenSkipped": false` publishes nothing, for a stage whose output no running stage
   reads while it is skipped.
+- `optionalInputs` (array of input binding names): when the reference of one of these inputs
+  does not resolve this frame, its binding samples the engine's black texture and the stage
+  still runs. Without it, an input that does not resolve skips the stage. `BloomThreshold`
+  lists `uSampleDelta`, which reads `View.BloomSampleDelta`: the engine publishes it only for a
+  multisampled view with bloom on.
 - `inputGates` (object, input binding to a post-process settings gate such as
   `bloomScatteringActive`): while the gate reads inactive, this stage neither resolves nor
   reads that input and its binding samples the engine's black texture. A skipped stage

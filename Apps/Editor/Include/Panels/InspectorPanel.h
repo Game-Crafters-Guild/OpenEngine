@@ -285,6 +285,12 @@ private:
     // often it is asked. A section's refresh callback asks for it while the panel runs
     // the callbacks the rebuild destroys, so the rebuild never runs inside that call.
     void RequestEntityRefresh();
+    // Asks for RequestEntityRefresh once no text field of the panel has the focus, so the rebuild
+    // never ends an edit.
+    void RequestEntityRefreshAfterTextEdit();
+    bool HasTextEditFocus() const;
+    // Sets the override marks of the entity header, the component headers and the field rows again.
+    void RefreshOverrideMarks();
     // Re-present the shown asset now that its reload has landed: the inspector's own
     // in-place update where it registered one, the full rebuild otherwise. A rebuild
     // is the blunt answer — it drops keyboard focus, closes an open popup and resets
@@ -349,7 +355,9 @@ private:
     void RecordInspectorHistory(InspectorSelectionHistoryEntry entry);
     void NavigateInspectorHistoryAt(size_t index);
     void SyncInspectorHistoryButtonState();
-    void MountHistoryButtons(UIElement& headerContainer);
+    // Appends the header row's end from its layout: the override badge, hidden, and the history arrows.
+    // On the entity-name header it then sets the name's override mark, so the badge exists before any mark.
+    void MountHeaderTrailingSlot(UIElement& headerContainer);
     /// Minimal top header (title + arrows) mounted on m_TopRoot for non-entity / empty states
     /// so the inspector header strip is always present.
     void BuildSimpleTopHeader(const std::string& titleText,
@@ -472,6 +480,10 @@ private:
     bool m_PendingShowKeepMultiSelection = true;
     bool m_ModuleInspectorRefreshPending = false;
     bool m_EntityRefreshPosted = false;
+    bool m_EntityRefreshAfterTextEdit = false;
+    // The entity header and its name field of a single selection, for the in-place name mark (not owned).
+    UIElement* m_EntityNameHeader = nullptr;
+    UIElement* m_EntityNameField = nullptr;
     std::function<void(ECS::World*, ECS::EntityHandle)> m_OnHistoryEntityNavigate;
     std::function<void(ECS::World*, const std::vector<ECS::EntityHandle>&)> m_OnHistoryEntitiesNavigate;
     std::function<void(const std::vector<std::filesystem::path>&)> m_OnHistoryAssetNavigate;
@@ -526,6 +538,7 @@ private:
     {
         std::vector<std::function<void()>> Simulation;
         std::vector<std::function<void()>> Frame;
+        std::vector<std::function<void()>> OverrideMarks;
     };
     std::unordered_map<ECS::ComponentTypeId, SectionRefreshCallbacks> m_SectionRefreshCallbacks;
     std::chrono::steady_clock::time_point m_LastSimulationRefresh{};

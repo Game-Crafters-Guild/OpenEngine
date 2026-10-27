@@ -1,13 +1,10 @@
 #include "Editor/Hierarchy/HierarchyNavigationBar.h"
 
-#include "Editor/EditorPaths.h"
 #include "Editor/EditorTreeTitleIconVars.h"
-#include "Logger/Logger.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/ItemSizeSlider.h"
-#include "UI/Parsers/XMLParser.h"
 
 #include <cmath>
-#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -49,15 +46,9 @@ HierarchyNavigationBar::HierarchyNavigationBar()
 // The glyph is the bar's layout; the bar is built once per Hierarchy, so the layout is read here.
 void HierarchyNavigationBar::AddSizeGlyph(const std::string& tooltip)
 {
-    const std::filesystem::path path = GetEditorGlobalPaths().installAssetsRoot / kLayoutAssetPath;
-    std::unique_ptr<UIElement> glyph;
-    if (!UIParsing::XMLParser::ParseLayoutFromFile(path.string(), glyph) || !glyph)
-    {
-        Logger::Log::Error("HierarchyNavigationBar: {} did not load, so the row size slider shows without its "
-                           "glyph. Check that it is staged under the editor asset mount.",
-                           path.generic_string());
+    std::unique_ptr<UIElement> glyph = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, {});
+    if (!glyph)
         return;
-    }
     glyph->SetTooltip(tooltip);
     AddChild(std::move(glyph));
 }

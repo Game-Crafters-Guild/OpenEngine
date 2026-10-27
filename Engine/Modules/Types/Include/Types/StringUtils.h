@@ -137,6 +137,19 @@ inline std::string ReplaceAll(std::string text, std::string_view from, std::stri
     return text;
 }
 
+/// The number of times `needle` occurs in `haystack`, scanning left to right without overlap:
+/// CountOccurrences("aaaa", "aa") is 2. An empty `needle` counts 0.
+inline std::size_t CountOccurrences(std::string_view haystack, std::string_view needle)
+{
+    if (needle.empty())
+        return 0;
+    std::size_t count = 0;
+    for (std::size_t at = haystack.find(needle); at != std::string_view::npos;
+         at = haystack.find(needle, at + needle.size()))
+        ++count;
+    return count;
+}
+
 // Case-insensitive substring check. Avoids allocating lowered copies.
 inline bool ContainsIgnoreCase(std::string_view haystack, std::string_view needle)
 {

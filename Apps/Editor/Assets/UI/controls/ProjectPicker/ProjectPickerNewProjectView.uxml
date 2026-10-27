@@ -1,0 +1,35 @@
+<!-- The project picker's create page: the title row with the back button and the tabs, the card grid scroll view
+     (its content is ProjectPickerNewProjectGrid.uxml), and the name and location form. The ids are the contract
+     with ProjectPickerModal.cpp; the styles are in ProjectPicker.css. -->
+<UIElement id="new-project-view">
+  <UIElement id="new-project-top">
+    <Button id="new-project-back"
+            class="project-picker-button project-picker-button-secondary secondary project-picker-back-button"
+            text="‹" />
+    <Label id="new-project-title" class="project-picker-page-title" text="New project" />
+    <UIElement id="new-project-tabs">
+      <Button id="project-templates-tab" class="project-picker-new-tab active" text="Templates" />
+      <Button id="project-community-tab" class="project-picker-new-tab" text="Community" />
+    </UIElement>
+  </UIElement>
+  <ScrollView id="new-project-grid-scroll" />
+  <UIElement id="new-project-form" class="project-picker-full-bleed">
+    <UIElement class="project-picker-form-fields">
+      <UIElement class="project-picker-field-row">
+        <Label class="project-picker-field-label" text="PROJECT NAME" />
+        <TextField id="new-project-name-field" class="project-picker-text-field project-picker-text-field-fill" />
+      </UIElement>
+      <UIElement class="project-picker-field-row">
+        <Label class="project-picker-field-label" text="LOCATION" />
+        <UIElement class="project-picker-field-controls">
+          <TextField id="new-project-location-field"
+                     class="project-picker-text-field project-picker-text-field-grow" />
+          <Button id="new-project-location-browse"
+                  class="project-picker-button project-picker-button-primary primary project-picker-button-compact project-picker-button-w140 project-picker-button-noshrink"
+                  text="Browse" />
+        </UIElement>
+      </UIElement>
+    </UIElement>
+    <Label id="new-project-error" class="project-picker-error" />
+  </UIElement>
+</UIElement>

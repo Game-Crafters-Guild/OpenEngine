@@ -22,6 +22,9 @@ layout(set=0,binding=3,std140) uniform ViewParamsBlock {
 #undef GE_VP_MAT4
 } ViewParams;
 #include "Includes/reverse_z.glsl"
+// The MSAA resolve's plain sample mean minus its weighted mean, in stored units (black when the view
+// is not multisampled or the pipeline does not wire it). uHDR plus this is the plain mean.
+layout(set=0,binding=4) uniform sampler2D uSampleDelta;
 // The depth veil follows an MIT-licensed OCASM technique while using the
 // engine's multiscale bloom reconstruction in place of a temporal ghost buffer.
 // See ThirdParty/OCASMDepthVeil/LICENSE and UPSTREAM.md.
@@ -66,9 +69,15 @@ vec3 BrightPass(vec3 c, float expScale)
     return c * (w / max(le, 1e-6)); // scene-linear result from an exposed fraction
 }
 
+// The bloom input at uv: the scene color with the sub-pixel brightness the weighted resolve removed.
+vec3 BloomInput(vec2 uv)
+{
+    return SafeHDR(texture(uHDR, uv).rgb + texture(uSampleDelta, uv).rgb);
+}
+
 vec3 ModernSource(vec2 uv, float expScale)
 {
-    vec3 c = SafeHDR(texture(uHDR, uv).rgb);
+    vec3 c = BloomInput(uv);
     // Threshold each tap before the wide average. Thresholding the diluted
     // result would erase small emitters even when they exceed the threshold.
     if (pc.thresholdFree != 0) return c;
@@ -79,10 +88,10 @@ vec3 ModernSource(vec2 uv, float expScale)
         // keep their brightness. The shoulder preserves small colored lights
         // below sixteen display whites, then softly bounds isolated outliers.
         vec2 d = 1.0 / vec2(textureSize(uHDR, 0));
-        float neighbour = max(min(GE_ExposedMaxChannel(SafeHDR(texture(uHDR, uv + vec2(d.x, 0)).rgb), expScale),
-                                  GE_ExposedMaxChannel(SafeHDR(texture(uHDR, uv - vec2(d.x, 0)).rgb), expScale)),
-                              min(GE_ExposedMaxChannel(SafeHDR(texture(uHDR, uv + vec2(0, d.y)).rgb), expScale),
-                                  GE_ExposedMaxChannel(SafeHDR(texture(uHDR, uv - vec2(0, d.y)).rgb), expScale)));
+        float neighbour = max(min(GE_ExposedMaxChannel(BloomInput(uv + vec2(d.x, 0)), expScale),
+                                  GE_ExposedMaxChannel(BloomInput(uv - vec2(d.x, 0)), expScale)),
+                              min(GE_ExposedMaxChannel(BloomInput(uv + vec2(0, d.y)), expScale),
+                                  GE_ExposedMaxChannel(BloomInput(uv - vec2(0, d.y)), expScale)));
         float brightness = GE_ExposedMaxChannel(c, expScale);
         float shoulder = max(neighbour * 2.0, pc.threshold + 16.0);
         float excess = max(brightness - shoulder, 0.0);

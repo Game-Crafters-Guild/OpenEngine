@@ -18,6 +18,13 @@
 
 #extension GL_EXT_nonuniform_qualifier : require
 
+// The terrain's inputs are continuous across its facets, so it reads them at the pixel center
+// (MaterialKeyword::SurfaceInputsAtPixelCenter). A centroid input moves off the center on a partly
+// covered MSAA pixel: the splat and the shadow then read another place, a line along each facet edge.
+#if defined(GE_SURFACE_INPUTS_AT_CENTROID)
+#error "cbt_surface.glsl: register the terrain material with MaterialKeyword::SurfaceInputsAtPixelCenter"
+#endif
+
 // Global bindless arrays + GE_BTEX — single declaration site (guarded include).
 #include "Includes/bindless_textures.glsl"
 
@@ -1064,11 +1071,9 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
             // so the taps are skipped (the perf gate the old height threshold stood in for).
             CBTSculptGeom sg = CBT_SurfSculptGeom(sp);
             float centerSculpt = CBT_SampleSculptDirSurf(dir, sg);
-            // Analytic sphere modifiers (S2/S3): compose the closed-form set (flattens + transient
-            // brush dabs) at the pixel, reusing the relief already evaluated at this dir (h still
-            // holds the pure closed form here) — the same composition VertexEval displaced the
-            // geometry with, so the splat altitude and the R+h normal scale agree with the mesh.
-            // Total 0 (dark-ship) adds no float op.
+            // Analytic sphere modifiers (S2/S3): compose the closed-form set on the closed-form relief h.
+            // VertexEval composes the same set on its base height: h, or the page height on the paged wide arm.
+            // An empty set adds no float op.
             if (CBT_SphereAnalyticTotalSurf(sp) != 0u)
                 centerSculpt += CBT_SphereAnalyticOffsetSurf(sp, dir, h);
             h += centerSculpt;

@@ -110,6 +110,7 @@ Skybox: game data, a full mirror
 SplineComponent: game data, a full mirror
 SplineExtrude: game data, a full mirror
 SplineFence: game data, a full mirror
+SplineFencePart: element struct, mirrored inside its owner
 SplineFenceSpanPiece: engine-internal, no mirror (@ge-engine-internal)
 SplineGroundProvisioned: game data, a full mirror
 SplineNetworkMember: game data, a full mirror

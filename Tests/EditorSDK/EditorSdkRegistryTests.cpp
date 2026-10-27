@@ -15,6 +15,8 @@
 #include "ECS/Entity.h"
 #include "Editor/Entities/EditorComponentTraits.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
+#include "Input/InputSystem.h"
+#include "Input/KeyCodes.h"
 #include "InspectorRegistry.h"
 #include "Picking/EditorPickProviders.h"
 
@@ -334,5 +336,55 @@ TEST(EditorPluginRegistry, EnabledResolutionIsCachedUntilInvalidated)
 
     // Restore the default resolver state so later tests see default-enabled
     // semantics (the registry is process-global).
+    registry.SetEnabledResolver(nullptr);
+}
+
+namespace
+{
+
+// A plugin that binds one key with its modifiers to one Hierarchy command.
+class KeyPlugin final : public ed::IEditorPlugin
+{
+public:
+    KeyPlugin(const char* id, int key, int mods, uint32_t command) : m_Key(key), m_Mods(mods), m_Command(command)
+    {
+        m_Descriptor = {id, "Key Plugin", "1.0.0", true};
+    }
+
+    const GameEngine::Plugins::PluginDescriptor& GetDescriptor() const override { return m_Descriptor; }
+
+    uint32_t HierarchyCommandForKey(int key, int mods) const override
+    {
+        return key == m_Key && mods == m_Mods ? m_Command : 0u;
+    }
+
+private:
+    GameEngine::Plugins::PluginDescriptor m_Descriptor{};
+    int m_Key = 0;
+    int m_Mods = 0;
+    uint32_t m_Command = 0;
+};
+
+} // namespace
+
+// The Hierarchy asks the registry for the command a key runs: the first enabled plugin that binds it answers,
+// a disabled plugin and an unbound key answer 0.
+TEST(EditorPluginRegistry, HierarchyCommandForKeyComesFromTheFirstEnabledPluginThatBindsIt)
+{
+    namespace input = GameEngine::Input;
+    auto& registry = ed::EditorPluginRegistry::Get();
+    const int chord = input::kModControl | input::kModShift;
+    static KeyPlugin first("sdkTest.keyFirst", input::kKeyCode_P, chord, 0x5101u);
+    static KeyPlugin second("sdkTest.keySecond", input::kKeyCode_P, chord, 0x7001u);
+    registry.RegisterPlugin(first);
+    registry.RegisterPlugin(second);
+
+    EXPECT_EQ(registry.HierarchyCommandForKey(input::kKeyCode_P, chord), 0x5101u);
+    EXPECT_EQ(registry.HierarchyCommandForKey(input::kKeyCode_D, input::kModControl), 0u) << "no plugin binds Ctrl+D";
+
+    registry.SetEnabledResolver([](std::string_view id, bool defaultEnabled)
+                                { return id == "sdkTest.keyFirst" ? false : defaultEnabled; });
+    EXPECT_EQ(registry.HierarchyCommandForKey(input::kKeyCode_P, chord), 0x7001u)
+        << "a disabled plugin answers nothing";
     registry.SetEnabledResolver(nullptr);
 }

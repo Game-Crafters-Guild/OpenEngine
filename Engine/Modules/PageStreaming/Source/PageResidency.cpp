@@ -4,7 +4,8 @@
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/PageLoader.h"
-#include "PageStreaming/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreAccess.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
 
 #include "Logger/Logger.h"
 
@@ -24,9 +25,20 @@ std::span<const PageStoreLevel> LevelsOf(const PageSource& source)
 {
     if (source.Store)
         return source.Store->Layout().Levels;
+    if (source.Access)
+        return source.Access->Levels();
     if (source.Generated)
         return source.Generated->Levels();
     return {};
+}
+
+uint32 FaceCountOf(const PageSource& source)
+{
+    if (source.Store)
+        return source.Store->Layout().Header.FaceCount;
+    if (source.Access)
+        return source.Access->FaceCount();
+    return source.Generated ? source.Generated->FaceCount() : 1u;
 }
 
 uint32 TopLevelOf(const PageSource& source)
@@ -86,13 +98,10 @@ void PageResidencyManager::Configure(uint32 stream, uint32 field, PageSource sou
     state.TopLevel = TopLevelOf(state.Source);
     state.PageBytes = state.Source.PayloadBytes();
     state.Epoch = m_NextEpoch++;
-    const std::span<const PageStoreLevel> levels = LevelsOf(state.Source);
-    const uint32 faces = state.Source.Store ? state.Source.Store->Layout().Header.FaceCount : 1u;
-    assert((levels.empty() || (levels.front().SamplesX <= kCpuDirectoryMaxSamplesPerAxis &&
-                               levels.front().SamplesZ <= kCpuDirectoryMaxSamplesPerAxis)) &&
-           "a store past the CPU directory's limit is refused before it streams");
-    state.EntriesPerFace = static_cast<uint32>(DensePageCount(levels));
-    state.CpuDirectory.assign(static_cast<std::size_t>(faces) * state.EntriesPerFace, CpuPageEntry{});
+    state.SourceVersion = state.Source.Access ? state.Source.Access->Version() : 0u;
+    state.EntriesPerFace = static_cast<uint32>(DensePageCount(LevelsOf(state.Source)));
+    // The CPU directory is built by the stream's first RequestCpu: a stream with no CPU reader holds none.
+    state.CpuDirectory.clear();
     state.CpuChanges.assign(kCpuChangeRecordLength, PageAddress{});
     state.KeptCpuWindow.clear(); // the old source's window
 }
@@ -136,8 +145,14 @@ void PageResidencyManager::RequestCpu(uint32 stream, uint32 firstPinnedLevel, st
     if (it == m_Streams.end())
         return;
     Stream& state = it->second;
+    // A CPU read runs on the frame thread, and a read of a store being baked waits on the bake.
+    assert(!state.Source.Access && "RequestCpu on a stream over a PageStoreAccess: read its pages through Request, on workers");
+    if (state.Source.Access)
+        return;
     // The CPU readers (SurfaceHeightQuery) read planar terrain: the pins and fetches walk face 0 only.
-    assert(state.CpuDirectory.size() == state.EntriesPerFace && "CPU height pages of a stream with more than one face");
+    assert(FaceCountOf(state.Source) == 1u && "CPU height pages of a stream with more than one face");
+    if (state.CpuDirectory.empty())
+        BuildCpuDirectory(state);
     if (state.CpuPinnedLevel != firstPinnedLevel)
     {
         // The top page is fetched synchronously by the Update; the rest of the pinned levels,
@@ -168,7 +183,12 @@ void PageResidencyManager::RequestCpu(uint32 stream, uint32 firstPinnedLevel, st
 CpuPageDirectory PageResidencyManager::CpuPages(uint32 stream) const
 {
     const auto it = m_Streams.find(stream);
-    return it == m_Streams.end() ? CpuPageDirectory{} : DirectoryOf(it->second);
+    if (it == m_Streams.end())
+        return CpuPageDirectory{};
+    // A read before the first RequestCpu gets an empty directory: every page is Missing.
+    assert((!it->second.CpuDirectory.empty() || LevelsOf(it->second.Source).empty()) &&
+           "CpuPages before the stream's first RequestCpu: request the CPU pages first");
+    return DirectoryOf(it->second);
 }
 
 std::span<const PageAddress> PageResidencyManager::CpuWindow(uint32 stream) const
@@ -185,8 +205,24 @@ CpuPageDirectory PageResidencyManager::DirectoryOf(const Stream& stream)
                             stream.PageBytes};
 }
 
+void PageResidencyManager::BuildCpuDirectory(Stream& stream)
+{
+    const std::span<const PageStoreLevel> levels = LevelsOf(stream.Source);
+    assert((levels.empty() || (levels.front().SamplesX <= kCpuDirectoryMaxSamplesPerAxis &&
+                               levels.front().SamplesZ <= kCpuDirectoryMaxSamplesPerAxis)) &&
+           "a store past the CPU directory's limit is refused before it streams");
+    stream.CpuDirectory.assign(static_cast<std::size_t>(FaceCountOf(stream.Source)) * stream.EntriesPerFace, CpuPageEntry{});
+    const CpuPageDirectory directory = DirectoryOf(stream);
+    for (const auto& [address, page] : stream.Loaded)
+        stream.CpuDirectory[directory.Index(address)] = CpuPageEntry{page.Bytes->data(), CpuPageState::Resident};
+    for (const PageAddress& address : stream.Absent)
+        stream.CpuDirectory[directory.Index(address)] = CpuPageEntry{nullptr, CpuPageState::Absent};
+}
+
 void PageResidencyManager::SetCpuEntry(Stream& stream, const PageAddress& address, const CpuPageEntry& entry)
 {
+    if (stream.CpuDirectory.empty())
+        return; // no CPU reader yet: BuildCpuDirectory takes the loaded pages when one asks
     const std::size_t index = DirectoryOf(stream).Index(address);
     assert(index < stream.CpuDirectory.size() && "a page outside its stream's pyramid");
     if (index >= stream.CpuDirectory.size())
@@ -227,6 +263,9 @@ void PageResidencyManager::DrainCompletions(uint64 frameIndex)
         if (it == m_Streams.end() || it->second.Epoch != done.Epoch)
             continue; // a load of a stream since forgotten or restarted
         it->second.InFlight.erase(done.Outcome.Address);
+        // Absent at an older version of a store being baked: the page is fetched again.
+        if (done.Outcome.Absent && done.SourceVersion != it->second.SourceVersion)
+            continue;
         Land(it->second, frameIndex, done.Outcome);
     }
 }
@@ -266,8 +305,23 @@ bool PageResidencyManager::NeedsLoad(const Stream& stream, const PageAddress& ad
     return failed == stream.Failures.end() || frameIndex >= failed->second.RetryAtFrame;
 }
 
+void PageResidencyManager::RetryAbsentPages()
+{
+    for (auto& [id, stream] : m_Streams)
+    {
+        if (!stream.Source.Access)
+            continue;
+        const uint64 version = stream.Source.Access->Version();
+        if (version == stream.SourceVersion)
+            continue;
+        stream.SourceVersion = version;
+        stream.Absent.clear();
+    }
+}
+
 void PageResidencyManager::FetchNow(Stream& stream, uint64 frameIndex, const PageAddress& address)
 {
+    assert(!stream.Source.Access && "a store being baked is read on workers: a read here waits on the bake");
     PageFetchOutcome outcome = FetchPage(stream.Source, address);
     Land(stream, frameIndex, outcome);
 }
@@ -390,15 +444,16 @@ void PageResidencyManager::StartLoad(uint32 streamId, Stream& stream, const Page
 {
     const std::shared_ptr<CompletionQueue> queue = m_Completions;
     const uint64 epoch = stream.Epoch;
+    const uint64 version = stream.SourceVersion;
     stream.InFlight.insert(address);
     ++m_InFlightCount;
     if (cpu)
         ++m_CpuInFlightCount;
     ++m_LoadsStarted;
     SubmitPageFetch(m_Pool, m_Io, stream.Source, address, stream.Cancel,
-                    [queue, streamId, epoch, cpu](PageFetchOutcome outcome) {
+                    [queue, streamId, epoch, version, cpu](PageFetchOutcome outcome) {
                         std::lock_guard lock(queue->Mutex);
-                        queue->Completions.push_back(Completion{streamId, epoch, std::move(outcome), cpu});
+                        queue->Completions.push_back(Completion{streamId, epoch, version, std::move(outcome), cpu});
                     });
 }
 
@@ -532,6 +587,7 @@ void PageResidencyManager::Update(uint64 frameIndex, float32 deltaSeconds, bool 
     const std::chrono::steady_clock::time_point start = m_Clock();
     m_FrameIndex = frameIndex;
     m_LoadsStarted = 0;
+    RetryAbsentPages();
     DrainCompletions(frameIndex);
     FetchCpuNow(frameIndex, start);
     RebuildCandidates();

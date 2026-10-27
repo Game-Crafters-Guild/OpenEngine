@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <unordered_map>
 #include <typeindex>
 #include <mutex>
@@ -67,6 +68,11 @@ struct InspectorContext {
     // Optional: inspectors that need per-frame visual refresh push a callback here. Keep these cheap.
     // Owned by InspectorPanel; cleared on each ShowEntity rebuild.
     std::vector<std::function<void()>>* FrameRefreshCallbacks = nullptr;
+    // Optional: inspectors that mark overridden fields push a callback here that sets the marks again.
+    // Owned by InspectorPanel; cleared with the section's other refresh callbacks.
+    std::vector<std::function<void()>>* OverrideMarkRefreshCallbacks = nullptr;
+    // Optional: sets every override mark of the shown entity again, in place, with no rebuild.
+    std::function<void()> RefreshOverrideMarks;
 
     // Optional: navigate to and highlight an asset in the asset browser by path.
     std::function<void(const std::filesystem::path&)> PingAsset;
@@ -137,6 +143,37 @@ using InspectorFn = std::function<void(const InspectorContext&)>;
 // than doing work.
 using AssetLoadingSuffixFn = std::function<std::string(const GUID& guid)>;
 
+// Where the Inspector adds an entity banner: under the entity's header, or after its components.
+enum class EntityBannerPlacement
+{
+    BeforeComponents,
+    AfterComponents,
+};
+
+// How one component of an entity differs from the source the entity derives from, as a registered
+// answerer reports it. Empty for an entity that derives from nothing.
+struct ComponentOverrides
+{
+    // True when the component or any of its fields differs from the source.
+    bool Overridden = false;
+    // The header badge for the component ("Added"), and its tooltip; empty for none.
+    std::string Badge;
+    std::string BadgeTooltip;
+    // The reflected names of the fields that differ from the source.
+    std::vector<std::string> Fields;
+
+    bool IsFieldOverridden(std::string_view fieldName) const
+    {
+        for (const std::string& field : Fields)
+            if (field == fieldName)
+                return true;
+        return false;
+    }
+};
+
+using ComponentOverridesFn =
+    std::function<ComponentOverrides(ECS::World& world, ECS::EntityHandle entity, ECS::ComponentTypeId typeId)>;
+
 // Simple registry for custom inspectors.
 class InspectorRegistry {
 public:
@@ -195,6 +232,52 @@ public:
         return &it->second;
     }
 
+    // Register the banner `key` that the Inspector adds at `placement` on an entity; a second
+    // registration of `key` replaces the first in its place. The function adds nothing for an entity
+    // it has no banner for. Banners show in registration order.
+    void RegisterEntityBanner(std::string_view key, EntityBannerPlacement placement, InspectorFn fn)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        for (EntityBanner& banner : m_EntityBanners)
+        {
+            if (banner.Key == key)
+            {
+                banner.Placement = placement;
+                banner.Fn = std::move(fn);
+                return;
+            }
+        }
+        m_EntityBanners.push_back({std::string(key), placement, std::move(fn)});
+    }
+    // The registered entity banners at `placement`, in registration order.
+    std::vector<InspectorFn> GetEntityBanners(EntityBannerPlacement placement) const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        std::vector<InspectorFn> banners;
+        for (const EntityBanner& banner : m_EntityBanners)
+            if (banner.Placement == placement)
+                banners.push_back(banner.Fn);
+        return banners;
+    }
+    // Set the one answerer the component sections and the default field rows ask how a component
+    // differs from its entity's source; a second call replaces the first. The entity header asks for
+    // the Name component.
+    void SetComponentOverridesAnswerer(ComponentOverridesFn fn)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        m_ComponentOverrides = std::move(fn);
+    }
+    // How `typeId` on `entity` differs from the entity's source; empty when no answerer is set.
+    ComponentOverrides QueryComponentOverrides(ECS::World& world, ECS::EntityHandle entity,
+                                               ECS::ComponentTypeId typeId) const
+    {
+        ComponentOverridesFn answerer;
+        {
+            std::lock_guard<std::mutex> lock(m_Mutex);
+            answerer = m_ComponentOverrides;
+        }
+        return answerer ? answerer(world, entity, typeId) : ComponentOverrides{};
+    }
     // Register an inspector for an asset type (Material, Shader, etc.)
     void RegisterAssetInspector(AssetType type, InspectorFn fn)
     {
@@ -245,6 +328,14 @@ private:
     std::unordered_map<std::type_index, InspectorFn> m_ComponentInspectors;
     std::unordered_map<ECS::ComponentTypeId, InspectorFn> m_ComponentInspectorsById;
     std::unordered_map<int, InspectorFn> m_AssetInspectors;
+    struct EntityBanner
+    {
+        std::string Key;
+        EntityBannerPlacement Placement = EntityBannerPlacement::BeforeComponents;
+        InspectorFn Fn;
+    };
+    std::vector<EntityBanner> m_EntityBanners;
+    ComponentOverridesFn m_ComponentOverrides;
     std::unordered_map<int, AssetLoadingSuffixFn> m_AssetLoadingSuffixes;
     // Module stamp per component-inspector registration (C12 attribution;
     // registry bookkeeping — see ECS/ModuleRegistration.h).

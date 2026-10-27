@@ -1,15 +1,15 @@
 #include "UI/Controls/TransientNotice.h"
 
-#include "Editor/EditorPaths.h"
 #include "Logger/Logger.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Label.h"
-#include "UI/Parsers/XMLParser.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIStyle.h"
 
-#include <filesystem>
+#include <array>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 namespace GameEngine::EditorUI
@@ -20,6 +20,8 @@ namespace
 constexpr const char* kLayoutAssetPath = "UI/controls/TransientNotice/TransientNotice.uxml";
 constexpr const char* kStyleAssetPath = "UI/controls/TransientNotice/TransientNotice.css";
 constexpr const char* kTextId = "TransientNoticeText";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 1> kRequiredIds = {kTextId};
 constexpr const char* kShownClass = "transient-notice--shown";
 
 } // namespace
@@ -30,15 +32,9 @@ TransientNotice::TransientNotice()
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
     // A notice is built once per host panel, so the layout is read when it is built.
-    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / kLayoutAssetPath;
-    std::unique_ptr<UIElement> plate;
-    if (!UIParsing::XMLParser::ParseLayoutFromFile(path.string(), plate) || !plate)
-    {
-        Logger::Log::Error("TransientNotice: {} did not load, so no confirmation shows. Check that it is staged "
-                           "under the editor asset mount.",
-                           path.generic_string());
+    std::unique_ptr<UIElement> plate = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!plate)
         return;
-    }
     m_Text = dynamic_cast<Label*>(plate->FindById(HashStringId(kTextId)));
     if (!m_Text)
         Logger::Log::Error("TransientNotice: {} needs a Label with id '{}' in its plate.", kLayoutAssetPath, kTextId);

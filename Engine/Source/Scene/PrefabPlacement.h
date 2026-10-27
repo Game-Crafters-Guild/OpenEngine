@@ -15,8 +15,14 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
+
+namespace GameEngine::Components
+{
+struct Transform;
+}
 
 namespace GameEngine::Scene
 {
@@ -104,10 +110,20 @@ std::string PathAsSpelledOnDisk(const std::filesystem::path& file, const std::fi
 const PrefabTemplate* BuildTemplateFromFile(PrefabLibrary& library, const std::filesystem::path& path,
                                             const GUID& source, const LoadOptions& options, std::string& error);
 
-// Holds in `placement.library`, for `placement.world`, every prefab a PrefabRef field of `entities`
-// names, building the ones that are not resident (and, through their own PrefabRef fields, the
-// prefabs they name). A prefab that cannot be read is logged and skipped.
-void HoldReferencedPrefabs(PrefabPlacement& placement, std::span<const ECS::EntityHandle> entities);
+// Holds in `library`, for `world`, every prefab a PrefabRef field of `entities` (in `world`) names,
+// building the ones that are not resident through `options.assetResolver` (and, through their own
+// PrefabRef fields, the prefabs they name). A prefab that cannot be read is logged and skipped.
+void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const LoadOptions& options,
+                           std::span<const ECS::EntityHandle> entities);
+
+// Clones `prefab` into `world` with its root at `at` under `parent`, marked with `source`; the
+// clones are remap.GetTargets(), in template order. Null when the clone fails.
+ECS::EntityHandle SpawnTemplate(ECS::World& world, const PrefabLibrary& library, const PrefabTemplate& prefab,
+                                const GUID& source, const Components::Transform& at, ECS::EntityHandle parent,
+                                ECS::EntityRemap& remap);
+
+// The scene identities `world` uses, so a new instance gets an id no entity has.
+std::unordered_set<std::string> CollectSceneIdentities(ECS::World& world);
 
 // Places every [prefab] section of `doc` and applies its override lines.
 bool PlaceSceneInstances(PrefabPlacement& placement, SceneLoadContext& sceneCtx,

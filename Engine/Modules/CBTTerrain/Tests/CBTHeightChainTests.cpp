@@ -622,6 +622,23 @@ TEST(CBTHeightChainShim, SurfaceTakesTheGrazingFootprintFromTheLevelRule)
     EXPECT_EQ(src.find("pixelAngle * spread;"), std::string::npos) << "the shadow's footprint skips the fade";
 }
 
+// The terrain reads its inputs at the pixel center. A centroid input moves away from the center on a
+// partly covered MSAA pixel, so the splat and the shadow read their sharp fields at another place
+// there: a dotted line along each facet edge. The surface refuses to compile with centroid inputs.
+TEST(CBTHeightChainShim, SurfaceRefusesCentroidInputs)
+{
+    const std::string path = std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_surface.glsl";
+    std::ifstream file(path);
+    ASSERT_TRUE(file.is_open()) << "cannot open " << path;
+    std::stringstream ss;
+    ss << file.rdbuf();
+    const std::string src = ss.str();
+    const size_t guard = src.find("#if defined(GE_SURFACE_INPUTS_AT_CENTROID)\n#error");
+    ASSERT_NE(guard, std::string::npos) << "the surface refuses centroid inputs";
+    EXPECT_LT(guard, src.find("SurfaceOutput EvaluateSurface(SurfaceInput sIn)"))
+        << "the refusal comes before the surface reads an input";
+}
+
 TEST_F(CBTHeightChain, NormalChainMatchesTheChainSurfaceAtThreeMips)
 {
     constexpr uint32_t kX = 385u;

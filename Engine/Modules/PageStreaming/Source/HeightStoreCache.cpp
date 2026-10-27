@@ -2,7 +2,7 @@
 
 #include "PageStreaming/HeightPageCooker.h"
 #include "PageStreaming/HeightStoreKey.h"
-#include "PageStreaming/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
 
 #include "FileSystem/FileSystem.h"
 

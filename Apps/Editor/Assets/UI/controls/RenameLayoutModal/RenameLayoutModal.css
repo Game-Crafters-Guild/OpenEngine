@@ -1,0 +1,8 @@
+/* RenameLayoutModal: the column that holds the name label and field. The window, header and footer
+   come from Modal.css. */
+
+.rename-layout-modal-content {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}

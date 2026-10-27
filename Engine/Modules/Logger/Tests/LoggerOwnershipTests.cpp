@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "Logger/Logger.h"
+#include "LoggerInternals.h"
 
 #include <array>
 #include <cstdio>
@@ -76,25 +77,22 @@ class LoggerOwnershipTestFixture : public ::testing::Test
 TEST_F(LoggerOwnershipTestFixture, FormatterAndBorrowedDataAreConsumedBeforeReturn)
 {
     char text[] = "producer text";
-    char file[] = "producer.cpp";
-    char function[] = "ProducerFunction";
     int formatted = 0;
+    int line = 0;
     {
         std::unique_lock sinkLock(Log::GetStateForSharing()->Mutex);
-        Log::LogWithSource(LogLevel::Info, file, 17, function, "value: {}",
-                           LoggerOwnershipTest::BorrowedValue{text, &formatted});
+        line = __LINE__ + 1;
+        GE_LOG(CoreLog, Info, "value: {}", LoggerOwnershipTest::BorrowedValue{text, &formatted});
         EXPECT_EQ(formatted, 1);
         std::memset(text, 'x', sizeof(text) - 1);
-        std::memset(file, 'x', sizeof(file) - 1);
-        std::memset(function, 'x', sizeof(function) - 1);
     }
     Log::Flush();
     const auto messages = Spy->GetMessages();
     ASSERT_EQ(messages.size(), 1u);
     EXPECT_EQ(messages[0].Message, "value: producer text");
-    EXPECT_EQ(messages[0].SourceFile, "producer.cpp");
-    EXPECT_EQ(messages[0].Function, "ProducerFunction");
-    EXPECT_EQ(messages[0].SourceLine, 17);
+    EXPECT_EQ(messages[0].SourceFile, __FILE__);
+    EXPECT_TRUE(messages[0].Function.ends_with("TestBody")) << messages[0].Function;
+    EXPECT_EQ(messages[0].SourceLine, line);
     EXPECT_EQ(formatted, 1);
 }
 
@@ -108,39 +106,16 @@ TEST_F(LoggerOwnershipTestFixture, FilteredMessagesDoNotInvokeUserFormatters)
     EXPECT_EQ(Spy->GetCount(), 0u);
 }
 
-TEST_F(LoggerOwnershipTestFixture, OwnedSourceConsumesFormatterBeforeProducerReturns)
+TEST_F(LoggerOwnershipTestFixture, ChannelRecordKeepsItsSourceWhenFormattingFails)
 {
-    char text[] = "producer text";
-    int formatted = 0;
-    {
-        std::unique_lock sinkLock(Log::GetStateForSharing()->Mutex);
-        const OwnedSourceLocation source("owned.cpp", "OwnedProducer");
-        Log::LogWithSource(LogLevel::Info, source, 23, "value: {}",
-                           LoggerOwnershipTest::BorrowedValue{text, &formatted});
-        EXPECT_EQ(formatted, 1);
-        std::memset(text, 'x', sizeof(text) - 1);
-    }
-    Log::Flush();
-    const auto messages = Spy->GetMessages();
-    ASSERT_EQ(messages.size(), 1u);
-    EXPECT_EQ(messages[0].Message, "value: producer text");
-    EXPECT_EQ(messages[0].SourceFile, "owned.cpp");
-    EXPECT_EQ(messages[0].Function, "OwnedProducer");
-    EXPECT_EQ(messages[0].SourceLine, 23);
-    EXPECT_EQ(formatted, 1);
-}
-
-TEST_F(LoggerOwnershipTestFixture, OwnedSourcePreservesFormattingFailureRecord)
-{
-    const OwnedSourceLocation source("owned.cpp", "OwnedProducer");
-    EXPECT_NO_THROW(Log::LogWithSource(LogLevel::Info, source, 29, "{}",
-                                       LoggerOwnershipTest::ThrowingValue{}));
+    const int line = __LINE__ + 1;
+    EXPECT_NO_THROW(GE_LOG(CoreLog, Info, "{}", LoggerOwnershipTest::ThrowingValue{}));
     Log::Flush();
     const auto messages = Spy->GetMessages();
     ASSERT_EQ(messages.size(), 1u);
     EXPECT_EQ(messages[0].Message, "[FORMAT ERROR: deliberate formatter failure]");
-    EXPECT_EQ(messages[0].SourceFile, "owned.cpp");
-    EXPECT_EQ(messages[0].SourceLine, 29);
+    EXPECT_EQ(messages[0].SourceFile, __FILE__);
+    EXPECT_EQ(messages[0].SourceLine, line);
 }
 
 TEST_F(LoggerOwnershipTestFixture, FormattingFailureStillProducesAnErrorRecord)

@@ -15,6 +15,7 @@
 #include "Platform/ContextMenu.h"
 #include "RecordingContextMenu.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -345,6 +346,30 @@ TEST(EditorShortcutsBindings, EditMenuRowsShowTheKeysTheKeyMapBinds)
     SaveShortcutBindings(store, *rename, {{Input::kKeyCode_F3, 0}});
     ASSERT_TRUE(store.Save());
     EXPECT_EQ(buildEntityMenu().ShortcutOf("Rename"), "F3") << "the menu shows a key the key map no longer binds";
+}
+
+// Design 4.2.1: the primary modifier with Shift and P creates a prefab in the Hierarchy, and no other
+// entry of the catalog binds that chord.
+TEST(EditorShortcutsBindings, TheCreatePrefabKeyIsPrimaryShiftPAndBindsNothingElse)
+{
+    ScopedCatalogDefaultBindings defaults;
+    const int primary = Platform::PrimaryShortcutModifierIsCommand() ? Input::kModSuper : Input::kModControl;
+    const int chord = primary | Input::kModShift;
+
+    EXPECT_TRUE(Editor::MatchesCatalogShortcut("Hierarchy", "Create Prefab", Input::kKeyCode_P, chord));
+    EXPECT_FALSE(Editor::MatchesCatalogShortcut("Hierarchy", "Create Prefab", Input::kKeyCode_P, primary))
+        << "the primary modifier with P toggles play mode";
+    const auto& catalog = Editor::GetShortcutCatalog();
+    const auto entry = std::find_if(catalog.begin(), catalog.end(),
+                                    [](const Editor::ShortcutCatalogEntry& candidate)
+                                    {
+                                        return std::string_view(candidate.groupLabel) == "Hierarchy" &&
+                                               std::string_view(candidate.displayName) == "Create Prefab";
+                                    });
+    ASSERT_NE(entry, catalog.end());
+    EXPECT_EQ(Editor::FindShortcutConflict(*entry, Input::kKeyCode_P, chord), nullptr);
+    EXPECT_EQ(Editor::CatalogShortcutLabel("Hierarchy", "Create Prefab"),
+              Editor::FormatShortcutBinding(Input::kKeyCode_P, chord));
 }
 
 // The Hierarchy's key map, through the catalog's defaults: F2 renames the selected entity,

@@ -3,10 +3,14 @@
 #endif
 #include "Logger/Logger.h"
 #include "Logger/LogSink.h"
+
+#include "LogChannelTable.h"
+#include "LoggerInternals.h"
+
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
-#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -24,13 +28,6 @@
 #include <windows.h>
 #else
 #include <pthread.h>
-#include <unistd.h>
-#if defined(__APPLE__)
-#include <mach/mach.h>
-#include <mach/mach_vm.h>
-#elif defined(__linux__)
-#include <sys/uio.h>
-#endif
 #endif
 
 namespace Logger
@@ -84,6 +81,8 @@ Log::LoggerState* Log::GetStateForSharing()
 
 void Log::RedirectToSharedState(LoggerState* state)
 {
+    assert(GetState().Channels.GetCount() == 1 &&
+           "a channel registered before RedirectToSharedState holds an index into a table no sink reads");
     s_RedirectedState = state;
 }
 
@@ -112,7 +111,7 @@ void Log::Initialize(const Config& config)
             state.Sinks.push_back(std::make_unique<ConsoleSink>(consoleConfig));
         }
 
-        state.m_EffectiveMinLevel.store(state.m_Config.GlobalMinLevel, std::memory_order_relaxed);
+        state.Channels.SetGlobalLevel(state.m_Config.GlobalMinLevel);
     }
 
     // Clear stale async state from previous session (handles re-init after Shutdown)
@@ -227,7 +226,7 @@ void Log::Shutdown()
     }
 
     state.Initialized.store(false, std::memory_order_release);
-    state.m_EffectiveMinLevel.store(LogLevel::Off, std::memory_order_relaxed);
+    state.Channels.SetGlobalLevel(LogLevel::Off);
 }
 
 void Log::AddSink(std::unique_ptr<LogSink> sink)
@@ -240,8 +239,7 @@ void Log::AddSink(std::unique_ptr<LogSink> sink)
 
     state.Sinks.push_back(std::move(sink));
 
-    LogLevel effective = state.m_Config.GlobalMinLevel;
-    state.m_EffectiveMinLevel.store(effective, std::memory_order_relaxed);
+    state.Channels.SetGlobalLevel(state.m_Config.GlobalMinLevel);
 }
 
 void Log::ClearSinks()
@@ -262,7 +260,7 @@ void Log::ClearSinks()
     }
 
     state.Sinks.clear();
-    state.m_EffectiveMinLevel.store(LogLevel::Off, std::memory_order_relaxed);
+    state.Channels.SetGlobalLevel(LogLevel::Off);
 }
 
 void Log::SetLogLevel(LogLevel level)
@@ -271,26 +269,166 @@ void Log::SetLogLevel(LogLevel level)
     std::lock_guard<std::mutex> lock(state.Mutex);
 
     state.m_Config.GlobalMinLevel = level;
-    state.m_EffectiveMinLevel.store(level, std::memory_order_relaxed);
+    state.Channels.SetGlobalLevel(level);
 }
 
 LogLevel Log::GetLogLevel()
 {
-    return GetState().m_EffectiveMinLevel.load(std::memory_order_relaxed);
+    return GetState().Channels.GetGlobalLevel();
+}
+
+// ========================================
+// CHANNELS
+// ========================================
+
+void Log::SetChannelLevel(std::uint16_t channel, std::optional<LogLevel> level)
+{
+    GetState().Channels.SetSetting(channel, level);
+}
+
+std::optional<LogLevel> Log::GetChannelSetting(std::uint16_t channel)
+{
+    return GetState().Channels.GetSetting(channel);
+}
+
+LogLevel Log::GetChannelLevel(std::uint16_t channel)
+{
+    return GetState().Channels.GetEffectiveLevel(channel);
+}
+
+bool Log::ShouldLog(LogLevel level)
+{
+    return Enabled(CoreLog(), level);
+}
+
+LogLevel Log::GetChannelLevelWithoutSetting(std::uint16_t channel)
+{
+    return GetState().Channels.GetLevelWithoutSetting(channel);
+}
+
+std::uint16_t Log::GetChannelCount()
+{
+    return GetState().Channels.GetCount();
+}
+
+std::string_view Log::GetChannelName(std::uint16_t channel)
+{
+    return GetState().Channels.GetName(channel);
+}
+
+LogChannel RegisterChannel(std::string_view name, LogLevel defaultLevel)
+{
+    LogChannelTable& table = Log::GetState().Channels;
+    const std::uint16_t index = table.Register(name, defaultLevel);
+    return LogChannel{table.GetName(index), table.GetDefaultLevel(index), index};
+}
+
+bool Enabled(const LogChannel& channel, LogLevel level)
+{
+    return Log::GetState().Channels.Enabled(channel.Index, level);
+}
+
+namespace
+{
+// The three spellings of the anonymous namespace: clang, GCC and MSVC.
+constexpr std::string_view kAnonymousNamespaces[] = {"(anonymous namespace)::", "{anonymous}::",
+                                                     "`anonymous-namespace'::"};
+constexpr std::string_view kOperatorKeyword = "operator";
+
+bool IsOpeningBracket(char character)
+{
+    return character == '(' || character == '<' || character == '[';
+}
+
+bool IsClosingBracket(char character)
+{
+    return character == ')' || character == '>' || character == ']';
+}
+
+// The '(' that opens the last bracket group at depth 0, which is the parameter list of a signature.
+size_t FindParameterList(std::string_view signature)
+{
+    int depth = 0;
+    for (size_t index = signature.size(); index-- > 0;)
+    {
+        const char character = signature[index];
+        if (IsClosingBracket(character))
+            ++depth;
+        else if (IsOpeningBracket(character) && --depth == 0 && character == '(')
+            return index;
+    }
+    return std::string_view::npos;
+}
+
+// The offset of the "operator" keyword that starts the function's own name, or npos.
+size_t FindOperatorKeyword(std::string_view head)
+{
+    const size_t keyword = head.rfind(kOperatorKeyword);
+    if (keyword == std::string_view::npos)
+        return keyword;
+    if (keyword > 0 && head[keyword - 1] != ':' && head[keyword - 1] != ' ')
+        return std::string_view::npos;
+    return keyword;
+}
+
+// The text after the last space outside brackets before `end`: the name without the return type.
+std::string_view NameBefore(std::string_view head, size_t end)
+{
+    int depth = 0;
+    for (size_t index = end; index-- > 0;)
+    {
+        const char character = head[index];
+        if (IsClosingBracket(character))
+            ++depth;
+        else if (IsOpeningBracket(character))
+            --depth;
+        else if (character == ' ' && depth <= 0)
+            return head.substr(index + 1);
+    }
+    return head;
+}
+
+void EraseAnonymousNamespaces(std::string& name)
+{
+    for (const std::string_view anonymous : kAnonymousNamespaces)
+    {
+        for (size_t found = name.find(anonymous); found != std::string::npos; found = name.find(anonymous))
+            name.erase(found, anonymous.size());
+    }
+}
+} // namespace
+
+std::string QualifiedFunctionName(std::string_view signature)
+{
+    std::string_view name = signature;
+    const size_t parameters = FindParameterList(signature);
+    if (parameters != std::string_view::npos)
+    {
+        std::string_view head = signature.substr(0, parameters);
+        while (!head.empty() && head.back() == ' ')
+            head.remove_suffix(1);
+        const size_t keyword = FindOperatorKeyword(head);
+        // MSVC writes "operator ()" with no parameter list: the brackets are the operator's name.
+        const bool operatorCallName =
+            keyword != std::string_view::npos && keyword + kOperatorKeyword.size() == head.size();
+        if (!operatorCallName)
+            name = NameBefore(head, keyword != std::string_view::npos ? keyword : head.size());
+    }
+    std::string result(name);
+    EraseAnonymousNamespaces(result);
+    return result;
 }
 
 // ========================================
 // OWNED RECORD CAPTURE
 // ========================================
 
-LogMessage Log::MakeOwnedRecord(LogLevel level, const char* file, int line, const char* function)
+LogMessage Log::MakeOwnedRecord(LogLevel level)
 {
     LogMessage record;
     record.Level = level;
     record.Timestamp = std::chrono::system_clock::now();
     record.SetThreadId(GetCachedThreadId());
-    if (file || function)
-        record.SetSourceLocation(file, line, function);
     MaybeAttachBacktrace(record);
     return record;
 }
@@ -311,10 +449,9 @@ void FormatRecordMessage(LogMessage& record, std::string_view format, std::forma
 }
 } // namespace
 
-void Log::EnqueueFormatted(LogLevel level, std::string_view format, std::format_args args,
-                          const char* file, int line, const char* function)
+void Log::EnqueueFormatted(LogLevel level, std::string_view format, std::format_args args)
 {
-    LogMessage record = MakeOwnedRecord(level, file, line, function);
+    LogMessage record = MakeOwnedRecord(level);
     FormatRecordMessage(record, format, args);
     PushEntry(std::move(record));
 }
@@ -352,42 +489,16 @@ void Log::MaybeAttachBacktrace(LogMessage& msg)
         msg.Backtrace = std::move(frames);
 }
 
-void Log::EnqueueString(LogLevel level, std::string_view message,
-                        const char* file, int line, const char* function)
+void Log::EnqueueString(LogLevel level, std::string_view message)
 {
-    LogMessage record = MakeOwnedRecord(level, file, line, function);
-    record.Message.assign(message.data(), message.size());
-    PushEntry(std::move(record));
-}
-
-void Log::EnqueueFormattedWithSource(LogLevel level, std::string_view format,
-                                      std::format_args args, std::string_view file,
-                                      int line, std::string_view function)
-{
-    LogMessage record = MakeOwnedRecord(level, nullptr, 0, nullptr);
-    record.SourceFile = file;
-    record.SourceLine = line;
-    record.Function = function;
-    FormatRecordMessage(record, format, args);
-    PushEntry(std::move(record));
-}
-
-void Log::EnqueueStringWithSource(LogLevel level, std::string_view message,
-                                 std::string_view file, int line, std::string_view function)
-{
-    LogMessage record = MakeOwnedRecord(level, nullptr, 0, nullptr);
-    record.SourceFile = file;
-    record.SourceLine = line;
-    record.Function = function;
+    LogMessage record = MakeOwnedRecord(level);
     record.Message.assign(message.data(), message.size());
     PushEntry(std::move(record));
 }
 
 void Log::CriticalImpl(std::string_view message)
 {
-    auto& state = GetState();
-
-    if (!state.Initialized.load(std::memory_order_acquire))
+    if (!GetState().Initialized.load(std::memory_order_acquire))
     {
         std::cout << "[CRITICAL] " << message << '\n';
         return;
@@ -396,6 +507,17 @@ void Log::CriticalImpl(std::string_view message)
     LogMessage msg(LogLevel::Critical, std::string(message.data(), message.size()));
     msg.SetThreadId(GetCachedThreadId());
     MaybeAttachBacktrace(msg);
+    DispatchCritical(msg);
+}
+
+void Log::DispatchCritical(const LogMessage& msg)
+{
+    auto& state = GetState();
+    if (!state.Initialized.load(std::memory_order_acquire))
+    {
+        std::cout << "[CRITICAL] " << msg.Message << '\n';
+        return;
+    }
 
     // Re-entrancy guard: drain thread already holds state.Mutex during dispatch.
     // Acquiring it again would deadlock (non-recursive mutex).
@@ -409,32 +531,22 @@ void Log::CriticalImpl(std::string_view message)
     DispatchToSinks(msg);
 }
 
-void Log::CriticalImplWithSource(std::string_view message,
-                                  std::string_view file, int line, std::string_view function)
+void Enqueue(const LogChannel& channel, LogLevel level, const char* file, int line, const char* function,
+             std::string_view format, std::format_args args)
 {
-    auto& state = GetState();
-
-    if (!state.Initialized.load(std::memory_order_acquire))
+    LogMessage record = Log::MakeOwnedRecord(level);
+    record.Channel = channel.Index;
+    // The call site's literals are alive during the call, so a plain copy is safe here.
+    record.SourceFile = file;
+    record.SourceLine = line;
+    record.Function = QualifiedFunctionName(function);
+    FormatRecordMessage(record, format, args);
+    if (level >= LogLevel::Critical)
     {
-        std::cout << "[CRITICAL] " << message << '\n';
+        Log::DispatchCritical(record);
         return;
     }
-
-    LogMessage msg(LogLevel::Critical, std::string(message.data(), message.size()));
-    msg.SetThreadId(GetCachedThreadId());
-    msg.SourceFile = file;
-    msg.SourceLine = line;
-    msg.Function = function;
-    MaybeAttachBacktrace(msg);
-
-    if (std::this_thread::get_id() == state.DrainThreadId)
-    {
-        DispatchToSinks(msg);
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(state.Mutex);
-    DispatchToSinks(msg);
+    Log::PushEntry(std::move(record));
 }
 
 // ========================================
@@ -766,161 +878,6 @@ size_t Log::GetSinkCount()
     auto& state = GetState();
     std::lock_guard<std::mutex> lock(state.Mutex);
     return state.Sinks.size();
-}
-
-// ========================================
-// SOURCE LOCATION — owned strings
-// ========================================
-
-namespace
-{
-std::atomic<int> s_SourceProbeUnavailable{0};
-
-#if defined(_WIN32) || defined(_WIN64)
-#if defined(_MSC_VER)
-__declspec(noinline)
-#endif
-bool TryCopyCString(const char* src, char* dest, size_t destSize, size_t& outLen) noexcept
-{
-    outLen = 0;
-    if (!src || !dest || destSize == 0)
-        return false;
-    __try
-    {
-        for (size_t i = 0; i < destSize; ++i)
-        {
-            const char c = src[i];
-            dest[i] = c;
-            if (c == '\0')
-            {
-                outLen = i;
-                return true;
-            }
-        }
-        return false;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-        return false;
-    }
-}
-#else
-// Kernel reads reject inaccessible pages without changing process-wide fault
-// handlers. Read one page at a time so a NUL at a page boundary remains valid.
-bool TryCopyCString(const char* src, char* dest, size_t destSize, size_t& outLen) noexcept
-{
-    outLen = 0;
-    if (!src || !dest || destSize == 0)
-        return false;
-    static const size_t pageSize = [] {
-        const long size = sysconf(_SC_PAGESIZE);
-        return size > 0 ? static_cast<size_t>(size) : size_t{4096};
-    }();
-    uintptr_t address = reinterpret_cast<uintptr_t>(src);
-    size_t offset = 0;
-    while (offset < destSize)
-    {
-        const size_t chunk = (std::min)({destSize - offset, pageSize - address % pageSize, size_t{128}});
-        size_t copied = 0;
-#if defined(__APPLE__)
-        mach_vm_size_t bytes = 0;
-        if (mach_vm_read_overwrite(mach_task_self(), static_cast<mach_vm_address_t>(address),
-                static_cast<mach_vm_size_t>(chunk),
-                reinterpret_cast<mach_vm_address_t>(dest + offset), &bytes) != KERN_SUCCESS)
-            return false;
-        copied = static_cast<size_t>(bytes);
-#elif defined(__linux__)
-        iovec local{dest + offset, chunk};
-        iovec remote{reinterpret_cast<void*>(address), chunk};
-        const auto bytes = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
-        if (bytes <= 0)
-        {
-            if (bytes < 0 && (errno == EPERM || errno == EACCES || errno == ENOSYS))
-            {
-                int expected = 0;
-                const int reason = errno;
-                if (s_SourceProbeUnavailable.compare_exchange_strong(expected, reason))
-                    std::fprintf(stderr, "Logger: source-location probing unavailable (error %d); source metadata omitted\n", reason);
-            }
-            return false;
-        }
-        copied = static_cast<size_t>(bytes);
-#elif defined(__EMSCRIPTEN__)
-        const size_t memoryBytes = __builtin_wasm_memory_size(0) * size_t{65536};
-        if (address >= memoryBytes || chunk > memoryBytes - address)
-            return false;
-        std::memcpy(dest + offset, reinterpret_cast<const void*>(address), chunk);
-        copied = chunk;
-#else
-#error "Logger source-pointer probing requires Windows, macOS, Linux or Emscripten"
-#endif
-        const auto* terminator = static_cast<const char*>(std::memchr(dest + offset, '\0', copied));
-        if (terminator)
-        {
-            outLen = static_cast<size_t>(terminator - dest);
-            return true;
-        }
-        if (copied != chunk)
-            return false;
-        offset += copied;
-        address += copied;
-    }
-    return false;
-}
-#endif
-
-void ReportUnreadableSourcePointer(const char* src)
-{
-    static std::atomic<int> s_Reports{0};
-    if (s_Reports.fetch_add(1, std::memory_order_relaxed) >= 8)
-        return;
-
-    char buf[160];
-    std::snprintf(buf, sizeof(buf),
-                  "Logger: dropped unreadable source-location pointer %p",
-                  static_cast<const void*>(src));
-
-    auto frames = CaptureBacktrace(8, 2);
-    std::string msg = buf;
-    if (!frames.empty())
-    {
-        msg += " from";
-        const size_t n = (std::min)(frames.size(), size_t(4));
-        for (size_t i = 0; i < n; ++i)
-        {
-            msg += ' ';
-            if (!frames[i].Symbol.empty())
-                msg += frames[i].Symbol;
-            else
-                msg += frames[i].Module;
-        }
-    }
-    Log::Warning(std::string_view(msg));
-}
-} // namespace
-
-std::string CopySourceCString(const char* src)
-{
-    if (!src)
-        return {};
-    if (s_SourceProbeUnavailable.load(std::memory_order_relaxed) != 0)
-        return {};
-    char copy[kMaxSourceCString];
-    size_t length = 0;
-    if (!TryCopyCString(src, copy, kMaxSourceCString, length))
-    {
-        if (s_SourceProbeUnavailable.load(std::memory_order_relaxed) == 0)
-            ReportUnreadableSourcePointer(src);
-        return {};
-    }
-    return std::string(copy, length);
-}
-
-void LogMessage::SetSourceLocation(const char* file, std::int32_t line, const char* function)
-{
-    SourceFile = CopySourceCString(file);
-    SourceLine = line;
-    Function = CopySourceCString(function);
 }
 
 } // namespace Logger

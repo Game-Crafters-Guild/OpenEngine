@@ -16,7 +16,7 @@ namespace ECS { class World; }
 /// Inspector field for selecting an entity reference (EntityHandle).
 ///
 /// Displays the referenced entity's Name (falling back to "Entity <id>", or
-/// "(None)" when unset/invalid) and supports:
+/// "None" when unset/invalid) and supports:
 ///   - Drag-drop of a HierarchyEntityDragPayload (drag an entity from the Hierarchy)
 ///   - Clear button to remove the reference
 ///   - An optional required-components filter: only entities that have ALL of the

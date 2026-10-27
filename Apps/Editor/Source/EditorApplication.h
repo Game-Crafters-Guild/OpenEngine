@@ -19,7 +19,7 @@
 #include "UI/Layout/Docking.h"
 #include "UI/UIManager.h"
 #include "CssInspector/CssInspector.h"
-#include "Panels/ProjectFolderPickerModal.h"
+#include "Panels/ProjectPicker/ProjectPickerModal.h"
 #include "Assets/PolyhavenDownloadManager.h"
 #include "Panels/PlayModeChangeReviewModal.h"
 #include "Editor/RenderGraphTickRegistry.h"
@@ -763,9 +763,8 @@ class EditorApplication : public Application
     bool m_EnableNativeToolbar = false;
 #endif
     
-    // Project folder picker modal (shown on launch if no project specified)
-    // Note: owned by UI tree, stored as raw pointer for access
-    ProjectFolderPickerModal* m_ProjectFolderModal = nullptr;
+    // The project picker, shown at launch when no project is given. The UI tree owns it.
+    ProjectPickerModal* m_ProjectPickerModal = nullptr;
 
     // While the picker covers the editor on a host that drives the frame loop
     // (Platform::HostDrivesFrameLoop), skip world extract/cull/scene RG: there a

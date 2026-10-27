@@ -1,0 +1,13 @@
+<!-- VcsCommitDialog (Apps/Editor/Include/VersionControl/Ui/VcsCommitDialog.h): a message field with Commit
+     and Cancel. VcsDialog.css styles it. The ids are the contract with VcsCommitDialog.cpp. -->
+<UIElement id="vcs-commit-dialog" class="vcs-modal vcs-commit-dialog">
+  <UIElement class="modal-window vcs-modal-window">
+    <Label class="vcs-modal-title" text="Commit Changes" />
+    <Label class="vcs-modal-label" text="Commit Message:" />
+    <TextField id="commit-message-field" />
+    <UIElement class="vcs-modal-buttons">
+      <Button id="commit-button" text="Commit" />
+      <Button id="cancel-button" text="Cancel" />
+    </UIElement>
+  </UIElement>
+</UIElement>

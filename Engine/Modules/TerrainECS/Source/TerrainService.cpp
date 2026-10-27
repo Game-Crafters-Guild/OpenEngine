@@ -1957,6 +1957,17 @@ CBTTerrain::SphereSculptGeometry TerrainService::GetPlanetSculptGeometry() const
     return m_SphereSculpt.Geometry();
 }
 
+void TerrainService::AccumulatePlanetPageDirtyRegions(const CBTTerrain::SphereEditRegions& regions)
+{
+    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
+    for (uint32 i = 0; i < regions.Count; ++i)
+    {
+        const CBTTerrain::SphereFaceUVRect& rect = regions.Rects[i];
+        if (rect.Face < kPlanetSculptFaceCount)
+            UnionPlanetSculptFaceRect(m_RenderSculptFaces[rect.Face], rect.MinU, rect.MinV, rect.MaxU, rect.MaxV);
+    }
+}
+
 bool TerrainService::ConsumeSphereSculptDirtyRegions(CBTTerrain::SphereEditRegions& out)
 {
     std::lock_guard<std::mutex> lock(m_SphereSculptMutex);

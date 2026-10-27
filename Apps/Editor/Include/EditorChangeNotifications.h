@@ -61,6 +61,10 @@ public:
         explicit operator bool() const { return id != 0; }
     };
 
+    // The id of this channel, unique in the process: a channel made at the address of a destroyed one
+    // has another id.
+    std::uint64_t GetChannelId() const { return m_ChannelId; }
+
     SubscriptionToken SubscribeComponentChanged(ComponentChangedCallback cb)
     {
         if (!cb)
@@ -217,6 +221,13 @@ private:
         explicit ProjectSwitchedSlot(ProjectSwitchedCallback c) : Cb(std::move(c)) {}
     };
 
+    static std::uint64_t NextChannelId()
+    {
+        static std::atomic<std::uint64_t> s_NextChannelId{1};
+        return s_NextChannelId.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const std::uint64_t m_ChannelId = NextChannelId();
     std::mutex m_Mutex;
     std::uint64_t m_NextId = 1;
     std::unordered_map<std::uint64_t, std::shared_ptr<ComponentSlot>> m_ComponentChanged;

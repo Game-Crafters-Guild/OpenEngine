@@ -15,7 +15,6 @@
 #include "UI/Controls/Label.h"
 #include "UI/UIEvents.h"
 
-#include <cstdio>
 #include <cstring>
 #include <memory>
 
@@ -68,13 +67,6 @@ ShapeSignature ReadShapeSignature(const ECS::World& world, ECS::EntityHandle ent
 }
 
 } // namespace
-
-std::string FormatMeters(float32 meters)
-{
-    char text[32];
-    std::snprintf(text, sizeof(text), "%.1f m", meters);
-    return text;
-}
 
 void AddValueRow(UIElement* parent, const char* labelText, const std::string& value, const char* tooltip)
 {

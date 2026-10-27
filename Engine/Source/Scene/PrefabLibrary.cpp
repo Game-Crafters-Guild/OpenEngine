@@ -30,6 +30,12 @@ bool ReadsAnyOf(const PrefabTemplate& prefab, std::span<const std::string> chang
     }
     return false;
 }
+
+// The record key of a prefab file: the registry's folded key, so every spelling of one file finds one record.
+std::string RecordKey(const std::filesystem::path& path)
+{
+    return AssetPaths::NormalizeForRegistryKey(path);
+}
 } // namespace
 
 PrefabLibrary::PrefabLibrary()
@@ -54,7 +60,7 @@ void PrefabLibrary::AssertWritable() const
 
 const PrefabTemplate* PrefabLibrary::FindByPath(const std::filesystem::path& path) const
 {
-    const auto it = m_Records.find(path.generic_string());
+    const auto it = m_Records.find(RecordKey(path));
     return it == m_Records.end() ? nullptr : it->second->Current.get();
 }
 
@@ -74,7 +80,7 @@ const PrefabTemplate& PrefabLibrary::Insert(PrefabTemplate built)
     AssertWritable();
     assert(!built.Entities.empty() && built.Entities.size() == built.Addresses.size() &&
            "A template has its root and an address per entity");
-    const std::string key = built.Path.generic_string();
+    const std::string key = RecordKey(built.Path);
     std::unique_ptr<Record>& record = m_Records[key];
     if (!record)
         record = std::make_unique<Record>();
@@ -100,7 +106,7 @@ void PrefabLibrary::Hold(const ECS::World& world, const PrefabTemplate& prefab)
         ReleaseHolds(holds);
         holds.Epoch = world.GetEntityHandleEpoch();
     }
-    std::string key = prefab.Path.generic_string();
+    std::string key = RecordKey(prefab.Path);
     if (std::find(holds.Keys.begin(), holds.Keys.end(), key) != holds.Keys.end())
         return;
     const auto it = m_Records.find(key);
@@ -226,7 +232,7 @@ void PrefabLibrary::ReportNotResident(const GUID& source) const
 
 std::uint32_t PrefabLibrary::GetReferenceCount(const std::filesystem::path& path) const
 {
-    const auto it = m_Records.find(path.generic_string());
+    const auto it = m_Records.find(RecordKey(path));
     return it == m_Records.end() ? 0u : it->second->References;
 }
 

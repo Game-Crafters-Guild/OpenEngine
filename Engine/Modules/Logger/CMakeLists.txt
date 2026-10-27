@@ -6,6 +6,7 @@ project(Logger LANGUAGES CXX)
 # Core Logger source files
 set(LOGGER_SOURCES
     Source/Logger.cpp
+    Source/LogChannelTable.cpp
     Source/ConsoleSink.cpp
     Source/CallbackSink.cpp
     Source/DeferredSink.cpp
@@ -16,12 +17,15 @@ set(LOGGER_SOURCES
 # Core Logger header files
 set(LOGGER_HEADERS
     Include/Logger/Logger.h
+    Include/Logger/LogChannel.h
     Include/Logger/LogLevel.h
     Include/Logger/LogSink.h
     Include/Logger/CallbackSink.h
     Include/Logger/DeferredSink.h
     Include/Logger/RingBufferSink.h
     Include/Logger/Backtrace.h
+    Source/LogChannelTable.h
+    Source/LoggerInternals.h
 )
 
 # Optional features (can be excluded for minimal builds)

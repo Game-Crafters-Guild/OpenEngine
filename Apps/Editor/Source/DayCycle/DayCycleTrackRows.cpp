@@ -2,7 +2,7 @@
 
 #include "DayCycle/DayCycleUi.h"
 #include "DayCycle/DayCycleWorkingCopy.h"
-#include "Inspectors/SkySunReadoutText.h"
+#include "Inspectors/SkySun/SkySunReadoutText.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/CurveField.h"
 #include "UI/Controls/Label.h"

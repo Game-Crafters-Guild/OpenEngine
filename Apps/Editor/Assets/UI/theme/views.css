@@ -321,7 +321,7 @@
 	flex-direction: row;
 	flex-wrap: nowrap;
 	align-items: center;
-	gap: 6px;
+	gap: var(--ui_spacing_sm);
 }
 
 .tree .tree-foldout {
@@ -415,7 +415,8 @@
 	background-size: var(--ui_tree_icon_size) var(--ui_tree_icon_size);
 	background-position: center;
 	background-repeat: no-repeat;
-	background-image-tint: var(--ui_asset_icon_tint, rgba(200, 200, 200, 1.0));
+	/* A row class may set --hierarchy_row_glyph_color to tint its glyph (prefab rows). */
+	background-image-tint: var(--hierarchy_row_glyph_color, var(--ui_asset_icon_tint, rgba(200, 200, 200, 1.0)));
 	background-image-saturation: 0;
 	border-radius: var(--ui_radius_sm);
 }
@@ -590,6 +591,12 @@
 	background-image: url("editor:Icons/ocean.svg");
 }
 
+/* Prefab instance root glyph. In the Hierarchy its row sets the tint (teal, or red for a missing file). */
+.entity-icon.hierarchy-entity-prefab {
+	background-image: url("editor:Icons/Cube.svg");
+	background-image-tint: var(--ui_color_prefab);
+}
+
 /* Scene hierarchy: mark-up */
 .entity-icon.hierarchy-entity-markup {
 	background-image: url("editor:Icons/markup.svg");
@@ -661,9 +668,71 @@
 	color: #E5E5E5;
 }
 
-/* Hierarchy names use the same resting and interaction tones as asset files. */
+/* Hierarchy names use the same resting and interaction tones as asset files. A row class may
+   set --hierarchy_row_name_color to give its resting name a tone of its own (prefab rows). */
 .hierarchy-panel .tree .tree-item .tree-title {
-	color: var(--ui_color_text_dim);
+	color: var(--hierarchy_row_name_color, var(--ui_color_text_dim));
+}
+
+/* Prefab rows (Prefabs/PrefabHierarchyRows.cpp): an instance root rests teal, glyph and name; the
+   entities inside it rest with a teal name and a teal badge on the glyph; a root whose prefab file
+   is missing rests red, glyph and name. */
+.hierarchy-prefab-root {
+	--hierarchy_row_name_color: var(--ui_color_prefab);
+	--hierarchy_row_glyph_color: var(--ui_color_prefab);
+}
+
+.hierarchy-prefab-member {
+	--hierarchy_row_name_color: var(--ui_color_prefab);
+}
+
+.hierarchy-prefab-missing {
+	--hierarchy_row_name_color: var(--ui_color_error_text);
+	--hierarchy_row_glyph_color: var(--ui_color_error_text);
+}
+
+/* The member badge is the title's background. The title starts inside the glyph by the badge less 4 px, so
+   the badge ends 4 px past the glyph; the glyph draws later and keeps its clicks. The badge shows from a 20 px
+   icon up (tree-icons-show-badges, EditorTreeTitleIconVars.cpp); under it the teal name marks a member. */
+.hierarchy-panel .tree-icons-show-badges .tree .tree-item.hierarchy-prefab-member .tree-title {
+	--hierarchy_member_badge_pull: calc(2 * var(--ui_spacing_sm) + var(--ui_tree_icon_badge_size) - 4px);
+	min-height: var(--ui_tree_icon_size);
+	margin-left: calc(-1 * var(--hierarchy_member_badge_pull));
+	padding-left: var(--hierarchy_member_badge_pull);
+	background-image: url("editor:Icons/prefab-member-badge.svg");
+	background-size: var(--ui_tree_icon_badge_size) var(--ui_tree_icon_badge_size);
+	background-position: left bottom;
+	background-repeat: no-repeat;
+	background-image-tint: var(--ui_color_prefab);
+}
+
+/* A selected member keeps the teal, so the selection does not hide that it is in an instance. */
+.hierarchy-panel .tree .tree-item.hierarchy-prefab-member.selected .tree-title {
+	color: var(--ui_color_prefab);
+}
+
+/* A missing prefab file shows a question mark in place of the cube, so the state does not rest on
+   the red alone. */
+.tree-item.hierarchy-prefab-missing .entity-icon.hierarchy-entity-prefab {
+	background-image: url("editor:Icons/help.svg");
+}
+
+/* The prefab marker is the row's own background in its left gutter: a teal dot on an entity that
+   differs from its prefab, a green plus on an entity added on the instance. */
+.tree .tree-item.hierarchy-prefab-overridden {
+	background-image: url("editor:Icons/dot.svg");
+	background-size: 6px 6px;
+	background-position: 3px center;
+	background-repeat: no-repeat;
+	background-image-tint: var(--ui_color_prefab);
+}
+
+.tree .tree-item.hierarchy-prefab-added {
+	background-image: url("editor:Icons/plus.svg");
+	background-size: 10px 10px;
+	background-position: 1px center;
+	background-repeat: no-repeat;
+	background-image-tint: var(--ui_color_accent_green);
 }
 
 .hierarchy-panel .tree .tree-item:hover .tree-title {

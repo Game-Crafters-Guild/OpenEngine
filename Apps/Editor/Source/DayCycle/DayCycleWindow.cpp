@@ -14,7 +14,7 @@
 #include "DayCycle/DayCycleWorkingCopy.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
-#include "Inspectors/SkySunReadoutText.h"
+#include "Inspectors/SkySun/SkySunReadoutText.h"
 #include "Types/StringId.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/CurveField.h"

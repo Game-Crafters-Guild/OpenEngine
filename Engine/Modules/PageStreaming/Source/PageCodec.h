@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 
 #include <memory>
 #include <span>
@@ -48,5 +48,10 @@ public:
 /// The codec of the store whose header is `header`: its steps for HeightSteps, a byte copy for
 /// Rgba8, Rgba8Srgb and Rg8, the BC5 encoder and decoder for Bc5.
 std::unique_ptr<PageCodec> MakePageCodec(const PageStoreHeader& header);
+
+/// The loaded bytes of a level-`level` page of `format` from its stored bytes `stored` (the size of
+/// `entry`): PagePayloadBytes(format) bytes, `codec`'s samples, or a block format's blocks as stored.
+void DecodePagePayload(const PageCodec& codec, PageFieldFormat format, uint32 level, const PageIndexEntry& entry,
+                       std::span<const uint8> stored, std::vector<uint8>& outPayload);
 
 } // namespace GameEngine::PageStreaming

@@ -134,14 +134,14 @@ TEST(FenceSpanOverrideRemap, AResampleLandsEachOverrideOnTheNearestSurvivingPoin
     SplineFence fence;
     fence.Overrides[0] = Gate(0u, 0u);
     fence.Overrides[1] = Gate(3u, 2u);
-    fence.Overrides[2] = {5u, 1u, SplineSpanOverrideKind::ExplicitPiece, 1u};
+    fence.Overrides[2] = {5u, 1u, SplineSpanOverrideKind::ExplicitPart, 1u};
     SplinePointRenumbering resampled;
     resampled.OldToNew = {0u, 1u, 1u, 2u, 3u, 3u, 4u};
     resampled.PointCountAfter = 5u;
     EXPECT_TRUE(Editor::RemapSpanOverrides(fence, resampled, {}));
     EXPECT_EQ(fence.Overrides[0], Gate(0u, 0u));
     EXPECT_EQ(fence.Overrides[1], Gate(2u, 2u));
-    EXPECT_EQ(fence.Overrides[2], (SplineSpanOverride{3u, 1u, SplineSpanOverrideKind::ExplicitPiece, 1u}));
+    EXPECT_EQ(fence.Overrides[2], (SplineSpanOverride{3u, 1u, SplineSpanOverrideKind::ExplicitPart, 1u}));
 }
 
 // An override that already named a point the spline did not have is not the

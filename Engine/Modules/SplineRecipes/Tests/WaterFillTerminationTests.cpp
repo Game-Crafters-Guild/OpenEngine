@@ -448,7 +448,7 @@ class WaterFillTermination : public ::testing::Test
         SG::SplineFillParams params;
         params.MaxHalfWidth = reach;
         params.EdgeDrop = std::max(0.0f, recipe.EdgeDrop);
-        params.SeaLevelFloor = recipe.SeaLevelFloor;
+        params.FloorHeight = recipe.FloorHeight;
         repro.Field = SG::BuildSplineFillField(repro.Stations, repro.Grid, params);
 
         repro.Run = BuildWaterFillRun(m_World, repro.Stations, recipe, GameEngine::Mathematics::Matrix4x4::Identity(),

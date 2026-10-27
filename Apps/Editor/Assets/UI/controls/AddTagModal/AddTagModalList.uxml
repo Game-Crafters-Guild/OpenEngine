@@ -1,0 +1,14 @@
+<!-- The tag list of AddTagModal (Apps/Editor/Include/Panels/AddTagModal.h). AddTagModal.cpp puts one row
+     per tag (AddTagModalTagRow.uxml) above the All Tags row. The style sheet hides the new tag section. The ids are the
+     contract with AddTagModal.cpp. -->
+<UIElement class="add-tag-modal-list">
+  <UIElement id="add-tag-all-row" class="add-tag-modal-all-row">
+    <UIElement class="add-tag-modal-circle" />
+    <Label class="add-tag-modal-all-label" text="All Tags…" />
+  </UIElement>
+  <UIElement id="add-tag-new-section" class="add-tag-modal-new-section">
+    <Label class="add-tag-modal-new-label" text="New tag name" />
+    <TextField id="add-tag-new-name" class="add-tag-modal-new-field" value="" />
+    <Button id="add-tag-new-add" class="secondary" text="Add" />
+  </UIElement>
+</UIElement>

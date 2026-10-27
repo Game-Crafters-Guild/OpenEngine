@@ -22,7 +22,7 @@
 
 #include "UI/Controls/TextField.h"
 #include "UI/Controls/TextArea.h"
-#include "UI/Interaction/FocusIsInside.h"
+#include "UI/Interaction/FocusQueries.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/Dropdown.h"

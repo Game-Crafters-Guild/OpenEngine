@@ -116,7 +116,7 @@ float32 PolylineLength(const std::vector<CenterSample>& samples)
 }
 
 // Where one span of a run draws its piece from. An override turns a span into
-// a gate (GatePool) or pins its SpanPool slot; a gate with no gate piece to draw
+// a gate (Gate pool) or pins its Span pool slot; a gate with no gate piece to draw
 // is an opening, which keeps the room of the wall it replaced and places
 // nothing in it.
 enum class SpanSource : uint8
@@ -139,8 +139,8 @@ struct RunOverride
 // length, so the count and the sequence are solved together.
 struct RunFill
 {
-    // Per span, in order: the active pool slot it draws — a GatePool slot for a
-    // gate, the SpanPool slot of the wall it replaced for an opening — and the
+    // Per span, in order: the active pool slot it draws — a Gate pool slot for a
+    // gate, the Span pool slot of the wall it replaced for an opening — and the
     // pool that slot is in.
     std::vector<uint32> Slots;
     std::vector<SpanSource> Sources;
@@ -167,7 +167,7 @@ const RunOverride* FindRunOverride(std::span<const RunOverride> overrides, uint3
 
 // What one span draws once its override, if any, is applied. A gate draws the
 // gate piece its override names, or leaves an opening where the gate pool has
-// no such piece; a pinned span draws the SpanPool slot its override names, and
+// no such piece; a pinned span draws the Span pool slot its override names, and
 // keeps the seeded pick where the pool has no such slot. The misses are
 // reported where the run is solved (ReportRunOverrides), never here: the fill
 // tries three counts and would say it three times.
@@ -186,7 +186,7 @@ void ApplyRunOverride(const RunOverride& entry, size_t spanPieceCount, size_t ga
             source = SpanSource::Opening;
         }
     }
-    else if (entry.Kind == Components::SplineSpanOverrideKind::ExplicitPiece &&
+    else if (entry.Kind == Components::SplineSpanOverrideKind::ExplicitPart &&
              entry.PoolSlot < spanPieceCount)
     {
         slot = entry.PoolSlot;
@@ -307,7 +307,7 @@ struct Run
 };
 
 // The pool piece span `span` of a run is laid as: its gate piece for a gate,
-// otherwise the SpanPool piece it drew — for an opening, the wall whose room it
+// otherwise the Span pool piece it drew — for an opening, the wall whose room it
 // keeps.
 const FencePieceBounds& SpanPieceOf(const Run& run, size_t span, const FenceLayoutParams& params)
 {
@@ -565,8 +565,9 @@ std::string JoinName(const SpanJoin& join)
 {
     if (join.Before != join.After)
         return "point " + std::to_string(join.Before->EndPoint);
-    return "the station " + Metres(join.Before->Stations[join.AfterSpan]) + " m along run " +
-           std::to_string(join.Before->StartPoint) + "->" + std::to_string(join.Before->EndPoint);
+    return "the post position " + Metres(join.Before->Stations[join.AfterSpan]) +
+           " m along the segment from point " + std::to_string(join.Before->StartPoint) + " to point " +
+           std::to_string(join.Before->EndPoint);
 }
 
 void MitreBareJoins(std::vector<Run>& runs, const FenceLayoutParams& params,
@@ -650,8 +651,8 @@ void MitreJoinsOfRuns(std::vector<Run>& runs, const FenceLayoutParams& params,
             validation.push_back("Fence: " + JoinName(join) + " turns " +
                                  WholeDegrees(std::abs(turn)) + " degrees, past the " +
                                  WholeDegrees(limitRadians) +
-                                 " degree mitre limit — the spans meet with square ends there; "
-                                 "plant a post at it");
+                                 " degree mitre limit. The spans meet with square ends there; "
+                                 "plant a post at it.");
             continue;
         }
         SpanJoinMeasure measure;
@@ -702,8 +703,8 @@ void MitreJoinsOfRuns(std::vector<Run>& runs, const FenceLayoutParams& params,
         after.SpanStartOverhangs[join.AfterSpan] = 0.0f;
         validation.push_back("Fence: mitring " + JoinName(join) + " needs a span stretched " +
                              Factor(needed) + "x, past the " + Factor(maxStretch) +
-                             "x cap — the spans meet with square ends there; plant a post at it "
-                             "or raise Span Max Stretch");
+                             "x cap. The spans meet with square ends there; plant a post at it "
+                             "or raise Span Max Stretch.");
     }
 }
 
@@ -878,24 +879,24 @@ float32 CrestPieceThatAlwaysFits(float32 stretch, float32 askedPitch)
 std::string EmptyCrestRowReport(float32 stretch, float32 askedPitch, bool hasPostMesh)
 {
     const std::string wayOut =
-        hasPostMesh ? ", or clear the Post pool." : ", or move what reserves the run.";
+        hasPostMesh ? ", or remove the Post parts." : ", or move what reserves the segment.";
     const std::string opening =
-        "Fence: the crest row placed no crest pieces — the longest clear stretch is " +
+        "Fence: the crest row placed no crest parts. The longest clear stretch is " +
         Metres(stretch) + " m. ";
     const float32 fits = CrestPieceThatAlwaysFits(stretch, askedPitch);
     if (askedPitch > 0.0f && fits < kMinPieceLengthMetres)
     {
         return opening + "Crest Pitch " + Metres(askedPitch) +
-               " m leaves no room for a piece in it; lower the pitch" + wayOut;
+               " m leaves no room for a part in it; lower the pitch" + wayOut;
     }
     // The pitch, not the half, is what binds once it exceeds half the stretch.
     if (askedPitch > 0.0f && stretch - askedPitch < stretch * 0.5f)
     {
         return opening + "At a Crest Pitch of " + Metres(askedPitch) +
-               " m, a crest piece no longer than " + Metres(fits) +
+               " m, a crest part no longer than " + Metres(fits) +
                " m (the stretch less the pitch) always fits; use one" + wayOut;
     }
-    return opening + "A crest piece no longer than half of it, " + Metres(fits) +
+    return opening + "A crest part no longer than half of it, " + Metres(fits) +
            " m, always fits; use one" + wayOut;
 }
 
@@ -1441,7 +1442,7 @@ CrestRowReport EmitCrestRow(const std::vector<Run>& runs, const FenceLayoutParam
 
 std::string RunName(uint32 startPoint, uint32 endPoint)
 {
-    return "run " + std::to_string(startPoint) + "->" + std::to_string(endPoint);
+    return "the segment from point " + std::to_string(startPoint) + " to point " + std::to_string(endPoint);
 }
 
 // The recipe's overrides, sorted to the runs they name: one list per declared
@@ -1462,7 +1463,7 @@ std::vector<std::vector<RunOverride>> CollectRunOverrides(
         {
             validation.push_back("Fence: a span override names point " +
                                  std::to_string(entry.PointIndex) +
-                                 ", which opens no run — it places nothing; move it or remove it");
+                                 ", which opens no segment. It places nothing; change its point or remove it.");
             continue;
         }
         std::vector<RunOverride>& run = byRun[entry.PointIndex];
@@ -1473,7 +1474,7 @@ std::vector<std::vector<RunOverride>> CollectRunOverrides(
                                         : entry.PointIndex + 1u;
             validation.push_back("Fence: two span overrides name span " +
                                  std::to_string(entry.SpanOrdinal) + " of " +
-                                 RunName(entry.PointIndex, endPoint) + " — the first is used");
+                                 RunName(entry.PointIndex, endPoint) + ". The first is used.");
             continue;
         }
         run.push_back({entry.SpanOrdinal, entry.Kind, entry.PoolSlot});
@@ -1499,24 +1500,24 @@ void ReportRunOverrides(const Run& run, std::span<const RunOverride> overrides,
         {
             validation.push_back("Fence: a span override names " + spanName(entry) + ", which has " +
                                  std::to_string(spans) +
-                                 " span(s) — it places nothing; move it or remove it");
+                                 " span(s). It places nothing; change its point or span, or remove it.");
             continue;
         }
         if (entry.Kind == Components::SplineSpanOverrideKind::Gate && !params.GatePieces.empty() &&
             entry.PoolSlot >= params.GatePieces.size())
         {
-            validation.push_back("Fence: the gate on " + spanName(entry) + " names Gate " +
-                                 std::to_string(entry.PoolSlot + 1u) + ", but the Gate pool holds " +
+            validation.push_back("Fence: the gate on " + spanName(entry) + " names Gate part " +
+                                 std::to_string(entry.PoolSlot + 1u) + ", but the fence has " +
                                  std::to_string(params.GatePieces.size()) +
-                                 " — the span is left open");
+                                 " Gate part(s) with a mesh. The span is left open.");
         }
-        else if (entry.Kind == Components::SplineSpanOverrideKind::ExplicitPiece &&
+        else if (entry.Kind == Components::SplineSpanOverrideKind::ExplicitPart &&
                  entry.PoolSlot >= params.SpanPieces.size())
         {
-            validation.push_back("Fence: the explicit piece on " + spanName(entry) + " names Span " +
-                                 std::to_string(entry.PoolSlot + 1u) + ", but the Span pool holds " +
+            validation.push_back("Fence: the explicit part on " + spanName(entry) + " names Span part " +
+                                 std::to_string(entry.PoolSlot + 1u) + ", but the fence has " +
                                  std::to_string(params.SpanPieces.size()) +
-                                 " — it keeps the fence's own pick");
+                                 " Span part(s) with a mesh. The fence picks a Span part by Seed there.");
         }
     }
 }
@@ -1597,15 +1598,15 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
             result.Validation.push_back(
                 "Fence: authored points " + std::to_string(run.StartPoint) + " and " +
                 std::to_string(run.EndPoint) +
-                " are coincident — the run between them is skipped and the station emitted once");
+                " are coincident. The segment between them is skipped and its post is placed once.");
             // The run holds no span, so nothing its overrides name exists.
             if (!overridesByRun[r].empty())
             {
                 result.Validation.push_back(
                     "Fence: " + std::to_string(overridesByRun[r].size()) + " span override(s) on " +
                     RunName(run.StartPoint, run.EndPoint) +
-                    " place nothing — the run has no length; move point " +
-                    std::to_string(run.EndPoint) + " or remove them");
+                    " place nothing. The segment has no length; move point " +
+                    std::to_string(run.EndPoint) + " or remove them.");
             }
             continue;
         }
@@ -1629,13 +1630,12 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
                               (explicitMinScale ? " (explicit compression limit)"
                                                 : " (the " + Factor(maxStretch) + "x cap's reciprocal)");
             result.Validation.push_back(
-                "Fence: run " + std::to_string(run.StartPoint) + "->" +
-                std::to_string(run.EndPoint) + " is " + Metres(run.LengthMetres) +
+                "Fence: " + RunName(run.StartPoint, run.EndPoint) + " is " + Metres(run.LengthMetres) +
                 " m and its closest fill of " + std::to_string(run.Fill.Slots.size()) +
-                " span piece(s) is " + Metres(run.Fill.NaturalLength) + " m — needs " +
+                " span part(s) is " + Metres(run.Fill.NaturalLength) + " m. It needs " +
                 Factor(run.Fill.Stretch) + "x, " + bound + "; no count within one of the nominal " +
                 std::to_string(run.Fill.NominalCount) +
-                " satisfies it, so the run is built at the required stretch");
+                " satisfies it, so the segment is built at the required stretch.");
         }
 
         // Stations: cumulative piece lengths scaled to close the run exactly on
@@ -1801,8 +1801,8 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
             budgetReported = true;
             result.Validation.push_back(
                 "Fence: hit the " + std::to_string(params.MaxPieces) +
-                " piece budget; the rest of the spline is not built — raise the post pitch or "
-                "shorten the spline");
+                " part budget. The rest of the spline is not built; raise Span Length or "
+                "shorten the spline.");
         }
         return false;
     };
@@ -1815,10 +1815,9 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
             {
                 shortRunReported = true;
                 result.Validation.push_back(
-                    "Fence: run " + std::to_string(run.StartPoint) + "->" +
-                    std::to_string(run.EndPoint) +
-                    " produced no usable stations and contributes nothing — its centerline has no "
-                    "measurable length after draping");
+                    "Fence: " + RunName(run.StartPoint, run.EndPoint) +
+                    " gives no usable post positions and adds nothing. Its centerline has no "
+                    "measurable length after draping.");
             }
             continue;
         }
@@ -1830,10 +1829,9 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
         {
             truncationReported = true;
             result.Validation.push_back(
-                "Fence: run " + std::to_string(run.StartPoint) + "->" +
-                std::to_string(run.EndPoint) + " needed " +
-                std::to_string(run.Stations.size()) + " stations but the layout budget allows " +
-                std::to_string(run.Poses.size()) + " — raise the post pitch");
+                "Fence: " + RunName(run.StartPoint, run.EndPoint) + " needs " +
+                std::to_string(run.Stations.size()) + " post positions but the layout budget allows " +
+                std::to_string(run.Poses.size()) + ". Raise Span Length.");
         }
 
         const size_t emitCount = run.Poses.size() - 1u;
@@ -1888,10 +1886,9 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
             if (cover > 0.0f && worstStep > cover)
             {
                 result.Validation.push_back(
-                    "Fence: run " + std::to_string(run.StartPoint) + "->" +
-                    std::to_string(run.EndPoint) + " steps " + Metres(worstStep) +
-                    " m between stations, more than the " + Metres(cover) +
-                    " m piece height covers — the stepped grade leaves a gap at the riser");
+                    "Fence: " + RunName(run.StartPoint, run.EndPoint) + " steps " + Metres(worstStep) +
+                    " m between post positions, more than the " + Metres(cover) +
+                    " m part height covers. The stepped grade leaves a gap at the riser.");
             }
         }
 
@@ -1946,14 +1943,13 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
         if (buriedSamples > 0u)
         {
             result.Validation.push_back(
-                "Fence: the ground rises through the spans of run " +
-                std::to_string(run.StartPoint) + "->" + std::to_string(run.EndPoint) + " at " +
-                std::to_string(buriedSamples) + " sample(s) — worst at span " +
-                std::to_string(worstSpanOrdinal) + ", " + Metres(worstDepth) +
-                " m deeper than the piece is planted for, " + Metres(worstArcMetres) +
-                " m along the run at (" + Metres(worstPos.x) + ", " + Metres(worstPos.z) +
-                ") — add an authored point there so a station lands on the bump, or the fence is "
-                "buried at that span");
+                "Fence: the ground rises through the spans of " + RunName(run.StartPoint, run.EndPoint) +
+                " at " + std::to_string(buriedSamples) + " sample(s), worst at span " +
+                std::to_string(worstSpanOrdinal) + ": " + Metres(worstDepth) +
+                " m deeper than the part is planted for, " + Metres(worstArcMetres) +
+                " m along the segment at (" + Metres(worstPos.x) + ", " + Metres(worstPos.z) +
+                "). Add an authored point there so a post stands on the bump, or the fence is "
+                "buried at that span.");
         }
     }
 
@@ -1994,14 +1990,14 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
         {
             result.Validation.push_back(
                 "Fence: Crest Pitch " + Metres(params.CrestPitch) +
-                " m is below the longest crest piece, " + Metres(crest.LongestPiece) +
-                " m; the piece length is used");
+                " m is below the longest crest part, " + Metres(crest.LongestPiece) +
+                " m; the part length is used.");
         }
         if (params.SpanPieces.empty())
         {
             result.Validation.push_back(
-                "Fence: the crest row is laid along the tops of the spans and the span pool is "
-                "empty — no crest piece is placed");
+                "Fence: the crest row is laid along the tops of the spans, and the fence has no "
+                "Span part with a mesh. No crest part is placed.");
         }
         else
         {
@@ -2012,8 +2008,8 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
                 budgetReported = true;
                 result.Validation.push_back(
                     "Fence: hit the " + std::to_string(params.MaxPieces) +
-                    " piece budget; the rest of the crest row is not built — raise the crest "
-                    "pitch or shorten the spline");
+                    " part budget. The rest of the crest row is not built; raise Crest Pitch "
+                    "or shorten the spline.");
             }
             // A pool was assigned, a run was long enough to hold a cell with
             // nothing reserved, and not one cell stood anywhere: the posts or
@@ -2035,8 +2031,8 @@ FenceLayoutResult BuildFenceLayout(const std::vector<CenterSample>& center,
             else if (row.WithinBudget && row.CellsPlaced == 0u && row.ARegisteredRunHoldsACell)
             {
                 result.Validation.push_back(
-                    "Fence: the crest row placed no crest pieces — a reserved stretch reaches "
-                    "every wall they stand on; move what reserves the run.");
+                    "Fence: the crest row placed no crest parts. A reserved stretch reaches "
+                    "every span they stand on; move what reserves the segment.");
             }
         }
     }

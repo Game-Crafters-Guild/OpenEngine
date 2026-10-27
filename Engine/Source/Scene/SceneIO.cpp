@@ -1530,18 +1530,6 @@ static bool ClaimEntityId(std::unordered_map<std::string, int>& firstLineById, c
     return false;
 }
 
-// The id of a prefab file's root, the entity an instance's root is.
-constexpr std::string_view kPrefabRootId = "root";
-
-// The longest scene identity a SceneEntityTag holds.
-constexpr std::size_t kMaxSceneTagLength = sizeof(Components::SceneEntityTag::value) - 1;
-
-// A long scene identity is 16 hex digits of its path's hash and '~' before the local id.
-constexpr std::size_t kHashedSceneTagHeadLength = 17;
-
-// The longest id in a prefab file: a hashed scene identity keeps it whole.
-constexpr std::size_t kMaxPrefabIdLength = kMaxSceneTagLength - kHashedSceneTagHeadLength;
-
 // False, with the line and the fix, when `id` holds a separator, or is longer than a prefab file
 // allows.
 static bool ValidateEntityId(const std::string& id, int headerLine, bool inPrefab, std::string* outError,
@@ -3192,7 +3180,7 @@ bool LoadSceneFromFile(ECS::World& world,
     }
 
     if (engineLibrary)
-        HoldReferencedPrefabs(placement, inst.created);
+        HoldReferencedPrefabs(*engineLibrary, world, options, inst.created);
 
     // The load succeeded, so every caller is about to treat this world as the scene. When a line of the
     // file did not apply, that is only true with an asterisk — say so once, loudly, with the
@@ -3676,7 +3664,10 @@ bool SaveSceneToFile(ECS::World& world,
         }
     }
 
-    out << "[scene name=\"" << sceneFilePath.stem().string() << "\" version=1]\n\n";
+    if (options.writePrefabHeader)
+        out << "[prefab version=1]\n\n";
+    else
+        out << "[scene name=\"" << sceneFilePath.stem().string() << "\" version=1]\n\n";
     const auto schemas = SceneSchemaRegistry::GetAllSorted();
 
     // If requested, re-serialize prefab instances back to [prefab] sections (plus [resource] lines),

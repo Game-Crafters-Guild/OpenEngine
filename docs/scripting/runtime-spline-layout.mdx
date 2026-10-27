@@ -1,6 +1,6 @@
 ---
 title: Runtime spline layout
-description: Laying out fences, walls, and tiles along a spline at runtime with the SplineLayout API, with crest rows, caps, gates, and explicit pieces.
+description: Laying out fences, walls, and tiles along a spline at runtime with the SplineLayout API, with crest rows, caps, gates, and explicit parts.
 sidebar:
   order: 15
 ---
@@ -14,9 +14,9 @@ For a fence or wall, provide:
 
 - A world-space `CenterSample` polyline, including measured surface normals.
 - `FenceLayoutParams.RunBoundaries`, identifying authored corners by fractional
-  sample index. Two boundaries describe one run. Adjacent runs share a station.
+  sample index. Two boundaries describe one segment. Adjacent segments share a station.
 - Active span-pool bounds and optional post bounds. The solver measures the
-  along-path axis from those bounds and uses their natural lengths to fill runs.
+  along-path axis from those bounds and uses their natural lengths to fill segments.
 - Planting, grade, and stretch settings, and optionally a `StationSurfaceProbe`
   that measures the exact surface beneath each final station.
 
@@ -79,7 +79,7 @@ these shared suites alongside its controller tests.
 
 `FenceLayoutParams::SpanMinScale` optionally supplies a compression floor
 separate from `SpanMaxStretch`. For a 5 m kit, `SpanMinScale = 0.15` and
-`SpanMaxStretch = 1.25` admit a 0.75 m connector while a 7.41 m run uses two
+`SpanMaxStretch = 1.25` admit a 0.75 m connector while a 7.41 m segment uses two
 panels at approximately 0.741 scale rather than one at 1.482 scale.
 
 The default zero uses the reciprocal floor, as editor recipes do.
@@ -91,24 +91,24 @@ inspector have no field for it.
 ## Crest rows and caps
 
 A crest row is a line of pieces along the tops of the spans: battlements,
-coping, lamps. It follows one of two rules per run.
+coping, lamps. It follows one of two rules per segment.
 
 When the crest pitch is the longest crest piece's own length (Crest Pitch 0, or
-typed equal to it) and every wall in the run has that same length, the row is
+typed equal to it) and every wall in the segment has that same length, the row is
 registered to the walls: one crest piece stands on each wall, centered on it,
 posed in its frame and stretched exactly as far as the fill stretched that wall.
 Its ends are the wall's ends, so the row closes wherever the walls close,
 around a curve too, and the posts reserve nothing against it: the post at a
 wall's end covers the crest's join exactly as it covers the wall's.
 
-Otherwise the run keeps the pitch grid, and its pieces are never stretched.
+Otherwise the segment keeps the pitch grid, and its pieces are never stretched.
 Cells are sized to the longest piece in the pool and each piece is centered in
-its cell, so the row reads as one repeated profile however long the run is.
-Cells are measured from each run's opening authored point, so editing the
+its cell, so the row reads as one repeated profile however long the segment is.
+Cells are measured from each segment's opening authored point, so editing the
 spline elsewhere leaves the row where it stands. A piece that would stand
 inside a post's footprint, inside a stretch a runtime caller reserved, or past
-the end of its run, is dropped rather than squeezed. A post at that edge covers
-the join, and without one the gap shows. A run never mixes the two rules.
+the end of its segment, is dropped rather than squeezed. A post at that edge covers
+the join, and without one the gap shows. A segment never mixes the two rules.
 
 Caps are the end pieces some kits ship for those gaps. Each gap a crest row
 leaves takes at most one cap: the longest cap that fits it, flush against the
@@ -116,31 +116,35 @@ last whole piece and facing the edge the gap ends at. What the cap does not
 cover stays bare, and the post, if there is one, covers it. A cap longer than
 every gap is never placed.
 
-To author one, add a `SplineFence` to a spline entity, put the wall mesh into
-Span and the battlement into Crest. Crest Pitch stays 0 unless the kit wants air
+To author one, add a `SplineFence` to a spline entity. Its inspector lists the
+fence's Parts: each row is a kind (Post, Span, Gate, Crest or Cap) and a mesh,
+with Move Up, Move Down and Remove, and Add Part adds a row. Give the first Span
+part the wall mesh, add a Crest part for the battlement and a Cap part for the
+kit's end piece. The parts of one kind are that role's pool: the fence picks
+among them by Seed, in list order. Crest Pitch stays 0 unless the kit wants air
 between pieces: 0 uses the longest crest piece's own length, so the pieces meet
-flush, and a smaller value is raised to it and reported. The kit's end piece
-goes into Cap. A fence with no span pool lays no crest row, because the row
-stands on the tops of the spans, and the log says so.
+flush, and a smaller value is raised to it and reported. A fence with no Span
+part lays no crest row, because the row stands on the tops of the spans, and
+the log says so. A fence lists at most 32 parts.
 
 On the pitch grid a mesh in Post reserves its footprint at every station, and
 crest cells stand only in the clear stretch between two footprints. Because
-cells are laid from the run's opening point and not from each post, a piece is
+cells are laid from the segment's opening point and not from each post, a piece is
 certain to fit a clear stretch only when it is at most half that stretch long
 and, at a typed Crest Pitch, no longer than the stretch less the pitch. A wide
 tower in Post with a battlement that is not as long as the wall panels can
 therefore lay no crest pieces at all. The caps may still stand. When that
 happens the log names the longest clear stretch and the piece length that
-always fits it. Use a shorter crest piece, or clear the Post pool. A battlement
+always fits it. Use a shorter crest piece, or remove the Post parts. A battlement
 exactly as long as the wall panels registers to them instead and stands
 between the towers.
 
 A runtime caller passes the active crest and cap pool bounds in
 `FenceLayoutParams::CrestPieces` and `CapPieces`, the pitch in `CrestPitch`, and
-the stretches of run its own planted pieces occupy in `Reservations`. A
+the stretches of a segment that its own planted pieces occupy in `Reservations`. A
 reservation is a signed interval about an authored point: negative reaches back
-into the run closing on that point, positive forward into the run opening at it,
-so one entry covers a node two runs meet at. Post footprints need no entry: the
+into the segment closing on that point, positive forward into the segment opening at it,
+so one entry covers a node two segments meet at. Post footprints need no entry: the
 layout derives them from the post bounds it was given.
 `FenceLayoutResult::Crests` returns the row with its caps, distinguished by
 `FenceCrest::IsCap`. `FenceCrest::LengthScale` is 1 on the pitch grid and for
@@ -151,48 +155,55 @@ piece budget, so a wall that exhausts the budget keeps its structure and reports
 the cut. An empty `CrestPieces` produces no row and leaves the rest of the result
 unchanged.
 
-## Gates and explicit pieces
+## Gates and explicit parts
 
-A span can be told what to draw instead of the fence's own pick. A gate draws a
-piece from the Gate pool. An explicit piece keeps one chosen piece from the Span
-pool whatever the seed picks. Both are span overrides on the recipe, addressed
-by the authored point that opens the span's run and the span's position in that
-run, counted from 0.
+A span can be told what to draw instead of the part the Seed picks. A gate draws a
+Gate part. An explicit part draws one Span part whatever the Seed picks. Both are
+span overrides on the fence (`SplineSpanOverrideKind::Gate` and
+`SplineSpanOverrideKind::ExplicitPart`), addressed by the authored point that
+opens the span's segment and the span's position in that segment, counted from 0.
 
-To make a gate, put the gate mesh into the fence's Gate pool and click the span
-in the scene view. Its section leads the inspector: it names the span and
-offers Use (Span Pool, Gate, or Explicit Piece) and the pool piece to draw, by
-mesh name. What Use chooses is saved on the fence, so it survives every rebuild.
-The rest of the piece is rebuilt from the fence. The span stays selected when it
-becomes a gate, so the gate piece can be chosen straight away. The fence's own
-inspector lists every override under Span Overrides, where each can be changed
-or removed. A fence holds at most sixteen, and both inspectors say so when the
-table is full. Overrides are saved with the scene and undo like any other edit.
+To make a gate, add a Gate part with the gate mesh to the fence and click the
+span in the scene view. Its section leads the inspector: it names the span and
+offers Use (Any Span Part, Gate, or Explicit Part) and the part to draw, by
+its kind and its mesh name. What Use chooses is saved on the fence, so it survives every rebuild.
+The rest of the span is rebuilt from the fence. The span stays selected when it
+becomes a gate, so the gate part can be chosen straight away.
+
+The fence's own inspector lists every override under Span Overrides, one row
+each: its kind and its part on the first line, its point and its span on the
+second. Add Override adds one like the last, on the next span the fence placed
+that has none;
+Move Up and Move Down change the order, and the first of two overrides on one
+span is the one the fence uses; Remove deletes it. A row that cannot do what it
+says names the problem under it, and the fence's state reads "Built" with a
+count of warnings. A fence holds at most sixteen overrides. Overrides are saved
+with the scene and undo like any other edit.
 
 A gate is chosen, not stretched to the length of the wall it replaces: the fill
-counts it at its own length, and the run's one shared stretch then closes the
-run around it the way it closes around walls of mixed length, so the gate takes
-that stretch like every other span of its run. The seeded picks of the other
-spans stay what they were when the gate leaves its run's span count unchanged.
-A gate that changes the count moves the picks of every later run, whose
+counts it at its own length, and the segment's one shared stretch then closes the
+segment around it the way it closes around walls of mixed length, so the gate takes
+that stretch like every other span of its segment. The seeded picks of the other
+spans stay what they were when the gate leaves its segment's span count unchanged.
+A gate that changes the count moves the picks of every later segment, whose
 ordinals follow the spans before them. A gate reserves its span of the crest
 row, so battlements stop at a gate on the pitch grid and on a row registered to
 the walls alike. Only the walls decide registration, so a gate longer than the
 walls leaves them registered. Where no post covers a gate's end at a bend, the
-gate is mitred like a wall. With the Gate pool empty a gate is an opening: the
+gate is mitred like a wall. With no Gate part a gate is an opening: the
 room of the wall it replaced with nothing in it, which is how to leave a gap in
 a hedge. An opening places no piece, so it cannot be selected in the scene view
 again. Change it back in the fence's Span Overrides.
 
 An override follows its point through edits of the spline. Inserting a point
-moves it with the point it names. Deleting a point folds that point's run into
-the run before it, and the override counts on past the spans that stood before
-its run, so it names the same place along the wall. The merged run is filled
+moves it with the point it names. Deleting a point folds that point's segment into
+the segment before it, and the override counts on past the spans that stood before
+its segment, so it names the same place along the wall. The merged segment is filled
 anew, so the span there may be a little longer or shorter. Resampling moves an
 override to the new point nearest the old one. Deleting the first or last point
-of an open spline removes that end's run and the overrides on it. An override
-the layout cannot apply is never dropped in silence: a span past its run's
-fill, a point that opens no run, a slot its pool does not hold, a run whose two
+of an open spline removes that end's segment and the overrides on it. An override
+the layout cannot apply is never dropped in silence: a span past its segment's
+fill, a point that opens no segment, a slot its pool does not hold, a segment whose two
 points coincide, and a second override on one span are each reported once per
 rebuild, and the inspectors show the ones they can tell beside the override.
 

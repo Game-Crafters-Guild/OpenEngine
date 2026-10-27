@@ -3,11 +3,14 @@
 
 #include "TerrainECS/TerrainModifierSystem.h"
 
+#include "TerrainECS/TerrainSurfaceBakeInputs.h"
+
 #include "TerrainECS/TerrainColorMap.h"
 #include "TerrainECS/TerrainGrassField.h"
+#include "TerrainECS/TerrainZonePayload.h"
 
 #include "PageStreaming/PageAddress.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 
 #include "Mathematics/Vector3.h"
 
@@ -66,12 +69,12 @@ struct PageLattice
     std::vector<float32> WorldZ;
 };
 
-bool MakePageLattice(const TiledTerrainData& tiled, const PageStreaming::PageAddress& address,
+bool MakePageLattice(const TerrainSurfaceBakeInputs& inputs, const PageStreaming::PageAddress& address,
                      const PageStreaming::PageStoreLevel& level, PageStreaming::PageFieldFormat format,
                      PageLattice& lattice)
 {
-    const uint32 tileW = tiled.Config.TileConfig.HeightmapWidth;
-    const uint32 tileH = tiled.Config.TileConfig.HeightmapHeight;
+    const uint32 tileW = inputs.Config.TileConfig.HeightmapWidth;
+    const uint32 tileH = inputs.Config.TileConfig.HeightmapHeight;
     if (tileW < 2u || tileH < 2u || address.X >= level.PagesX || address.Z >= level.PagesZ || level.SamplesX < 2u ||
         level.SamplesZ < 2u)
         return false;
@@ -84,10 +87,10 @@ bool MakePageLattice(const TiledTerrainData& tiled, const PageStreaming::PageAdd
     const uint32 z1 = std::max(ClampSample(lattice.FirstZ + stride - 1, level.SamplesZ), lattice.Z0 + 1u);
     lattice.Width = x1 - lattice.X0 + 1u;
     lattice.Height = z1 - lattice.Z0 + 1u;
-    lattice.WorldX = OwnerTilePositions(lattice.X0, x1, address.Level, tileW, tiled.Config.TilesPerAxisX,
-                                        tiled.WorldOriginX, tiled.Config.TileWorldSize);
-    lattice.WorldZ = OwnerTilePositions(lattice.Z0, z1, address.Level, tileH, tiled.Config.TilesPerAxisZ,
-                                        tiled.WorldOriginZ, tiled.Config.TileWorldSize);
+    lattice.WorldX = OwnerTilePositions(lattice.X0, x1, address.Level, tileW, inputs.Config.TilesPerAxisX,
+                                        inputs.WorldOriginX, inputs.Config.TileWorldSize);
+    lattice.WorldZ = OwnerTilePositions(lattice.Z0, z1, address.Level, tileH, inputs.Config.TilesPerAxisZ,
+                                        inputs.WorldOriginZ, inputs.Config.TileWorldSize);
     return true;
 }
 
@@ -119,6 +122,43 @@ void CopyLatticeToStride(const PageLattice& lattice, const PageStreaming::PageSt
     }
 }
 
+// Copies `stack` into `out`. Each copy reads its own copy of its spline, rule rows, paint mask and
+// zone colors, kept in `inputs`. A stamp mask, a sculpt payload and a route become null: the
+// surface bake reads them through the height overlay or not at all.
+void CopyBakeStack(std::span<const ResolvedModifier> stack, TerrainSurfaceBakeInputs& inputs,
+                   std::vector<ResolvedModifier>& out)
+{
+    out.assign(stack.begin(), stack.end());
+    for (ResolvedModifier& mod : out)
+    {
+        mod.Route = nullptr;
+        if (mod.ResolvedSpline)
+            mod.ResolvedSpline = &inputs.Splines.emplace_back(*mod.ResolvedSpline);
+        if (mod.ModType == ResolvedModifier::Type::PaintZone && mod.PaintZone.Mask)
+        {
+            const std::size_t texels = static_cast<std::size_t>(mod.PaintZone.Width) * mod.PaintZone.Height;
+            mod.PaintZone.Mask = inputs.PaintMasks.emplace_back(mod.PaintZone.Mask, mod.PaintZone.Mask + texels).data();
+        }
+        else if (mod.ModType == ResolvedModifier::Type::ColorZone && mod.ColorZone.Color)
+        {
+            const std::size_t floats = static_cast<std::size_t>(mod.ColorZone.Width) * mod.ColorZone.Height *
+                                       kZonePayloadColorChannels;
+            mod.ColorZone.Color = inputs.ZoneColors.emplace_back(mod.ColorZone.Color, mod.ColorZone.Color + floats).data();
+        }
+        else if (mod.ModType == ResolvedModifier::Type::SculptZone)
+            mod.SculptZone.Offsets = nullptr;
+        for (ResolvedEffect& effect : mod.Effects)
+        {
+            if (effect.EffectKind == ResolvedEffect::Kind::Rules && effect.Rules.Rules)
+                effect.Rules.Rules = inputs.RuleRows
+                                         .emplace_back(effect.Rules.Rules, effect.Rules.Rules + effect.Rules.RuleCount)
+                                         .data();
+            else if (effect.EffectKind == ResolvedEffect::Kind::Stamp)
+                effect.Stamp.MaskTexels = nullptr;
+        }
+    }
+}
+
 } // namespace
 
 PageStreaming::PageSampleRect SurfaceHeightRect(const PageStreaming::PageStoreLevel& level, uint32 pageX, uint32 pageZ,
@@ -133,13 +173,13 @@ PageStreaming::PageSampleRect SurfaceHeightRect(const PageStreaming::PageStoreLe
                                          ClampSample(firstZ + last + 1, level.SamplesZ)};
 }
 
-bool BakeSurfaceNormalPage(const TiledTerrainData& tiled, const PageStreaming::PageAddress& address,
+bool BakeSurfaceNormalPage(const TiledTerrainConfig& config, const PageStreaming::PageAddress& address,
                            const PageStreaming::PageStoreLevel& level, const SurfaceHeightWindow& heights,
                            std::vector<uint8>& outTexels)
 {
     constexpr PageStreaming::PageFieldFormat kFormat = PageStreaming::PageFieldFormat::Bc5;
-    const uint32 tileW = tiled.Config.TileConfig.HeightmapWidth;
-    const uint32 tileH = tiled.Config.TileConfig.HeightmapHeight;
+    const uint32 tileW = config.TileConfig.HeightmapWidth;
+    const uint32 tileH = config.TileConfig.HeightmapHeight;
     if (tileW < 2u || tileH < 2u || address.X >= level.PagesX || address.Z >= level.PagesZ)
         return false;
     const PageStreaming::PageSampleRect rect = SurfaceHeightRect(level, address.X, address.Z, kFormat);
@@ -155,12 +195,12 @@ bool BakeSurfaceNormalPage(const TiledTerrainData& tiled, const PageStreaming::P
             field.SetSample(x, z, heights.Heights[static_cast<std::size_t>(z) * rect.Width() + x]);
 
     // GenerateNormalmapFromHeightfield's spacing in normalized height units, times the level's step.
-    const float32 heightScale = std::max(tiled.Config.HeightScale, 0.001f);
+    const float32 heightScale = std::max(config.HeightScale, 0.001f);
     const float32 levelScale = static_cast<float32>(1u << address.Level);
     const float32 spacingX =
-        tiled.Config.TileWorldSize / (static_cast<float32>(tileW - 1u) * heightScale) * levelScale;
+        config.TileWorldSize / (static_cast<float32>(tileW - 1u) * heightScale) * levelScale;
     const float32 spacingZ =
-        tiled.Config.TileWorldSize / (static_cast<float32>(tileH - 1u) * heightScale) * levelScale;
+        config.TileWorldSize / (static_cast<float32>(tileH - 1u) * heightScale) * levelScale;
 
     // A stride sample outside the terrain takes the nearest sample inside it, as the store's
     // clamped edges do. At the terrain's edge the difference clamps, as a tile with no neighbor does.
@@ -182,17 +222,18 @@ bool BakeSurfaceNormalPage(const TiledTerrainData& tiled, const PageStreaming::P
     return true;
 }
 
-bool TerrainModifierSystem::BakeSurfaceSplatPage(const TiledTerrainData& tiled,
+bool TerrainModifierSystem::BakeSurfaceSplatPage(const TerrainSurfaceBakeInputs& inputs,
                                                  const PageStreaming::PageAddress& address,
                                                  const PageStreaming::PageStoreLevel& level,
                                                  const SurfaceHeightWindow& heights, std::vector<uint8>& outTexels)
 {
+    const TiledTerrainConfig& config = inputs.Config;
     const uint32 pageX = address.X;
     const uint32 pageZ = address.Z;
-    const uint32 tileW = tiled.Config.TileConfig.HeightmapWidth;
-    const uint32 tileH = tiled.Config.TileConfig.HeightmapHeight;
-    if (tileW < 2u || tileH < 2u || tiled.Config.TilesPerAxisX == 0u || tiled.Config.TilesPerAxisZ == 0u ||
-        !tiled.SplatBakeRangeValid || pageX >= level.PagesX || pageZ >= level.PagesZ)
+    const uint32 tileW = config.TileConfig.HeightmapWidth;
+    const uint32 tileH = config.TileConfig.HeightmapHeight;
+    if (tileW < 2u || tileH < 2u || config.TilesPerAxisX == 0u || config.TilesPerAxisZ == 0u ||
+        !inputs.SplatBakeRangeValid || pageX >= level.PagesX || pageZ >= level.PagesZ)
         return false;
     constexpr PageStreaming::PageFieldFormat kFormat = PageStreaming::PageFieldFormat::Rgba8;
     const PageStreaming::PageSampleRect rect = SurfaceHeightRect(level, pageX, pageZ, kFormat);
@@ -209,18 +250,18 @@ bool TerrainModifierSystem::BakeSurfaceSplatPage(const TiledTerrainData& tiled,
 
     SplatTexelLattice lattice;
     const float32 levelScale = static_cast<float32>(1u << address.Level);
-    lattice.SpacingX = levelScale * tiled.Config.TileWorldSize / static_cast<float32>(tileW - 1u);
-    lattice.SpacingZ = levelScale * tiled.Config.TileWorldSize / static_cast<float32>(tileH - 1u);
-    lattice.WorldX = OwnerTilePositions(rect.MinX, rect.MaxX, address.Level, tileW, tiled.Config.TilesPerAxisX,
-                                        tiled.WorldOriginX, tiled.Config.TileWorldSize);
-    lattice.WorldZ = OwnerTilePositions(rect.MinZ, rect.MaxZ, address.Level, tileH, tiled.Config.TilesPerAxisZ,
-                                        tiled.WorldOriginZ, tiled.Config.TileWorldSize);
+    lattice.SpacingX = levelScale * config.TileWorldSize / static_cast<float32>(tileW - 1u);
+    lattice.SpacingZ = levelScale * config.TileWorldSize / static_cast<float32>(tileH - 1u);
+    lattice.WorldX = OwnerTilePositions(rect.MinX, rect.MaxX, address.Level, tileW, config.TilesPerAxisX,
+                                        inputs.WorldOriginX, config.TileWorldSize);
+    lattice.WorldZ = OwnerTilePositions(rect.MinZ, rect.MaxZ, address.Level, tileH, config.TilesPerAxisZ,
+                                        inputs.WorldOriginZ, config.TileWorldSize);
 
     // Zero is the unbaked base, as ResetSplatmap makes it.
     std::vector<uint8> splat(static_cast<std::size_t>(rect.Width()) * rect.Height() * 4u, 0u);
-    ApplySplatModifiers(splat, rect.Width(), rect.Height(), field, lattice, tiled.Config.HeightScale,
-                        tiled.SplatBakeMinH, tiled.SplatBakeMaxH, m_AppliedModifiers, 0, 0, kRegionUnbounded,
-                        kRegionUnbounded);
+    ApplySplatModifiers(splat, rect.Width(), rect.Height(), field, lattice, config.HeightScale, inputs.SplatBakeMinH,
+                        inputs.SplatBakeMaxH, inputs.Splat, 0, 0, kRegionUnbounded, kRegionUnbounded,
+                        inputs.LayerClampWarnings, inputs.UnaddressableRulesWarnings);
 
     // Cut the page's stride from the window. A stride sample outside the terrain takes the
     // nearest sample inside it, as the store's clamped edges do.
@@ -242,17 +283,17 @@ bool TerrainModifierSystem::BakeSurfaceSplatPage(const TiledTerrainData& tiled,
     return true;
 }
 
-bool TerrainModifierSystem::BakeSurfaceGrassPage(const TiledTerrainData& tiled,
+bool TerrainModifierSystem::BakeSurfaceGrassPage(const TerrainSurfaceBakeInputs& inputs,
                                                  const PageStreaming::PageAddress& address,
                                                  const PageStreaming::PageStoreLevel& level,
-                                                 std::vector<uint8>& outTexels) const
+                                                 std::vector<uint8>& outTexels)
 {
     constexpr PageStreaming::PageFieldFormat kFormat = PageStreaming::PageFieldFormat::Rg8;
     PageLattice lattice;
-    if (!MakePageLattice(tiled, address, level, kFormat, lattice))
+    if (!MakePageLattice(inputs, address, level, kFormat, lattice))
         return false;
     TerrainGrassField field;
-    ComposeLatticeGrassField(lattice, m_GrassModifiers, field);
+    ComposeLatticeGrassField(lattice, inputs.Grass, field);
     const uint32 stride = PageStreaming::PageStrideTexels(kFormat);
     // A field with no pixels is neutral.
     if (field.Pixels.empty())
@@ -264,18 +305,17 @@ bool TerrainModifierSystem::BakeSurfaceGrassPage(const TiledTerrainData& tiled,
     return true;
 }
 
-bool TerrainModifierSystem::BakeSurfaceColorPage(const TiledTerrainData& tiled,
+bool TerrainModifierSystem::BakeSurfaceColorPage(const TerrainSurfaceBakeInputs& inputs,
                                                  const PageStreaming::PageAddress& address,
                                                  const PageStreaming::PageStoreLevel& level,
-                                                 const TerrainColorGroundWrite& write,
                                                  std::span<const uint8> splatTexels,
-                                                 std::vector<uint8>& outTexels) const
+                                                 std::vector<uint8>& outTexels)
 {
     constexpr PageStreaming::PageFieldFormat kFormat = PageStreaming::PageFieldFormat::Rgba8Srgb;
     const uint32 stride = PageStreaming::PageStrideTexels(kFormat);
     PageLattice lattice;
     if (splatTexels.size() != static_cast<std::size_t>(stride) * stride * 4u ||
-        !MakePageLattice(tiled, address, level, kFormat, lattice))
+        !MakePageLattice(inputs, address, level, kFormat, lattice))
         return false;
     // The splat under the lattice. The splat page holds the stride from (FirstX, FirstZ).
     std::vector<uint8> splat(static_cast<std::size_t>(lattice.Width) * lattice.Height * 4u);
@@ -287,20 +327,20 @@ bool TerrainModifierSystem::BakeSurfaceColorPage(const TiledTerrainData& tiled,
                     &splat[static_cast<std::size_t>(z) * lattice.Width * 4u]);
     }
     TerrainGrassField grass;
-    ComposeLatticeGrassField(lattice, m_GrassModifiers, grass);
-    TerrainColorComposeInputs inputs;
-    inputs.Width = lattice.Width;
-    inputs.Height = lattice.Height;
-    inputs.OriginX = lattice.WorldX.front();
-    inputs.OriginZ = lattice.WorldZ.front();
-    inputs.SizeX = lattice.WorldX.back() - lattice.WorldX.front();
-    inputs.SizeZ = lattice.WorldZ.back() - lattice.WorldZ.front();
-    inputs.Splat = {splat.data(), lattice.Width, lattice.Height, true};
-    inputs.Grass = {&grass, inputs.OriginX, inputs.OriginZ, inputs.SizeX, inputs.SizeZ};
-    inputs.Write = write;
-    inputs.Zones = m_ColorZones;
+    ComposeLatticeGrassField(lattice, inputs.Grass, grass);
+    TerrainColorComposeInputs compose;
+    compose.Width = lattice.Width;
+    compose.Height = lattice.Height;
+    compose.OriginX = lattice.WorldX.front();
+    compose.OriginZ = lattice.WorldZ.front();
+    compose.SizeX = lattice.WorldX.back() - lattice.WorldX.front();
+    compose.SizeZ = lattice.WorldZ.back() - lattice.WorldZ.front();
+    compose.Splat = {splat.data(), lattice.Width, lattice.Height, true};
+    compose.Grass = {&grass, compose.OriginX, compose.OriginZ, compose.SizeX, compose.SizeZ};
+    compose.Write = inputs.GroundWrite;
+    compose.Zones = inputs.Color;
     TerrainColorMap map;
-    ComposeTerrainColorMap(map, inputs);
+    ComposeTerrainColorMap(map, compose);
     // A map that no writer reaches holds no pixels: every texel is unwritten (0, 0, 0, 0).
     if (map.Pixels.empty())
     {
@@ -309,6 +349,23 @@ bool TerrainModifierSystem::BakeSurfaceColorPage(const TiledTerrainData& tiled,
     }
     CopyLatticeToStride(lattice, level, stride, kTerrainColorMapChannels, map.Pixels, outTexels);
     return true;
+}
+
+std::shared_ptr<const TerrainSurfaceBakeInputs> TerrainModifierSystem::SnapshotSurfaceBake(
+    const TiledTerrainData& tiled, const TerrainColorGroundWrite& write) const
+{
+    auto inputs = std::make_shared<TerrainSurfaceBakeInputs>();
+    inputs->Config = tiled.Config;
+    inputs->WorldOriginX = tiled.WorldOriginX;
+    inputs->WorldOriginZ = tiled.WorldOriginZ;
+    inputs->SplatBakeMinH = tiled.SplatBakeMinH;
+    inputs->SplatBakeMaxH = tiled.SplatBakeMaxH;
+    inputs->SplatBakeRangeValid = tiled.SplatBakeRangeValid;
+    inputs->GroundWrite = write;
+    CopyBakeStack(m_AppliedModifiers, *inputs, inputs->Splat);
+    CopyBakeStack(m_GrassModifiers, *inputs, inputs->Grass);
+    CopyBakeStack(m_ColorZones, *inputs, inputs->Color);
+    return inputs;
 }
 
 } // namespace GameEngine::TerrainECS

@@ -53,7 +53,7 @@ set(EDITOR_TEST_SOURCES
 	TextureCoveragePolicyNoticeTests.cpp
 	# The texture inspector's header suffix while the texture's first load cooks.
 	TextureLoadingSuffixTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/TextureLoadingSuffix.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/Texture/TextureLoadingSuffix.cpp
 	# The status bar's registered items and "Preparing N textures".
 	StatusBarItemTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Registries/StatusBarItemRegistry.cpp
@@ -73,6 +73,7 @@ set(EDITOR_TEST_SOURCES
 	SceneSaveDrivesOnceTests.cpp
 	SaveBlockedDuringPlayTests.cpp
 	SceneLoadFailureTests.cpp
+	LoadControlLayoutTests.cpp
 	ScriptStatusIndicatorTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Scripting/ScriptStatusIndicator.cpp
 	TerrainEntityUndoResolutionTests.cpp
@@ -139,18 +140,21 @@ set(EDITOR_TEST_SOURCES
 	# A row disabled through its control: every element inside the control takes the state, so an
 	# enum field's dropdown draws its disabled look. Leaf TU over the editor stylesheets.
 	InspectorDisabledRowTests.cpp
+	# The override marks keep a row's and a header's content in place, and a removed component's
+	# title is muted. Leaf TU over the editor stylesheets.
+	InspectorOverriddenMarkLayoutTests.cpp
 	# The Cube LUT preview's enlarged view: a click opens it in the window, a click or Escape
 	# closes it. Leaf TUs over the UI element tree.
 	CubeLutPreviewPopoverTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/CubeLutPreview.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/CubeLutPreviewPopover.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/CubeLut/CubeLutPreview.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/CubeLut/CubeLutPreviewPopover.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Thumbnails/CubeLutStripRequest.cpp
 	# The Cube LUT effect's stage notice: its text both ways, and its build from a loaded or loading
 	# asset over a live asset manager.
 	CubeLutStageNoticeTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/CubeLutStageNotice.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/CubeLut/CubeLutStageNotice.cpp
 	# The effect inspector, so the notice's action is tested through the inspector's own wiring.
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/CubeLutEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/CubeLut/CubeLutEffectInspector.cpp
 	# The two halves that keep a generated entity from being treated as authored
 	# content: the hierarchy drop rule, and the Inspector notice that says what a
 	# generated entity is and selects its owner. Leaf TUs over World and the UI
@@ -172,17 +176,23 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PreservedFieldNotice.cpp
 	# The Navigation Agent inspector: the Surface row and the status of the agent's request.
 	NavigationAgentInspectorTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/NavigationAgentInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/Navigation/NavigationAgentInspector.cpp
 	# The Navigation Surface inspector: its reflected rows per mode, the bake status notice and the
 	# Bake action, over the reflection-driven row builder it composes.
 	NavigationSurfaceInspectorTests.cpp
 	SplineRecipeInspectorTests.cpp
 	NavigationBakedDataSaveTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/NavigationSurfaceInspector.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineRecipeInspector.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineFenceInspector.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineFenceOverrideFields.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplinePlacementInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/Navigation/NavigationSurfaceInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineRecipe/SplineRecipeInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/Spline/SplineExtrudeInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineFence/SplineFenceInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineFence/SplineFencePartRow.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineFence/SplineFencePreview.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineRecipe/SplineRecipePreviewCanvas.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/ListItemActions.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineFence/SplineFenceOverrideFields.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SplineFence/SplineFenceOverrideRow.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/Spline/SplinePlacementInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/DefaultComponentInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/RenderLayerField.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/Gizmos/NavigationSurfaceGizmo.cpp
@@ -220,7 +230,7 @@ set(EDITOR_TEST_SOURCES
 	# falloff, transform-scoped region) and which effect it silently drops.
 	# Same leaf-TU shape as the generated-entity notice above.
 	TerrainVolumeNoticeTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/TerrainVolumeNotices.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainVolumeNotices.cpp
 	# The order that puts a section host ahead of the sections it hosts, over the
 	# traits registry in EditorSDK.dll. Leaf TU, like the notices above.
 	InspectorSectionHostsTests.cpp
@@ -241,9 +251,9 @@ set(EDITOR_TEST_SOURCES
 	TerrainGrassVocabularyTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainGrassVocabulary.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainRuleConditionVocabulary.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/TerrainRuleNotices.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/TerrainSizingNotice.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/TextureCoveragePolicyNotice.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainRuleNotices.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainSizingNotice.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/Texture/TextureCoveragePolicyNotice.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainInteractiveModifierEdit.cpp
 	AxisLayoutSerializerTests.cpp
 	CancellableShellProcessTests.cpp
@@ -569,6 +579,23 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Picking/ScenePick.cpp
 	# The Scene View drop queries over the picks (ScenePickPendingBvhTests).
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewDropPlacement.cpp
+	# The prefab drop: the placement, the refusal notice, the drop's undo step; Create Prefab, its dialog and its
+	# undo step; Create Prefab from a Hierarchy entity dropped on an Assets folder (PrefabPlaceTests).
+	PrefabPlaceTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/AssetsFolderDropRegistry.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/PrefabService.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/CreatePrefabCommand.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/CreatePrefabDialog.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/PrefabBar.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/UnpackPrefabCommand.cpp
+	# The prefab instance in the Hierarchy and the Scene View pick (PrefabHierarchyTests).
+	PrefabHierarchyTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/PrefabHierarchyRows.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/PrefabInstanceDescriptions.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/PrefabRemovedComponents.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/PrefabThumbnailHandler.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Picking/PickRootResolver.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewFraming.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SceneView/SceneViewProjection.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Markups/ConvertMarkupShapeCommand.cpp
@@ -737,6 +764,11 @@ set(EDITOR_TEST_SOURCES
 	# The Log list keeps its selection only on the lines it shows. Its row layout is staged below.
 	LogViewTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/LogView.cpp
+	# The Log panel's Channels list: the search, the count, Show All and Hide All, a row's toggle and level.
+	LogChannelPopoverTests.cpp
+	# The Channels list laid out over the editor stylesheets: the Level column and its heading.
+	LogChannelPopoverLayoutTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/LogChannelPopover.cpp
 	# The C# project a script opens with in the external editor: the path the
 	# scripts project is generated at. Opening the editor itself needs a desktop.
 	ExternalScriptEditorLauncherTests.cpp
@@ -751,7 +783,7 @@ set(EDITOR_TEST_SOURCES
 	# BuiltInInspectorRegistration here), driven over a real asset on disk.
 	TerrainMaterialLibraryInspectorTests.cpp
 	MaterialTexturePreviewHostTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/TerrainMaterialLibraryInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Terrain/TerrainMaterialLibraryInspector.cpp
 	# The inspector's texture rows go through InspectorTextureSlotPreview.h, which
 	# builds a MaterialTexturePreviewHost inline.
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/MaterialTexturePreviewHost.cpp
@@ -802,9 +834,9 @@ set(EDITOR_TEST_SOURCES
 	OptionPicturesTests.cpp
 	# The sky inspector's sun readout: its wording and the info card it is shown in.
 	SkySunReadoutTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunReadoutCard.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunReadoutText.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunPathCaptions.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunReadoutCard.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunReadoutText.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunPathCaptions.cpp
 	# Switching the Sun path across a selection, over the real undo service.
 	SkySunPathSwitchTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunPathSwitch.cpp
@@ -813,7 +845,7 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunIlluminanceSwitch.cpp
 	# What the sun illuminance curve's reference line is drawn from, compared field by field.
 	SkySunCurveReferenceTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunCurveReference.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunCurveReference.cpp
 	# Switching the Sky Mode across a selection, the same way.
 	SkyModeSwitchTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkyEnvironmentEdit.cpp
@@ -1037,6 +1069,39 @@ add_test(NAME HierarchyEnableStateTests
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 
+# The Hierarchy's model-thumbnail lookup with and without the panel's child lists.
+# Its own target for the same reason as HierarchyEnableStateTests.
+add_executable(HierarchyModelThumbnailTests
+	HierarchyModelThumbnailTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntityIcon.cpp
+	# What HierarchyEntityIcon.cpp reaches: the component traits registry for an
+	# entity's kind, and the Polyhaven cache directory for a placeholder's thumbnail.
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Entities/EditorComponentTraits.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/PolyhavenService.cpp
+	# PolyhavenService reads its cache directory from the editor preferences.
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/SettingsStore.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/EditorPaths.cpp
+)
+target_include_directories(HierarchyModelThumbnailTests PRIVATE ${CMAKE_SOURCE_DIR}/Apps/Editor/Include)
+target_link_libraries(HierarchyModelThumbnailTests PRIVATE
+	Engine
+	GTest::gtest
+	GTest::gtest_main
+)
+set_target_properties(HierarchyModelThumbnailTests PROPERTIES
+	CXX_STANDARD 20
+	CXX_STANDARD_REQUIRED ON
+	VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(HierarchyModelThumbnailTests)
+ge_stage_runtime_dependencies(HierarchyModelThumbnailTests)
+add_test(NAME HierarchyModelThumbnailTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:HierarchyModelThumbnailTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:HierarchyModelThumbnailTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
 # What the 9-slice editor offers on a texture it cannot write. Its own target
 # rather than a file in EDITOR_TEST_SOURCES, for the reason above: the control's
 # anonymous namespace would join EditorTests' unity batches.
@@ -1133,8 +1198,8 @@ add_test(NAME LightInspectorTests
 # shared curve editor, whose sources stay out of EditorTests' unity batches.
 add_executable(SkySunPathRowsTests
 	SkySunPathRowsTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunPathRows.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunPathCaptions.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunPathRows.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunPathCaptions.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/DayOfYearText.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunDayKind.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunPathSwitch.cpp
@@ -1192,8 +1257,8 @@ add_executable(DayCycleEditorTests
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/AssetCreation.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/EntityMaterialTextureAssign.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LuxText.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunPathCaptions.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunReadoutText.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunPathCaptions.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunReadoutText.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunDayKind.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkyEnvironmentEdit.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunLinkUndo.cpp
@@ -1240,9 +1305,9 @@ add_test(NAME DayCycleEditorTests
 # editor, with its preset picker and its context menu.
 add_executable(SkySunDriveRowsTests
 	SkySunDriveRowsTests.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunDriveRows.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunDriveRows.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkyDayCurveRow.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySunCurveReference.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/SkySun/SkySunCurveReference.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LuxText.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkySunIlluminanceSwitch.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Sky/SkyEnvironmentEdit.cpp
@@ -1256,6 +1321,7 @@ add_executable(SkySunDriveRowsTests
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/UIContextMenu.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/InterceptableContextMenu.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/RenameLayoutModal.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/EditorPaths.cpp
 )
 target_include_directories(SkySunDriveRowsTests PRIVATE
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
@@ -1293,6 +1359,7 @@ add_executable(ExposureCompensationCurveRowTests
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/UIContextMenu.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/InterceptableContextMenu.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/RenameLayoutModal.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/EditorPaths.cpp
 )
 target_include_directories(ExposureCompensationCurveRowTests PRIVATE
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
@@ -1972,10 +2039,81 @@ if(TARGET EditorTests)
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/InspectorNotice/InspectorNotice.uxml"
 	    "Assets/UI/controls/InspectorNotice/InspectorNotice.uxml")
 
+	# CreatePrefabDialog builds its fields from its layout, read from the same install-assets root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/CreatePrefabDialog/CreatePrefabDialog.uxml"
+	    "Assets/UI/controls/CreatePrefabDialog/CreatePrefabDialog.uxml")
+
+	# PrefabBar builds its two lines from its layout, read from the same install-assets root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/PrefabBar/PrefabBar.uxml"
+	    "Assets/UI/controls/PrefabBar/PrefabBar.uxml")
+
+	# The editor's modals build their trees from their layouts, read from the same root; LoadControlLayoutTests
+	# reads them.
+	foreach(_modal IN ITEMS SaveSceneChangesModal RestoreSceneBackupModal ConfirmActionModal RenameLayoutModal
+	        DownloadInProgressModal PlayModeEntryModal CameraCustomAspectModal PlayModeChangeReviewModal
+	        SaveSceneAsModal AddTagModal VideoPlayerModal VcsCommitDialog)
+	    ge_stage_test_asset(EditorTests
+	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/${_modal}/${_modal}.uxml"
+	        "Assets/UI/controls/${_modal}/${_modal}.uxml")
+	endforeach()
+
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/AddTagModal/AddTagModalList.uxml"
+	    "Assets/UI/controls/AddTagModal/AddTagModalList.uxml")
+	foreach(_layout IN ITEMS ProjectPickerNewProjectView ProjectPickerNewProjectGrid ProjectPickerImportView
+	                        ProjectPickerNewProjectActions ProjectPickerImportActions ProjectCard
+	                        RecentProjectNewCard RecentProjectOpenCard ProjectPickerSearchPlaceholder
+	                        ProjectPickerRecentGrid)
+	    ge_stage_test_asset(EditorTests
+	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/ProjectPicker/${_layout}.uxml"
+	        "Assets/UI/controls/ProjectPicker/${_layout}.uxml")
+	endforeach()
+
+	# The rows that AddTagModal, PlayModeChangeReviewModal and SaveSceneAsModal build per item.
+	foreach(_row IN ITEMS AddTagModal/AddTagModalTagRow PlayModeChangeReviewModal/PlayModeChangeReviewRow
+	        SaveSceneAsModal/SaveSceneAsFolderRow)
+	    ge_stage_test_asset(EditorTests
+	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/${_row}.uxml"
+	        "Assets/UI/controls/${_row}.uxml")
+	endforeach()
+
+	# LoadControlLayoutTests reads the Log panel and the folder bake status layouts from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/panels/LogPanel/LogPanel.uxml"
+	    "Assets/UI/panels/LogPanel/LogPanel.uxml")
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/thumbnails/FolderBakeStatus/FolderBakeStatus.uxml"
+	    "Assets/UI/thumbnails/FolderBakeStatus/FolderBakeStatus.uxml")
+
 	# PictureChoiceField builds its tiles from its layout, read from the same install-assets root.
 	ge_stage_test_asset(EditorTests
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/PictureChoiceField/PictureChoiceField.uxml"
 	    "Assets/UI/controls/PictureChoiceField/PictureChoiceField.uxml")
+
+	# ListItemActions builds its three buttons from its layout, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/ListItemActions/ListItemActions.uxml"
+	    "Assets/UI/controls/ListItemActions/ListItemActions.uxml")
+
+	# SplineFencePartRow builds each fence part row from its layout, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/inspectors/SplineFencePartRow/SplineFencePartRow.uxml"
+	    "Assets/UI/inspectors/SplineFencePartRow/SplineFencePartRow.uxml")
+
+	# The spline recipe preview strips build their plate from its layout, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/inspectors/SplineRecipePreview/SplineFencePreview.uxml"
+	    "Assets/UI/inspectors/SplineRecipePreview/SplineFencePreview.uxml")
+	# SplineFenceOverrideRow builds each span override row from its layout, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/inspectors/SplineFenceOverrideRow/SplineFenceOverrideRow.uxml"
+	    "Assets/UI/inspectors/SplineFenceOverrideRow/SplineFenceOverrideRow.uxml")
+	# The Inspector's header row ends with the badge and the history arrows from its layout, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/inspectors/EntityHeader/EntityHeader.uxml"
+	    "Assets/UI/inspectors/EntityHeader/EntityHeader.uxml")
 
 	# TransientNotice builds its plate and text from its layout, read from the same root.
 	ge_stage_test_asset(EditorTests
@@ -1987,10 +2125,25 @@ if(TARGET EditorTests)
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.uxml"
 	    "Assets/UI/panels/HierarchyNavigationBar/HierarchyNavigationBar.uxml")
 
+	# The Script Packages page builds its list and each package row from their layouts, read from the same root.
+	foreach(_layout IN ITEMS ScriptPackagesList ScriptPackageRow)
+	    ge_stage_test_asset(EditorTests
+	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/ScriptPackagesList/${_layout}.uxml"
+	        "Assets/UI/controls/ScriptPackagesList/${_layout}.uxml")
+	endforeach()
+
 	# The Log list builds each row from its layout, read from the same root.
 	ge_stage_test_asset(EditorTests
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/panels/LogPanel/LogRow.uxml"
 	    "Assets/UI/panels/LogPanel/LogRow.uxml")
+
+	# The Log panel's Channels list builds itself and each channel row from its layouts, read from the same root.
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/panels/LogPanel/LogChannelPopover.uxml"
+	    "Assets/UI/panels/LogPanel/LogChannelPopover.uxml")
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/panels/LogPanel/LogChannelRow.uxml"
+	    "Assets/UI/panels/LogPanel/LogChannelRow.uxml")
 
 	# The shipped animation-graph sample, read from the same exe-anchored asset
 	# root the editor loads it from.

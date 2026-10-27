@@ -11,7 +11,7 @@
 
 #include "EditorContextMenu/InterceptableContextMenu.h"
 #include "InspectorRegistry.h"
-#include "Inspectors/TerrainMaterialLibraryInspector.h"
+#include "Terrain/TerrainMaterialLibraryInspector.h"
 #include "StagedTestPaths.h"
 #include "TestTempDir.h"
 

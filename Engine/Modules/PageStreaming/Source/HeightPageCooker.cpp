@@ -6,8 +6,8 @@
 #include "HeightStepPlanner.h"
 #include "SourceRangeReader.h"
 #include "HeightPageCodec.h"
-#include "PageStreaming/PageStoreReader.h"
-#include "PageStreaming/PageStoreWriter.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreWriter.h"
 
 #include "AssetCore/SharedFileRead.h"
 #include "Terrain/Heightfield.h"

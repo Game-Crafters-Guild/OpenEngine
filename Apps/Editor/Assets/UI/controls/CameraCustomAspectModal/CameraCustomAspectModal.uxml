@@ -1,0 +1,26 @@
+<!-- CameraCustomAspectModal (Apps/Editor/Include/Panels/CameraCustomAspectModal.h): the width and height
+     of a custom camera aspect ratio, with Cancel and Apply. The ids are the contract with
+     CameraCustomAspectModal.cpp. -->
+<UIElement class="camera-aspect-modal-backdrop">
+  <UIElement class="modal-window camera-aspect-modal-window">
+    <UIElement class="camera-aspect-modal-header">
+      <Label class="camera-aspect-modal-title" text="Custom Aspect Ratio" />
+    </UIElement>
+    <UIElement class="camera-aspect-modal-content">
+      <Label class="camera-aspect-modal-description"
+             text="Enter the target width and height ratio used for projection and black bars." />
+      <UIElement class="camera-aspect-modal-field-row">
+        <Label class="camera-aspect-modal-field-label" text="Width" />
+        <FloatField id="camera-aspect-width" class="camera-aspect-modal-field" />
+      </UIElement>
+      <UIElement class="camera-aspect-modal-field-row">
+        <Label class="camera-aspect-modal-field-label" text="Height" />
+        <FloatField id="camera-aspect-height" class="camera-aspect-modal-field" />
+      </UIElement>
+    </UIElement>
+    <UIElement class="camera-aspect-modal-footer">
+      <Button id="camera-aspect-cancel" class="secondary" text="Cancel" />
+      <Button id="camera-aspect-apply" class="primary" text="Apply" />
+    </UIElement>
+  </UIElement>
+</UIElement>

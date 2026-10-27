@@ -143,6 +143,7 @@ bool FullscreenShaderNode::Initialize(std::string nodeId, std::string nodeJson, 
     m_Json = std::move(nodeJson);
     m_Inputs.clear();
     m_InputGates.clear();
+    m_OptionalInputs.clear();
     m_AssetTextures.clear();
     m_InputUsages.clear();
     m_Buffers.clear();
@@ -346,6 +347,15 @@ bool FullscreenShaderNode::Initialize(std::string nodeId, std::string nodeJson, 
             {
                 if (it.value().is_string())
                     m_InputGates.emplace(it.key(), it.value().get<std::string>());
+            }
+        }
+
+        if (j.contains("optionalInputs") && j["optionalInputs"].is_array())
+        {
+            for (const auto& name : j["optionalInputs"])
+            {
+                if (name.is_string())
+                    m_OptionalInputs.push_back(name.get<std::string>());
             }
         }
 
@@ -1089,6 +1099,12 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
             continue;
         }
         const RenderGraph::RGTexture t = d.ResolveTexture(node.m_Inputs[name]);
+        if (!t.IsValid() &&
+            std::find(node.m_OptionalInputs.begin(), node.m_OptionalInputs.end(), name) != node.m_OptionalInputs.end())
+        {
+            texBinds.push_back({name, services->Textures().GetDefaultBlackTexture()});
+            continue;
+        }
         if (!t.IsValid())
         {
             if (!node.m_LoggedUnresolvedInput)
@@ -1615,7 +1631,7 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
             });
     }
     if (resolvePair.IsValid())
-        Rendering::Passes::AddMsaaColorResolvePassRG(d.Frame, passOutput, resolvePair,
+        Rendering::Passes::AddMsaaColorResolvePassRG(d.Frame, passOutput, resolvePair, d.ViewBloomSampleDelta,
                                                      d.PassName("ColorResolve").c_str());
 
     // The chain variable: downstream resolvers of the output ref see THIS

@@ -178,6 +178,11 @@ public:
     void SetDropPreview(const UI::Interaction::DropPreviewState& state) override;
 
 private:
+    // Records the entities a drop made at once as one undo step named for the user; the step's
+    // undo removes them and restores the selection from before the drop.
+    void CommitDropStep(const std::vector<ECS::EntityHandle>& droppedRoots,
+                        const std::vector<UI::Interaction::ItemId>& selectionBefore,
+                        UI::Interaction::ItemId anchorBefore);
     // Creates the entity for a dropped asset file once the asset is loaded (a lens flare
     // needs only its GUID): a model named `entityName`, a texture's sprite or a lens flare,
     // placed last in the hierarchy and selected.
@@ -243,6 +248,7 @@ private:
     Editor::EditorChangeNotifications::SubscriptionToken m_LightChangedSub{};
     Editor::EditorChangeNotifications::SubscriptionToken m_MeshRendererChangedSub{};
     Editor::EditorChangeNotifications::SubscriptionToken m_NameChangedSub{};
+    Editor::EditorChangeNotifications::SubscriptionToken m_DecorationChangedSub{};
     bool m_RefreshQueued = false;
     // Coalesces the Name-changed label rebuild, which deliberately bypasses m_RefreshQueued
     // (a queued label rebuild must never swallow a pending structure refresh). Update()'s
@@ -337,6 +343,11 @@ private:
     ECS::EntityHandle m_ContextTargetEntity{};
     std::vector<std::filesystem::path> m_ContextMenuRecentScenes;
 
+    // The entities a command on the context target acts on: the whole selection when it holds the
+    // target, the target alone otherwise.
+    std::vector<ECS::EntityHandle> ContextTargetEntities() const;
+    // The first selected entity that is alive, or the invalid handle.
+    ECS::EntityHandle FirstSelectedEntity() const;
     // Duplicate the currently selected entities (with subtrees) and select the copies.
     void DuplicateSelectedEntities();
     // Delete the selected entities with their subtrees as one undo step; the Delete key and the

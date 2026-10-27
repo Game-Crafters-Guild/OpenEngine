@@ -1329,12 +1329,9 @@ TEST(UIRegressions, DeferredRelayoutReflowsSiblingAfterSelfResize)
 
 
 
-// Repro for the project-picker search bar: the absolutely-positioned clear
-// button (z-index 20) sits on top of the TextField (inline z-index 10, width
-// 100%). Clicking the X must reach the Button and run its OnClick, clearing
-// the field — not get swallowed by the field's text-editing pointer routing.
-// Mirrors BuildPanelSearchBar wiring + ProjectFolderPickerModal's inline
-// overrides and root mouse-down focus handler.
+// A search bar in a high-z modal: the clear button sits on top of the full-width TextField.
+// A click on the clear button runs its OnClick and clears the field; the field's text
+// routing does not take the click.
 TEST(UIRegressions, SearchBarClearButtonClickClearsFieldOverText)
 {
     auto* dev = SharedHeadlessDevice();
@@ -1392,10 +1389,8 @@ TEST(UIRegressions, SearchBarClearButtonClickClearsFieldOverText)
         .Set(Style::FlexGrow, 1.0f)
         .Set(Style::FlexShrink, 1.0f)
         .Set(Style::Position, PositionType::Relative)
-        // The fix mirrored in ProjectFolderPickerModal: interactive elements
-        // inside a high-z modal context must set z-index above that context,
-        // not the small local values from the panel-search CSS (10/20) —
-        // those lose the flat hit test to every plain container in the modal.
+        // An interactive element in a high-z modal sets its z-index above the modal's.
+        // The panel-search CSS values (10/20) lose the flat hit test to the modal's containers.
         .Set(Style::ZIndex, 10002)
         .Set(Style::PointerEvents, true);
     clearPtr->SetFocusProxy(fieldPtr);
@@ -1410,10 +1405,8 @@ TEST(UIRegressions, SearchBarClearButtonClickClearsFieldOverText)
         }
     });
 
-    // Modal wrapper mirroring ProjectFolderPickerModal: root z-index 10000,
-    // window z-index 10001. Hit-testing compares z flat across stacking
-    // contexts, so a small explicit z-index on a descendant loses to the
-    // modal context.
+    // The modal wrapper: root z-index 10000, window z-index 10001. The hit test
+    // compares z flat across stacking contexts.
     auto modal = std::make_unique<UIElement>();
     modal->SetId("modal");
     modal->Overrides().Set(Style::ZIndex, 10000);

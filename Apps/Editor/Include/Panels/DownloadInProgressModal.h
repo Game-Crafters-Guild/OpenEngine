@@ -36,7 +36,6 @@ private:
     void UpdateMessage();
 
     UIElement* m_Backdrop = nullptr;
-    UIElement* m_Window = nullptr;
     UIElement* m_Title = nullptr;
     UIElement* m_Message = nullptr;
 

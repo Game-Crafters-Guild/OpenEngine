@@ -1,15 +1,15 @@
 #include "Panels/CameraCustomAspectModal.h"
 
-#include "UI/Controls/Button.h"
+#include "Input/KeyCodes.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/FloatField.h"
-#include "UI/Controls/Label.h"
-#include "UI/Controls/TextField.h"
-#include "UI/StyleProperties.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
-#include "Input/KeyCodes.h"
 
 #include <algorithm>
+#include <array>
+#include <memory>
+#include <string_view>
 
 namespace GameEngine
 {
@@ -17,80 +17,33 @@ namespace GameEngine
 namespace
 {
 constexpr float kMinAspectDimension = 0.0001f;
-}
+constexpr const char* kLayoutAssetPath = "UI/controls/CameraCustomAspectModal/CameraCustomAspectModal.uxml";
+constexpr const char* kStyleAssetPath = "UI/controls/CameraCustomAspectModal/CameraCustomAspectModal.css";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 4> kRequiredIds = {
+    "camera-aspect-width",
+    "camera-aspect-height",
+    "camera-aspect-cancel",
+    "camera-aspect-apply",
+};
+} // namespace
 
 CameraCustomAspectModal::CameraCustomAspectModal()
 {
     AddClass("camera-aspect-modal");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
+    RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
     m_Backdrop = backdrop.get();
-    m_Backdrop->AddClass("camera-aspect-modal-backdrop");
-
-    auto window = std::make_unique<UIElement>();
-    m_Window = window.get();
-    m_Window->AddClass("modal-window");
-    m_Window->AddClass("camera-aspect-modal-window");
-
-    {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("camera-aspect-modal-header");
-        auto title = std::make_unique<Label>();
-        title->SetText("Custom Aspect Ratio");
-        title->AddClass("camera-aspect-modal-title");
-        header->AddChild(std::move(title));
-        m_Window->AddChild(std::move(header));
-    }
-
-    {
-        auto content = std::make_unique<UIElement>();
-        content->AddClass("camera-aspect-modal-content");
-
-        auto description = std::make_unique<Label>();
-        description->SetText("Enter the target width and height ratio used for projection and black bars.");
-        description->AddClass("camera-aspect-modal-description");
-        content->AddChild(std::move(description));
-
-        auto makeFieldRow = [](const char* labelText, FloatField*& outField) {
-            auto row = std::make_unique<UIElement>();
-            row->AddClass("camera-aspect-modal-field-row");
-
-            auto label = std::make_unique<Label>();
-            label->SetText(labelText);
-            label->AddClass("camera-aspect-modal-field-label");
-            row->AddChild(std::move(label));
-
-            auto field = std::make_unique<FloatField>();
-            outField = field.get();
-            field->AddClass("camera-aspect-modal-field");
-            row->AddChild(std::move(field));
-            return row;
-        };
-
-        content->AddChild(makeFieldRow("Width", m_WidthField));
-        content->AddChild(makeFieldRow("Height", m_HeightField));
-        m_Window->AddChild(std::move(content));
-    }
-
-    {
-        auto footer = std::make_unique<UIElement>();
-        footer->AddClass("camera-aspect-modal-footer");
-
-        auto cancel = std::make_unique<Button>();
-        cancel->SetText("Cancel");
-        cancel->AddClass("secondary");
-        cancel->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
-
-        auto ok = std::make_unique<Button>();
-        ok->SetText("Apply");
-        ok->AddClass("primary");
-        ok->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCommitClicked(); });
-
-        footer->AddChild(std::move(cancel));
-        footer->AddChild(std::move(ok));
-        m_Window->AddChild(std::move(footer));
-    }
+    m_WidthField = dynamic_cast<FloatField*>(m_Backdrop->FindById("camera-aspect-width"_sid));
+    m_HeightField = dynamic_cast<FloatField*>(m_Backdrop->FindById("camera-aspect-height"_sid));
+    m_Backdrop->FindById("camera-aspect-cancel"_sid)
+        ->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
+    m_Backdrop->FindById("camera-aspect-apply"_sid)
+        ->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCommitClicked(); });
 
     m_Backdrop->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
     {
@@ -108,7 +61,6 @@ CameraCustomAspectModal::CameraCustomAspectModal()
         }
     });
 
-    m_Backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 

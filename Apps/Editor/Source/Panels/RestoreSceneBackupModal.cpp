@@ -1,75 +1,47 @@
 #include "Panels/RestoreSceneBackupModal.h"
 
+#include "Input/KeyCodes.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
-#include "Input/KeyCodes.h"
+
+#include <array>
+#include <memory>
+#include <string_view>
 
 namespace GameEngine
 {
+
+namespace
+{
+constexpr const char* kLayoutAssetPath = "UI/controls/RestoreSceneBackupModal/RestoreSceneBackupModal.uxml";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 4> kRequiredIds = {
+    "restore-backup-title",
+    "restore-backup-message",
+    "restore-backup-discard",
+    "restore-backup-restore",
+};
+} // namespace
 
 RestoreSceneBackupModal::RestoreSceneBackupModal()
 {
     AddClass("modal-overlay");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
 
-    // Backdrop
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
     m_Backdrop = backdrop.get();
-    m_Backdrop->AddClass("modal-backdrop");
     m_Backdrop->SetFocusable(true);
-
-    // Window
-    auto window = std::make_unique<UIElement>();
-    m_Window = window.get();
-    m_Window->AddClass("modal-window");
-    m_Window->AddClass("modal-window-shadow");
-    m_Window->AddClass("modal-window-520");
-
-    // Header
-    {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("modal-header");
-        auto title = std::make_unique<Label>();
-        m_Title = title.get();
-        title->SetText("Restore unsaved changes?");
-        title->AddClass("modal-title");
-        header->AddChild(std::move(title));
-        m_Window->AddChild(std::move(header));
-    }
-
-    // Content
-    {
-        auto content = std::make_unique<UIElement>();
-        content->AddClass("modal-content");
-        auto msg = std::make_unique<Label>();
-        m_Message = msg.get();
-        msg->SetText("This scene has autosaved changes from a previous session.");
-        msg->AddClass("modal-message");
-        content->AddChild(std::move(msg));
-        m_Window->AddChild(std::move(content));
-    }
-
-    // Footer buttons
-    {
-        auto footer = std::make_unique<UIElement>();
-        footer->AddClass("modal-footer");
-
-        auto discard = std::make_unique<Button>();
-        discard->SetText("Discard");
-        discard->AddClass("secondary");
+    m_Title = m_Backdrop->FindById("restore-backup-title"_sid);
+    m_Message = m_Backdrop->FindById("restore-backup-message"_sid);
+    if (auto* discard = dynamic_cast<Button*>(m_Backdrop->FindById("restore-backup-discard"_sid)))
         discard->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnDiscardClicked(); });
-
-        auto restore = std::make_unique<Button>();
-        restore->SetText("Restore");
-        restore->AddClass("primary");
+    if (auto* restore = dynamic_cast<Button*>(m_Backdrop->FindById("restore-backup-restore"_sid)))
         restore->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnRestoreClicked(); });
-
-        footer->AddChild(std::move(discard));
-        footer->AddChild(std::move(restore));
-        m_Window->AddChild(std::move(footer));
-    }
 
     // Enter restores (the safe choice). Deliberately no Escape binding:
     // Discard deletes the autosaved work and must be an explicit click.
@@ -84,12 +56,13 @@ RestoreSceneBackupModal::RestoreSceneBackupModal()
         }
     });
 
-    m_Backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 
 void RestoreSceneBackupModal::Show(const std::string& title, const std::string& message)
 {
+    if (!m_Backdrop)
+        return;
     m_Visible = true;
     if (auto* t = dynamic_cast<Label*>(m_Title))
         t->SetText(title);

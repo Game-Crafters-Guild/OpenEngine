@@ -1,6 +1,6 @@
 #include "TerrainECS/TerrainHeightPageFeature.h"
 
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Logger/Logger.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"

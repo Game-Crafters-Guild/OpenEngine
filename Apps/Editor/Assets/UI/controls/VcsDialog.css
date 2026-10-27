@@ -3,7 +3,7 @@
  * Loaded by VcsCommitDialog.cpp / VcsLogViewer.cpp via
  * RequestSubtreeStyleAssetPath. Both dialogs share the `.vcs-modal` root
  * idiom: a full-screen flex-centered backdrop holding one bounded-width
- * window, matching the editor's ProjectFolderPickerModal / SearchDialog
+ * window, matching the editor's ProjectPickerModal / SearchDialog
  * overlay pattern. Without these rules the dialog roots flow as unstyled
  * full-width strips at the bottom of the UI root.
  *

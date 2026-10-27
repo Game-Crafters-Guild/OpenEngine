@@ -31,7 +31,7 @@ enum class SplinePoolRole : uint32
 // empty slot never select (the inspector compacts on edit; a hole from a
 // hand-edited scene is reported by PoolHasHole, not silently reshuffled).
 // Templated on the array bound because the recipes size their pools from their
-// own kits — tiles at kSplinePoolCapacity, fences at kSplineFencePoolCapacity.
+// own kits.
 template <std::size_t kCapacity>
 inline uint32 ActivePoolCount(const ModelRef (&pool)[kCapacity])
 {

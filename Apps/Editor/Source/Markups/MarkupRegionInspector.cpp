@@ -51,6 +51,8 @@ using Components::MarkupRegionMember;
 
 // Areas from this many square meters up read in hectares.
 constexpr float32 kHectare = 10000.0f;
+// A perimeter reads to a tenth of a meter.
+constexpr int kLengthDecimals = 1;
 
 std::string FormatArea(float32 squareMeters)
 {
@@ -128,7 +130,7 @@ void AddOutlineRows(const InspectorContext& ctx)
     const std::optional<MarkupECS::MarkupFootprint> footprint = MarkupECS::ReadMarkupFootprint(*ctx.World, ctx.Entity);
     if (!footprint || footprint->IsCircle())
         return;
-    AddValueRow(ctx.Parent, "Perimeter", FormatMeters(MarkupECS::RegionOutlinePerimeter(footprint->Ring)),
+    AddValueRow(ctx.Parent, "Perimeter", FormatMeters(MarkupECS::RegionOutlinePerimeter(footprint->Ring), kLengthDecimals),
                 "The outline's length on the ground plane");
     AddValueRow(ctx.Parent, "Outline area", FormatArea(MarkupECS::RegionOutlineArea(footprint->Ring)),
                 "The area the outline encloses on the ground plane, before its members apply");

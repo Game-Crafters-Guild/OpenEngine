@@ -21,7 +21,7 @@
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
 #include "UI/EditorSearchBars.h"
-#include "UI/Interaction/FocusIsInside.h"
+#include "UI/Interaction/FocusQueries.h"
 #include "Types/StringId.h"
 #include "Core/Engine.h"
 #include "Logger/Logger.h"

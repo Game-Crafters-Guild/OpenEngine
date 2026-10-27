@@ -8,7 +8,7 @@
 #include <new>
 
 #include "Components/Rendering/SkyEnvironment.h"
-#include "Inspectors/SkySunCurveReference.h"
+#include "Inspectors/SkySun/SkySunCurveReference.h"
 
 using namespace GameEngine;
 

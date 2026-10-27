@@ -229,6 +229,11 @@ class RenderPipelineInstance
   private:
     friend struct ViewDeclare;
 
+    // Imports and publishes Names::View::BloomSampleDelta, a pool texture of the single-sample resolve's
+    // size and format. Nothing is created when `resolve` is invalid or multisampled.
+    void DeclareBloomSampleDelta(Rendering::RenderGraph::RGFrame& frame, Rendering::ViewId viewId,
+                                 Rendering::RenderGraph::RGTexture resolve);
+
     // RenderGraph path: rg-free node (re)instantiation on blueprint dirty (the
     // EnsureBuilt branch is old-graph-coupled via node->Disable(rg); a
     // Declare-driven instance owns no old-graph passes to disable).

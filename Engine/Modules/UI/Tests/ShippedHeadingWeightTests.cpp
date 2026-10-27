@@ -72,9 +72,9 @@ constexpr ShippedRuleCase kMediumRules[] = {
     {"panels/DiffPanel.css", R"(<label id="subject" class="diff-scene-entity-key">Camera</label>)"},
     {"controls/InspectorNotice/InspectorNotice.css", R"(<label id="subject" class="inspector-notice-title">Waiting</label>)"},
     {"controls/CollapsibleInfoCard/CollapsibleInfoCard.css", R"(<label id="subject" class="editor-info-card-toggle">More</label>)"},
-    {"controls/ProjectPicker.css",
+    {"controls/ProjectPicker/ProjectPicker.css",
      R"(<uielement id="shown" class="project-picker-modal"><label id="subject" class="project-card-title">Harbor Town</label></uielement>)"},
-    {"controls/VideoPlayerModal.css", R"(<label id="subject" class="vpm-title">Intro.mp4</label>)"},
+    {"controls/VideoPlayerModal/VideoPlayerModal.css", R"(<label id="subject" class="vpm-title">Intro.mp4</label>)"},
 };
 
 std::string ShippedCss(const char* sheet)

@@ -33,6 +33,7 @@ class ThumbnailService; // or IconProvider; see docs naming discussion
 class SmartFolderController;
 struct EditorContext;
 namespace Editor { struct CodeAssetDescriptor; }
+namespace UI::Interaction { struct DropFeedback; struct DropRequest; }
 
 // Stable per-column keys for the Assets list TableView, shared by the panel (which builds
 // the TrackDef column model) and the controller (whose keyed cell binder dispatches on them).
@@ -300,6 +301,20 @@ private:
     void CheckPendingInspectorSelect();
     void ClearAssetItemSelectionForDatasetSwitch();
     std::shared_ptr<void> HoldInspectorAssetFireSuppression();
+
+    // The folder a drop on a view lands in. Refusal is set, and Path empty, where the view takes no drop.
+    struct DropFolder
+    {
+        std::filesystem::path Path;
+        const char* Refusal = nullptr;
+    };
+    DropFolder ResolveTreeDropFolder(const UI::Interaction::DropRequest& request) const;
+    DropFolder ResolveGridDropFolder(const UI::Interaction::DropRequest& request) const;
+    DropFolder ResolveListDropFolder(const UI::Interaction::DropRequest& request) const;
+    // Asset files move or copy into the folder; any other drag goes to its AssetsFolderDropRegistry acceptor.
+    UI::Interaction::DropFeedback CanDropOnFolder(const UI::Interaction::DropRequest& request,
+                                                  const DropFolder& folder) const;
+    void PerformDropOnFolder(const UI::Interaction::DropRequest& request, const DropFolder& folder);
 
     // Phantom-row context-menu callback. Delegates the actual world walk +
     // schema-driven mutation to MissingAssetTracker (where ECS knowledge

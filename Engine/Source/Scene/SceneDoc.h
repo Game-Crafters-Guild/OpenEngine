@@ -209,6 +209,18 @@ bool ReadTextFile(const std::filesystem::path& p, std::string& out);
 void SetError(const std::filesystem::path& file, int line, const std::string& msg);
 
 // Scene identities and addresses.
+// The id of a prefab file's root, the entity an instance's root is.
+inline constexpr std::string_view kPrefabRootId = "root";
+
+// The longest scene identity a SceneEntityTag holds.
+inline constexpr std::size_t kMaxSceneTagLength = sizeof(Components::SceneEntityTag::value) - 1;
+
+// A long scene identity is 16 hex digits of its path's hash and '~' before the local id.
+inline constexpr std::size_t kHashedSceneTagHeadLength = 17;
+
+// The longest id in a prefab file: a hashed scene identity keeps it whole.
+inline constexpr std::size_t kMaxPrefabIdLength = kMaxSceneTagLength - kHashedSceneTagHeadLength;
+
 Components::SceneEntityTag MakeTag(const std::string& s);
 std::string SlugifyDisplayNameForSceneEntityId(std::string_view raw);
 std::string AllocateUniqueSceneEntityId(const std::string& preferred, std::unordered_set<std::string>& used);

@@ -9,7 +9,7 @@
 #include "UI/Controls/SearchFieldWithFilter.h"
 #include "UI/Controls/Slider.h"
 #include "UI/Controls/TextField.h"
-#include "UI/Interaction/FocusIsInside.h"
+#include "UI/Interaction/FocusQueries.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIElement.h"

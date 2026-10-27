@@ -98,7 +98,7 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Interaction/PointerManipulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Interaction/ContextMenuManipulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Interaction/DismissablePopup.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Interaction/FocusIsInside.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Interaction/FocusQueries.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Interaction/ItemResizeGesture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Interaction/DragDropManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Interaction/DragDropOverlay.cpp
@@ -615,6 +615,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextFieldPointerTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FieldCaptionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FloatFieldDragToChangeTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FloatFieldDisplayTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/PointerLockTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/TextInputSelectionTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ReleaseFocusHandoffTests.cpp
@@ -661,6 +662,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UIElementWeakRefTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/AttachDetachEventTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FocusReleaseOnRemovalTests.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/FocusIsInTextInputTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ControlValueEventTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UIManagerOrderTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UIMouseButtonDispatchTests.cpp

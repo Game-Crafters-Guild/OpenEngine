@@ -180,7 +180,7 @@ WaterFillRun BuildWaterFillRun(ECS::World& world,
     SG::SplineFillParams params;
     params.MaxHalfWidth = reach;
     params.EdgeDrop = std::max(0.0f, recipe.EdgeDrop);
-    params.SeaLevelFloor = recipe.SeaLevelFloor;
+    params.FloorHeight = recipe.FloorHeight;
     // MaxWetCorners is left at the field's own default ON PURPOSE. Passing the
     // WINDOW budget here aliases the two guards, and since wet corners are a
     // subset of the window the water guard could then never fire.

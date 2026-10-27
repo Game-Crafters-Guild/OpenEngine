@@ -31,7 +31,6 @@
 #include "ECSModules/Rendering/SkeletonStore.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
 #include "SceneView/SelectionOutlineContributors.h"
-#include "Editor/EditorPaths.h"
 #include "Editor/Settings/SceneViewSettings.h"
 #include "Engine/Rendering/Camera.h"
 #include "Engine/Rendering/MeshGPURegistry.h"
@@ -942,11 +941,9 @@ void SceneViewController::DeclareOverlaysRG(RenderGraph::RGFrame& frame, RenderG
         if (!m_GameUI)
             // The Scene View overlays onto the editor's shared scene+gizmos target,
             // so a Fullscreen UIDocument must NOT clear it (neverClearTarget=true).
-            // Font from the staged editor assets next to Editor.exe.
             m_GameUI = GameUIHost::CreateForHost(
                 device, &EngineCore::GetInstance().GetAssetManager(),
-                &EngineCore::GetInstance().GetJobSystem(),
-                Editor::GetEditorGlobalPaths().installAssetsRoot, /*neverClearTarget=*/true);
+                &EngineCore::GetInstance().GetJobSystem(), /*neverClearTarget=*/true);
         m_GameUiScale.Apply(*m_GameUI->GetUIManager());
         // The HUD composites onto the scene pipeline's finalColor: its
         // declared space is the PRODUCER's stamp (#784), not the display's.

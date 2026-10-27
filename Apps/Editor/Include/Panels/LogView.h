@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,7 @@ class SelectionModel;
  * @brief The Log panel's list: one row per entry the model's filters show, newest at the bottom.
  *
  * Messages arrive on any thread through AddMessage and reach the model on the main thread in
- * FlushPendingMessages. A row shows the severity glyph, the time and the message's first line; each
+ * FlushPendingMessages. A row shows the severity glyph, the time, the channel and the message's first line; each
  * row is declared in UI/panels/LogPanel/LogRow.uxml. The list's item id is the entry's sequence, so a
  * selection stays on its entry when old entries are dropped. Main thread only, except AddMessage.
  */
@@ -54,6 +55,7 @@ public:
     const LogModel& GetModel() const { return m_Model; }
     /// Changes the model's filters, rebinds the rows and drops a selection the filters now hide.
     void SetSeverityShown(LogModel::Severity severity, bool shown);
+    void SetChannelsShown(std::span<const uint16_t> channels, bool shown);
     void SetSearch(std::string_view text);
     void SetSearchField(LogModel::SearchField field);
 

@@ -692,6 +692,13 @@ class WorkStealingThreadPool
     size_t GetCurrentWorkerId() const;
 
     /**
+     * @brief Destroys the result and callbacks of every Completed or Failed task that only the
+     * registry holds. The engine calls it while a native module image is still mapped, before the
+     * unload takes away the code those results and callbacks came from. A task a handle holds stays.
+     */
+    void ReleaseFinishedTasks();
+
+    /**
      * @brief Shut the pool down.
      *
      * Order (each step depends on the previous): gate -> join compute workers

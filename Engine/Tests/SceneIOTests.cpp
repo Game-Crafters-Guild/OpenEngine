@@ -1523,7 +1523,7 @@ TEST(SceneIO, ReflectionSchema_SplinePlacementElementKeys)
         "[guid=\"000000aa-0000-0000-0000-000000000003\"]", &err)) << err;
 }
 
-// SplineFence carries five pools, the span-override table AND the enum fields
+// SplineFence carries its parts list, the span-override table AND the enum fields
 // the fence recipe needs. Every authored value below differs from its default,
 // so a field that failed to serialize would load back as its default and fail
 // the comparison.
@@ -1537,17 +1537,14 @@ TEST(SceneIO, SaveThenLoad_RoundTripSplineFence)
     w1.AddComponentImmediate(e, Components::SceneEntityTag{{'f', 'e', 'n', 'c', 'e', '\0'}});
 
     Components::SplineFence authored{};
-    authored.PostPool[0] = PoolTestRef(11);
-    authored.PostPool[1] = PoolTestRef(12);
-    authored.SpanPool[0] = PoolTestRef(21);
-    authored.SpanPool[1] = PoolTestRef(22);
-    authored.SpanPool[Components::kSplineFencePoolCapacity - 1] = PoolTestRef(27);
-    authored.GatePool[0] = PoolTestRef(31);
-    authored.CrestPool[0] = PoolTestRef(41);
-    authored.CrestPool[1] = PoolTestRef(42);
-    authored.CrestPool[Components::kSplineFencePoolCapacity - 1] = PoolTestRef(47);
-    authored.CapPool[0] = PoolTestRef(51);
-    authored.CapPool[1] = PoolTestRef(52);
+    using Components::SplineFencePartKind;
+    authored.Parts[0] = {PoolTestRef(11), SplineFencePartKind::Post};
+    authored.Parts[1] = {PoolTestRef(21), SplineFencePartKind::Span};
+    authored.Parts[2] = {PoolTestRef(22), SplineFencePartKind::Span};
+    authored.Parts[3] = {PoolTestRef(31), SplineFencePartKind::Gate};
+    authored.Parts[4] = {PoolTestRef(41), SplineFencePartKind::Crest};
+    authored.Parts[5] = {{}, SplineFencePartKind::Cap};
+    authored.Parts[Components::kSplineFenceMaxParts - 1] = {PoolTestRef(52), SplineFencePartKind::Cap};
     authored.PostPitch = 3.125f;
     authored.CrestPitch = 2.75f;
     authored.ConformMode = Components::SplinePlacementConform::Height;
@@ -1562,7 +1559,7 @@ TEST(SceneIO, SaveThenLoad_RoundTripSplineFence)
     // slot between them: the table must come back slot-exact.
     authored.Overrides[1] = {3u, 2u, Components::SplineSpanOverrideKind::Gate, 1u};
     authored.Overrides[Components::kSplineFenceMaxSpanOverrides - 1u] = {
-        7u, 0u, Components::SplineSpanOverrideKind::ExplicitPiece, 4u};
+        7u, 0u, Components::SplineSpanOverrideKind::ExplicitPart, 4u};
     w1.AddComponentImmediate(e, authored);
 
     ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
@@ -1576,14 +1573,8 @@ TEST(SceneIO, SaveThenLoad_RoundTripSplineFence)
     ASSERT_NE(loaded, nullptr);
 
     // Targeted checks first for a readable failure...
-    for (std::uint32_t i = 0; i < Components::kSplineFencePoolCapacity; ++i)
-    {
-        EXPECT_EQ(loaded->PostPool[i], authored.PostPool[i]) << "PostPool[" << i << "]";
-        EXPECT_EQ(loaded->SpanPool[i], authored.SpanPool[i]) << "SpanPool[" << i << "]";
-        EXPECT_EQ(loaded->GatePool[i], authored.GatePool[i]) << "GatePool[" << i << "]";
-        EXPECT_EQ(loaded->CrestPool[i], authored.CrestPool[i]) << "CrestPool[" << i << "]";
-        EXPECT_EQ(loaded->CapPool[i], authored.CapPool[i]) << "CapPool[" << i << "]";
-    }
+    for (std::uint32_t i = 0; i < Components::kSplineFenceMaxParts; ++i)
+        EXPECT_EQ(loaded->Parts[i], authored.Parts[i]) << "Parts[" << i << "]";
     EXPECT_FLOAT_EQ(loaded->PostPitch, authored.PostPitch);
     EXPECT_FLOAT_EQ(loaded->CrestPitch, authored.CrestPitch);
     EXPECT_FLOAT_EQ(loaded->SlopeBlend, authored.SlopeBlend);
@@ -1665,7 +1656,7 @@ TEST(SceneIO, SaveThenLoad_RoundTripSplineExtrude)
     authored.WidthScale = Components::SplineExtrudeWidthScale::Uniform;
     authored.WidthMode = Components::SplineExtrudeWidthMode::FitToBanks;
     authored.MaxHalfWidth = 21.5f;
-    authored.SeaLevelFloor = -12.5f;
+    authored.FloorHeight = -12.5f;
     authored.EndTaperMetres = 6.25f;
     authored.ConformMode = Components::SplinePlacementConform::None;
     authored.ConformTarget = Components::SplineConformTarget::TerrainOnly;
@@ -1780,7 +1771,7 @@ TEST(SceneIO, SaveThenLoad_SplineRecipeOverrideMaterialSetAndUnset)
     placementSet.OverrideMaterial = MaterialTestRef(41);
     w1.AddComponentImmediate(set, placementSet);
     Components::SplineFence fenceSet{};
-    fenceSet.SpanPool[0] = PoolTestRef(2);
+    fenceSet.Parts[0].Mesh = PoolTestRef(2);
     fenceSet.OverrideMaterial = MaterialTestRef(42);
     w1.AddComponentImmediate(set, fenceSet);
 
@@ -1791,7 +1782,7 @@ TEST(SceneIO, SaveThenLoad_SplineRecipeOverrideMaterialSetAndUnset)
     placementUnset.StraightPool[0] = PoolTestRef(3);
     w1.AddComponentImmediate(unset, placementUnset);
     Components::SplineFence fenceUnset{};
-    fenceUnset.SpanPool[0] = PoolTestRef(4);
+    fenceUnset.Parts[0].Mesh = PoolTestRef(4);
     w1.AddComponentImmediate(unset, fenceUnset);
 
     ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
@@ -1830,7 +1821,7 @@ TEST(SceneIO, SaveThenLoad_SplineFenceOverrideLinesAndUntouchedTable)
     ASSERT_TRUE(gated.IsValid());
     w1.AddComponentImmediate(gated, Components::SceneEntityTag{{'o', 'v', 'r', '\0'}});
     Components::SplineFence withGate{};
-    withGate.SpanPool[0] = PoolTestRef(51);
+    withGate.Parts[0].Mesh = PoolTestRef(51);
     withGate.Overrides[0] = {2u, 1u, Components::SplineSpanOverrideKind::Gate, 0u};
     w1.AddComponentImmediate(gated, withGate);
 
@@ -1838,7 +1829,7 @@ TEST(SceneIO, SaveThenLoad_SplineFenceOverrideLinesAndUntouchedTable)
     ASSERT_TRUE(plain.IsValid());
     w1.AddComponentImmediate(plain, Components::SceneEntityTag{{'p', 'l', 'n', '\0'}});
     Components::SplineFence withoutOverrides{};
-    withoutOverrides.SpanPool[0] = PoolTestRef(52);
+    withoutOverrides.Parts[0].Mesh = PoolTestRef(52);
     w1.AddComponentImmediate(plain, withoutOverrides);
 
     ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
@@ -1864,10 +1855,10 @@ TEST(SceneIO, SaveThenLoad_SplineFenceOverrideLinesAndUntouchedTable)
     EXPECT_TRUE(*loadedPlain == withoutOverrides);
 }
 
-// A pool hole must round-trip slot-exact for the fence too: null elements omit
-// their line and load back empty, so the file preserves the authored layout and
-// the ACTIVE-prefix rule stays in selection, never in the format.
-TEST(SceneIO, SaveThenLoad_SplineFencePoolHoleSurvives)
+// The parts list round-trips slot-exact: a fence whose first part was removed
+// loads without it rather than with a new fence's default Span part, and an
+// empty slot before a part stays empty.
+TEST(SceneIO, SaveThenLoad_SplineFenceEmptyPartSlotsSurvive)
 {
     const auto scenePath = MakeTempPath("roundtrip_spline_fence_hole.scene");
 
@@ -1877,9 +1868,8 @@ TEST(SceneIO, SaveThenLoad_SplineFencePoolHoleSurvives)
     w1.AddComponentImmediate(e, Components::SceneEntityTag{{'h', 'o', 'l', 'e', 'd', '\0'}});
 
     Components::SplineFence authored{};
-    authored.SpanPool[0] = PoolTestRef(41);
-    // SpanPool[1] deliberately empty.
-    authored.SpanPool[2] = PoolTestRef(43);
+    authored.Parts[0] = {};
+    authored.Parts[2] = {PoolTestRef(43), Components::SplineFencePartKind::Crest};
     w1.AddComponentImmediate(e, authored);
 
     ASSERT_TRUE(Scene::SaveSceneToFile(w1, scenePath, Scene::SaveOptions{}));
@@ -1891,9 +1881,9 @@ TEST(SceneIO, SaveThenLoad_SplineFencePoolHoleSurvives)
     ASSERT_TRUE(e2.IsValid());
     const auto* loaded = w2.GetComponent<Components::SplineFence>(e2);
     ASSERT_NE(loaded, nullptr);
-    EXPECT_EQ(loaded->SpanPool[0], authored.SpanPool[0]);
-    EXPECT_TRUE(loaded->SpanPool[1].IsNull());
-    EXPECT_EQ(loaded->SpanPool[2], authored.SpanPool[2]);
+    EXPECT_EQ(loaded->Parts[0].Kind, Components::SplineFencePartKind::None);
+    EXPECT_EQ(loaded->Parts[1].Kind, Components::SplineFencePartKind::None);
+    EXPECT_EQ(loaded->Parts[2], authored.Parts[2]);
 }
 
 namespace

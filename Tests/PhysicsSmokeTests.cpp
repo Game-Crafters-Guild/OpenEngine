@@ -3,7 +3,7 @@
 #include "EngineLogCapture.h"
 #include "PagedTiledTerrain.h"
 #include "PageStreaming/HeightPageOverlay.h"
-#include "PageStreaming/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
 #include "Physics/PhysicsWorld.h"

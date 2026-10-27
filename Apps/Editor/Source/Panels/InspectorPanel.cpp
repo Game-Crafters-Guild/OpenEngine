@@ -12,6 +12,7 @@
 #include "Panels/ScriptVariablesEmptyState.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <chrono>
@@ -26,6 +27,7 @@
 #include <set>
 #include <span>
 #include <sstream>
+#include <string_view>
 #include <type_traits>
 
 #include "Editor/EditorTreeTitleIconVars.h"
@@ -45,6 +47,7 @@
 
 #include "Panels/ConfirmActionModal.h"
 #include "Panels/SettingsPanel.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/Foldout.h"
@@ -62,6 +65,7 @@
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Thumbnails/IThumbnailProvider.h"
+#include "UI/Interaction/FocusQueries.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
@@ -207,6 +211,15 @@ std::size_t MaterialSlotOrderKeyHash::operator()(const MaterialSlotOrderKey& k) 
 
 namespace
 {
+
+// The end of the header row: the override badge and the selection history arrows.
+constexpr const char* kHeaderTrailingLayoutAssetPath = "UI/inspectors/EntityHeader/EntityHeader.uxml";
+constexpr std::array<std::string_view, 4> kHeaderTrailingRequiredIds = {
+    "inspector-header-badge",
+    "inspector-header-history",
+    "inspector-history-back",
+    "inspector-history-forward",
+};
 
 // Icon for an Add Component category submenu row.
 const char* CategoryIcon(const std::string& category)
@@ -1053,7 +1066,8 @@ static bool TryFindComponentTypeIdByName(const std::string& name, ECS::Component
     }
     // Plugin-registered display names (clipboard paste / preset resolution
     // must round-trip package components, e.g. "Tree Generator").
-    for (const auto& [typeId, traits] : Editor::EditorComponentTraitsRegistry::Get().Snapshot())
+    const auto registered = Editor::EditorComponentTraitsRegistry::Get().Snapshot();
+    for (const auto& [typeId, traits] : *registered)
     {
         if (traits.DisplayName == name)
         {
@@ -2486,6 +2500,9 @@ void InspectorPanel::ClearContent()
     m_HistoryForwardButton = nullptr;
     m_HeaderIconHost = nullptr;
     m_HeaderTitleField = nullptr;
+    m_EntityNameHeader = nullptr;
+    m_EntityNameField = nullptr;
+    m_EntityRefreshAfterTextEdit = false;
     m_SectionTypeIds.clear();
     m_SectionDragSource = nullptr;
     m_SectionDragIndicatorTarget = nullptr;
@@ -2546,6 +2563,30 @@ void InspectorPanel::RequestEntityRefresh()
     // A dropped action never runs to clear the latch, and every later request would be ignored.
     if (!posted)
         m_EntityRefreshPosted = false;
+}
+
+void InspectorPanel::RequestEntityRefreshAfterTextEdit()
+{
+    m_EntityRefreshAfterTextEdit = true;
+}
+
+bool InspectorPanel::HasTextEditFocus() const
+{
+    const UIManager* ui = GetOwnerManager();
+    return ui && (UI::FocusIsInTextInput(*ui, m_TopRoot) || UI::FocusIsInTextInput(*ui, m_ContentRoot));
+}
+
+void InspectorPanel::RefreshOverrideMarks()
+{
+    if (!m_World || !m_World->IsValid(m_Entity) || m_Entities.size() > 1)
+        return;
+    if (m_EntityNameHeader && m_EntityNameField)
+        UpdateEntityNameOverrideMark(*m_EntityNameHeader, *m_EntityNameField, *m_World, m_Entity);
+    for (const auto& [section, typeId] : m_SectionTypeIds)
+        section->SetOverridden(InspectorRegistry::Get().QueryComponentOverrides(*m_World, m_Entity, typeId).Overridden);
+    for (auto& entry : m_SectionRefreshCallbacks)
+        for (auto& callback : entry.second.OverrideMarks)
+            callback();
 }
 
 void InspectorPanel::ReShowAssetAfterItsReload()
@@ -2725,46 +2766,31 @@ void InspectorPanel::RecordInspectorHistory(InspectorSelectionHistoryEntry entry
     }
 }
 
-void InspectorPanel::MountHistoryButtons(UIElement& headerContainer)
+void InspectorPanel::MountHeaderTrailingSlot(UIElement& headerContainer)
 {
-    auto historyRow = std::make_unique<UIElement>();
-    historyRow->SetId("inspector-header-history");
-    historyRow->AddClass("inspector-header-history");
-    historyRow->Overrides()
-        .Set(Style::Display, DisplayMode::Flex)
-        .Set(Style::FlexDir, FlexDirection::Row)
-        .Set(Style::AlignItems, AlignItems::Center)
-        .Set(Style::Gap, StyleLength::Px(2.0f))
-        .Set(Style::FlexShrink, 0.0f);
-    m_HistoryButtonsRow = historyRow.get();
-
-    auto backBtn = std::make_unique<Button>();
-    backBtn->SetId("inspector-history-back");
-    backBtn->AddClass("icon-button");
-    backBtn->AddClass("inspector-header-history-icon");
-    backBtn->AddClass("inspector-history-back-btn");
-    backBtn->SetText("");
-    backBtn->SetTooltip("Previous selection");
-    backBtn->Overrides().Set(Style::FlexShrink, 0.0f);
-    m_HistoryBackButton = backBtn.get();
-    backBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&)
-                        { NavigateSelectionHistoryBack(); });
-
-    auto fwdBtn = std::make_unique<Button>();
-    fwdBtn->SetId("inspector-history-forward");
-    fwdBtn->AddClass("icon-button");
-    fwdBtn->AddClass("inspector-header-history-icon");
-    fwdBtn->AddClass("inspector-history-forward-btn");
-    fwdBtn->SetText("");
-    fwdBtn->SetTooltip("Next selection");
-    fwdBtn->Overrides().Set(Style::FlexShrink, 0.0f);
-    m_HistoryForwardButton = fwdBtn.get();
-    fwdBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&)
-                       { NavigateSelectionHistoryForward(); });
-
-    historyRow->AddChild(std::move(backBtn));
-    historyRow->AddChild(std::move(fwdBtn));
-    headerContainer.AddChild(std::move(historyRow));
+    std::unique_ptr<UIElement> slot = Editor::ControlLayoutLoader::Load(kHeaderTrailingLayoutAssetPath,
+                                                                        kHeaderTrailingRequiredIds);
+    if (!slot)
+        return;
+    m_HistoryButtonsRow = slot->FindById("inspector-header-history"_sid);
+    m_HistoryBackButton = dynamic_cast<Button*>(slot->FindById("inspector-history-back"_sid));
+    m_HistoryForwardButton = dynamic_cast<Button*>(slot->FindById("inspector-history-forward"_sid));
+    if (m_HistoryBackButton)
+    {
+        m_HistoryBackButton->SetTooltip("Previous selection");
+        m_HistoryBackButton->RegisterEventHandler(kEventButtonClick,
+                                                  [this](UIEvent&) { NavigateSelectionHistoryBack(); });
+    }
+    if (m_HistoryForwardButton)
+    {
+        m_HistoryForwardButton->SetTooltip("Next selection");
+        m_HistoryForwardButton->RegisterEventHandler(kEventButtonClick,
+                                                     [this](UIEvent&) { NavigateSelectionHistoryForward(); });
+    }
+    headerContainer.AddChild(std::move(slot));
+    // The name mark writes the badge, so it runs here, after the badge exists.
+    if (&headerContainer == m_EntityNameHeader && m_EntityNameField && m_World)
+        UpdateEntityNameOverrideMark(headerContainer, *m_EntityNameField, *m_World, m_Entity);
 }
 
 namespace
@@ -2886,7 +2912,7 @@ void InspectorPanel::BuildSimpleTopHeader(const std::string& titleText,
     m_HeaderTitleField = title.get();
     headerContainer->AddChild(std::move(title));
 
-    MountHistoryButtons(*headerContainer);
+    MountHeaderTrailingSlot(*headerContainer);
 
     // Reserve space where the entity enable/disable toggle would sit so the arrows
     // keep a consistent horizontal position across all inspector modes.
@@ -3622,6 +3648,7 @@ void InspectorPanel::BuildComponentSectionBody(InspectorSection* section, ECS::C
     SectionRefreshCallbacks& refreshCallbacks = m_SectionRefreshCallbacks[typeId];
     ctx.SimulationRefreshCallbacks = &refreshCallbacks.Simulation;
     ctx.FrameRefreshCallbacks = &refreshCallbacks.Frame;
+    ctx.OverrideMarkRefreshCallbacks = &refreshCallbacks.OverrideMarks;
     ctx.PingAsset = m_PingAsset;
     ctx.PingAssetPreserveInspector = m_PingAssetPreserveInspector;
     ctx.SelectEntity = m_SelectEntity;
@@ -4158,6 +4185,11 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
             e.kind = Editor::EditorChangeNotifications::ChangeKind::Commit;
             m_ChangeNotifications->NotifyWorldStructureChanged(e); });
         headerContainer->AddChild(std::move(headerField));
+        if (!isMultiEdit)
+        {
+            m_EntityNameHeader = headerContainer.get();
+            m_EntityNameField = headerFieldRaw;
+        }
     }
     else
     {
@@ -4167,8 +4199,9 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
         headerContainer->AddChild(std::move(header));
     }
 
-    // Selection history arrows, rendered between the name and the toggle.
-    MountHistoryButtons(*headerContainer);
+    // The badge and the selection history arrows, between the name and the toggle. The mount also sets
+    // the name's override mark on the badge.
+    MountHeaderTrailingSlot(*headerContainer);
 
     // Toggle control for enable/disable: the entity's own state.
     ECS::Entity entityObj(m_World, entity);
@@ -4211,6 +4244,21 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
     // multi-line banner in `inspector-top` would shorten the section area for
     // every entity, generated or not.
     Editor::AddGeneratedEntityNotice(m_ContentRoot, *m_World, entity, m_SelectEntity);
+
+    InspectorContext bannerContext{};
+    bannerContext.Parent = m_ContentRoot;
+    bannerContext.World = m_World;
+    bannerContext.Entity = entity;
+    bannerContext.Entities = m_Entities;
+    bannerContext.Undo = m_Undo;
+    bannerContext.ChangeNotifications = m_ChangeNotifications;
+    bannerContext.PingAsset = m_PingAsset;
+    bannerContext.SelectEntity = m_SelectEntity;
+    bannerContext.EditorCtx = m_Context;
+    bannerContext.RequestInspectorRefresh = [this]() { RequestEntityRefreshAfterTextEdit(); };
+    bannerContext.RefreshOverrideMarks = [this]() { RefreshOverrideMarks(); };
+    for (const InspectorFn& banner : InspectorRegistry::Get().GetEntityBanners(EntityBannerPlacement::BeforeComponents))
+        banner(bannerContext);
 
     SyncInspectorHistoryButtonState();
 
@@ -4370,6 +4418,14 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
             sectionRaw->SetHeaderTooltip(traits.InspectorTooltip);
         else if (const char* tip = ComponentTooltip(typeId))
             sectionRaw->SetHeaderTooltip(tip);
+        if (!isMultiEdit)
+        {
+            const ComponentOverrides overrides =
+                InspectorRegistry::Get().QueryComponentOverrides(*m_World, entity, typeId);
+            sectionRaw->SetOverridden(overrides.Overridden);
+            if (!overrides.Badge.empty())
+                sectionRaw->SetHeaderBadge(overrides.Badge, overrides.BadgeTooltip, InspectorSection::BadgeKind::Neutral);
+        }
         if (hostSection)
         {
             sectionRaw->AddClass("inspector-hosted-section");
@@ -5148,6 +5204,10 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
             }
         }
     }
+
+    if (!isMultiEdit)
+        for (const InspectorFn& banner : InspectorRegistry::Get().GetEntityBanners(EntityBannerPlacement::AfterComponents))
+            banner(bannerContext);
 
     // Enable drag-on-label for all FloatField/IntField rows in component sections
     InspectorDrag::AutoSetupDragForInspector(m_ContentRoot);
@@ -6739,6 +6799,12 @@ void InspectorPanel::TickSimulationRefresh()
 
     // The derived state lands with the hierarchy pass, a frame after the switch that caused it.
     SyncEntityActivityPresentation();
+
+    if (m_EntityRefreshAfterTextEdit && !HasTextEditFocus())
+    {
+        m_EntityRefreshAfterTextEdit = false;
+        RequestEntityRefresh();
+    }
 
     for (auto& entry : m_SectionRefreshCallbacks)
     {

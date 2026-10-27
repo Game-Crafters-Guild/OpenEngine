@@ -373,16 +373,30 @@
 	border-radius: 4px;
 }
 
+/* The end of the header row (UI/inspectors/EntityHeader/EntityHeader.uxml): the override badge, then the
+   history arrows, spaced as the row spaces its items. A hidden badge takes no gap. */
+.inspector-header-trailing {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
 /* Entity selection history: 24×24 glyph in 36×36 hit area, no fill. */
 .inspector-header-history {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
 	flex-shrink: 0;
 	align-self: center;
-	gap: 0;
+	gap: 2px;
 	margin-right: 20px;
 }
 
 .inspector-header-history .icon-button.inspector-header-history-icon,
 .inspector-header-history button.icon-button.inspector-header-history-icon {
+	flex-shrink: 0;
 	width: 36px;
 	height: 36px;
 	min-width: 36px;
@@ -667,6 +681,7 @@
 	flex-direction: row;
 	align-items: center;
 	padding: 4px 16px 4px 20px;
+	padding-left: calc(20px - var(--inspector-override-edge, 0px));
 	margin: 0 -8px;
 	cursor: pointer;
 	gap: 0;
@@ -1275,6 +1290,7 @@ button.flare-element-header-menu:focus,
 .inspector-filled-sections .inspector-section-header-row {
 	margin: 0;
 	padding: 5px 12px 5px 12px;
+	padding-left: calc(12px - var(--inspector-override-edge, 0px));
 	background-color: #222222;
 	border-radius: 0;
 }
@@ -1325,6 +1341,9 @@ button.flare-element-header-menu:focus,
 .inspector-filled-sections {
 	--inspector-section-dot-margin-left: -4px;
 	--inspector-section-dot-margin-right: 4px;
+	--inspector-row-override-mark-left: -12px;
+	--inspector-gutter-offset: 0px;
+	--inspector-header-overridden-padding-left: 5px;
 }
 
 .inspector-filled-sections .inspector-section-icon {
@@ -1346,9 +1365,71 @@ button.flare-element-header-menu:focus,
 	gap: 8px;
 }
 
+/* A full-width preview of what the rows around it set (InspectorUI::AddPreviewRow). It keeps its
+   height in a crowded column, as a notice does. */
+.inspector-preview-row {
+	display: flex;
+	flex-direction: column;
+	flex-shrink: 0;
+	margin: 0 0 6px 0;
+}
+
 /* Single source for vertical spacing between rows (component inspectors + embedded Material UI). */
 .inspector-panel .inspector-row {
 	margin-bottom: var(--inspector-row-gap);
+}
+
+/* The override edge marks a value that differs from the entity's source. It is 3 px wide, at the x of
+   the section headers' left edge in every look, and takes no space from the content. A header row
+   draws it as its left border and takes the width back from its padding. */
+.inspector-section-header-row-overridden {
+	--inspector-override-edge: 3px;
+	border-left: 3px solid var(--inspector-override-edge-color, var(--ui_color_prefab));
+}
+
+/* A row's edge is its own element, so the row's layout stays as it is. */
+.inspector-override-mark {
+	position: absolute;
+	left: 0px;
+	top: 0px;
+	bottom: 0px;
+	width: 3px;
+	background-color: var(--ui_color_prefab);
+	pointer-events: none;
+}
+
+/* A row's edge moves left past the section body's padding and the header row's offset. */
+.inspector-override-mark-row {
+	left: var(--inspector-row-override-mark-left, -36px);
+}
+
+.inspector-label-overridden {
+	font-weight: bold;
+}
+
+.inspector-header-overridden {
+	font-weight: bold;
+}
+
+/* The entity header clips its children, so its edge is its own left border, moved out to the gutter:
+   --inspector-gutter-offset is the x of the gutter from the left of an element in the Inspector's
+   padding. The padding keeps the content in place. */
+.inspector-header-container-overridden {
+	margin-left: var(--inspector-gutter-offset, -8px);
+	padding-left: var(--inspector-header-overridden-padding-left, 13px);
+	border-left: 3px solid var(--ui_color_prefab);
+}
+
+/* A faded section reads as a component the entity does not have. Its edge is muted, so it does not
+   read as one bar with the edge of an overridden header above it. */
+.inspector-section-faded {
+	--inspector-override-edge-color: var(--ui_color_text_secondary);
+	--inspector-section-title: var(--ui_color_text_secondary);
+	--inspector-section-title-hover: var(--ui_color_text_secondary);
+}
+
+.inspector-section-icon-faded {
+	opacity: 0.5;
 }
 
 /* Buttons in inspector rows must not shrink so their text stays visible */
@@ -3226,7 +3307,7 @@ button.inspector-button.inspector-new-material-button,
 
 /* Preserve the enabled-state contrast while keeping whole-row hover feedback. */
 .inspector-section > .inspector-section-header-row > .inspector-section-header {
-    color: #DDDDDD;
+    color: var(--inspector-section-title, #DDDDDD);
 }
 .inspector-section > .inspector-section-header-row:hover > .inspector-section-header {
     color: var(--inspector-section-title-hover, #FFFFFF);

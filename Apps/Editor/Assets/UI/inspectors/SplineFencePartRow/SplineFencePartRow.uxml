@@ -1,0 +1,13 @@
+<!-- SplineFencePartRow (Apps/Editor/Include/Inspectors/SplineFence/SplineFencePartRow.h): one part of a fence's
+     Parts list. The classes are the contract with SplineFencePartRow.cpp. -->
+<UIElement class="inspector-row spline-fence-part-row">
+  <UIElement class="spline-fence-part-kind-cell">
+    <Dropdown class="inspector-dropdown spline-fence-part-kind" />
+  </UIElement>
+  <UIElement class="inspector-field spline-fence-part-field">
+    <UIElement class="spline-fence-part-mesh-cell">
+      <AssetField class="dropdown-asset-field spline-fence-part-mesh" />
+    </UIElement>
+    <ListItemActions class="spline-fence-part-actions" />
+  </UIElement>
+</UIElement>

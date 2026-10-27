@@ -1,79 +1,51 @@
 #include "Panels/RenameLayoutModal.h"
 
+#include "Input/KeyCodes.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/TextField.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
-#include "Input/KeyCodes.h"
+
+#include <array>
+#include <memory>
+#include <string_view>
 
 namespace GameEngine
 {
+
+namespace
+{
+constexpr const char* kLayoutAssetPath = "UI/controls/RenameLayoutModal/RenameLayoutModal.uxml";
+constexpr const char* kStyleAssetPath = "UI/controls/RenameLayoutModal/RenameLayoutModal.css";
+// The ids the constructor looks up. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 4> kRequiredIds = {
+    "rename-layout-title",
+    "rename-layout-name",
+    "rename-layout-cancel",
+    "rename-layout-rename",
+};
+} // namespace
 
 RenameLayoutModal::RenameLayoutModal()
 {
     AddClass("modal-overlay");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
+    RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    if (!backdrop)
+        return;
     m_Backdrop = backdrop.get();
-    m_Backdrop->AddClass("modal-backdrop");
-
-    auto window = std::make_unique<UIElement>();
-    m_Window = window.get();
-    m_Window->AddClass("modal-window");
-    m_Window->AddClass("modal-window-shadow");
-    m_Window->AddClass("modal-window-420");
-
-    {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("modal-header");
-        auto title = std::make_unique<Label>();
-        m_Title = title.get();
-        title->SetText("Rename Layout");
-        title->AddClass("modal-title");
-        header->AddChild(std::move(title));
-        m_Window->AddChild(std::move(header));
-    }
-
-    {
-        auto content = std::make_unique<UIElement>();
-        content->AddClass("modal-content");
-        content->AddClass("rename-layout-modal-content");
-
-        auto label = std::make_unique<Label>();
-        label->SetText("New name");
-        label->AddClass("modal-field-label");
-        content->AddChild(std::move(label));
-
-        auto field = std::make_unique<TextField>();
-        m_NameField = field.get();
-        field->SetValue("");
-        field->AddClass("modal-text-field");
-        field->SetOnCommit([this]() { OnCommitClicked(); });
-        content->AddChild(std::move(field));
-
-        m_Window->AddChild(std::move(content));
-    }
-
-    {
-        auto footer = std::make_unique<UIElement>();
-        footer->AddClass("modal-footer");
-
-        auto cancel = std::make_unique<Button>();
-        cancel->SetText("Cancel");
-        cancel->AddClass("secondary");
+    m_Title = dynamic_cast<Label*>(m_Backdrop->FindById("rename-layout-title"_sid));
+    m_NameField = dynamic_cast<TextField*>(m_Backdrop->FindById("rename-layout-name"_sid));
+    if (m_NameField)
+        m_NameField->SetOnCommit([this]() { OnCommitClicked(); });
+    if (auto* cancel = dynamic_cast<Button*>(m_Backdrop->FindById("rename-layout-cancel"_sid)))
         cancel->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
-
-        auto ok = std::make_unique<Button>();
-        ok->SetText("Rename");
-        ok->AddClass("primary");
-        ok->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCommitClicked(); });
-
-        footer->AddChild(std::move(cancel));
-        footer->AddChild(std::move(ok));
-        m_Window->AddChild(std::move(footer));
-    }
+    if (auto* rename = dynamic_cast<Button*>(m_Backdrop->FindById("rename-layout-rename"_sid)))
+        rename->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCommitClicked(); });
 
     m_Backdrop->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
     {
@@ -91,12 +63,13 @@ RenameLayoutModal::RenameLayoutModal()
         }
     });
 
-    m_Backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
 }
 
 void RenameLayoutModal::Show(const std::string& title, const std::string& initialValue)
 {
+    if (!m_Backdrop)
+        return;
     m_Visible = true;
     if (m_Title)
         m_Title->SetText(title);

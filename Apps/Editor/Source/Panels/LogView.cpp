@@ -1,22 +1,20 @@
 #include "Panels/LogView.h"
 
-#include "AssetCore/SharedFileRead.h"
-#include "Editor/EditorPaths.h"
 #include "Input/KeyCodes.h"
 #include "Logger/LogSink.h"
 #include "Logger/Logger.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/ListView.h"
 #include "UI/Interaction/Selection.h"
-#include "UI/Parsers/XMLParser.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/UIEvents.h"
 
 #include <algorithm>
 #include <array>
-#include <filesystem>
 #include <iterator>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -27,7 +25,12 @@ namespace {
 constexpr const char* kRowLayoutAssetPath = "UI/panels/LogPanel/LogRow.uxml";
 constexpr const char* kGlyphId = "LogRowGlyph";
 constexpr const char* kTimeId = "LogRowTime";
+constexpr const char* kChannelId = "LogRowChannel";
+/// The channel cell of a Core line: an en dash (UTF-8), so the cell reads as part of the column.
+/// Copies and the file log write no channel for Core.
+constexpr const char* kNoChannelText = "\xE2\x80\x93";
 constexpr const char* kMessageId = "LogRowMessage";
+constexpr std::array<std::string_view, 4> kRowRequiredIds = {kGlyphId, kTimeId, kChannelId, kMessageId};
 /// Only on rows whose entry names a source: elsewhere a double-click only selects.
 constexpr const char* kOpenSourceTooltip = "Double-click to open the source.";
 
@@ -44,24 +47,6 @@ constexpr SeverityClasses kGlyphSeverityClasses{"log-row-glyph-debug", "log-row-
                                                 "log-row-glyph-error"};
 constexpr SeverityClasses kMessageSeverityClasses{"log-row-message-debug", "log-row-message-info",
                                                   "log-row-message-warning", "log-row-message-error"};
-
-std::string ReadRowLayoutText()
-{
-    const std::filesystem::path path = Editor::GetEditorGlobalPaths().installAssetsRoot / kRowLayoutAssetPath;
-    std::string text;
-    if (!ReadFileTextShared(path, text))
-        Logger::Log::Error("Log panel: {} did not read, so the list shows empty rows. Check that it is staged under "
-                           "the editor asset mount.",
-                           path.generic_string());
-    return text;
-}
-
-// Read once per process: the list builds a row per pooled slot.
-const std::string& RowLayoutText()
-{
-    static const std::string s_Text = ReadRowLayoutText();
-    return s_Text;
-}
 
 void SetSeverityClass(UIElement* part, const SeverityClasses& classes, LogModel::Severity severity)
 {
@@ -85,16 +70,15 @@ class LogView::Row : public UIElement {
 public:
     Row()
     {
-        std::unique_ptr<UIElement> layout;
-        const std::string& layoutText = RowLayoutText();
-        if (layoutText.empty() || !UIParsing::XMLParser::ParseLayoutFromString(layoutText, layout, kRowLayoutAssetPath) ||
-            !layout)
+        std::unique_ptr<UIElement> layout = Editor::ControlLayoutLoader::Load(kRowLayoutAssetPath, kRowRequiredIds);
+        if (!layout)
             return;
         // The row takes the layout root's place: its classes and its parts.
         for (const std::string& name : layout->GetClasses())
             AddClass(name);
         m_Glyph = layout->FindById(HashStringId(kGlyphId));
         m_Time = dynamic_cast<Label*>(layout->FindById(HashStringId(kTimeId)));
+        m_Channel = dynamic_cast<Label*>(layout->FindById(HashStringId(kChannelId)));
         m_Message = dynamic_cast<Label*>(layout->FindById(HashStringId(kMessageId)));
         while (!layout->GetChildren().empty())
             AddChild(layout->TakeChild(layout->GetChildren().front().get()));
@@ -107,6 +91,11 @@ public:
         SetSeverityClass(m_Glyph, kGlyphSeverityClasses, severity);
         if (m_Time)
             m_Time->SetText(LogModel::FormatTime(entry));
+        if (m_Channel)
+        {
+            const std::string_view channel = LogModel::ChannelLabel(entry);
+            m_Channel->SetText(channel.empty() ? std::string(kNoChannelText) : std::string(channel));
+        }
         if (m_Message)
         {
             SetSeverityClass(m_Message, kMessageSeverityClasses, severity);
@@ -117,6 +106,7 @@ public:
 private:
     UIElement* m_Glyph = nullptr;
     Label* m_Time = nullptr;
+    Label* m_Channel = nullptr;
     Label* m_Message = nullptr;
 };
 
@@ -238,6 +228,12 @@ void LogView::Clear()
 void LogView::SetSeverityShown(LogModel::Severity severity, bool shown)
 {
     m_Model.SetSeverityShown(severity, shown);
+    AfterFilterChange();
+}
+
+void LogView::SetChannelsShown(std::span<const uint16_t> channels, bool shown)
+{
+    m_Model.SetChannelsShown(channels, shown);
     AfterFilterChange();
 }
 

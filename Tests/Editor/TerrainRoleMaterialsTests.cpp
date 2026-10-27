@@ -17,7 +17,7 @@
 
 #include "Assets/TerrainMaterialLibraryAsset.h"
 #include "Components/Terrain/Terrain.h"
-#include "Inspectors/TerrainMaterialLibraryInspector.h"
+#include "Terrain/TerrainMaterialLibraryInspector.h"
 #include "Platform/SystemMetrics.h"
 #include "Terrain/TerrainRoleMaterials.h"
 #include "UI/Controls/Button.h"

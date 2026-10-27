@@ -42,6 +42,8 @@ class SaveSceneAsModal final : public UIElement
     // an up entry, bounded at the project root). The in-project chooser, used where
     // an OS folder dialog cannot name a location inside the project.
     void PopulateFolderList();
+    // Adds a folder row that opens `target` when clicked. False, with one error, when the row does not build.
+    bool AddFolderRow(const std::string& text, const std::filesystem::path& target);
 
     std::filesystem::path m_SelectedDir;
     std::filesystem::path m_ProjectRoot; // The in-project chooser is confined to this subtree.

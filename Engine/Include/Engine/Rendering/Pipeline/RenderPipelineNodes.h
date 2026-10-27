@@ -72,6 +72,8 @@ struct ViewDeclare
     Rendering::RenderGraph::RGTexture ViewColor{};
     Rendering::RenderGraph::RGTexture ViewDepth{};         // EFFECTIVE (prepass override published)
     Rendering::RenderGraph::RGTexture ViewResolve{};
+    // The MSAA resolve's second output for bloom (Names::View::BloomSampleDelta); invalid = none.
+    Rendering::RenderGraph::RGTexture ViewBloomSampleDelta{};
     Rendering::RenderGraph::RGTexture ViewDepthResolved{}; // aliases ViewDepth until DepthResolve publishes
     // Names::View::OccluderDepthResolved, or ViewDepthResolved where nothing published it (no
     // DepthResolve yet, so no non-occluding heads are in the view depth either).

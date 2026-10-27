@@ -8,6 +8,7 @@
       <Button id="LogFilterWarning" class="small secondary log-filter log-filter-warning active" text="Warnings" />
       <Button id="LogFilterInfo" class="small secondary log-filter log-filter-info active" text="Info" />
       <Button id="LogFilterDebug" class="small secondary log-filter log-filter-debug active" text="Debug" />
+      <Button id="LogChannels" class="small secondary" text="Channels" />
     </UIElement>
     <UIElement class="log-toolbar-end">
       <UIElement class="log-actions">
@@ -28,6 +29,7 @@
       <UIElement class="log-detail-header">
         <UIElement id="LogDetailGlyph" class="log-row-glyph" />
         <Label id="LogDetailSeverity" class="log-detail-severity" />
+        <Label id="LogDetailChannel" class="log-detail-channel" />
         <Label id="LogDetailTime" class="log-detail-time" />
         <Button id="LogDetailSource" class="small secondary log-detail-source hidden">
           <UIElement class="log-detail-source-glyph" />

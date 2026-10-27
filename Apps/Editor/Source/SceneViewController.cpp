@@ -777,7 +777,12 @@ SceneViewController::~SceneViewController()
     {
         m_ChangeNotifications->Unsubscribe(m_ChangeSub);
     }
+    if (m_ChangeNotifications)
+    {
+        m_ChangeNotifications->Unsubscribe(m_ProjectSwitchedSub);
+    }
     m_ChangeSub = {};
+    m_ProjectSwitchedSub = {};
     m_ChangeNotifications = nullptr;
 }
 
@@ -891,14 +896,23 @@ void SceneViewController::SetChangeNotifications(Editor::EditorChangeNotificatio
     {
         m_ChangeNotifications->Unsubscribe(m_ChangeSub);
     }
+    if (m_ChangeNotifications)
+    {
+        m_ChangeNotifications->Unsubscribe(m_ProjectSwitchedSub);
+    }
 
     m_ChangeNotifications = notifications;
     m_ChangeSub = {};
+    m_ProjectSwitchedSub = {};
 
     if (!m_ChangeNotifications)
     {
         return;
     }
+
+    // The overlay builds the HUD host again on its next frame, so the host resolves
+    // its font through the new project's mounts.
+    m_ProjectSwitchedSub = m_ChangeNotifications->SubscribeProjectSwitched([this]() { m_GameUI.reset(); });
 
     const ECS::ComponentTypeId transformType = ECS::GetComponentTypeId<Components::Transform>();
     m_ChangeSub = m_ChangeNotifications->SubscribeComponentChanged(

@@ -9,7 +9,7 @@
 #include "Engine/Build/AssetCollector.h"
 #include "Engine/Build/TerrainPageExport.h"
 #include "AssetCore/GUID.h"
-#include "PageStreaming/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
 #include "PageStreaming/TerrainPageContainer.h"
 #include "Types/PathUtils.h"
 

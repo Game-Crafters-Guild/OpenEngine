@@ -6,6 +6,7 @@
 #include "Platform/ContextMenu.h"
 #include "Rendering/Core/Handle.h"
 
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <string>
@@ -15,6 +16,7 @@
 namespace GameEngine
 {
 struct EditorContext;
+class UIElement;
 }
 
 namespace GameEngine::Editor
@@ -35,13 +37,21 @@ struct HierarchyCommandContext
     ECS::World* World = nullptr;
     ECS::EntityHandle TargetEntity{};
     bool HasTargetEntity = false;
+    /// The entities the command acts on: the selection when it holds TargetEntity, TargetEntity alone
+    /// otherwise; for a key, the selection.
+    std::vector<ECS::EntityHandle> TargetEntities;
     const EditorContext* EditorCtx = nullptr;
     EditorChangeNotifications* ChangeNotifications = nullptr;
     UndoRedoService* Undo = nullptr;
+    /// An element of the panel that ran the command. A command that opens a dialog attaches it to
+    /// the root of this element's window, so the dialog covers the whole window.
+    UIElement* DialogHost = nullptr;
 
     std::function<void(ECS::EntityHandle)> SelectEntity;
     std::function<void(ECS::EntityHandle)> NotifyEntityCreated;
     std::function<void()> NotifyWorldStructureChanged;
+    /// Selects the asset file at the path in the Assets panel and shows it there.
+    std::function<void(const std::filesystem::path&)> PingAsset;
 };
 
 // One draw the scene-view selection/hover outline mask should render for a
@@ -77,6 +87,9 @@ public:
     {
         return false;
     }
+    /// The Hierarchy command that the key `key` with `mods` runs while the Hierarchy has focus, as its
+    /// menu entry runs it; 0 for a key the plugin does not bind.
+    virtual uint32_t HierarchyCommandForKey(int /*key*/, int /*mods*/) const { return 0; }
     // Selection/hover outline contribution for entities whose rendered meshes
     // are plugin-generated. Append zero or more parts; entities the plugin
     // does not own must be left untouched.
@@ -116,6 +129,8 @@ public:
                                    const HierarchyContextMenuContext& context);
     bool HandleHierarchyCommand(uint32_t commandId,
                                 const HierarchyCommandContext& context);
+    /// The command the first enabled plugin binds to `key` with `mods` in the Hierarchy; 0 when none does.
+    uint32_t HierarchyCommandForKey(int key, int mods) const;
     void CollectSelectionMaskParts(ECS::World& world,
                                    ECS::EntityHandle entity,
                                    std::vector<SelectionMaskPart>& outParts);

@@ -1,5 +1,8 @@
 #include "Panels/AddTagModal.h"
 
+#include "Inspectors/InspectorDragHelpers.h"
+#include "Logger/Logger.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/ScrollView.h"
@@ -11,13 +14,34 @@
 #include "UI/Registration/ElementRegistration.h"
 #include "Input/KeyCodes.h"
 
+#include <array>
 #include <memory>
+#include <string_view>
 
 namespace GameEngine {
 
 namespace {
 
-const char* kTagRowClass = "add-tag-modal-tag-row";
+constexpr const char* kLayoutAssetPath = "UI/controls/AddTagModal/AddTagModal.uxml";
+constexpr const char* kStyleAssetPath = "UI/controls/AddTagModal/AddTagModal.css";
+constexpr const char* kListLayoutAssetPath = "UI/controls/AddTagModal/AddTagModalList.uxml";
+constexpr const char* kTagRowLayoutAssetPath = "UI/controls/AddTagModal/AddTagModalTagRow.uxml";
+constexpr const char* kTagCircleClass = "add-tag-modal-circle";
+constexpr const char* kTagLabelClass = "add-tag-modal-label";
+// The circle of a tag that has a color. The circle of a tag without a color has the base style.
+constexpr const char* kTagColoredCircleClass = "colored";
+// The ids the constructor looks up in each layout. A layout that lacks one does not load.
+constexpr std::array<std::string_view, 3> kRequiredIds = {
+    "add-tag-window",
+    "add-tag-header",
+    "add-tag-scroll",
+};
+constexpr std::array<std::string_view, 4> kRequiredListIds = {
+    "add-tag-all-row",
+    "add-tag-new-section",
+    "add-tag-new-name",
+    "add-tag-new-add",
+};
 
 }
 
@@ -25,10 +49,16 @@ AddTagModal::AddTagModal()
 {
     AddClass("add-tag-modal");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
+    RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
 
-    auto backdrop = std::make_unique<UIElement>();
+    std::unique_ptr<UIElement> backdrop = Editor::ControlLayoutLoader::Load(kLayoutAssetPath, kRequiredIds);
+    std::unique_ptr<UIElement> list = Editor::ControlLayoutLoader::Load(kListLayoutAssetPath, kRequiredListIds);
+    if (!backdrop || !list)
+        return;
+    auto* scroll = dynamic_cast<ScrollView*>(backdrop->FindById("add-tag-scroll"_sid));
+    if (!scroll)
+        return;
     m_Backdrop = backdrop.get();
-    backdrop->AddClass("add-tag-modal-backdrop");
     backdrop->SetFocusable(true);
     backdrop->RegisterEventHandler(kEventMouseDown, [this](UIEvent& e) {
         if (e.Button == 0 && e.Target == m_Backdrop && !IsWindowDragging())
@@ -41,72 +71,23 @@ AddTagModal::AddTagModal()
             Hide();
         }
     });
+    m_Window = backdrop->FindById("add-tag-window"_sid);
+    BindDragHandle(backdrop->FindById("add-tag-header"_sid));
 
-    auto window = std::make_unique<UIElement>();
-    m_Window = window.get();
-    m_Window->AddClass("modal-window");
-    m_Window->AddClass("add-tag-modal-window");
-
-    // Header: the drag handle.
-    {
-        auto header = std::make_unique<UIElement>();
-        header->AddClass("add-tag-modal-header");
-        BindDragHandle(header.get());
-        auto title = std::make_unique<Label>();
-        title->SetText("Tags");
-        title->AddClass("add-tag-modal-title");
-        header->AddChild(std::move(title));
-        window->AddChild(std::move(header));
-    }
-
-    // Scrollable tag list
-    auto scrollView = std::make_unique<ScrollView>();
-    scrollView->AddClass("add-tag-modal-scroll");
-    auto contentContainer = std::make_unique<UIElement>();
-    contentContainer->AddClass("add-tag-modal-list");
-    m_TagListContainer = contentContainer.get();
-    scrollView->AddContent(std::move(contentContainer));
-    window->AddChild(std::move(scrollView));
-
-    // "All Tags…" row (added to container in BuildTagList)
-    auto allTagsRow = std::make_unique<UIElement>();
-    m_AllTagsRow = allTagsRow.get();
-    m_AllTagsRow->AddClass("add-tag-modal-all-row");
+    m_TagListContainer = list.get();
+    m_AllTagsRow = list->FindById("add-tag-all-row"_sid);
     m_AllTagsRow->RegisterEventHandler(kEventMouseDown, [this](UIEvent& e) {
         if (e.Button == 0)
             OnAllTagsClicked();
     });
-    auto allTagsCircle = std::make_unique<UIElement>();
-    allTagsCircle->AddClass("add-tag-modal-circle");
-    auto allTagsLabel = std::make_unique<Label>();
-    allTagsLabel->SetText("All Tags…");
-    allTagsLabel->AddClass("add-tag-modal-all-label");
-    m_AllTagsRow->AddChild(std::move(allTagsCircle));
-    m_AllTagsRow->AddChild(std::move(allTagsLabel));
-    m_TagListContainer->AddChild(std::move(allTagsRow));
+    m_AddNewSection = list->FindById("add-tag-new-section"_sid);
+    m_NewTagNameField = dynamic_cast<TextField*>(list->FindById("add-tag-new-name"_sid));
+    m_AddTagButton = dynamic_cast<Button*>(list->FindById("add-tag-new-add"_sid));
+    if (m_AddTagButton)
+        m_AddTagButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnAddNewTagClicked(); });
+    // A scroll view takes its content through its viewport, which a layout file cannot name.
+    scroll->AddContent(std::move(list));
 
-    // Inline "Add new tag" section (hidden by default)
-    auto addNewSection = std::make_unique<UIElement>();
-    m_AddNewSection = addNewSection.get();
-    m_AddNewSection->AddClass("add-tag-modal-new-section");
-    auto nameLabel = std::make_unique<Label>();
-    nameLabel->SetText("New tag name");
-    nameLabel->AddClass("add-tag-modal-new-label");
-    m_AddNewSection->AddChild(std::move(nameLabel));
-    auto nameField = std::make_unique<TextField>();
-    m_NewTagNameField = nameField.get();
-    nameField->SetValue("");
-    nameField->AddClass("add-tag-modal-new-field");
-    auto addBtn = std::make_unique<Button>();
-    m_AddTagButton = addBtn.get();
-    addBtn->SetText("Add");
-    addBtn->AddClass("secondary");
-    addBtn->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnAddNewTagClicked(); });
-    m_AddNewSection->AddChild(std::move(nameField));
-    m_AddNewSection->AddChild(std::move(addBtn));
-    m_TagListContainer->AddChild(std::move(addNewSection));
-
-    backdrop->AddChild(std::move(window));
     AddChild(std::move(backdrop));
     PlaceWindow(0.0f, 0.0f);
 }
@@ -170,27 +151,30 @@ void AddTagModal::BuildTagList()
     const std::vector<EditorTagDefinition> tags = EditorTags::Load();
     for (const auto& tag : tags)
     {
-        auto row = std::make_unique<UIElement>();
-        row->AddClass(kTagRowClass);
+        std::unique_ptr<UIElement> row = Editor::ControlLayoutLoader::Load(kTagRowLayoutAssetPath, {});
+        if (!row)
+            break;
+        UIElement* circle = InspectorDrag::FindChildByClass(row.get(), kTagCircleClass);
+        auto* label = dynamic_cast<Label*>(InspectorDrag::FindChildByClass(row.get(), kTagLabelClass));
+        if (!circle || !label)
+        {
+            Logger::Log::Error("Tags: {} needs the '{}' element and the '{}' label.", kTagRowLayoutAssetPath,
+                               kTagCircleClass, kTagLabelClass);
+            break;
+        }
         const std::string tagName = tag.Name;
         row->RegisterEventHandler(kEventMouseDown, [this, tagName](UIEvent& e) {
             if (e.Button == 0)
                 OnTagRowClicked(tagName);
         });
 
-        auto circle = std::make_unique<UIElement>();
-        circle->AddClass("add-tag-modal-circle");
-        circle->Overrides()
-            .Set(Style::BorderColor, BorderColorsTRBL{tag.Color.empty() ? (uint32_t)0xFF666666 : (uint32_t)0x4DFFFFFF, tag.Color.empty() ? (uint32_t)0xFF666666 : (uint32_t)0x4DFFFFFF, tag.Color.empty() ? (uint32_t)0xFF666666 : (uint32_t)0x4DFFFFFF, tag.Color.empty() ? (uint32_t)0xFF666666 : (uint32_t)0x4DFFFFFF})
-            .Set(Style::BackgroundColor, tag.Color.empty() ? (uint32_t)0x00000000
-                : UIRegistration::Parser<uint32_t>::Parse(tag.Color));
-
-        auto label = std::make_unique<Label>();
+        if (!tag.Color.empty())
+        {
+            circle->AddClass(kTagColoredCircleClass);
+            circle->Overrides().Set(Style::BackgroundColor, UIRegistration::Parser<uint32_t>::Parse(tag.Color));
+        }
         label->SetText(tag.Name);
-        label->AddClass("add-tag-modal-label");
 
-        row->AddChild(std::move(circle));
-        row->AddChild(std::move(label));
         m_TagListContainer->AddChild(std::move(row));
     }
 

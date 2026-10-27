@@ -76,7 +76,7 @@ struct FenceMitreVariants
 };
 
 // What each pool a variant can be cut from offers the cutter, indexed by its
-// active slot: the SpanPool, the CrestPool and the GatePool (a gate is a span
+// active slot: the Span pool, the Crest pool and the Gate pool (a gate is a span
 // and is mitred like one).
 struct FenceMitreSources
 {

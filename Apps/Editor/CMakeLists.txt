@@ -73,6 +73,7 @@ set(EDITOR_SOURCES
     Source/Editor/Entities/ComponentRemoval.cpp
     Source/Editor/Entities/SkyboxEntityFactory.cpp
     Source/Assets/AssetsBrowserController.cpp
+    Source/Assets/AssetsFolderDropRegistry.cpp
     Source/Assets/EditorAssetActionsInstall.cpp
     Source/Assets/AssetsDataProviders.cpp
     Source/Assets/DownloadPillOverlay.cpp
@@ -104,6 +105,7 @@ set(EDITOR_SOURCES
     Source/Editor/Hierarchy/HierarchyReparent.cpp
     Source/Panels/InspectorPanel.cpp
     Source/Panels/AssetViewPanel.cpp
+    Source/Panels/LogChannelPopover.cpp
     Source/Panels/LogModel.cpp
     Source/Panels/LogPanel.cpp
     Source/Panels/LogView.cpp
@@ -117,7 +119,10 @@ set(EDITOR_SOURCES
     Source/Panels/VisualProfilerPanel.cpp
     Source/Panels/BacktraceFrameView.cpp
     Source/Panels/VramPanel.cpp
-    Source/Panels/ProjectFolderPickerModal.cpp
+    Source/Panels/ProjectPicker/ProjectCard.cpp
+    Source/Panels/ProjectPicker/ProjectCard.h
+    Source/Panels/ProjectPicker/ProjectPickerModal.cpp
+    Source/Panels/ProjectPicker/ProjectPickerModal.h
     Source/Projects/ProjectCatalog.cpp
     Source/Projects/ProjectCatalogService.cpp
     Source/Projects/NewProjectLocation.cpp
@@ -243,6 +248,7 @@ set(EDITOR_SOURCES
 	Source/UI/Controls/DraggableModal.cpp
 	Source/UI/Controls/EditorTopToolbar.cpp
 	Source/UI/Controls/InspectorNotice.cpp
+	Source/UI/Controls/ListItemActions.cpp
 	Source/UI/Controls/PictureChoiceField.cpp
 	Source/UI/Controls/TransientNotice.cpp
 	Source/UI/Controls/SkyDayKeyGradientBar.cpp
@@ -263,17 +269,15 @@ set(EDITOR_SOURCES
 	Source/Inspectors/InspectorEntityActivity.cpp
 	Source/Inspectors/InspectorSectionHosts.cpp
 	Source/Inspectors/PreservedFieldNotice.cpp
-	Source/Inspectors/TerrainVolumeNotices.cpp
 	Source/Inspectors/InspectorComponentSection.cpp
-	Source/Inspectors/TerrainRuleNotices.cpp
-	Source/Inspectors/TerrainSizingNotice.cpp
 	Source/Inspectors/MeshRendererInspector.cpp
 	Source/Inspectors/ShadowCastingRow.cpp
 	Source/Inspectors/RenderLayerField.cpp
-	Source/Inspectors/NavigationAgentInspector.cpp
-	Source/Inspectors/NavigationSourceComponentTraits.cpp
-	Source/Inspectors/NavigationSurfaceInspector.cpp
-	Source/Inspectors/SplineRecipeInspector.cpp
+	Source/Inspectors/Navigation/NavigationAgentInspector.cpp
+	Source/Inspectors/Navigation/NavigationSourceComponentTraits.cpp
+	Source/Inspectors/Navigation/NavigationSurfaceInspector.cpp
+	Source/Inspectors/SplineRecipe/SplineRecipeInspector.cpp
+	Source/Inspectors/Spline/SplineExtrudeInspector.cpp
 	Source/Inspectors/SkinnedMeshRendererInspector.cpp
 	Source/Inspectors/AnimatorInspector.cpp
 	Source/Inspectors/ValueCurveInspector.cpp
@@ -293,28 +297,27 @@ set(EDITOR_SOURCES
 	Source/Inspectors/ModelInspector.cpp
 	Source/Inspectors/ModelSettingsReload.cpp
 	Source/Inspectors/SubmeshLodProvenance.cpp
-	Source/Inspectors/TextureCoveragePolicyNotice.cpp
-	Source/Inspectors/TextureLoadingSuffix.cpp
+	Source/Inspectors/Texture/TextureCoveragePolicyNotice.cpp
+	Source/Inspectors/Texture/TextureLoadingSuffix.cpp
 	Source/Inspectors/PendingAssetHeader.cpp
-	Source/Inspectors/TextureInspector.cpp
+	Source/Inspectors/Texture/TextureInspector.cpp
 	Source/Inspectors/ShaderInspector.cpp
 	Source/Inspectors/ScriptInspector.cpp
 	Source/Inspectors/NativeSourceInspector.cpp
 	Source/Inspectors/RenderPipelineInspector.cpp
-	Source/Inspectors/TerrainMaterialLibraryInspector.cpp
 	Source/Inspectors/SkyEnvironmentInspector.cpp
 	Source/Inspectors/DayOfYearText.cpp
 	Source/Inspectors/SkyDayCurveRow.cpp
 	Source/Inspectors/LuxText.cpp
-	Source/Inspectors/SkySunCurveReference.cpp
-	Source/Inspectors/SkySunDriveRows.cpp
-	Source/Inspectors/SkySunIlluminanceRow.cpp
+	Source/Inspectors/SkySun/SkySunCurveReference.cpp
+	Source/Inspectors/SkySun/SkySunDriveRows.cpp
+	Source/Inspectors/SkySun/SkySunIlluminanceRow.cpp
 	Source/Inspectors/SkyStarLookRow.cpp
 	Source/Inspectors/SkyStarSeenByRow.cpp
-	Source/Inspectors/SkySunPathRows.cpp
-	Source/Inspectors/SkySunPathCaptions.cpp
-	Source/Inspectors/SkySunReadoutCard.cpp
-	Source/Inspectors/SkySunReadoutText.cpp
+	Source/Inspectors/SkySun/SkySunPathRows.cpp
+	Source/Inspectors/SkySun/SkySunPathCaptions.cpp
+	Source/Inspectors/SkySun/SkySunReadoutCard.cpp
+	Source/Inspectors/SkySun/SkySunReadoutText.cpp
 	Source/Inspectors/AmbientLightInspector.cpp
 	Source/Inspectors/SkyboxInspector.cpp
 	Source/Inspectors/OceanWaveSpectrumInspector.cpp
@@ -345,11 +348,11 @@ set(EDITOR_SOURCES
 	Source/Inspectors/HeightFogEffectInspector.cpp
 	Source/Inspectors/ColorFilterEffectInspector.cpp
 	Source/Inspectors/ColorGradeEffectInspector.cpp
-	Source/Inspectors/CubeLutAssetInspector.cpp
-	Source/Inspectors/CubeLutEffectInspector.cpp
-	Source/Inspectors/CubeLutPreview.cpp
-	Source/Inspectors/CubeLutStageNotice.cpp
-	Source/Inspectors/CubeLutPreviewPopover.cpp
+	Source/Inspectors/CubeLut/CubeLutAssetInspector.cpp
+	Source/Inspectors/CubeLut/CubeLutEffectInspector.cpp
+	Source/Inspectors/CubeLut/CubeLutPreview.cpp
+	Source/Inspectors/CubeLut/CubeLutStageNotice.cpp
+	Source/Inspectors/CubeLut/CubeLutPreviewPopover.cpp
 	Source/Inspectors/DebandEffectInspector.cpp
 	Source/Inspectors/VignetteEffectInspector.cpp
 	Source/Inspectors/ShadowSettingsEffectInspector.cpp
@@ -366,12 +369,15 @@ set(EDITOR_SOURCES
 	Source/Terrain/TerrainHeightmapInspector.cpp
 	Source/Terrain/RawHeightmapSettingsCommit.cpp
 	Source/Terrain/TerrainInspector.cpp
+	Source/Terrain/TerrainSizingNotice.cpp
 	Source/Terrain/TerrainPageCookOverlay.cpp
 	Source/Terrain/TerrainModifierInspectors.cpp
+	Source/Terrain/TerrainVolumeNotices.cpp
 	Source/Terrain/TerrainGrassPresetRow.cpp
 	Source/Terrain/TerrainGrassRegionRows.cpp
 	Source/Terrain/TerrainColorZoneInspector.cpp
 	Source/Terrain/TerrainMaterialLibraryMint.cpp
+	Source/Terrain/TerrainMaterialLibraryInspector.cpp
 	Source/Navigation/NavigationBakedDataSave.cpp
 	Source/Terrain/TerrainBakeCacheSave.cpp
 	Source/Terrain/TerrainGrassVocabulary.cpp
@@ -379,6 +385,7 @@ set(EDITOR_SOURCES
 	Source/Terrain/TerrainRuleConditionVocabulary.cpp
 	Source/Terrain/TerrainRuleWeightProfileStrip.cpp
 	Source/Terrain/TerrainRuleRows.cpp
+	Source/Terrain/TerrainRuleNotices.cpp
 	Source/Terrain/TerrainInteractiveModifierEdit.cpp
 	Source/Terrain/SphereSculptSaver.cpp
 	Source/Terrain/TerrainZonePayloadSaver.cpp
@@ -391,11 +398,15 @@ set(EDITOR_SOURCES
 	Source/Sky/SkySunIlluminanceSwitch.cpp
 	Source/Sky/SkySunPathSwitch.cpp
 	Source/Sky/SkyEnvironmentEdit.cpp
-	Source/Inspectors/SplineInspector.cpp
-	Source/Inspectors/SplineFenceInspector.cpp
-	Source/Inspectors/SplineFenceSpanPieceInspector.cpp
-	Source/Inspectors/SplineFenceOverrideFields.cpp
-	Source/Inspectors/SplinePlacementInspector.cpp
+	Source/Inspectors/Spline/SplineInspector.cpp
+	Source/Inspectors/SplineFence/SplineFenceInspector.cpp
+	Source/Inspectors/SplineFence/SplineFencePartRow.cpp
+	Source/Inspectors/SplineFence/SplineFencePreview.cpp
+	Source/Inspectors/SplineRecipe/SplineRecipePreviewCanvas.cpp
+	Source/Inspectors/SplineFence/SplineFenceSpanPieceInspector.cpp
+	Source/Inspectors/SplineFence/SplineFenceOverrideFields.cpp
+	Source/Inspectors/SplineFence/SplineFenceOverrideRow.cpp
+	Source/Inspectors/Spline/SplinePlacementInspector.cpp
 	Source/ExternalScriptEditorLauncher.cpp
 	Source/ScriptEditor/SourceLocation.cpp
 	Source/ScriptEditor/SourceLocationOpener.cpp
@@ -566,6 +577,17 @@ set(EDITOR_SOURCES
 	# The editor's pick over the engine's scene raycast: the eye, the pick providers, the root.
 	Source/Picking/ScenePick.cpp
 	Source/Picking/PickRootResolver.cpp
+	# Prefabs: placing, creating and unpacking instances of .prefab assets.
+	Source/Prefabs/CreatePrefabCommand.cpp
+	Source/Prefabs/CreatePrefabDialog.cpp
+	Source/Prefabs/PrefabBar.cpp
+	Source/Prefabs/PrefabEditorRegistration.cpp
+	Source/Prefabs/PrefabHierarchyRows.cpp
+	Source/Prefabs/PrefabInstanceDescriptions.cpp
+	Source/Prefabs/PrefabRemovedComponents.cpp
+	Source/Prefabs/PrefabService.cpp
+	Source/Prefabs/PrefabThumbnailHandler.cpp
+	Source/Prefabs/UnpackPrefabCommand.cpp
 	Source/EditorApplication_InspectorSettings.cpp
 	Source/Editor/Settings/EditorHiDpiPlatformSettings.cpp
 	Source/EditorApplication_Fullscreen.cpp
@@ -700,9 +722,9 @@ set(EDITOR_HEADERS
     Include/UndoRedo/MultiEntityComponentSnapshot.h
     Include/Inspectors/TransformInspector.h
 	Include/Inspectors/MeshRendererInspector.h
-	Include/Inspectors/NavigationAgentInspector.h
-	Include/Inspectors/NavigationSourceComponentTraits.h
-	Include/Inspectors/NavigationSurfaceInspector.h
+	Include/Inspectors/Navigation/NavigationAgentInspector.h
+	Include/Inspectors/Navigation/NavigationSourceComponentTraits.h
+	Include/Inspectors/Navigation/NavigationSurfaceInspector.h
 	Include/Inspectors/SkinnedMeshRendererInspector.h
 	Include/Inspectors/ValueCurveInspector.h
 	Include/Inspectors/CameraInspector.h
@@ -720,15 +742,15 @@ set(EDITOR_HEADERS
 	Include/Inspectors/DayOfYearText.h
 	Include/Inspectors/SkyDayCurveRow.h
 	Include/Inspectors/LuxText.h
-	Include/Inspectors/SkySunCurveReference.h
-	Include/Inspectors/SkySunDriveRows.h
-	Include/Inspectors/SkySunIlluminanceRow.h
+	Include/Inspectors/SkySun/SkySunCurveReference.h
+	Include/Inspectors/SkySun/SkySunDriveRows.h
+	Include/Inspectors/SkySun/SkySunIlluminanceRow.h
 	Include/Inspectors/SkyStarLookRow.h
 	Include/Inspectors/SkyStarSeenByRow.h
-	Include/Inspectors/SkySunPathRows.h
-	Include/Inspectors/SkySunPathCaptions.h
-	Include/Inspectors/SkySunReadoutCard.h
-	Include/Inspectors/SkySunReadoutText.h
+	Include/Inspectors/SkySun/SkySunPathRows.h
+	Include/Inspectors/SkySun/SkySunPathCaptions.h
+	Include/Inspectors/SkySun/SkySunReadoutCard.h
+	Include/Inspectors/SkySun/SkySunReadoutText.h
 	Include/Inspectors/SkyboxInspector.h
 	Include/Sky/SkyEnvironmentComponentTraits.h
 	Include/Sky/SkyEnvironmentCreation.h
@@ -756,6 +778,7 @@ set(EDITOR_HEADERS
 	Include/Inspectors/HumanoidRigInspector.h
 	Include/Inspectors/RetargetMapInspector.h
 	Include/UI/ActivateOnRelease.h
+	Include/UI/ControlLayoutLoader.h
 	Include/UI/InspectorSection.h
 	Include/UI/EditorSearchBars.h
 	Include/UI/InlineRenameSession.h
@@ -789,6 +812,7 @@ set(EDITOR_HEADERS
     Include/Assets/AssetRename.h
     Include/Assets/AssetRenameController.h
     Include/Assets/AssetsBrowserController.h
+    Include/Assets/AssetsFolderDropRegistry.h
     Include/Assets/EditorAssetActionsInstall.h
     Include/Assets/AssetsDataProviders.h
 	Include/ExternalScriptEditorLauncher.h
@@ -807,6 +831,7 @@ set(EDITOR_HEADERS
 		Include/Editor/Entities/CopiedEntityRuntimeRefs.h
 		Include/Editor/Entities/EntityDuplicate.h
 		Include/Editor/Hierarchy/HierarchyEntityIcon.h
+    Include/Panels/LogChannelPopover.h
     Include/Panels/LogPanel.h
     Include/Panels/LogView.h
     Include/Panels/ScriptDiagnosticsByAssembly.h
@@ -820,7 +845,6 @@ set(EDITOR_HEADERS
     Include/Panels/AddTagModal.h
     Include/Scripting/EditorScriptMenuRegistry.h
 	Include/Panels/InspectorPanel.h
-	Include/Panels/ProjectFolderPickerModal.h
     Include/Panels/PlayModeChangeReviewModal.h
     Include/Panels/VideoPlayerModal.h
     Include/EditorVideoPlayerController.h
@@ -978,6 +1002,8 @@ set(EDITOR_SDK_SOURCES
 	# The zip reader, in the SDK so package modules can list and extract archives too.
 	Source/Editor/ZipArchiveReader.cpp
 	Source/EditorPaths.cpp
+	# The layout loader and its text cache, in the SDK so every control that loads a layout shares one cache.
+	Source/UI/ControlLayoutLoader.cpp
 	Source/SettingsStore.cpp
 	Source/InspectorRegistry.cpp
 	Source/Picking/EditorPickProviders.cpp

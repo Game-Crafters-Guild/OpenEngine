@@ -28,7 +28,6 @@ class PlayModeChangeReviewModal final : public UIElement
     void OnDiscardClicked();
 
     UIElement* m_Backdrop = nullptr;
-    UIElement* m_Window = nullptr;
     UIElement* m_ListRoot = nullptr;
 
     std::vector<class Toggle*> m_Toggles;

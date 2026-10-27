@@ -42,6 +42,7 @@ void SortedTransparentNode::DeclareForView(ViewDeclare& d)
     t.Color = d.ViewColor;
     t.Depth = d.ViewDepth;
     t.Resolve = d.ViewResolve;
+    t.BloomSampleDelta = d.ViewBloomSampleDelta;
     t.DepthResolved = d.ViewDepthResolved;
     t.GTAO = d.ResolveTexture(Names::View::GTAO);
     t.SkyBackdrop = d.ResolveTexture(Names::Res::SkyBackdrop);

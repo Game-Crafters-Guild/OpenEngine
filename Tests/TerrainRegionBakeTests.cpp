@@ -20,13 +20,16 @@
 #include "Mathematics/HalfFloat.h"
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/HeightPageOverlay.h"
-#include "PageStreaming/PageStoreFormat.h"
-#include "PageStreaming/PageStorePatcher.h"
-#include "PageStreaming/PageStoreReader.h"
-#include "PageStreaming/PageStoreWriter.h"
+#include "PageStreaming/PageResidency.h"
+#include "PageStreaming/PageStore/PageStoreAccess.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStorePatcher.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreWriter.h"
 #include "Terrain/Heightfield.h"
 #include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "TerrainECS/TerrainSurfaceBakeInputs.h"
 #include "TerrainECS/TerrainSurfacePageBaker.h"
 #include "TerrainECS/TerrainSurfacePageDriver.h"
 #include "TerrainECS/TerrainSurfaceStore.h"
@@ -2981,7 +2984,8 @@ PageStreaming::GeneratedHeightLattice TileNoiseLattice(const TiledTerrainData& t
 
 std::vector<PageStreaming::PageStoreLevel> TileLatticeLevels(const TiledTerrainData& tiled)
 {
-    const PageStreaming::PageStoreHeader header = MakeSurfaceStoreHeader(tiled, PageStreaming::PageFieldKind::Splat, 0u);
+    const PageStreaming::PageStoreHeader header =
+        MakeSurfaceStoreHeader(tiled.Config, PageStreaming::PageFieldKind::Splat, 0u);
     return PageStreaming::BuildPageStoreLevels(header.SamplesX, header.SamplesZ);
 }
 
@@ -3051,6 +3055,7 @@ TEST(TerrainRegionBake, ALevel0SurfacePageHoldsTheTileBakesSplatBitForBit)
     TerrainModifierSystem system;
     system.Update(world, 1.0f / 60.0f);
     ASSERT_TRUE(tiled->SplatBakeRangeValid);
+    const std::shared_ptr<const TerrainSurfaceBakeInputs> inputs = system.SnapshotSurfaceBake(*tiled, {});
 
     const uint32 interior = tiled->Config.TileConfig.HeightmapWidth - 1u;
     const uint32 tilesX = tiled->Config.TilesPerAxisX;
@@ -3073,14 +3078,21 @@ TEST(TerrainRegionBake, ALevel0SurfacePageHoldsTheTileBakesSplatBitForBit)
                 for (uint32 gx = window.Rect.MinX; gx <= window.Rect.MaxX; ++gx)
                     window.Heights.push_back(ownerTile(gx, gz)->Heightfield.GetSample(tileLocal(gx, tilesX),
                                                                                        tileLocal(gz, tilesZ)));
-            ASSERT_TRUE(system.BakeSurfaceSplatPage(*tiled, PageStreaming::PageAddress{0, 0, px, pz}, level0, window,
-                                                    page));
+            ASSERT_TRUE(TerrainModifierSystem::BakeSurfaceSplatPage(*inputs, PageStreaming::PageAddress{0, 0, px, pz},
+                                                                     level0, window, page));
             ExpectSplatPageMatchesTiles(*tiled, px, pz, page, comparison);
             if (HasFatalFailure())
                 return;
         }
     EXPECT_GT(comparison.Compared, 2000000u);
     EXPECT_GT(comparison.Weighted, 1000u) << "the rules never reached a compared texel";
+}
+
+// A store access on the lattice of `tiled` for its `plane` store.
+std::shared_ptr<PageStreaming::PageStoreAccess> SurfaceAccess(const TiledTerrainData& tiled,
+                                                              PageStreaming::PageFieldKind plane)
+{
+    return std::make_shared<PageStreaming::PageStoreAccess>(plane, MakeSurfaceStoreHeader(tiled.Config, plane, 0u));
 }
 
 // The height pages of a generated lattice, with the terrain's modifier overlay when it has one. A
@@ -3130,7 +3142,12 @@ struct ScopedStoreFolder
         std::filesystem::remove_all(Path);
         std::filesystem::create_directories(Path);
     }
-    ~ScopedStoreFolder() { std::filesystem::remove_all(Path); }
+    // After a failed assert, a job can still hold a store file open, so the removal ignores errors.
+    ~ScopedStoreFolder()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(Path, error);
+    }
 };
 
 // A tiled terrain with the global surface rules baked, for the splat store tests.
@@ -3174,8 +3191,9 @@ TEST(TerrainRegionBake, ASplatStoreBakesItsCoarseLevelsFirstAndSettlesOnTheTentO
     TiledTerrainData& tiled = *terrain.Tiled;
     const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
     JobSystem::WorkStealingThreadPool pool(4);
-    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Splat, GeneratedHeightPages(provider, tiled),
-                           &pool);
+    TerrainSurfacePageBaker baker(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                  SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                  GeneratedHeightPages(provider, tiled), &pool);
     const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
     ASSERT_GE(levels.size(), 5u);
     constexpr uint32 kFirstCoarse = 3u;
@@ -3199,7 +3217,9 @@ TEST(TerrainRegionBake, ASplatStoreBakesItsCoarseLevelsFirstAndSettlesOnTheTentO
     for (uint32 tx = 0; tx < 2u; ++tx)
     {
         ASSERT_EQ(baker.BakeLevel0Pages(forward, TilePageBatch(tiled, tx, 0u)), "");
+        ASSERT_EQ(baker.Finish(), "");
         ASSERT_EQ(baker.BakeLevel0Pages(backward, TilePageBatch(tiled, 1u - tx, 0u)), "");
+        ASSERT_EQ(baker.Finish(), "");
     }
 
     // The settled pyramid: every level-0 page written, then every coarser page refiltered from it.
@@ -3209,7 +3229,7 @@ TEST(TerrainRegionBake, ASplatStoreBakesItsCoarseLevelsFirstAndSettlesOnTheTentO
     {
         PageStreaming::PageStoreWriter writer;
         ASSERT_EQ(writer.Create(settled, PageStreaming::MakePageStoreLayout(
-            MakeSurfaceStoreHeader(tiled, PageStreaming::PageFieldKind::Splat, 7u))), "");
+            MakeSurfaceStoreHeader(tiled.Config, PageStreaming::PageFieldKind::Splat, 7u))), "");
         PageStreaming::PageStorePatcher patcher(writer, nullptr);
         for (uint32 pz = 0; pz < levels[0].PagesZ; ++pz)
             for (uint32 px = 0; px < levels[0].PagesX; ++px)
@@ -3308,11 +3328,14 @@ TEST(TerrainRegionBake, ASurfacePageReadsItsNeighborsHeightsForItsApronAndClamps
 
     // The normal reads the slope at its apron: the clamped apron is the bake over edge-extended heights.
     const PageStreaming::PageFieldKind normal = PageStreaming::PageFieldKind::Normal;
-    TerrainSurfacePageBaker refusedNormal(terrain.System, tiled, normal, GeneratedHeightPages(provider, tiled, &refused),
-                                          nullptr);
-    TerrainSurfacePageBaker extendedNormal(terrain.System, tiled, normal,
+    TerrainSurfacePageBaker refusedNormal(terrain.System.SnapshotSurfaceBake(tiled, {}), normal,
+                                          SurfaceAccess(tiled, normal),
+                                          GeneratedHeightPages(provider, tiled, &refused), nullptr);
+    TerrainSurfacePageBaker extendedNormal(terrain.System.SnapshotSurfaceBake(tiled, {}), normal,
+                                           SurfaceAccess(tiled, normal),
                                            EdgeExtendedHeightPages(provider, tiled, neighbor, boundary), nullptr);
-    TerrainSurfacePageBaker wholeNormal(terrain.System, tiled, normal, GeneratedHeightPages(provider, tiled), nullptr);
+    TerrainSurfacePageBaker wholeNormal(terrain.System.SnapshotSurfaceBake(tiled, {}), normal,
+                                        SurfaceAccess(tiled, normal), GeneratedHeightPages(provider, tiled), nullptr);
     const std::filesystem::path refusedFile = folder.Path / "refused.gepage";
     const std::filesystem::path extendedFile = folder.Path / "extended.gepage";
     const std::filesystem::path wholeFile = folder.Path / "whole.gepage";
@@ -3321,18 +3344,21 @@ TEST(TerrainRegionBake, ASurfacePageReadsItsNeighborsHeightsForItsApronAndClamps
     {
         ASSERT_EQ(baker->CreateStore(*file, 7u, 3u), "");
         ASSERT_EQ(baker->BakeLevel0Pages(*file, batch), "") << "an absent neighbor clamps the apron";
+        ASSERT_EQ(baker->Finish(), "");
     }
     const std::vector<uint8> clamped = StoredPageBytes(refusedFile, normal, boundary);
     EXPECT_EQ(clamped, StoredPageBytes(extendedFile, normal, boundary)) << "the apron is not the clamped heights'";
     EXPECT_NE(clamped, StoredPageBytes(wholeFile, normal, boundary)) << "the neighbor's heights never reached the apron";
 
     // With the neighbor on hand, the splat apron is the tile bake's.
-    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+    TerrainSurfacePageBaker baker(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                  SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
                                   GeneratedHeightPages(provider, tiled, &refused), nullptr);
     const std::filesystem::path file = folder.Path / "splat.gepage";
     ASSERT_EQ(baker.CreateStore(file, 7u, 3u), "");
     refused.reset();
     ASSERT_EQ(baker.BakeLevel0Pages(file, batch), "");
+    ASSERT_EQ(baker.Finish(), "");
     {
         PageStreaming::PageStoreReader store;
         ASSERT_EQ(store.Open(file, PageStreaming::PageFieldKind::Splat), "");
@@ -3387,13 +3413,15 @@ TEST(TerrainRegionBake, ANormalStoresLevel0PagesAreTheTileNormalMapWithinTheBc5E
     TiledTerrainData& tiled = *terrain.Tiled;
     const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
     JobSystem::WorkStealingThreadPool pool(4);
-    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Normal,
+    TerrainSurfacePageBaker baker(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Normal,
+                           SurfaceAccess(tiled, PageStreaming::PageFieldKind::Normal),
                            GeneratedHeightPages(provider, tiled), &pool);
     ScopedStoreFolder folder("normal");
     const std::filesystem::path file = folder.Path / "normal.gepage";
     ASSERT_EQ(baker.CreateStore(file, 7u, 3u), "");
     for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX; ++tx)
         ASSERT_EQ(baker.BakeLevel0Pages(file, TilePageBatch(tiled, tx, 0u)), "");
+    ASSERT_EQ(baker.Finish(), "");
 
     PageStreaming::PageStoreReader store;
     PageStreaming::PageStoreReader cache;
@@ -3488,13 +3516,15 @@ TEST(TerrainRegionBake, AGrassControlStoresLevel0PagesAreTheTileGrassField)
 
     const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
     JobSystem::WorkStealingThreadPool pool(4);
-    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::GrassControl,
+    TerrainSurfacePageBaker baker(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::GrassControl,
+                           SurfaceAccess(tiled, PageStreaming::PageFieldKind::GrassControl),
                            GeneratedHeightPages(provider, tiled), &pool);
     ScopedStoreFolder folder("grass");
     const std::filesystem::path file = folder.Path / "grass.gepage";
     ASSERT_EQ(baker.CreateStore(file, 7u, 3u), "");
     for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX; ++tx)
         ASSERT_EQ(baker.BakeLevel0Pages(file, TilePageBatch(tiled, tx, 0u)), "");
+    ASSERT_EQ(baker.Finish(), "");
 
     PageStreaming::PageStoreReader store;
     ASSERT_EQ(store.Open(file, PageStreaming::PageFieldKind::GrassControl), "");
@@ -3594,14 +3624,16 @@ TEST(TerrainRegionBake, AColorStoresLevel0PagesAreTheTileColorMap)
 
     const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
     JobSystem::WorkStealingThreadPool pool(4);
-    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Color,
-                           GeneratedHeightPages(provider, tiled), &pool);
-    baker.SetGroundWrite(TerrainColorMapBaker::ResolveGroundWrite(terrain.World, terrain.Entity));
+    TerrainSurfacePageBaker baker(
+        terrain.System.SnapshotSurfaceBake(tiled, TerrainColorMapBaker::ResolveGroundWrite(terrain.World, terrain.Entity)),
+        PageStreaming::PageFieldKind::Color, SurfaceAccess(tiled, PageStreaming::PageFieldKind::Color),
+        GeneratedHeightPages(provider, tiled), &pool);
     ScopedStoreFolder folder("color");
     const std::filesystem::path file = folder.Path / "color.gepage";
     ASSERT_EQ(baker.CreateStore(file, 7u, 3u), "");
     for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX; ++tx)
         ASSERT_EQ(baker.BakeLevel0Pages(file, TilePageBatch(tiled, tx, 0u)), "");
+    ASSERT_EQ(baker.Finish(), "");
 
     PageStreaming::PageStoreReader store;
     ASSERT_EQ(store.Open(file, PageStreaming::PageFieldKind::Color), "");
@@ -3650,7 +3682,7 @@ std::string BakeWholeStore(TerrainSurfacePageBaker& baker, const TiledTerrainDat
     for (uint32 tz = 0; tz < tiled.Config.TilesPerAxisZ && failure.empty(); ++tz)
         for (uint32 tx = 0; tx < tiled.Config.TilesPerAxisX && failure.empty(); ++tx)
             failure = baker.BakeLevel0Pages(file, TilePageBatch(tiled, tx, tz));
-    return failure;
+    return failure.empty() ? baker.Finish() : failure;
 }
 
 // The hash of every stored page of the store at `file`, level by level.
@@ -3704,7 +3736,8 @@ TEST(TerrainRegionBake, AStrokeRebakesThePagesItsRectReachesAndItsUndoRestoresTh
     const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
     const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
     JobSystem::WorkStealingThreadPool pool(4);
-    TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+    TerrainSurfacePageBaker baker(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                           SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
                            GeneratedHeightPages(provider, tiled), &pool);
     ScopedStoreFolder folder("stroke");
     const std::filesystem::path file = folder.Path / "stroked.gepage";
@@ -3725,13 +3758,16 @@ TEST(TerrainRegionBake, AStrokeRebakesThePagesItsRectReachesAndItsUndoRestoresTh
     const std::vector<PageStreaming::PageAddress> pages = baker.Level0PagesReading(tiled.SurfaceChanged);
     ASSERT_FALSE(pages.empty());
     EXPECT_LE(pages.size(), 4u);
+    baker.SetInputs(terrain.System.SnapshotSurfaceBake(tiled, {}), GeneratedHeightPages(provider, tiled));
     const uint64 writtenBefore = baker.PagesWritten();
     ASSERT_EQ(baker.BakeLevel0Pages(file, pages), "");
+    ASSERT_EQ(baker.Finish(), "");
     // The dab's pages and at most one ancestor each per coarser level.
     EXPECT_GT(baker.PagesWritten(), writtenBefore);
     EXPECT_LE(baker.PagesWritten() - writtenBefore, pages.size() * levels.size());
 
-    TerrainSurfacePageBaker fresh(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+    TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                           SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
                            GeneratedHeightPages(provider, tiled), &pool);
     const std::filesystem::path full = folder.Path / "full.gepage";
     ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
@@ -3744,7 +3780,9 @@ TEST(TerrainRegionBake, AStrokeRebakesThePagesItsRectReachesAndItsUndoRestoresTh
     terrain.World.SwapLifecycleEvents();
     terrain.System.Update(terrain.World, 1.0f / 60.0f);
     ASSERT_GT(tiled.SurfaceVersion, paintedVersion) << "the undo published no surface rect";
+    baker.SetInputs(terrain.System.SnapshotSurfaceBake(tiled, {}), GeneratedHeightPages(provider, tiled));
     ASSERT_EQ(baker.BakeLevel0Pages(file, baker.Level0PagesReading(tiled.SurfaceChanged)), "");
+    ASSERT_EQ(baker.Finish(), "");
     EXPECT_EQ(StorePageHashes(file, levels), before);
 }
 
@@ -3783,18 +3821,19 @@ bool SettleSurfacePages(SplatStoreTerrain& terrain, uint32 frames)
     return false;
 }
 
-// The level-0 pages of a terrain of `level0`, baked kLevel0PagesAFrame a frame, with the settle.
+// The frames a terrain of `level0` takes to bake its level-0 pages with no pool (one job of
+// kLevel0PagesAJob pages a frame, run in its frame), with the settle.
 uint32 FramesToSettle(const PageStreaming::PageStoreLevel& level0)
 {
     const std::size_t pages = static_cast<std::size_t>(level0.PagesX) * level0.PagesZ;
-    return static_cast<uint32>((pages + TerrainSurfacePageDriver::kLevel0PagesAFrame - 1u) /
-                               TerrainSurfacePageDriver::kLevel0PagesAFrame) +
+    return static_cast<uint32>((pages + TerrainSurfacePageDriver::kLevel0PagesAJob - 1u) /
+                               TerrainSurfacePageDriver::kLevel0PagesAJob) +
            TerrainSurfacePageDriver::kSurfaceSettleFrames + 1u;
 }
 
-// A scene load makes the stores with the pinned levels whole and no level-0 page; the next frames bake
-// level 0, kLevel0PagesAFrame pages a frame. A stroke bakes again, at its settle, only the pages that read
-// its rect and their ancestors. Each settled store is the full bake of the terrain.
+// A scene load makes the stores with the pinned levels whole and no level-0 page; the next frames
+// bake level 0, one job of kLevel0PagesAJob pages a frame. A stroke bakes again, at its settle, only
+// the pages that read its rect and their ancestors. Each settled store is the full bake of the terrain.
 TEST(TerrainRegionBake, ASceneLoadMakesTheSurfaceStoresAndAStrokeRebakesOnlyItsPages)
 {
     SplatStoreTerrain terrain(3u, 3u);
@@ -3836,15 +3875,16 @@ TEST(TerrainRegionBake, ASceneLoadMakesTheSurfaceStoresAndAStrokeRebakesOnlyItsP
     const std::size_t pages = static_cast<std::size_t>(levels.front().PagesX) * levels.front().PagesZ;
     EXPECT_EQ(terrain.System.SurfacePages().PendingPages(handle), pages);
     terrain.System.Update(terrain.World, 1.0f / 60.0f);
-    EXPECT_EQ(terrain.System.SurfacePages().PendingPages(handle), pages - TerrainSurfacePageDriver::kLevel0PagesAFrame)
-        << "the cold open bakes kLevel0PagesAFrame pages a frame";
+    EXPECT_EQ(terrain.System.SurfacePages().PendingPages(handle), pages - TerrainSurfacePageDriver::kLevel0PagesAJob)
+        << "the cold open bakes one job of kLevel0PagesAJob pages a frame";
     ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
 
     const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
     JobSystem::WorkStealingThreadPool pool(4);
     const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-driver-full.gepage";
     const auto expectFullBake = [&](const char* state) {
-        TerrainSurfacePageBaker baker(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+        TerrainSurfacePageBaker baker(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                               SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
                                GeneratedHeightPages(provider, tiled), &pool);
         ASSERT_EQ(BakeWholeStore(baker, tiled, full), "");
         EXPECT_EQ(StorePageHashes(*splatFile, levels), StorePageHashes(full, levels)) << state;
@@ -3858,7 +3898,8 @@ TEST(TerrainRegionBake, ASceneLoadMakesTheSurfaceStoresAndAStrokeRebakesOnlyItsP
     ASSERT_TRUE(SettleSurfacePages(terrain, FramesToSettle(levels.front())));
     EXPECT_EQ(SceneSurfaceStores(folder.Path, scene), stores) << "a stroke patches the stores in place";
     const std::vector<uint64> painted = StorePageHashes(*splatFile, levels);
-    const TerrainSurfacePageBaker reader(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+    const TerrainSurfacePageBaker reader(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                  SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
                                   GeneratedHeightPages(provider, tiled), nullptr);
     const std::vector<PageStreaming::PageAddress> reading = reader.Level0PagesReading(tiled.SurfaceChanged);
     std::size_t changed = 0;
@@ -3904,7 +3945,8 @@ TEST(TerrainRegionBake, AHeightScaleOrYOriginChangeMakesTheSurfaceStoresAgainUnd
     EXPECT_NE(scaled[1].File, opened[1].File) << "the normal store kept the key of the old height scale";
     const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
     JobSystem::WorkStealingThreadPool pool(4);
-    TerrainSurfacePageBaker fresh(terrain.System, tiled, PageStreaming::PageFieldKind::Normal,
+    TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Normal,
+                                  SurfaceAccess(tiled, PageStreaming::PageFieldKind::Normal),
                                   GeneratedHeightPages(provider, tiled), &pool);
     const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-height-scale-full.gepage";
     ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
@@ -3957,13 +3999,640 @@ TEST(TerrainRegionBake, AStrokesDabsBakeTheSurfacePagesOnceAtItsSettle)
     EXPECT_EQ(SceneSurfaceStores(folder.Path, scene), stores) << "a stroke patches the stores in place";
     const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
     JobSystem::WorkStealingThreadPool pool(4);
-    TerrainSurfacePageBaker fresh(terrain.System, tiled, PageStreaming::PageFieldKind::Splat,
+    TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                  SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
                                   GeneratedHeightPages(provider, tiled), &pool);
     const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-stroke-settle-full.gepage";
     ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
     const std::vector<uint64> painted = StorePageHashes(stores[0].File, levels);
     EXPECT_EQ(painted, StorePageHashes(full, levels));
     EXPECT_NE(painted, before);
+    RemoveSurfaceStore(full);
+}
+
+// Holds every worker of a pool of `workers` workers busy until Release: a job submitted meanwhile
+// cannot start. The holds are Background jobs, so they queue after a surface job submitted before
+// them, and the constructor returns when that job has ended.
+class BusyPool
+{
+public:
+    BusyPool(JobSystem::WorkStealingThreadPool& pool, std::size_t workers)
+    {
+        for (std::size_t worker = 0; worker < workers; ++worker)
+            m_Tasks.push_back(pool.Submit([this] { HoldWorker(); }, JobSystem::JobPriority::Background));
+        while (m_Started.load() < workers)
+            std::this_thread::yield();
+    }
+    ~BusyPool() { Release(); }
+    BusyPool(const BusyPool&) = delete;
+    BusyPool& operator=(const BusyPool&) = delete;
+
+    // Frees the workers; callable from any thread.
+    void Unblock() { m_Released.store(true); }
+
+    void Release()
+    {
+        m_Released.store(true);
+        for (JobSystem::TaskHandle& task : m_Tasks)
+            task.Wait();
+        m_Tasks.clear();
+    }
+
+private:
+    void HoldWorker()
+    {
+        ++m_Started;
+        while (!m_Released.load())
+            std::this_thread::yield();
+    }
+
+    std::vector<JobSystem::TaskHandle> m_Tasks;
+    std::atomic<std::size_t> m_Started{0};
+    std::atomic<bool> m_Released{false};
+};
+
+// Updates `terrain`, whose world runs the surface jobs on a pool, until its driver has no level-0
+// page to bake and no job, at most 120 s. False when pages stay.
+bool DrainSurfacePages(SplatStoreTerrain& terrain)
+{
+    JobSystem::WorkStealingThreadPool& pool = *terrain.World.GetJobSystem();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    for (uint32 frame = 1; std::chrono::steady_clock::now() < deadline; ++frame)
+    {
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        if (frame > TerrainSurfacePageDriver::kSurfaceSettleFrames &&
+            terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)) == 0u)
+        {
+            // A job with no level-0 page, such as the job that opens the stores, can still run. It
+            // ends before the holds start, and the next frame takes the pages it queues.
+            {
+                BusyPool flush(pool, pool.GetWorkerCount());
+            }
+            terrain.System.Update(terrain.World, 1.0f / 60.0f);
+            if (terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)) == 0u)
+                return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
+// Updates `terrain` until its driver has `pages` level-0 pages to bake, at most twice the settle.
+// False when it never has.
+bool UpdateUntilPending(SplatStoreTerrain& terrain, std::size_t pages)
+{
+    for (uint32 frame = 0; frame < 2u * TerrainSurfacePageDriver::kSurfaceSettleFrames; ++frame)
+    {
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        if (terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)) == pages)
+            return true;
+    }
+    return false;
+}
+
+// The settle of a stroke starts a job, and the frame thread bakes no page. Two more settles while
+// that job cannot run queue the stroke's pages once: when the job ends, one job bakes them from the
+// newest inputs, and the store is the full bake of the last stroke.
+TEST(TerrainRegionBake, SettlesWhileASurfaceJobRunsCoalesceIntoOneJobOfTheNewestInputs)
+{
+    constexpr std::size_t kWorkers = 2;
+    JobSystem::WorkStealingThreadPool pool(kWorkers);
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    terrain.World.SetJobSystem(&pool);
+    ScopedStoreFolder folder("coalesce");
+    const GUID scene = GUID::Generate();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    ASSERT_TRUE(DrainSurfacePages(terrain));
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    const std::vector<uint64> before = StorePageHashes(stores[0].File, levels);
+
+    const ECS::EntityHandle dab = AddCornerPaintDab(terrain);
+    terrain.World.SwapLifecycleEvents();
+    BusyPool busy(pool, kWorkers);
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    const TerrainSurfacePageBaker reader(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                         SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                         SurfaceHeightPageFetch{}, nullptr);
+    const std::size_t pages = reader.Level0PagesReading(tiled.SurfaceChanged).size();
+    ASSERT_GT(pages, 0u);
+    ASSERT_LE(pages, TerrainSurfacePageDriver::kLevel0PagesAJob);
+    ASSERT_TRUE(UpdateUntilPending(terrain, pages)) << "the settle started no job, or baked on the frame thread";
+    EXPECT_EQ(StorePageHashes(stores[0].File, levels), before) << "the frame thread baked the stroke";
+
+    for (const float32 strength : {0.5f, 0.3f})
+    {
+        terrain.World.GetComponentForWrite<Components::TerrainPaintLayerEffect>(dab)->Strength = strength;
+        ASSERT_TRUE(UpdateUntilPending(terrain, 2u * pages)) << "strength " << strength;
+        for (uint32 frame = 0; frame < TerrainSurfacePageDriver::kSurfaceSettleFrames; ++frame)
+            terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        EXPECT_EQ(terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)), 2u * pages)
+            << "a settle while the job runs queued its pages twice, or started a second job";
+    }
+    busy.Release();
+    ASSERT_TRUE(DrainSurfacePages(terrain));
+
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                  SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                  GeneratedHeightPages(provider, tiled), &pool);
+    const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-coalesce-full.gepage";
+    ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+    EXPECT_EQ(StorePageHashes(stores[0].File, levels), StorePageHashes(full, levels))
+        << "the store is not the bake of the newest stroke";
+    RemoveSurfaceStore(full);
+}
+
+// A run of the cold open keeps the stores open between its jobs. When the terrain closes, a job
+// publishes the stores off the frame thread; the splat store holds the run's pages as the full bake
+// has them, and no temporary file stays.
+TEST(TerrainRegionBake, AStoreThatARunHoldsOpenIsPublishedWhenItsTerrainCloses)
+{
+    constexpr std::size_t kWorkers = 2;
+    JobSystem::WorkStealingThreadPool pool(kWorkers);
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    ScopedStoreFolder folder("close");
+    const GUID scene = GUID::Generate();
+    const TiledTerrainHandle handle = TiledHandleOf(terrain);
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    const std::size_t pages = static_cast<std::size_t>(levels.front().PagesX) * levels.front().PagesZ;
+    ASSERT_GT(pages, 2u * TerrainSurfacePageDriver::kLevel0PagesAJob);
+
+    terrain.World.SetJobSystem(&pool);
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    {
+        // The first job of the run is queued before the holds, so it has ended when the constructor returns.
+        BusyPool busy(pool, kWorkers);
+        EXPECT_FALSE(std::filesystem::exists(stores[0].File)) << "the first job of the run published the store";
+        terrain.World.DestroyEntityImmediate(terrain.Entity);
+        terrain.World.SwapLifecycleEvents();
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        EXPECT_FALSE(std::filesystem::exists(stores[0].File)) << "the frame thread published the splat store";
+        EXPECT_FALSE(std::filesystem::exists(stores[1].File)) << "the frame thread published the normal store";
+    }
+    {
+        // The close job is queued before the holds, so it has ended when the constructor returns.
+        BusyPool flush(pool, kWorkers);
+    }
+    ASSERT_TRUE(std::filesystem::exists(stores[0].File)) << "the closed terrain left its splat store open";
+    ASSERT_TRUE(std::filesystem::exists(stores[1].File)) << "the closed terrain left its normal store open";
+    for (uint32 frame = 0; frame < 3u; ++frame)
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    EXPECT_EQ(terrain.System.SurfacePages().PendingPages(handle), 0u) << "the driver still holds the terrain";
+
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                  SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                  GeneratedHeightPages(provider, tiled), &pool);
+    const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-close-full.gepage";
+    ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+    const std::vector<uint64> closed = StorePageHashes(stores[0].File, levels);
+    const std::vector<uint64> whole = StorePageHashes(full, levels);
+    std::size_t baked = 0;
+    for (std::size_t page = 0; page < pages; ++page)
+    {
+        if (closed[page] == 0u)
+            continue;
+        ++baked;
+        EXPECT_EQ(closed[page], whole[page]) << "level-0 page " << page;
+    }
+    EXPECT_EQ(baked, TerrainSurfacePageDriver::kLevel0PagesAJob) << "the published store lost the run's pages";
+    std::size_t temporaries = 0;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(folder.Path))
+        if (entry.path().extension() == ".tmp")
+            ++temporaries;
+    EXPECT_EQ(temporaries, 0u) << "a temporary store file stayed";
+    RemoveSurfaceStore(full);
+}
+
+// A job bakes from the snapshot of its settle. When the live rules change before the job runs, the
+// store holds the bake of the old rules.
+TEST(TerrainRegionBake, ASurfaceJobBakesFromItsSnapshotWhenTheLiveRulesChange)
+{
+    constexpr std::size_t kWorkers = 2;
+    JobSystem::WorkStealingThreadPool pool(kWorkers);
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    terrain.World.SetJobSystem(&pool);
+    ScopedStoreFolder folder("snapshot-rules");
+    const GUID scene = GUID::Generate();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    ASSERT_TRUE(DrainSurfacePages(terrain));
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-snapshot-rules-full.gepage";
+
+    AddCornerPaintDab(terrain);
+    terrain.World.SwapLifecycleEvents();
+    BusyPool busy(pool, kWorkers);
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    std::vector<uint64> firstRules;
+    {
+        TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                      SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                      GeneratedHeightPages(provider, tiled), nullptr);
+        ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+        firstRules = StorePageHashes(full, levels);
+    }
+    const TerrainSurfacePageBaker reader(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                         SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                         SurfaceHeightPageFetch{}, nullptr);
+    const std::size_t pages = reader.Level0PagesReading(tiled.SurfaceChanged).size();
+    ASSERT_GT(pages, 0u);
+    ASSERT_TRUE(UpdateUntilPending(terrain, pages)) << "the settle started no job";
+
+    terrain.World.GetComponentForWrite<Components::TerrainSurfaceRulesEffect>(terrain.Rules)->Rules[0].Conditions[0].Max =
+        0.4f;
+    for (uint32 frame = 0; frame < 3u * TerrainSurfacePageDriver::kSurfaceSettleFrames; ++frame)
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    std::vector<uint64> secondRules;
+    {
+        TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                      SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                      GeneratedHeightPages(provider, tiled), nullptr);
+        ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+        secondRules = StorePageHashes(full, levels);
+    }
+    ASSERT_NE(firstRules, secondRules) << "the rules change left the splat unchanged";
+
+    busy.Release();
+    // The queued job is before the holds, so it has run when the constructor returns; the job of the
+    // rules change waits.
+    BusyPool after(pool, kWorkers);
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    ASSERT_TRUE(std::filesystem::exists(stores[0].File)) << "the job did not publish the store";
+    EXPECT_EQ(StorePageHashes(stores[0].File, levels), firstRules) << "the job read the live rules, not its snapshot";
+    after.Release();
+    ASSERT_TRUE(DrainSurfacePages(terrain));
+    RemoveSurfaceStore(full);
+}
+
+// The frame thread never waits for a surface job. With every worker held, the frames of a cold open
+// and a settle return and make no store; once the workers are free, the jobs make the splat and
+// normal stores as the full bakes of the painted terrain.
+TEST(TerrainRegionBake, TheFrameThreadNeverWaitsForASurfaceJob)
+{
+    constexpr std::size_t kWorkers = 2;
+    JobSystem::WorkStealingThreadPool pool(kWorkers);
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    terrain.World.SetJobSystem(&pool);
+    ScopedStoreFolder folder("never-waits");
+    const GUID scene = GUID::Generate();
+
+    // A frame that waited for the job would wait until the watchdog frees the workers.
+    constexpr auto kWatchdog = std::chrono::seconds(60);
+    BusyPool busy(pool, kWorkers);
+    std::promise<void> done;
+    const std::future<void> finished = done.get_future();
+    JobSystem::WorkStealingThreadPool watchdogPool(1);
+    JobSystem::TaskHandle watchdog = watchdogPool.Submit([&busy, &finished, kWatchdog] {
+        if (finished.wait_for(kWatchdog) == std::future_status::timeout)
+            busy.Unblock();
+    });
+    const auto start = std::chrono::steady_clock::now();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    AddCornerPaintDab(terrain);
+    terrain.World.SwapLifecycleEvents();
+    for (uint32 frame = 0; frame < 3u * TerrainSurfacePageDriver::kSurfaceSettleFrames; ++frame)
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    const bool storesBeforeRelease = !SceneSurfaceStores(folder.Path, scene).empty();
+    const TerrainSurfacePageBaker reader(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                         SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                         SurfaceHeightPageFetch{}, nullptr);
+    const std::size_t stroked = reader.Level0PagesReading(tiled.SurfaceChanged).size();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    done.set_value();
+    watchdog.Wait();
+    EXPECT_LT(elapsed, kWatchdog) << "a frame waited for a surface job";
+    EXPECT_FALSE(storesBeforeRelease) << "the frame thread made the stores";
+    EXPECT_EQ(terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)), stroked)
+        << "the stroke's pages are not queued behind the open job";
+
+    busy.Release();
+    ASSERT_TRUE(DrainSurfacePages(terrain));
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    for (const SceneSurfaceStore& store : stores)
+    {
+        TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), store.Plane,
+                                      SurfaceAccess(tiled, store.Plane), GeneratedHeightPages(provider, tiled), &pool);
+        const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-never-waits-full.gepage";
+        ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+        EXPECT_EQ(StorePageHashes(store.File, levels, store.Plane), StorePageHashes(full, levels, store.Plane))
+            << SurfacePlaneName(store.Plane) << " store";
+        RemoveSurfaceStore(full);
+    }
+}
+
+namespace
+{
+
+// The pages of `wanted` of `level` that stream `stream` of `residency` holds.
+std::size_t LoadedPages(const PageStreaming::PageResidencyManager& residency, uint32 stream,
+                        std::span<const PageStreaming::PageWant> wanted, uint32 level)
+{
+    std::size_t loaded = 0;
+    for (const PageStreaming::PageWant& want : wanted)
+        if (want.Address.Level == level && residency.Bytes(stream, want.Address) != nullptr)
+            ++loaded;
+    return loaded;
+}
+
+// Every page of `levels`, nearest first by page column and row.
+std::vector<PageStreaming::PageWant> EverySurfacePage(std::span<const PageStreaming::PageStoreLevel> levels)
+{
+    std::vector<PageStreaming::PageWant> wanted;
+    for (uint32 level = 0; level < levels.size(); ++level)
+        for (uint32 z = 0; z < levels[level].PagesZ; ++z)
+            for (uint32 x = 0; x < levels[level].PagesX; ++x)
+                wanted.push_back({PageStreaming::PageAddress{0, static_cast<uint8>(level), x, z},
+                                  static_cast<float32>(x + z), false});
+    return wanted;
+}
+
+// Updates `residency` until stream `stream` holds `count` pages of `level` of `wanted`, at most 30 s.
+void UpdateUntilLoaded(PageStreaming::PageResidencyManager& residency, uint64& frame, uint32 stream,
+                       std::span<const PageStreaming::PageWant> wanted, uint32 level, std::size_t count)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (LoadedPages(residency, stream, wanted, level) < count && std::chrono::steady_clock::now() < deadline)
+    {
+        residency.Update(++frame, 1.0f / 60.0f, false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+// The loaded bytes of page `address` of the store at `file`.
+std::vector<uint8> PublishedPayload(const std::filesystem::path& file, const PageStreaming::PageAddress& address)
+{
+    PageStreaming::PageStoreReader store;
+    EXPECT_EQ(store.Open(file, PageStreaming::PageFieldKind::Splat), "");
+    std::vector<uint8> stored;
+    std::vector<uint8> payload;
+    EXPECT_TRUE(store.ReadPageBytes(address, stored) && store.DecodePayload(address, stored, payload));
+    return payload;
+}
+
+// Page `address` of `access`, read on a worker of `pool`.
+PageStreaming::PageFetchOutcome FetchOnWorker(JobSystem::WorkStealingThreadPool& pool,
+                                              const PageStreaming::PageStoreAccess& access,
+                                              const PageStreaming::PageAddress& address)
+{
+    PageStreaming::PageFetchOutcome outcome;
+    pool.Submit([&] { outcome = access.Fetch(address); }, JobSystem::JobPriority::Background).Wait();
+    return outcome;
+}
+
+} // namespace
+
+// A stream over the splat store of a terrain reads the level-0 pages of a run's first job before the
+// run ends. After the run, a stream configured before it reads every page of the published store
+// through the same store access. No stream is configured again.
+TEST(TerrainRegionBake, ASurfacePageBakedMidRunIsReadByItsStreamBeforeTheRunEndsWithNoConfigure)
+{
+    constexpr std::size_t kWorkers = 2;
+    JobSystem::WorkStealingThreadPool pool(kWorkers);
+    JobSystem::WorkStealingThreadPool readers(1);
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    ScopedStoreFolder folder("live-read");
+    const GUID scene = GUID::Generate();
+    const TiledTerrainHandle handle = TiledHandleOf(terrain);
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    const std::shared_ptr<const PageStreaming::PageStoreAccess> access =
+        terrain.System.SurfacePages().SurfaceStore(handle, PageStreaming::PageFieldKind::Splat);
+    ASSERT_NE(access, nullptr);
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u);
+    const std::filesystem::path splat =
+        stores[0].Plane == PageStreaming::PageFieldKind::Splat ? stores[0].File : stores[1].File;
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    const std::vector<PageStreaming::PageWant> wanted = EverySurfacePage(levels);
+    const std::size_t level0 = static_cast<std::size_t>(levels.front().PagesX) * levels.front().PagesZ;
+    ASSERT_GT(level0, 2u * TerrainSurfacePageDriver::kLevel0PagesAJob);
+
+    PageStreaming::PageResidencyBudget budget;
+    budget.CpuBytes = 1ull << 30;
+    PageStreaming::PageResidencyManager residency(&readers, nullptr, budget);
+    residency.ConfigureField(0, 2u * static_cast<uint32>(wanted.size()), 2, 0.0f);
+    residency.Configure(0, 0, PageStreaming::PageSource{nullptr, nullptr, access});
+    residency.Configure(1, 0, PageStreaming::PageSource{nullptr, nullptr, access});
+    residency.Request(0, wanted);
+    residency.Request(1, {});
+    uint64 frame = 0;
+    const uint32 top = static_cast<uint32>(levels.size()) - 1u;
+    const std::size_t topPages = static_cast<std::size_t>(levels[top].PagesX) * levels[top].PagesZ;
+    UpdateUntilLoaded(residency, frame, 0, wanted, top, topPages);
+    ASSERT_EQ(LoadedPages(residency, 0, wanted, top), topPages)
+        << "the published pinned levels did not load";
+    ASSERT_EQ(LoadedPages(residency, 0, wanted, 0u), 0u) << "a level-0 page loaded before the run";
+
+    terrain.World.SetJobSystem(&pool);
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    {
+        // The run's first job is queued before the holds, so it has ended when the constructor
+        // returns; the holds keep the run from going on.
+        BusyPool busy(pool, kWorkers);
+        UpdateUntilLoaded(residency, frame, 0, wanted, 0u, TerrainSurfacePageDriver::kLevel0PagesAJob);
+        EXPECT_EQ(LoadedPages(residency, 0, wanted, 0u), TerrainSurfacePageDriver::kLevel0PagesAJob)
+            << "the first job's pages did not load while the run was open";
+        EXPECT_GT(terrain.System.SurfacePages().PendingPages(handle), 0u) << "the run ended";
+        EXPECT_FALSE(std::filesystem::exists(splat)) << "the run published the store";
+    }
+    ASSERT_TRUE(DrainSurfacePages(terrain));
+    ASSERT_TRUE(std::filesystem::exists(splat));
+    EXPECT_EQ(terrain.System.SurfacePages().SurfaceStore(handle, PageStreaming::PageFieldKind::Splat), access)
+        << "the run gave the plane another store access";
+    UpdateUntilLoaded(residency, frame, 0, wanted, 0u, level0);
+    ASSERT_EQ(LoadedPages(residency, 0, wanted, 0u), level0) << "a page baked in the run did not load";
+    for (const PageStreaming::PageWant& want : wanted)
+        if (want.Address.Level == 0u)
+            EXPECT_EQ(*residency.Bytes(0, want.Address), PublishedPayload(splat, want.Address))
+                << "level-0 page " << want.Address.X << "," << want.Address.Z;
+
+    residency.Request(1, wanted);
+    UpdateUntilLoaded(residency, frame, 1, wanted, 0u, level0);
+    for (const PageStreaming::PageWant& want : wanted)
+    {
+        const std::vector<uint8>* bytes = residency.Bytes(1, want.Address);
+        ASSERT_NE(bytes, nullptr);
+        EXPECT_EQ(*bytes, PublishedPayload(splat, want.Address))
+            << "level " << int(want.Address.Level) << " page " << want.Address.X << "," << want.Address.Z;
+    }
+    readers.Shutdown();
+}
+
+// The driver goes away while a job of a run waits for a worker and a stream reads the store. The
+// stream's store access stays readable, the job bakes and publishes its pages, and the stream reads them.
+TEST(TerrainRegionBake, ASurfaceStoreAccessOutlivesItsDriverAndReadsTheRunItsLastJobPublishes)
+{
+    constexpr std::size_t kWorkers = 2;
+    JobSystem::WorkStealingThreadPool pool(kWorkers);
+    JobSystem::WorkStealingThreadPool readers(1);
+    auto terrain = std::make_unique<SplatStoreTerrain>(3u, 3u);
+    ASSERT_NE(terrain->Tiled, nullptr);
+    ScopedStoreFolder folder("live-read-outlives");
+    const GUID scene = GUID::Generate();
+    const TiledTerrainHandle handle = TiledHandleOf(*terrain);
+    GiveSurfaceStores(*terrain, folder.Path, scene);
+    const std::shared_ptr<const PageStreaming::PageStoreAccess> access =
+        terrain->System.SurfacePages().SurfaceStore(handle, PageStreaming::PageFieldKind::Splat);
+    ASSERT_NE(access, nullptr);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(*terrain->Tiled);
+    const std::vector<PageStreaming::PageWant> wanted = EverySurfacePage(levels);
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u);
+    const std::filesystem::path splat =
+        stores[0].Plane == PageStreaming::PageFieldKind::Splat ? stores[0].File : stores[1].File;
+
+    PageStreaming::PageResidencyBudget budget;
+    budget.CpuBytes = 1ull << 30;
+    PageStreaming::PageResidencyManager residency(&readers, nullptr, budget);
+    residency.ConfigureField(0, static_cast<uint32>(wanted.size()), 2, 0.0f);
+    residency.Configure(0, 0, PageStreaming::PageSource{nullptr, nullptr, access});
+    residency.Request(0, wanted);
+    uint64 frame = 0;
+
+    terrain->World.SetJobSystem(&pool);
+    terrain->System.Update(terrain->World, 1.0f / 60.0f);
+    {
+        BusyPool first(pool, kWorkers); // the run's first job has ended
+    }
+    {
+        BusyPool busy(pool, kWorkers);
+        terrain->System.Update(terrain->World, 1.0f / 60.0f); // takes the first job, queues the second
+        ASSERT_GT(terrain->System.SurfacePages().PendingPages(handle), 0u);
+        residency.Update(++frame, 1.0f / 60.0f, false); // reads start
+        terrain.reset();
+        residency.Update(++frame, 1.0f / 60.0f, false);
+    }
+    {
+        BusyPool flush(pool, kWorkers); // the second job has run and let its stores go
+    }
+    // The job lets its stores go once it has run, which can be just after the flush.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!std::filesystem::exists(splat) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ASSERT_TRUE(std::filesystem::exists(splat)) << "the job of the driver that went away did not publish the store";
+    UpdateUntilLoaded(residency, frame, 0, wanted, 0u, 2u * TerrainSurfacePageDriver::kLevel0PagesAJob);
+    EXPECT_EQ(LoadedPages(residency, 0, wanted, 0u), 2u * TerrainSurfacePageDriver::kLevel0PagesAJob)
+        << "the stream did not read the pages of the run's two jobs";
+    for (const PageStreaming::PageWant& want : wanted)
+        if (const std::vector<uint8>* bytes = want.Address.Level == 0u ? residency.Bytes(0, want.Address) : nullptr)
+            EXPECT_EQ(*bytes, PublishedPayload(splat, want.Address))
+                << "level-0 page " << want.Address.X << "," << want.Address.Z;
+    std::size_t temporaries = 0;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(folder.Path))
+        if (entry.path().extension() == ".tmp")
+            ++temporaries;
+    EXPECT_EQ(temporaries, 0u) << "a temporary store file stayed";
+    readers.Shutdown();
+}
+
+// A plane that loses its store (the ground write turned off: the Color store's key is 0) closes its
+// store access before its file is deleted. A read of the access on a worker finds every page absent,
+// with no error, and the driver gives the plane no access.
+TEST(TerrainRegionBake, ASurfacePlaneThatLosesItsStoreClosesItsAccessBeforeTheFileIsDeleted)
+{
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    ScopedStoreFolder folder("lost-plane");
+    const GUID scene = GUID::Generate();
+    const TiledTerrainHandle handle = TiledHandleOf(terrain);
+    Components::TerrainGrass grass{};
+    grass.GroundDarkening = 0.6f;
+    terrain.World.AddComponentImmediate<Components::TerrainGrass>(terrain.Entity, grass);
+    terrain.World.SwapLifecycleEvents();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    const std::shared_ptr<const PageStreaming::PageStoreAccess> access =
+        terrain.System.SurfacePages().SurfaceStore(handle, PageStreaming::PageFieldKind::Color);
+    ASSERT_NE(access, nullptr);
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(*terrain.Tiled);
+    const PageStreaming::PageAddress top{0, static_cast<uint8>(levels.size() - 1u), 0, 0};
+    JobSystem::WorkStealingThreadPool readers(1);
+    ASSERT_NE(FetchOnWorker(readers, *access, top).Bytes, nullptr) << "the Color store's pinned page did not read";
+
+    // The run publishes the Color store into its access, then the open job deletes the store.
+    terrain.World.GetComponentForWrite<Components::TerrainGrass>(terrain.Entity)->GroundDarkening = 0.0f;
+    for (uint32 frame = 0; frame <= 2u * TerrainSurfacePageDriver::kSurfaceSettleFrames &&
+                           terrain.System.SurfacePages().SurfaceStore(handle, PageStreaming::PageFieldKind::Color);
+         ++frame)
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    ASSERT_EQ(terrain.System.SurfacePages().SurfaceStore(handle, PageStreaming::PageFieldKind::Color), nullptr);
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    EXPECT_EQ(stores.size(), 2u);
+    EXPECT_TRUE(std::none_of(stores.begin(), stores.end(), [](const SceneSurfaceStore& store) {
+        return store.Plane == PageStreaming::PageFieldKind::Color;
+    })) << "the Color store stayed on disk";
+    const PageStreaming::PageFetchOutcome outcome = FetchOnWorker(readers, *access, top);
+    EXPECT_TRUE(outcome.Absent) << "the access of the deleted Color store read a page";
+    EXPECT_EQ(outcome.Bytes, nullptr);
+    EXPECT_TRUE(outcome.Error.empty()) << outcome.Error;
+    readers.Shutdown();
+}
+
+// A stroke that settles while the job that opens kept stores waits for a worker bakes after the
+// open: the open does not drop the pages the stroke queued. The stroke comes after the frame that
+// starts the open, so the stores keep the key they were opened under.
+TEST(TerrainRegionBake, AStrokeThatSettlesWhileKeptStoresOpenBakesAfterTheOpen)
+{
+    constexpr std::size_t kWorkers = 2;
+    JobSystem::WorkStealingThreadPool pool(kWorkers);
+    SplatStoreTerrain terrain(3u, 3u);
+    ASSERT_NE(terrain.Tiled, nullptr);
+    TiledTerrainData& tiled = *terrain.Tiled;
+    terrain.World.SetJobSystem(&pool);
+    ScopedStoreFolder folder("stroke-during-open");
+    const GUID scene = GUID::Generate();
+    GiveSurfaceStores(terrain, folder.Path, scene);
+    ASSERT_TRUE(DrainSurfacePages(terrain));
+    const std::vector<SceneSurfaceStore> stores = SceneSurfaceStores(folder.Path, scene);
+    ASSERT_EQ(stores.size(), 2u);
+
+    // The driver forgets the stores, then opens them again: they are current, so they are kept.
+    TerrainService::Get().SetHeightPageStoreLocation(HeightPageStoreLocation{});
+    terrain.System.Update(terrain.World, 1.0f / 60.0f);
+    HeightPageStoreLocation cache;
+    cache.CacheDirectory = folder.Path;
+    TerrainService::Get().SetHeightPageStoreLocation(cache);
+    {
+        BusyPool busy(pool, kWorkers);
+        terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        AddCornerPaintDab(terrain);
+        terrain.World.SwapLifecycleEvents();
+        for (uint32 frame = 0; frame < 3u * TerrainSurfacePageDriver::kSurfaceSettleFrames; ++frame)
+            terrain.System.Update(terrain.World, 1.0f / 60.0f);
+        ASSERT_GT(terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)), 0u)
+            << "the stroke queued no page while the stores opened";
+    }
+    ASSERT_TRUE(DrainSurfacePages(terrain));
+    EXPECT_EQ(SceneSurfaceStores(folder.Path, scene), stores) << "the stores were not kept";
+
+    const std::vector<PageStreaming::PageStoreLevel> levels = TileLatticeLevels(tiled);
+    const PageStreaming::GeneratedHeightPageProvider provider(TileNoiseLattice(tiled));
+    TerrainSurfacePageBaker fresh(terrain.System.SnapshotSurfaceBake(tiled, {}), PageStreaming::PageFieldKind::Splat,
+                                  SurfaceAccess(tiled, PageStreaming::PageFieldKind::Splat),
+                                  GeneratedHeightPages(provider, tiled), &pool);
+    const std::filesystem::path full = folder.Path.parent_path() / "ge-surface-pages-stroke-during-open-full.gepage";
+    ASSERT_EQ(BakeWholeStore(fresh, tiled, full), "");
+    EXPECT_EQ(StorePageHashes(stores[0].File, levels), StorePageHashes(full, levels))
+        << "the open dropped the stroke's pages";
     RemoveSurfaceStore(full);
 }
 

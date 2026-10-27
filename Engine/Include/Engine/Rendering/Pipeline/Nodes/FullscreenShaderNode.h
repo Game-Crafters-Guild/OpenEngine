@@ -106,6 +106,9 @@ class FullscreenShaderNode : public IRenderPipelineNode
     // through can still allocate that input (#2158).
     // JSON: "inputGates": { "uScattering": "bloomScatteringActive" }.
     std::unordered_map<std::string, std::string> m_InputGates; // bindingName -> gate name
+    // Inputs whose ref may not resolve this frame: such a binding samples the engine's black texture
+    // and the stage still runs. JSON: "optionalInputs": [ "uSampleDelta" ].
+    std::vector<std::string> m_OptionalInputs;
     // Package/project texture assets bound directly by source-prefixed path.
     // JSON: "assetTextures": { "uLensDirt": "package-alias:/Textures/dirt.png" }.
     std::unordered_map<std::string, std::string> m_AssetTextures;

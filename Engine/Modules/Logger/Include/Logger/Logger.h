@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Logger/Backtrace.h"
+#include "Logger/LogChannel.h"
 #include "Logger/LogLevel.h"
 #include "Logger/LogSink.h"
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -45,6 +47,21 @@ class Log
     static void ClearSinks();
     static void SetLogLevel(LogLevel level);
     static LogLevel GetLogLevel();
+
+    /// Sets the level of the channel at this LogChannel::Index. With nullopt, the channel uses the stricter of the
+    /// global level and its default level again.
+    /// The setting applies whatever the global level is, except while logging is off. Thread-safe.
+    static void SetChannelLevel(std::uint16_t channel, std::optional<LogLevel> level);
+    /// The setting SetChannelLevel stored, or nullopt when the channel follows the global level.
+    static std::optional<LogLevel> GetChannelSetting(std::uint16_t channel);
+    /// The level the channel passes now: its setting, else the stricter of the global and its default level.
+    static LogLevel GetChannelLevel(std::uint16_t channel);
+    /// The level the channel passes with no setting: the stricter of the global and its default level.
+    static LogLevel GetChannelLevelWithoutSetting(std::uint16_t channel);
+    /// The number of registered channels; channel indices run from 0 (Core) to this count less one.
+    static std::uint16_t GetChannelCount();
+    /// The registered name, or empty for an index that is not registered.
+    static std::string_view GetChannelName(std::uint16_t channel);
 
     /**
      * @brief Block until every queued entry has reached the sinks and the sinks
@@ -147,72 +164,9 @@ class Log
         CriticalImpl(std::string_view(buf));
     }
 
-    // ========================================
-    // LOGGING WITH SOURCE LOCATION
-    // ========================================
-
-
-    static void LogWithSource(LogLevel level, const OwnedSourceLocation& source, int line,
-                              std::string_view message)
-    {
-        if (!ShouldLog(level)) return;
-        if (level >= LogLevel::Critical)
-            CriticalImplWithSource(message, source.File(), line, source.Function());
-        else
-            EnqueueStringWithSource(level, message, source.File(), line, source.Function());
-    }
-
-    template <typename... Args>
-    static void LogWithSource(LogLevel level, const OwnedSourceLocation& source, int line,
-                              std::format_string<Args...> fmt, Args&&... args)
-    {
-        if (!ShouldLog(level)) return;
-        if (level >= LogLevel::Critical)
-        {
-            auto& buf = GetFormatBuffer();
-            buf.clear();
-            std::format_to(std::back_inserter(buf), fmt, std::forward<Args>(args)...);
-            CriticalImplWithSource(std::string_view(buf), source.File(), line, source.Function());
-            return;
-        }
-        EnqueueFormattedWithSource(level, fmt.get(), std::make_format_args(args...),
-                                   source.File(), line, source.Function());
-    }
-
-    static void LogWithSource(LogLevel level, const char* file, int line, const char* function,
-                              std::string_view message)
-    {
-        if (!ShouldLog(level)) return;
-        if (level >= LogLevel::Critical)
-        {
-            CriticalImplWithSource(message, CopySourceCString(file), line, CopySourceCString(function));
-            return;
-        }
-        EnqueueString(level, message, file, line, function);
-    }
-
-    template <typename... Args>
-    static void LogWithSource(LogLevel level, const char* file, int line, const char* function,
-                              std::format_string<Args...> fmt, Args&&... args)
-    {
-        if (!ShouldLog(level)) return;
-        if (level >= LogLevel::Critical)
-        {
-            auto& buf = GetFormatBuffer();
-            buf.clear();
-            std::format_to(std::back_inserter(buf), fmt, std::forward<Args>(args)...);
-            CriticalImplWithSource(std::string_view(buf), CopySourceCString(file), line, CopySourceCString(function));
-            return;
-        }
-        EnqueueFormatted(level, fmt.get(), std::make_format_args(args...), file, line, function);
-    }
-
-    // The gate every entry point and the source macros share: below the
-    // effective level nothing is formatted, copied or queued.
-    static bool ShouldLog(LogLevel level)
-    {
-        return level >= GetState().m_EffectiveMinLevel.load(std::memory_order_relaxed);
-    }
+    // The gate of the functions above: the Core channel's level. Below it nothing
+    // is formatted, copied or queued.
+    static bool ShouldLog(LogLevel level);
 
   private:
 
@@ -221,34 +175,21 @@ class Log
     static void MaybeAttachBacktrace(LogMessage& msg);
 
     // The single construction point for a queued record: everything but the
-    // message text, owned by the record before it leaves the producer. A null
-    // file/function means the call site supplied no source location.
-    static LogMessage MakeOwnedRecord(LogLevel level, const char* file, int line,
-                                      const char* function);
+    // message text and the source, owned by the record before it leaves the producer.
+    static LogMessage MakeOwnedRecord(LogLevel level);
 
     // Consume borrowed arguments and any module-defined formatter before the
     // producer returns. Only owned text/metadata crosses the asynchronous queue;
     // moving, dispatching or destroying a record never calls into its producer.
-    static void EnqueueFormatted(LogLevel level, std::string_view format, std::format_args args,
-                                 const char* file = nullptr, int line = 0,
-                                 const char* function = nullptr);
+    static void EnqueueFormatted(LogLevel level, std::string_view format, std::format_args args);
 
     // String enqueue copies the supplied text into the owned record.
-    static void EnqueueString(LogLevel level, std::string_view message,
-                              const char* file = nullptr, int line = 0,
-                              const char* function = nullptr);
-
-    // Owned metadata bypasses pointer probing, but is copied into the record.
-    static void EnqueueFormattedWithSource(LogLevel level, std::string_view format,
-                                           std::format_args args, std::string_view file,
-                                           int line, std::string_view function);
-    static void EnqueueStringWithSource(LogLevel level, std::string_view message,
-                                        std::string_view file, int line, std::string_view function);
+    static void EnqueueString(LogLevel level, std::string_view message);
 
     // Critical synchronous dispatch (formats eagerly, bypasses queue).
     static void CriticalImpl(std::string_view message);
-    static void CriticalImplWithSource(std::string_view message,
-                                       std::string_view file, int line, std::string_view function);
+    /// Sends a Critical record to the sinks on the calling thread.
+    static void DispatchCritical(const LogMessage& msg);
 
     static void PushEntry(LogMessage&& entry);
 
@@ -259,85 +200,16 @@ class Log
     static void DrainThreadFunc();
     static void DispatchToSinks(const LogMessage& message);
 
-    // Public ONLY so the opaque pointer can round-trip through
-    // GetStateForSharing/RedirectToSharedState across module copies; treat as
-    // an opaque handle outside Logger.cpp.
-  public:
-    struct LoggerState
-    {
-        Config m_Config;
-        std::vector<std::unique_ptr<LogSink>> Sinks;
-        std::mutex Mutex;
-        std::atomic<bool> Initialized{false};
-        std::atomic<LogLevel> m_EffectiveMinLevel{LogLevel::Off};
-
-        // Async drain infrastructure
-        std::vector<LogMessage> Queue;
-        std::mutex QueueMutex;
-        std::condition_variable QueueCV;
-        std::thread DrainThread;
-        std::atomic<bool> DrainRunning{false};
-        std::atomic<bool> DrainThreadWaiting{false};
-        std::thread::id DrainThreadId{};
-        std::vector<std::promise<void>> FlushPromises;
-
-        ~LoggerState()
-        {
-            if (DrainThread.joinable())
-            {
-                DrainRunning.store(false, std::memory_order_release);
-                QueueCV.notify_one();
-                DrainThread.join();
-            }
-        }
-    };
-
   private:
     static LoggerState& GetState();
+
+    friend LogChannel RegisterChannel(std::string_view name, LogLevel defaultLevel);
+    friend bool Enabled(const LogChannel& channel, LogLevel level);
+    friend void Enqueue(const LogChannel& channel, LogLevel level, const char* file, int line,
+                        const char* function, std::string_view format, std::format_args args);
 
     Log(const Log&) = delete;
     Log& operator=(const Log&) = delete;
 };
 
 } // namespace Logger
-
-// ========================================
-// CONVENIENCE MACROS
-// ========================================
-
-#if LOGGER_ENABLE_SOURCE_LOCATION && defined(_DEBUG)
-#define LOGGER_LOG_OWNED_SOURCE(level, format, ...) \
-    do { \
-        if (Logger::Log::ShouldLog(level)) { \
-            const auto& loggerSource = [](const char* file, const char* function) -> const Logger::OwnedSourceLocation& { \
-                static const Logger::OwnedSourceLocation source(file, function); \
-                return source; \
-            }(__FILE__, __FUNCTION__); \
-            Logger::Log::LogWithSource(level, loggerSource, __LINE__, format __VA_OPT__(,) __VA_ARGS__); \
-        } \
-    } while (false)
-#define LOG_TRACE(format, ...) \
-    LOGGER_LOG_OWNED_SOURCE(Logger::LogLevel::Trace, format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_DEBUG(format, ...) \
-    LOGGER_LOG_OWNED_SOURCE(Logger::LogLevel::Debug, format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_INFO(format, ...) \
-    LOGGER_LOG_OWNED_SOURCE(Logger::LogLevel::Info, format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_WARNING(format, ...) \
-    LOGGER_LOG_OWNED_SOURCE(Logger::LogLevel::Warning, format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_ERROR(format, ...) \
-    LOGGER_LOG_OWNED_SOURCE(Logger::LogLevel::Error, format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_CRITICAL(format, ...) \
-    LOGGER_LOG_OWNED_SOURCE(Logger::LogLevel::Critical, format __VA_OPT__(,) __VA_ARGS__)
-#else
-#ifdef NDEBUG
-#define LOG_TRACE(...) ((void)0)
-#define LOG_DEBUG(...) ((void)0)
-#else
-#define LOG_TRACE(format, ...) Logger::Log::Trace(format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_DEBUG(format, ...) Logger::Log::Debug(format __VA_OPT__(,) __VA_ARGS__)
-#endif
-#define LOG_INFO(format, ...) Logger::Log::Info(format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_WARNING(format, ...) Logger::Log::Warning(format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_ERROR(format, ...) Logger::Log::Error(format __VA_OPT__(,) __VA_ARGS__)
-#define LOG_CRITICAL(format, ...) Logger::Log::Critical(format __VA_OPT__(,) __VA_ARGS__)
-#endif

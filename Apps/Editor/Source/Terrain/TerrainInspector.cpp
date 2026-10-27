@@ -36,7 +36,7 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/RenderLayersRow.h"
-#include "Inspectors/TerrainSizingNotice.h"
+#include "Terrain/TerrainSizingNotice.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Foldout.h"
 #include "UI/Controls/Label.h"

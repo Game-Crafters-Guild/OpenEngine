@@ -1,6 +1,7 @@
 #include "Core/EngineLoggerBridge.h"
 #include "Logger/Logger.h"
 #include "LoggerModuleProbe.h"
+#include "LoggerInternals.h"
 #include "NativeScripting/BuildCacheRecord.h"
 #include "NativeScripting/EngineBuildIdentity.h"
 #include "NativeScripting/NativeScriptManager.h"
@@ -91,7 +92,7 @@ void RejectLoggingModule(bool drainFirst, bool logOnDetach)
     bool rejectionSeen = false;
     for (const auto& message : spy->Messages)
     {
-        if (message.Message == "probe value 29")
+        if (message.Message == "probe value 29" && message.Channel == ProbeLog().Index)
             ++probeMessages;
         if (message.Message == "detach log 71")
             ++detachMessages;

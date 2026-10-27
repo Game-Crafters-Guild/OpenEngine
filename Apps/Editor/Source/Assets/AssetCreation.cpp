@@ -24,6 +24,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <mutex>
@@ -90,6 +91,29 @@ static bool IsPermutationOfSlotIndices(const std::vector<uint32_t>& order, uint3
 
 } // namespace
 
+
+// True when a file is at `path` or `reserved` holds it.
+static bool IsPathTaken(const std::filesystem::path& path, std::span<const std::filesystem::path> reserved)
+{
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) || std::find(reserved.begin(), reserved.end(), path) != reserved.end();
+}
+
+std::filesystem::path MakeNumberedFilePath(const std::filesystem::path& dir, const std::filesystem::path& fileName,
+                                           std::span<const std::filesystem::path> reserved)
+{
+    constexpr int kLastNumber = 9999;
+    std::filesystem::path candidate = (dir / fileName).lexically_normal();
+    const std::string stem = fileName.stem().string();
+    const std::string extension = fileName.extension().string();
+    for (int number = 1; IsPathTaken(candidate, reserved); ++number)
+    {
+        if (number > kLastNumber)
+            return {};
+        candidate = (dir / (stem + " (" + std::to_string(number) + ")" + extension)).lexically_normal();
+    }
+    return candidate;
+}
 
 std::filesystem::path MakeUniqueFilePath(const std::filesystem::path& dir,
                                          const std::string& baseStem,

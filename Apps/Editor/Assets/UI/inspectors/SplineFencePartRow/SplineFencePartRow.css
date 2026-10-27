@@ -1,0 +1,27 @@
+/* SplineFencePartRow: the kind, the mesh field and the list actions sit together on one line. */
+
+/* The kind dropdown is as wide as its longest name, Crest; the mesh field takes the rest. */
+.spline-fence-part-kind-cell {
+    flex: 0 0 auto;
+    width: 84px;
+    margin-right: 4px;
+}
+
+.spline-fence-part-kind {
+    width: 100%;
+}
+
+/* A narrow inspector moves the list actions under the mesh field, so the mesh name stays readable. */
+.spline-fence-part-field {
+    flex: 1 1 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    min-width: 0px;
+}
+
+.spline-fence-part-mesh-cell {
+    flex: 1 1 0;
+    min-width: 120px;
+}

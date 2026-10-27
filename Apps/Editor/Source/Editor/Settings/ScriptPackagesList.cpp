@@ -1,21 +1,18 @@
 #include "Editor/Settings/ScriptPackagesList.h"
 
 #include "AssetCore/SharedFileRead.h"
-#include "Editor/EditorPaths.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Logger/Logger.h"
 #include "Scripting/ScriptPackageRestore.h"
 #include "Scripting/ScriptsProjectFile.h"
 #include "Types/StringUtils.h"
+#include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/TextField.h"
-#include "UI/Parsers/XMLParser.h"
 #include "UI/UIEvents.h"
 
-#include <fstream>
 #include <memory>
-#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -35,47 +32,6 @@ constexpr const char* kNewVersionClass = "script-packages-new-version";
 constexpr const char* kAddClass = "script-packages-add";
 constexpr const char* kRemoveClass = "script-packages-remove";
 constexpr const char* kStatusClass = "script-packages-status";
-
-std::string ReadLayoutText(const char* assetPath)
-{
-    const std::filesystem::path path = GetEditorGlobalPaths().installAssetsRoot / assetPath;
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-    {
-        Logger::Log::Error("Script Packages: {} did not read, so the page shows no packages. Check that it is "
-                           "staged under the editor asset mount.",
-                           path.generic_string());
-        return {};
-    }
-    std::ostringstream text;
-    text << in.rdbuf();
-    return text.str();
-}
-
-// Read once per process: the page is built each time it opens, and a disk read each time is not
-// needed for a layout that does not change.
-const std::string& ListLayoutText()
-{
-    static const std::string s_Text = ReadLayoutText(kListLayoutAssetPath);
-    return s_Text;
-}
-
-const std::string& RowLayoutText()
-{
-    static const std::string s_Text = ReadLayoutText(kRowLayoutAssetPath);
-    return s_Text;
-}
-
-std::unique_ptr<UIElement> ParseLayout(const std::string& text, const char* assetPath)
-{
-    std::unique_ptr<UIElement> root;
-    if (text.empty() || !UIParsing::XMLParser::ParseLayoutFromString(text, root, assetPath) || !root)
-    {
-        Logger::Log::Error("Script Packages: {} did not parse, so the page shows no packages.", assetPath);
-        return nullptr;
-    }
-    return root;
-}
 
 // The children of `parent` that carry `className`, in order.
 std::vector<UIElement*> ChildrenWithClass(UIElement* parent, const char* className)
@@ -117,7 +73,7 @@ std::string SavedVersion(const std::filesystem::path& file, bool central, const 
 ScriptPackagesList::ScriptPackagesList(std::filesystem::path projectPath) : m_ProjectPath(std::move(projectPath))
 {
     RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
-    std::unique_ptr<UIElement> root = ParseLayout(ListLayoutText(), kListLayoutAssetPath);
+    std::unique_ptr<UIElement> root = Editor::ControlLayoutLoader::Load(kListLayoutAssetPath, {});
     if (!root)
         return;
     UIElement* rootRaw = root.get();
@@ -219,7 +175,7 @@ void ScriptPackagesList::RemovePackage(const std::string& id)
 
 void ScriptPackagesList::AppendRow(const ScriptsProjectFile::PackageReference& package)
 {
-    std::unique_ptr<UIElement> row = ParseLayout(RowLayoutText(), kRowLayoutAssetPath);
+    std::unique_ptr<UIElement> row = Editor::ControlLayoutLoader::Load(kRowLayoutAssetPath, {});
     if (!row)
         return;
     auto* id = dynamic_cast<Label*>(InspectorDrag::FindChildByClass(row.get(), kIdClass));

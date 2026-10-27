@@ -7,10 +7,14 @@
 #include <filesystem>
 #include <functional>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 
 namespace GameEngine {
+
+enum class AssetType; // defined in AssetCore/AssetTypes.h
+class AssetThumbnailHandler;
 
 class IThumbnailProvider {
 public:
@@ -18,6 +22,10 @@ public:
 
     // Set the runtime Assets/ root so returned paths can be relative to it.
     virtual void SetAssetsRoot(const std::filesystem::path& root) = 0;
+
+    // The handler that makes the thumbnails of `type`; it replaces any earlier one for the type.
+    // A feature registers the handler of the asset kind it owns.
+    virtual void RegisterHandler(AssetType type, std::unique_ptr<AssetThumbnailHandler> handler) = 0;
 
     // Returns a relative path (from Assets/) to a thumbnail or representative image if already cached.
     // If not cached, starts an async request and invokes onReady with the relative path when ready.

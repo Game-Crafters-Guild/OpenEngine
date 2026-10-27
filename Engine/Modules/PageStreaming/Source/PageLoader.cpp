@@ -1,8 +1,9 @@
 #include "PageStreaming/PageLoader.h"
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
-#include "PageStreaming/PageStoreFormat.h"
-#include "PageStreaming/PageStoreReader.h"
+#include "PageStreaming/PageStore/PageStoreAccess.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
+#include "PageStreaming/PageStore/PageStoreReader.h"
 
 #include "AssetCore/Asset.h"
 #include "Assets/AssetIOService.h"
@@ -100,7 +101,9 @@ void SubmitPageLoad(AssetIOService& io, PageLoadRequest request)
 
 uint32 PageSource::PayloadBytes() const
 {
-    assert((Store || Generated) && "a page source has a store or a generated provider");
+    assert((Store || Generated || Access) && "a page source has a store, a generated provider or a store access");
+    if (Access)
+        return PagePayloadBytes(Access->Format());
     return PagePayloadBytes(Store ? Store->Layout().Header.Format : PageFieldFormat::HeightSteps);
 }
 
@@ -112,6 +115,8 @@ uint64 NextPageFetchRetryFrame(uint64 frameIndex, uint32 failedAttempts)
 
 PageFetchOutcome FetchPage(const PageSource& source, const PageAddress& address)
 {
+    if (source.Access)
+        return source.Access->Fetch(address);
     PageFetchOutcome outcome;
     outcome.Address = address;
     if (source.Store && !source.Store->Layout().FindPresent(address))
