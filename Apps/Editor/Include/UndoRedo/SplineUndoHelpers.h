@@ -88,6 +88,17 @@ inline bool DecodeSplineConfig(const UndoRedoService::SnapshotTarget::Snapshot& 
     return true;
 }
 
+// Entity identity survives creation redo and scene snapshots; spline pool handles do not.
+inline SplineECS::SplineHandle ResolveSplineUndoHandle(ECS::World* world, ECS::EntityHandle entity,
+                                                      SplineECS::SplineHandle fallback)
+{
+    if (!world)
+        return fallback;
+    const auto* component = world->GetComponent<Components::SplineComponent>(entity);
+    return component ? SplineECS::SplineHandle{component->SplineDataIndex, component->SplineDataGeneration}
+                     : SplineECS::SplineHandle{};
+}
+
 inline UndoRedoService::SnapshotTarget MakeSplineEditableSnapshotTarget(
     SplineECS::SplineService* splineService,
     SplineECS::SplineHandle splineHandle,
@@ -99,25 +110,27 @@ inline UndoRedoService::SnapshotTarget MakeSplineEditableSnapshotTarget(
     UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
 
-    target.Capture = [splineService, splineHandle](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+    target.Capture = [splineService, splineHandle, world, entity](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
     {
-        auto* d = splineService ? splineService->GetSplineData(splineHandle) : nullptr;
-        if (!d)
+        const auto currentHandle = ResolveSplineUndoHandle(world, entity, splineHandle);
+        auto* data = splineService ? splineService->GetSplineData(currentHandle) : nullptr;
+        if (!data)
             return false;
-        return EncodeSplineConfig(d, out);
+        return EncodeSplineConfig(data, out);
     };
 
-    target.Apply = [splineService, splineHandle](const UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
+    target.Apply = [splineService, splineHandle, world, entity](const UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
     {
         GameEngine::Spline::SplineData restored{};
         if (!DecodeSplineConfig(snap, restored))
             return false;
-        auto* d = splineService ? splineService->GetSplineData(splineHandle) : nullptr;
-        if (!d)
+        const auto currentHandle = ResolveSplineUndoHandle(world, entity, splineHandle);
+        auto* data = splineService ? splineService->GetSplineData(currentHandle) : nullptr;
+        if (!data)
             return false;
-        *d = std::move(restored);
-        d->MarkDirty();
-        splineService->RebuildCache(splineHandle);
+        *data = std::move(restored);
+        data->MarkDirty();
+        splineService->RebuildCache(currentHandle);
         return true;
     };
 
