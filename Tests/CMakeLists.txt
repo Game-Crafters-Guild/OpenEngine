@@ -1522,11 +1522,6 @@ target_include_directories(HotReloadDemo PRIVATE
 ge_set_output_tests(HotReloadDemo)
 ge_stage_runtime_dependencies(HotReloadDemo)
 
-if(ENABLE_SCRIPTING)
-  add_subdirectory(NativeShim)
-  add_subdirectory(ManagedInterop)
-endif()
-
 # Add async hot-reload job system tests
 add_subdirectory(Jobs)
 

@@ -1,6 +1,5 @@
 #pragma warning disable CS1591
 using System;
-using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -45,58 +44,31 @@ namespace GameEngine.ManagedInteropTests
         public void Reset() => Assert.That(GE_TestUI_Reset(), Is.EqualTo(0));
 
         // ---------------------------------------------------------------------------
-        // The native test double must resolve beside this assembly. A library from
-        // another build or an inherited search path would invalidate the test results.
+        // PROBE 0: WHICH GameEngine.Native library is loaded. The shim is copied under the
+        // platform file name in the test output dir while GE_NATIVE_DIR/PATH point at the
+        // build tree's real one, so "the tests were green" says nothing until this is pinned.
         // ---------------------------------------------------------------------------
 
         [Test]
         public void ReportWhichNativeModuleIsLoaded()
         {
             AddElement("probe0");
-            string? path = LoadedNativeModulePath();
-            TestContext.Out.WriteLine("LOADED GameEngine.Native = " + (path ?? "<not loaded>"));
-            Assert.That(path, Is.Not.Null, "the loaded native library could not be identified");
-            Assert.That(Path.GetFullPath(path!), Is.EqualTo(Path.Combine(AppContext.BaseDirectory, Path.GetFileName(path!))),
-                "the test host must load the staged native double beside the test assembly");
-        }
-
-        private static string? LoadedNativeModulePath()
-        {
-            if (OperatingSystem.IsMacOS())
+            string? path = null;
+            foreach (System.Diagnostics.ProcessModule m in
+                     System.Diagnostics.Process.GetCurrentProcess().Modules)
             {
-                // Process.Modules omits dylibs on macOS. Resolve the image that owns
-                // the same test export, using this assembly's normal P/Invoke search.
-                nint library = NativeLibrary.Load(kLib, typeof(UiReviewProbeTests).Assembly, null);
-                try
+                if (m.ModuleName != null && IsNativeLibraryFileName(m.ModuleName))
                 {
-                    nint address = NativeLibrary.GetExport(library, nameof(GE_TestUI_Reset));
-                    return FindAddressImage(address, out NativeImage image) != 0
-                        ? Marshal.PtrToStringUTF8(image.FileName) : null;
-                }
-                finally
-                {
-                    NativeLibrary.Free(library);
+                    path = m.FileName;
+                    break;
                 }
             }
-
-            using var process = System.Diagnostics.Process.GetCurrentProcess();
-            foreach (System.Diagnostics.ProcessModule module in process.Modules)
-                if (IsNativeLibraryFileName(module.ModuleName))
-                    return module.FileName;
-            return null;
+            TestContext.Out.WriteLine("LOADED GameEngine.Native = " + (path ?? "<not loaded>"));
+            Assert.That(path, Is.Not.Null, "GameEngine.Native is not in the module list at all");
+            Assert.That(path!.Replace('\\', '/'), Does.Contain("InteropTests/bin"),
+                "the REAL engine native DLL won the probe, not the shim double — every UI shim "
+                + "assertion in this suite would then be measuring something else");
         }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct NativeImage
-        {
-            public nint FileName;
-            public nint BaseAddress;
-            public nint SymbolName;
-            public nint SymbolAddress;
-        }
-
-        [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "dladdr", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int FindAddressImage(nint address, out NativeImage image);
 
         // The file names CMake gives GameEngine.Native on Windows, macOS and Linux.
         private static bool IsNativeLibraryFileName(string moduleName) =>
