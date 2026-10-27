@@ -938,3 +938,36 @@ TEST(SplineInteractionStateTests, IndexDoesNotOwnTheStateAfterItsConsumersClose)
     EXPECT_TRUE(weak.expired());
     EXPECT_EQ(AcquireSplineInteractionState(world)->Selection().PointIndex, -1);
 }
+
+TEST_F(SplineToolTests, TwoDimensionalBrushDrawsInXYWithoutGroundHit)
+{
+    ScopedSplineStickToMeshSetting stickToMesh(false);
+    SplineTool tool(*GetWorld());
+    for (const auto phase : {PointerPhase::Down, PointerPhase::Move, PointerPhase::Up})
+    {
+        const float x = phase == PointerPhase::Down ? -2.0f : phase == PointerPhase::Move ? 0.0f : 2.0f;
+        auto event = MakePointer(phase, 100.0f + x * 20.0f, 100.0f, {x, 3.0f, -10.0f}, {0, 0, 1});
+        event.IsEditor2D = true;
+        event.orthoHeight = 10.0f;
+        event.tanHalfFovY = 0.0f;
+        tool.OnPointerEvent(event);
+    }
+    auto* service = GameEngine::SplineECS::SplineService::TryGet();
+    ASSERT_NE(service, nullptr);
+    size_t count = 0;
+    GetWorld()->Query<GameEngine::ECS::Read<SplineComponent>, GameEngine::ECS::Read<Transform>>()
+        .Each([&](const SplineComponent& reference, const Transform& transform)
+        {
+            ++count;
+            const auto* spline = service->GetSplineData({reference.SplineDataIndex, reference.SplineDataGeneration});
+            ASSERT_NE(spline, nullptr);
+            ASSERT_GE(spline->Points.size(), 2u);
+            for (const auto& point : spline->Points)
+            {
+                EXPECT_NEAR(point.Position.y + transform.GetPosition().y, 3.0f, 0.001f);
+                EXPECT_NEAR(point.Position.z + transform.GetPosition().z, 0.0f, 0.001f);
+            }
+        });
+    EXPECT_EQ(count, 1u);
+}
+

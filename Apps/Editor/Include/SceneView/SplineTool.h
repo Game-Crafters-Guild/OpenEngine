@@ -233,6 +233,8 @@ public:
 
 private:
     std::shared_ptr<SplineInteractionState> m_State;
+    bool RaycastEditingPlane(const GizmoRay& ray, Mathematics::Vector3& outHit);
+
     // Raycast against terrain heightfield and scene meshes.
     // When hitEntityId is non-null, receives the ECS entity id of the mesh hit
     // (0 if the hit came from terrain or the fallback plane).

@@ -518,6 +518,23 @@ bool SplineTool::RaycastEntityMesh(const GizmoRay& ray, uint32 entityId, Vector3
     return true;
 }
 
+bool SplineTool::RaycastEditingPlane(const GizmoRay& ray, Vector3& outHit)
+{
+    Vector3 origin{0.0f, 0.0f, 0.0f};
+    Vector3 normal{0.0f, 0.0f, 1.0f};
+    const auto selected = m_SelectionQuery ? m_SelectionQuery() : ECS::EntityHandle{};
+    if (const auto* transform = m_State->World().GetComponent<Components::WorldTransform>(selected))
+    {
+        const auto matrix = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
+        origin = matrix.TransformPoint(origin);
+        const auto x = matrix.TransformPoint({1.0f, 0.0f, 0.0f}) - origin;
+        const auto y = matrix.TransformPoint({0.0f, 1.0f, 0.0f}) - origin;
+        normal = Vector3::Cross(x, y).NormalizeOrZero();
+    }
+    float distance = 0.0f;
+    return Mathematics::IntersectRayPlane(ray, origin, normal, distance, outHit) && distance >= 0.0f;
+}
+
 void SplineTool::OnPointerEvent(const ScenePointerEvent& event)
 {
     if (event.phase == PointerPhase::Move && m_TransformTool)
@@ -539,7 +556,11 @@ void SplineTool::OnPointerEvent(const ScenePointerEvent& event)
     // whatever's behind it (terrain / floor), which is the problem this option
     // fixes. A miss produces no sample and the stroke visibly pauses until the
     // cursor returns to the target mesh.
-    if (stickyEnabled && m_IsDrawingBrush && m_StickyEntityId != 0)
+    if (event.IsEditor2D)
+    {
+        hit = RaycastEditingPlane(event.ray, hitPos);
+    }
+    else if (stickyEnabled && m_IsDrawingBrush && m_StickyEntityId != 0)
     {
         hit = RaycastEntityMesh(event.ray, m_StickyEntityId, hitPos);
         if (hit)
