@@ -133,6 +133,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -987,6 +988,15 @@ class HierarchyPanel::HierarchyDataProvider final : public TreeChangeTrackingPro
         return it == m_GhostChildren.end() ? 0 : static_cast<int>(it->second.size());
     }
 
+    // The entity's children in the order the tree lists them; empty when it has none.
+    std::span<const EntityHandle> ChildrenOf(const EntityHandle& entity) const
+    {
+        const auto it = m_Children.find(static_cast<uint32_t>(Encode(entity)));
+        if (it == m_Children.end())
+            return {};
+        return it->second;
+    }
+
     // ITreeDataProvider
     int GetRootCount() const override { return 1; }
     TreeId GetRootId(int) const override { return kRootId; }
@@ -1587,7 +1597,9 @@ HierarchyPanel::HierarchyPanel()
 	        else
 	            row->RemoveClass("entity-runtime");
 
-	        Editor::ApplyHierarchyEntityIconClasses(m_World, row, handle);
+	        // The provider's child lists are the tree the rows show.
+	        auto childrenOf = [this](ECS::EntityHandle parent) { return m_Provider->ChildrenOf(parent); };
+	        Editor::ApplyHierarchyEntityIconClasses(m_World, row, handle, childrenOf);
 
             // Keep the preview icon separate from the title so it can have its own
             // hover state.  TreeView rows are pooled, so create the child once and
@@ -1713,7 +1725,7 @@ HierarchyPanel::HierarchyPanel()
                    the Inspector header and the Bookmarks row. The row keeps its
                    own copy of the kind class for IsCssGlyphEntity and the
                    row-level rules. */
-                Editor::ApplyHierarchyEntityIconClassesToIcon(m_World, previewIconEl, handle);
+                Editor::ApplyHierarchyEntityIconClassesToIcon(m_World, previewIconEl, handle, childrenOf);
 
                 Editor::ApplyHierarchyLightIconTint(*m_World, handle, *previewIconEl);
 
@@ -1818,7 +1830,7 @@ HierarchyPanel::HierarchyPanel()
                     {
                         // Check entity itself or its children for a model asset (submesh models
                         // have MeshRenderer on children, not the parent).
-                        const GUID modelGuid = Editor::FindModelGuidForEntityOrChildren(m_World, handle);
+                        const GUID modelGuid = Editor::FindModelGuidForEntityOrChildren(m_World, handle, childrenOf);
                         if (!modelGuid.IsNull() &&
                             m_Context && m_Context->Thumbnails && !m_Context->UIReplayActive)
                             {

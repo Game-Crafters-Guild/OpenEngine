@@ -81,6 +81,18 @@ inline bool IsSpriteMeshRenderer(const MeshRenderer& mr)
     return true;
 }
 
+// The model the entity draws itself, or a null GUID when it draws none or a primitive.
+GUID ModelGuidDrawnBy(ECS::World& world, ECS::EntityHandle entity)
+{
+    const auto* renderer = world.GetComponent<MeshRenderer>(entity);
+    if (!renderer || !MeshRendererReferencesModelAsset(*renderer))
+        return {};
+    const GUID guid = ModelGuidFromMeshRenderer(*renderer);
+    if (guid.IsNull() || Engine::Renderer::PrimitiveGenerator::IsPrimitive(guid))
+        return {};
+    return guid;
+}
+
 // Resolves the active model-thumb coloring mode from the owning UIManager root.
 // Returns true if model thumbnails should be shown in natural color (saturation=1 / tint=white),
 // i.e. when either the main "Colored Hierarchy Icons" flag or the "3D Model Thumbnails Always
@@ -251,35 +263,39 @@ std::filesystem::path TryResolveInspectorIconAssetPath(ECS::World* world,
     return {};
 }
 
-GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle)
+GUID FindModelGuidForEntityOrChildren(ECS::World* world, ECS::EntityHandle handle,
+                                      EntityChildrenOf childrenOf)
 {
     if (!world || !handle.IsValid() || !world->IsValid(handle))
         return {};
 
-    if (const auto* mr = world->GetComponent<MeshRenderer>(handle))
+    if (const GUID own = ModelGuidDrawnBy(*world, handle); !own.IsNull())
+        return own;
+
+    // Imported models often put the MeshRenderer several levels deep (under an
+    // Armature, or on a submesh under a pivot), so the walk covers the whole subtree.
+    if (!childrenOf)
     {
-        if (MeshRendererReferencesModelAsset(*mr))
+        std::vector<ECS::EntityHandle> descendants;
+        Components::DescendantsOf(*world, handle, descendants);
+        for (const ECS::EntityHandle descendant : descendants)
         {
-            const GUID g = ModelGuidFromMeshRenderer(*mr);
-            if (!g.IsNull() && !Engine::Renderer::PrimitiveGenerator::IsPrimitive(g))
-                return g;
+            if (const GUID guid = ModelGuidDrawnBy(*world, descendant); !guid.IsNull())
+                return guid;
         }
+        return {};
     }
 
-    // Imported models routinely place the MeshRenderer several levels deep
-    // (under an Armature, or on a submesh under a transform pivot), so a
-    // direct-child scan misses them. BFS the full subtree and return the
-    // first non-primitive model GUID we find.
-    std::vector<ECS::EntityHandle> descendants;
-    Components::DescendantsOf(*world, handle, descendants);
-    for (const auto& descendant : descendants)
+    // Each entity is in one parent's list, so the walk reaches each descendant once.
+    std::vector<ECS::EntityHandle> frontier{handle};
+    for (std::size_t next = 0; next < frontier.size(); ++next)
     {
-        const auto* mr = world->GetComponent<MeshRenderer>(descendant);
-        if (!mr || !MeshRendererReferencesModelAsset(*mr))
-            continue;
-        const GUID g = ModelGuidFromMeshRenderer(*mr);
-        if (!g.IsNull() && !Engine::Renderer::PrimitiveGenerator::IsPrimitive(g))
-            return g;
+        for (const ECS::EntityHandle child : childrenOf(frontier[next]))
+        {
+            if (const GUID guid = ModelGuidDrawnBy(*world, child); !guid.IsNull())
+                return guid;
+            frontier.push_back(child);
+        }
     }
     return {};
 }
@@ -345,7 +361,8 @@ void ClearHierarchyEntityIconClasses(UIElement* row)
     }
 }
 
-void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::EntityHandle handle)
+void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::EntityHandle handle,
+                                     EntityChildrenOf childrenOf)
 {
     ClearHierarchyEntityIconClasses(row);
     if (!world || !row || !handle.IsValid() || !world->IsValid(handle))
@@ -544,7 +561,7 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::Ent
         return;
     }
 
-    const GUID childModelGuid = FindModelGuidForEntityOrChildren(world, handle);
+    const GUID childModelGuid = FindModelGuidForEntityOrChildren(world, handle, childrenOf);
     if (!childModelGuid.IsNull())
     {
         row->AddClass("hierarchy-entity-model");
@@ -555,9 +572,10 @@ void ApplyHierarchyEntityIconClasses(ECS::World* world, UIElement* row, ECS::Ent
 }
 
 void ApplyHierarchyEntityIconClassesToIcon(ECS::World* world, UIElement* icon,
-                                           ECS::EntityHandle handle)
+                                           ECS::EntityHandle handle,
+                                           EntityChildrenOf childrenOf)
 {
-    ApplyHierarchyEntityIconClasses(world, icon, handle);
+    ApplyHierarchyEntityIconClasses(world, icon, handle, childrenOf);
     if (!icon)
         return;
     /* Only the glyph-drawing element gets the marker, so `.entity-icon` plus the
