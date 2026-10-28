@@ -2,6 +2,9 @@
   <UIElement id="WebContainer" class="web-container">
     <UIElement id="WebTabBar" class="web-tab-bar hidden" />
     <UIElement class="web-controls">
+      <Button id="WebBackButton" class="small secondary icon-button web-nav-button web-back-icon" />
+      <Button id="WebForwardButton" class="small secondary icon-button web-nav-button web-forward-icon" />
+      <Button id="WebReloadButton" class="small secondary icon-button web-nav-button web-reload-icon" />
       <TextField id="WebURLField" class="web-url-field" value="" placeholder="Enter URL (YouTube or any webpage) and press Enter..." />
       <Button id="WebNewTabButton" class="small secondary icon-button plus-icon" />
     </UIElement>

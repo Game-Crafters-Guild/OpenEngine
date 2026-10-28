@@ -296,6 +296,39 @@ public:
         return true;
     }
 
+    void GoBack() override {
+        if (m_Initialized && m_WebView) {
+            [m_WebView goBack];
+        }
+    }
+
+    void GoForward() override {
+        if (m_Initialized && m_WebView) {
+            [m_WebView goForward];
+        }
+    }
+
+    void Reload() override {
+        if (m_Initialized && m_WebView) {
+            [m_WebView reload];
+        }
+    }
+
+    void StopLoading() override {
+        if (m_Initialized && m_WebView) {
+            [m_WebView stopLoading];
+        }
+    }
+
+    WebViewNavigation GetNavigation() const override {
+        if (!m_Initialized || !m_WebView) {
+            return {};
+        }
+        NSString* url = m_WebView.URL.absoluteString;
+        return {m_WebView.canGoBack == YES, m_WebView.canGoForward == YES, m_WebView.isLoading == YES,
+                url ? std::string([url UTF8String]) : std::string()};
+    }
+
     void* GetNativeView() const override {
         return (__bridge void*)m_WebView;
     }

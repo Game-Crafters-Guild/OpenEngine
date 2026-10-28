@@ -180,24 +180,43 @@ if (UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
         endif()
     endif()
 
-    # WebKitGTK still needs pkg-config (not affected by vcpkg contamination)
-    find_package(PkgConfig QUIET)
-    if (PkgConfig_FOUND)
-        pkg_check_modules(WEBKIT2GTK QUIET webkit2gtk-4.0)
-        if (WEBKIT2GTK_FOUND)
-            target_compile_definitions(Platform PRIVATE GE_HAVE_WEBKITGTK=1)
-            target_include_directories(Platform PRIVATE ${WEBKIT2GTK_INCLUDE_DIRS})
-            target_link_libraries(Platform PRIVATE ${WEBKIT2GTK_LIBRARIES})
-        else()
-            target_compile_definitions(Platform PRIVATE GE_HAVE_WEBKITGTK=0)
-        endif()
-    else()
-        target_compile_definitions(Platform PRIVATE GE_HAVE_WEBKITGTK=0)
-    endif()
     # X11 is needed for direct Xlib calls in Window.cpp (cursor, always-on-top, screen color)
     find_package(X11 QUIET)
     if (X11_FOUND)
         target_link_libraries(Platform PRIVATE X11::X11)
+    endif()
+
+    # The web view is WebKitGTK 4.1 (GTK 3) in its own module, PlatformWebViewGtk, which
+    # WebView_Linux.cpp loads at run time: libEngine.so, and so the Player, never depends on
+    # WebKitGTK. The module is built when the WebKitGTK development package is installed; without
+    # it, CreateWebView returns nullptr.
+    set(WEBKITGTK_FOUND FALSE)
+    if (NOT CMAKE_CROSSCOMPILING)
+        find_package(PkgConfig QUIET)
+        if (PkgConfig_FOUND)
+            # System packages only: vcpkg's .pc files on CMAKE_PREFIX_PATH (harfbuzz, freetype2,
+            # zlib) fail the exact versions the system's GTK requires.
+            pkg_check_modules(WEBKITGTK QUIET IMPORTED_TARGET NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH
+                webkit2gtk-4.1 gtk+-x11-3.0)
+        endif()
+    endif()
+    if (WEBKITGTK_FOUND AND X11_FOUND)
+        add_library(PlatformWebViewGtk MODULE Source/WebView_Gtk.cpp Source/WebViewState.cpp)
+        target_compile_features(PlatformWebViewGtk PRIVATE cxx_std_20)
+        target_include_directories(PlatformWebViewGtk PRIVATE Source)
+        target_link_libraries(PlatformWebViewGtk PRIVATE Engine PkgConfig::WEBKITGTK X11::X11)
+        target_compile_options(PlatformWebViewGtk PRIVATE -Wall -Wextra -Wpedantic)
+        # The module records only the libraries it calls: WebKitGTK, GTK, GLib, Xlib and libEngine.
+        target_link_options(PlatformWebViewGtk PRIVATE -Wl,--as-needed)
+        # Xlib's macros (None, Status) would reach WebViewState.cpp in one unity TU.
+        set_target_properties(PlatformWebViewGtk PROPERTIES UNITY_BUILD OFF FOLDER "Engine/Modules")
+        target_compile_definitions(Platform PRIVATE GE_HAVE_WEBKITGTK=1
+            GE_WEBVIEW_GTK_MODULE="$<TARGET_FILE_NAME:PlatformWebViewGtk>")
+        message(STATUS "WebKitGTK ${WEBKITGTK_webkit2gtk-4.1_VERSION} found: the web view is built")
+    else()
+        target_compile_definitions(Platform PRIVATE GE_HAVE_WEBKITGTK=0)
+        message(STATUS "WebKitGTK 4.1 not found: the web view is not built. Install webkit2gtk4.1-devel "
+                       "(Fedora) or libwebkit2gtk-4.1-dev (Debian, Ubuntu) to build it.")
     endif()
 endif()
 
@@ -352,8 +371,8 @@ if(BUILD_TESTING)
         set_tests_properties(PlatformWebViewPageStyleTests PROPERTIES TIMEOUT 30)
     endif()
 
-    # The Windows web view's parts that need no window and no WebView2 runtime. The
-    # helpers under test live in Source/ beside the backend.
+    # The web view's parts that need no window and no web engine. The helpers under test live
+    # in Source/ beside the backends.
     if (WIN32)
         add_executable(PlatformWebViewTests
             Tests/Utf8ToWideTests.cpp
@@ -365,6 +384,18 @@ if(BUILD_TESTING)
                 GTest::gtest
                 GTest::gtest_main
         )
+        target_include_directories(PlatformWebViewTests PRIVATE Source)
+        ge_set_output_tests(PlatformWebViewTests)
+        ge_stage_runtime_dependencies(PlatformWebViewTests)
+        add_test(NAME PlatformWebViewTests COMMAND PlatformWebViewTests)
+    elseif (TARGET PlatformWebViewGtk)
+        # The Linux module drives the same WebViewState; it is compiled into the module, not into
+        # libEngine.so, so the suite compiles it too.
+        add_executable(PlatformWebViewTests
+            Tests/WebViewStateTests.cpp
+            Source/WebViewState.cpp
+        )
+        target_link_libraries(PlatformWebViewTests PRIVATE GTest::gtest GTest::gtest_main)
         target_include_directories(PlatformWebViewTests PRIVATE Source)
         ge_set_output_tests(PlatformWebViewTests)
         ge_stage_runtime_dependencies(PlatformWebViewTests)

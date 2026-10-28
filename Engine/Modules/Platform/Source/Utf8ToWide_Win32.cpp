@@ -22,6 +22,21 @@ std::wstring Utf8ToWide(std::string_view text)
     return wide;
 }
 
+std::string WideToUtf8(std::wstring_view text)
+{
+    if (text.empty())
+        return {};
+
+    const int sourceLength = static_cast<int>(text.size());
+    const int length = WideCharToMultiByte(CP_UTF8, 0, text.data(), sourceLength, nullptr, 0, nullptr, nullptr);
+    if (length <= 0)
+        return {};
+
+    std::string utf8(static_cast<size_t>(length), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.data(), sourceLength, utf8.data(), length, nullptr, nullptr);
+    return utf8;
+}
+
 } // namespace Platform
 } // namespace GameEngine
 

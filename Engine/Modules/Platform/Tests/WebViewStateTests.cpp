@@ -1,6 +1,6 @@
-// The record-then-apply contract of the Windows web view, against a fake target: what reaches the
-// native view, and in which order, before and after it exists. The native view's own geometry is
-// a live check; nothing here creates a window.
+// The record-then-apply contract of the Windows and Linux web views, against a fake target: what
+// reaches the native view, and in which order, before and after it exists. The native view's own
+// geometry is a live check; nothing here creates a window.
 
 #include "WebViewState.h"
 

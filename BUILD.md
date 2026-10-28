@@ -131,6 +131,7 @@ node --version && python3 --version    # optional tools
 | **.NET 10 SDK** | C# scripting host and managed assemblies; not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
 | **Node.js 20 or newer** *(optional)* | Same use as on Windows. | your distribution's `nodejs` package, or [nodejs.org](https://nodejs.org/) |
 | **Python 3.10 or newer** *(optional)* | Same use as on Windows. | your distribution's `python3` package |
+| **WebKitGTK 4.1** *(optional)* | The editor's Web panel. Without it the configure prints that the web view is not built, and the panel shows "Web view not available". A game build never needs it. | `sudo apt install libwebkit2gtk-4.1-dev`, or `sudo dnf install webkit2gtk4.1-devel` |
 
 On Fedora (checked on Fedora 44), these two commands install everything above, including the system packages the vcpkg ports build with (Perl modules for OpenSSL, `nasm`, `autoconf-archive`):
 
@@ -144,7 +145,7 @@ sudo dnf install cmake ninja-build git pkgconf-pkg-config \
   dotnet-sdk-10.0 nodejs python3
 ```
 
-If a port needs another system package, the vcpkg configure error prints the install command. `vcpkg.json` builds the Vulkan loader with X11 and Wayland surface support; GLFW is built for X11, so a Wayland session needs XWayland. For a pure Wayland session, add the `wayland` feature to `glfw3` in `vcpkg.json` and install your distribution's Wayland development packages.
+If a port needs another system package, the vcpkg configure error prints the install command. `vcpkg.json` builds the Vulkan loader with X11 and Wayland surface support; GLFW is built for X11, so a Wayland session needs XWayland. For a pure Wayland session, add the `wayland` feature to `glfw3` in `vcpkg.json` and install your distribution's Wayland development packages; the Web panel then reports "Web view not available", because the web view is a child window of the editor's X11 window.
 
 ## Platform notes
 

@@ -62,6 +62,52 @@ public:
         return !m_Failed && m_State.LoadHTML(html);
     }
 
+    void GoBack() override
+    {
+        if (m_WebView)
+            m_WebView->GoBack();
+    }
+
+    void GoForward() override
+    {
+        if (m_WebView)
+            m_WebView->GoForward();
+    }
+
+    void Reload() override
+    {
+        if (m_WebView)
+            m_WebView->Reload();
+    }
+
+    void StopLoading() override
+    {
+        if (m_WebView)
+            m_WebView->Stop();
+    }
+
+    WebViewNavigation GetNavigation() const override
+    {
+        if (!m_WebView)
+            return {};
+
+        WebViewNavigation navigation;
+        BOOL canGoBack = FALSE;
+        BOOL canGoForward = FALSE;
+        m_WebView->get_CanGoBack(&canGoBack);
+        m_WebView->get_CanGoForward(&canGoForward);
+        navigation.CanGoBack = canGoBack != FALSE;
+        navigation.CanGoForward = canGoForward != FALSE;
+        navigation.IsLoading = m_Handlers->Loading;
+        LPWSTR source = nullptr;
+        if (SUCCEEDED(m_WebView->get_Source(&source)) && source)
+        {
+            navigation.URL = WideToUtf8(source);
+            CoTaskMemFree(source);
+        }
+        return navigation;
+    }
+
     void* GetNativeView() const override { return m_Destroyed ? nullptr : m_Host; }
 
     void Resize(int width, int height) override { m_State.Resize(width, height); }
@@ -97,6 +143,7 @@ public:
         m_OnUnavailable = nullptr;
         if (m_Controller)
         {
+            m_WebView->remove_NavigationStarting(m_NavigationStartingToken);
             m_WebView->remove_NavigationCompleted(m_NavigationCompletedToken);
             m_Controller->Close();
         }
@@ -108,6 +155,11 @@ public:
 private:
     struct Handlers {
         WebView_Win32* Owner = nullptr;
+        // Between the latest navigation's start and its completion. WebView2 reports no loading state
+        // of its own, so the navigation events keep it. A navigation that a newer one replaces
+        // completes after the newer one starts, so only the latest one's completion ends loading.
+        bool Loading = false;
+        UINT64 LatestNavigation = 0;
     };
 
     void OnEnvironmentCreated(ICoreWebView2Environment* environment, const std::string& failure)
@@ -149,10 +201,25 @@ private:
         m_Controller = controller;
         m_WebView = webView;
 
-        // The handler captures nothing, so it cannot outlive the view it reports for.
+        // The handlers hold the shared Handlers block, never the view, so they cannot outlive what
+        // they write to.
+        const std::shared_ptr<Handlers> handlers = m_Handlers;
+        m_WebView->add_NavigationStarting(
+            Callback<ICoreWebView2NavigationStartingEventHandler>(
+                [handlers](ICoreWebView2* /*sender*/, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                    args->get_NavigationId(&handlers->LatestNavigation);
+                    handlers->Loading = true;
+                    return S_OK;
+                })
+                .Get(),
+            &m_NavigationStartingToken);
         m_WebView->add_NavigationCompleted(
             Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                [](ICoreWebView2* /*sender*/, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                [handlers](ICoreWebView2* /*sender*/, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                    UINT64 navigationId = 0;
+                    args->get_NavigationId(&navigationId);
+                    if (navigationId == handlers->LatestNavigation)
+                        handlers->Loading = false;
                     BOOL succeeded = FALSE;
                     args->get_IsSuccess(&succeeded);
                     if (succeeded)
@@ -217,6 +284,7 @@ private:
     std::shared_ptr<WebViewEnvironment_Win32> m_Environment;
     ComPtr<ICoreWebView2Controller> m_Controller;
     ComPtr<ICoreWebView2> m_WebView;
+    EventRegistrationToken m_NavigationStartingToken{};
     EventRegistrationToken m_NavigationCompletedToken{};
     WebViewState m_State;
     std::function<void(const std::string&)> m_OnUnavailable;

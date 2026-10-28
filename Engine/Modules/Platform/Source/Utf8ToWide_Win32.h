@@ -17,6 +17,9 @@ namespace Platform {
  */
 std::wstring Utf8ToWide(std::string_view text);
 
+/// @brief Encode UTF-16 from a wide Win32 API as UTF-8, the reverse of Utf8ToWide.
+std::string WideToUtf8(std::wstring_view text);
+
 } // namespace Platform
 } // namespace GameEngine
 

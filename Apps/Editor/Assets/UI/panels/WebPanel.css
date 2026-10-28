@@ -91,6 +91,38 @@
   border-radius: 4px;
 }
 
+/* Back, forward and reload/stop, left of the URL field. Reload becomes stop while a page loads. */
+.web-nav-button {
+  background-size: 16px 16px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-image-tint: var(--ui_icon_tint_standard);
+}
+
+.web-nav-button:hover {
+  background-image-tint: var(--ui_icon_tint_hover);
+}
+
+.web-nav-button:disabled {
+  background-image-tint: var(--ui_color_text_disabled);
+}
+
+.web-back-icon {
+  background-image: url("editor:Icons/arrow-left.svg");
+}
+
+.web-forward-icon {
+  background-image: url("editor:Icons/arrow-right.svg");
+}
+
+.web-reload-icon {
+  background-image: url("editor:Icons/ResetReload.svg");
+}
+
+.web-stop-icon {
+  background-image: url("editor:Icons/xclose.svg");
+}
+
 .web-url-field {
   flex: 1;
   width: 100%;

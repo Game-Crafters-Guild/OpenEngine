@@ -21,6 +21,7 @@
 #include <cmath>
 #include <regex>
 #include <string>
+#include <string_view>
 #include <sstream>
 #include <filesystem>
 
@@ -29,6 +30,9 @@ namespace
 constexpr int kWebViewOffScreenX = -10000;
 constexpr int kWebViewOffScreenY = -10000;
 constexpr const char* kLastURLPrefKey = "ui.webpanel.lastUrl";
+// The base URL of the page LoadYouTubeVideo writes, which the view reports as its URL while it shows
+// that page.
+constexpr const char* kYouTubeWrapperBaseURL = "https://www.youtube.com";
 GameEngine::WebPanel* s_NativeDragPanel = nullptr;
 
 bool IsNativeDragAssetSupported(const std::filesystem::path& path)
@@ -78,6 +82,8 @@ WebPanel::~WebPanel()
         m_LayoutLoadHandle->Cancel();
     if (m_PanelStyleLoadHandle)
         m_PanelStyleLoadHandle->Cancel();
+    if (UIManager* manager = m_RefreshManager.Get(); manager && m_RefreshToken != 0)
+        manager->UnregisterPeriodicRefresh(m_RefreshToken);
 
     if (s_NativeDragPanel == this)
         s_NativeDragPanel = nullptr;
@@ -151,6 +157,8 @@ void WebPanel::OnPostLayout()
             UpdateWebViewSize();
         }
     }
+    if (m_BindApplied)
+        UpdateNavigationControls();
 
     m_WasVisible = isVisible;
 
@@ -278,6 +286,9 @@ void WebPanel::LoadBindAttachLayoutAndStyle()
                                               // succeeded, which is exactly here.
                                               RefreshElementPointers();
                                               SetupWebView();
+                                              m_RefreshManager = UIManagerRef(ui);
+                                              m_RefreshToken = ui->RegisterPeriodicRefresh(
+                                                  [this]() { UpdateNavigationControls(); });
                                           });
                      },
                      AssetLoadPriority::High));
@@ -287,6 +298,9 @@ void WebPanel::RefreshElementPointers()
 {
     m_Container = FindById("WebContainer"_sid);
     m_URLField = dynamic_cast<TextField*>(FindById("WebURLField"_sid));
+    m_BackButton = dynamic_cast<Button*>(FindById("WebBackButton"_sid));
+    m_ForwardButton = dynamic_cast<Button*>(FindById("WebForwardButton"_sid));
+    m_ReloadButton = dynamic_cast<Button*>(FindById("WebReloadButton"_sid));
     m_TabBar = FindById("WebTabBar"_sid);
     m_WebViewContainer = FindById("WebViewContainer"_sid);
     m_ErrorLabel = dynamic_cast<Label*>(FindById("WebErrorLabel"_sid));
@@ -372,6 +386,30 @@ void WebPanel::RefreshElementPointers()
                 e.Stop();
             }
         });
+    }
+
+    if (m_BackButton)
+    {
+        m_BackButton->SetTooltip("Back");
+        m_BackButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) {
+            if (Platform::IWebView* view = ActiveView())
+                view->GoBack();
+        });
+    }
+
+    if (m_ForwardButton)
+    {
+        m_ForwardButton->SetTooltip("Forward");
+        m_ForwardButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) {
+            if (Platform::IWebView* view = ActiveView())
+                view->GoForward();
+        });
+    }
+
+    if (m_ReloadButton)
+    {
+        m_ReloadButton->SetTooltip("Reload");
+        m_ReloadButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnReloadClicked(); });
     }
 
     if (auto* newTabButton = dynamic_cast<Button*>(FindById("WebNewTabButton"_sid)))
@@ -519,6 +557,8 @@ void WebPanel::LoadURL(const std::string& url)
     {
         tab->url = normalized;
         tab->title = TabTitleForURL(normalized);
+        if (m_URLField)
+            m_URLField->SetValueWithoutNotify(normalized);
         tab->view->SetVisible(true);
         UpdateWebViewSize();
         if (m_ErrorLabel)
@@ -587,7 +627,7 @@ void WebPanel::LoadYouTubeVideo(const std::string& embedURL)
 </html>)";
 
     tab->view->SetVisible(true);
-    if (tab->view->LoadHTML(htmlWrapper, "https://www.youtube.com"))
+    if (tab->view->LoadHTML(htmlWrapper, kYouTubeWrapperBaseURL))
     {
         tab->url = embedURL;
         tab->title = TabTitleForURL(embedURL);
@@ -774,6 +814,63 @@ void WebPanel::UpdateWebViewSize()
         view->Resize(right - left, bottom - top);
         view->SetPosition(left, top);
     }
+}
+
+void WebPanel::OnReloadClicked()
+{
+    Platform::IWebView* view = ActiveView();
+    if (!view)
+        return;
+    if (view->GetNavigation().IsLoading)
+        view->StopLoading();
+    else
+        view->Reload();
+}
+
+void WebPanel::UpdateNavigationControls()
+{
+    Platform::IWebView* view = ActiveView();
+    const Platform::WebViewNavigation navigation = view ? view->GetNavigation() : Platform::WebViewNavigation{};
+    if (m_ShownNavigation && navigation == *m_ShownNavigation)
+        return;
+
+    if (m_BackButton)
+        m_BackButton->SetEnabled(navigation.CanGoBack);
+    if (m_ForwardButton)
+        m_ForwardButton->SetEnabled(navigation.CanGoForward);
+    if (m_ReloadButton)
+    {
+        m_ReloadButton->RemoveClass(navigation.IsLoading ? "web-reload-icon" : "web-stop-icon");
+        m_ReloadButton->AddClass(navigation.IsLoading ? "web-stop-icon" : "web-reload-icon");
+        m_ReloadButton->SetTooltip(navigation.IsLoading ? "Stop" : "Reload");
+    }
+
+    // The field and the tab follow the page through links, redirects and history, except while the
+    // user types in the field, and except on pages the panel writes itself (the dark placeholder and
+    // the YouTube wrapper), whose URL is not one the user can load.
+    WebTab* tab = ActiveTab();
+    const bool isWebPage = navigation.URL.starts_with("http://") || navigation.URL.starts_with("https://");
+    std::string_view page = navigation.URL;
+    if (page.ends_with('/'))
+        page.remove_suffix(1);
+    const bool isPanelPage = page == kYouTubeWrapperBaseURL;
+    const bool urlChanged = !m_ShownNavigation || navigation.URL != m_ShownNavigation->URL;
+    if (tab && urlChanged && isWebPage && !isPanelPage && navigation.URL != tab->url)
+    {
+        tab->url = navigation.URL;
+        const std::string title = TabTitleForURL(navigation.URL);
+        if (title != tab->title)
+        {
+            tab->title = title;
+            RebuildTabBar();
+        }
+        UIManager* ui = GetOwnerManager();
+        const bool typing = ui && m_URLField && ui->GetFocusedElementId() == m_URLField->GetId();
+        if (m_URLField && !typing)
+            m_URLField->SetValueWithoutNotify(navigation.URL);
+    }
+
+    m_ShownNavigation = navigation;
 }
 
 void WebPanel::SetWebViewOffScreen(bool offScreen)
