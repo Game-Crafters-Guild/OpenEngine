@@ -2,9 +2,9 @@
 #
 # JobSystemTests is the PURE module suite (links JobSystem + Logger only —
 # never Engine, no scripting, no shim) and builds on every platform. The
-# scripting/hot-reload suites below the platform gate rely on the legacy
-# GameEngine.NativeShim and a Windows-only layout for managed test projects;
-# Linux/macOS scripting smoke coverage is provided by EngineCoreClrSmokeTests
+# scripting/hot-reload suites below the platform gate use Windows-only native
+# fixtures. The portable managed ABI suite is declared in ManagedInterop/.
+# Linux/macOS scripting smoke coverage also comes from EngineCoreClrSmokeTests
 # and EngineCompileServerSmokeTests.
 find_package(GTest REQUIRED)
 
@@ -82,34 +82,6 @@ set_tests_properties(JobSystemUnitTests PROPERTIES
 # ── Scripting / hot-reload suites (Windows-only, shim-dependent) ──────────
 if(NOT ENABLE_SCRIPTING OR NOT WIN32)
   return()
-endif()
-
-# Build and deploy a tiny native shim DLL to satisfy CoreBridge's ABI probe in tests
-if(WIN32)
-  # GameEngineNativeShimUi.cpp is a TEST DOUBLE for the game-UI element ABI, so the managed
-  # binding's own bookkeeping (wrapper identity, one native subscription per event, listener
-  # isolation, ALC revocation) can be driven from a dotnet-test host that has no engine. The
-  # engine-side contract stays pinned in UITests and ScriptingAbiIntegrationTests.
-  add_library(GameEngine.NativeShim SHARED
-      ../NativeShim/GameEngineNativeShim.cpp
-      ../NativeShim/GameEngineNativeShimUi.cpp)
-  # OUTPUT_NAME collides with the real GameEngine.Native target, so the shim
-  # must build into its own directory or it clobbers the real DLL/.lib in the
-  # shared output dirs (consumers copy it via $<TARGET_FILE:...>, which follows).
-  set_target_properties(GameEngine.NativeShim PROPERTIES OUTPUT_NAME "GameEngine.Native")
-  # Per-config variants required: the top-level CMAKE_*_OUTPUT_DIRECTORY_<CONFIG>
-  # globals initialize per-config target properties, which override the generic ones.
-  foreach(cfg ${CMAKE_CONFIGURATION_TYPES})
-    string(TOUPPER "${cfg}" cfgUpper)
-    set_target_properties(GameEngine.NativeShim PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY_${cfgUpper} "${CMAKE_CURRENT_BINARY_DIR}/NativeShim/${cfg}"
-      LIBRARY_OUTPUT_DIRECTORY_${cfgUpper} "${CMAKE_CURRENT_BINARY_DIR}/NativeShim/${cfg}"
-      ARCHIVE_OUTPUT_DIRECTORY_${cfgUpper} "${CMAKE_CURRENT_BINARY_DIR}/NativeShim/${cfg}"
-      PDB_OUTPUT_DIRECTORY_${cfgUpper} "${CMAKE_CURRENT_BINARY_DIR}/NativeShim/${cfg}")
-  endforeach()
-  # Include Engine public headers so the shim can include ScriptingABI.h
-  target_include_directories(GameEngine.NativeShim PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Include)
-
 endif()
 
 # Create test executable for job system (defined later) and only then wire copy
@@ -211,11 +183,6 @@ else()
 add_dependencies(HotReloadPipelineTests CompileServerHost)
 endif()
 
-# Optional managed interop test project (NUnit)
-add_custom_target(BuildManagedInteropTests ALL
-    COMMAND ${DOTNET_EXECUTABLE} build ${CMAKE_SOURCE_DIR}/Managed/InteropTests/InteropTests.csproj -c ${GE_MANAGED_TEST_CFG}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Building managed interop tests")
 add_dependencies(HotReloadPipelineTests BuildManagedInteropTests)
 # Managed CoreBridge tests (NUnit)
 add_custom_target(BuildManagedCoreBridgeTests ALL
@@ -259,45 +226,8 @@ set_tests_properties(ManagedCoreBridgeTests PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     ENVIRONMENT "DOTNET_ROLL_FORWARD=LatestPatch;DOTNET_ROOT=${DOTNET_DIR};GE_NATIVE_DIR=${CMAKE_BINARY_DIR}/bin/$<CONFIG>;PATH=${CMAKE_BINARY_DIR}/bin/$<CONFIG>;${DOTNET_DIR};$ENV{PATH}")
 
-# Ensure native shim is available next to managed interop tests
-add_dependencies(BuildManagedInteropTests GameEngine.NativeShim)
-add_custom_command(TARGET BuildManagedInteropTests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_SOURCE_DIR}/Managed/InteropTests/bin/${GE_MANAGED_TEST_CFG}/net10.0
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:GameEngine.NativeShim>
-        ${CMAKE_SOURCE_DIR}/Managed/InteropTests/bin/${GE_MANAGED_TEST_CFG}/net10.0/$<TARGET_FILE_NAME:GameEngine.Native>
-    COMMENT "Copying GameEngine.Native to Managed InteropTests output")
-
-add_custom_command(TARGET BuildManagedInteropTests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E remove -f
-        ${CMAKE_SOURCE_DIR}/Managed/InteropTests/bin/${GE_MANAGED_TEST_CFG}/net10.0/hostfxr.dll
-    COMMAND ${CMAKE_COMMAND} -E remove -f
-        ${CMAKE_SOURCE_DIR}/Managed/InteropTests/bin/${GE_MANAGED_TEST_CFG}/net10.0/nethost.dll
-    COMMENT "Preparing Managed InteropTests output")
-
-
-# Derive the dotnet installation directory for PATH augmentation
+# The managed interop target and its test double are declared before Jobs/.
 get_filename_component(DOTNET_DIR "${DOTNET_EXECUTABLE}" DIRECTORY)
-
-
-# Add managed interop tests to CTest (no-build because we build above)
-# Add managed interop tests to CTest (no-build because we build above)
-# The -c MUST be the same generator expression the build and staging steps above use. It was a
-# literal `Debug` while they mapped every non-Debug config (DebugFast, MinSizeRel,
-# RelWithDebInfo) to Release: `dotnet test -c Debug` then built a FRESH bin/Debug output with no
-# shim staged into it, the binding fell back to GE_NATIVE_DIR — the real GameEngine.Native.dll,
-# which has no vcpkg runtime dependencies staged beside it — and the suite reported 44 of 75
-# tests failing with DllNotFoundException. A false red that looks exactly like a broken change.
-add_test(NAME ManagedInteropTests
-    COMMAND ${DOTNET_EXECUTABLE} test ${CMAKE_SOURCE_DIR}/Managed/InteropTests/InteropTests.csproj
-            -c ${GE_MANAGED_TEST_CFG})
-# Run from repo root and set env so native shim is discoverable and correct dotnet is used
-set_tests_properties(ManagedInteropTests PROPERTIES
-    TIMEOUT 120
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    ENVIRONMENT "DOTNET_ROLL_FORWARD=LatestPatch;DOTNET_ROOT=${DOTNET_DIR};GE_NATIVE_DIR=${CMAKE_BINARY_DIR}/bin/$<CONFIG>;PATH=${CMAKE_BINARY_DIR}/bin/$<CONFIG>;${DOTNET_DIR};$ENV{PATH}")
-
 
 # The generated C# bindings against the real GameEngine.Native, in-process (Managed/BindingTests):
 # the build copies the engine's own GameEngine.Native and Engine beside the test assembly, where the

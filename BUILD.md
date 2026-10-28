@@ -272,6 +272,15 @@ On a machine with OBS Studio installed, set `DISABLE_VULKAN_OBS_CAPTURE=1` befor
 
 Through ctest: `ctest --test-dir build/<preset> -C <Config> -R "^ECSCoreTest\." --output-on-failure`. Some suites register under their executable's name and others register each test case (`ECSCoreTest.SomeCase`), so `ctest --test-dir build/<preset> -C <Config> -N -R <pattern>` first lists what a filter matches; a filter that lists nothing runs nothing.
 
+With `BUILD_TESTING=ON` and `ENABLE_SCRIPTING=ON`, the managed ABI suite is available on Windows, macOS, and Linux:
+
+```bash
+cmake --build --preset <preset> --config DebugFast --target BuildManagedInteropTests
+ctest --test-dir build/<preset> -C DebugFast -R "^ManagedInteropTests$" --output-on-failure
+```
+
+The build stages its native test double beside `InteropTests.dll` and keeps it separate from the production native library. Debug and DebugFast use the managed Debug configuration so Debug-only test hooks are present; other configurations use Release. The suite tests managed bindings and hot reload against the double. ECS tests that require the full native ECS interface report a skip in this host.
+
 **Which suites to run.** The ones that exercise the code you changed. Test targets are declared in the `CMakeLists.txt` beside their sources (`Engine/Modules/<Module>/Tests/`, `Tests/`, `Engine/Tests/`, `Apps/Editor/Tests/`); `git grep -l <TypeOrFunction> -- Tests Engine/Tests "Engine/Modules/*/Tests" Apps/Editor/Tests` lists the test sources that use what you changed, and the `CMakeLists.txt` in the same folder names their target.
 
 ## Standalone CLI (gameenginecli)

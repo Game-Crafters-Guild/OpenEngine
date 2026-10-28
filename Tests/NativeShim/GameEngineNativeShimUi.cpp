@@ -1,8 +1,3 @@
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
 
 // A TEST DOUBLE for the game-UI element ABI, not a UI implementation.
 //
@@ -922,4 +917,3 @@ GE_API GE_Result GE_CDECL GE_UIElement_GetRect(uint64_t instanceId, float* x, fl
 }
 
 } // extern "C"
-#endif
