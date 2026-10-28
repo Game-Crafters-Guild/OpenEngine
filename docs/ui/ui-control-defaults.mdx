@@ -105,9 +105,16 @@ Setting text that only grows at its end rebuilds only its last block, so text th
 ::::
 ::::tab[C#]
 
-:::caution[C# binding pending]
-No managed call yet; tracked as [OpenEngine issue #24](https://github.com/Game-Crafters-Guild/OpenEngine/issues/24). The native call is `MarkdownText::SetMarkdown`.
-:::
+```csharp title="Show the patch notes"
+using GameEngine.Scripting;
+
+if (Ui.FindElement("PatchNotes") is Ui.MarkdownText notes)
+    notes.SetText("## 1.2\n- **Lanterns** light the gate\n- Fixed `F` framing");
+```
+
+Declare the control in your `.uxml` document and resolve it after the document mounts. `SetText` passes Markdown to the native control and returns `false` if the element no longer exists. An empty or null string clears it. Call it on the main thread, like the other [game UI bindings](ui-api-guide.mdx).
+
+The wrapper inherits `PointerEntered` and `MouseMoved` from `Ui.Element`. Links keep their native hover styling and open HTTP or HTTPS addresses in the player's browser. The native control exposes no separate link callback. Text that grows at its end keeps the native control's incremental block updates.
 
 ::::
 :::::

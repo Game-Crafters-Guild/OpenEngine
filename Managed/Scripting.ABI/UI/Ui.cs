@@ -57,6 +57,10 @@ namespace GameEngine.Scripting
             [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
 
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_SetMarkdownText(ulong instanceId,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
         private static extern int GE_UIElement_SetClass(ulong instanceId,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string className, int on);
 

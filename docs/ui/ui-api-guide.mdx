@@ -263,7 +263,7 @@ if (Ui.FindElement("Score") is Ui.Label score)
 
 `GameUI::FindElementById` searches every mounted UI document. In C++ an element id is a `StringId`: write an id you know in code as a `"Score"_sid` literal, which is hashed at compile time, and hash an id built at runtime with `HashStringId(name)`. When two documents use the same id, the document owned by the lowest entity id wins, so the result is stable. To look in one document only, call `FindById` on its root, `GameUI::FindDocumentRoot(entity)`. The optional second argument of `FindElementById` receives the entity whose document matched.
 
-`Ui.FindElement` searches every mounted UI document, or only one when you pass its entity, and returns a wrapper typed from the element's tag (`Ui.Button`, `Ui.Label`, or `Ui.Element`). Elements also take classes from a script (`AddClass`), which is how a HUD shows, hides, and expresses state through its stylesheet.
+`Ui.FindElement` searches every mounted UI document, or only one when you pass its entity, and returns a wrapper typed from the element's tag, such as `Ui.Button`, `Ui.Label`, or [`Ui.MarkdownText`](ui-control-defaults.mdx#markdown-text). Tags without a dedicated wrapper return `Ui.Element`. Elements also take classes from a script (`AddClass`), which is how a HUD shows, hides, and expresses state through its stylesheet.
 
 ### Element calls from a script
 
