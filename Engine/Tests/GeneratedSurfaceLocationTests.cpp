@@ -322,6 +322,19 @@ TEST_F(GeneratedSurfaceLocationTest, MissingCacheRootIsAnErrorNotAFallbackBeside
     EXPECT_EQ(CountBuiltGlsl(m_MaterialDir), 0u);
 }
 
+TEST_F(GeneratedSurfaceLocationTest, RegistrySpellingIdentifiesEditorGraphUnderMixedCaseMount)
+{
+    auto context = MakeContext();
+    const auto physicalRoot = m_Root / "EditorAssets";
+    const auto registryRoot = m_Root / "editorassets";
+    context.AssetSourceRoots = {{"editor", physicalRoot, registryRoot}};
+    const auto identity = Rendering::MaterialSourceIdentity(registryRoot / "materials/graph/test.material", context);
+    EXPECT_EQ(identity.generic_string(), "editor/materials/graph/test.material");
+    EXPECT_EQ(Rendering::ResolveShaderSourceIdentity(identity.generic_string(), context),
+              physicalRoot / "materials/graph/test.material");
+    EXPECT_TRUE(Rendering::MaterialSourceIdentity(m_Root / "editorassets-extra/test.material", context).empty());
+}
+
 // A generated surface is a build artifact. Carrying the authoring graph in its
 // tag block made a node drag or a canvas pan rewrite it, which misses the shader
 // cache and recompiles the material for an edit that cannot reach a shader.

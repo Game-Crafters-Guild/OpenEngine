@@ -1,5 +1,7 @@
 #include "Rendering/Materials/MaterialBuildContext.h"
 
+#include "Types/PathUtils.h"
+
 #include <string_view>
 
 namespace GameEngine::Rendering
@@ -14,9 +16,11 @@ std::filesystem::path MaterialSourceIdentity(const std::filesystem::path& materi
     for (const MaterialBuildContext::AssetSourceRoot& source : context.AssetSourceRoots)
     {
         const fs::path root = fs::absolute(source.Root).lexically_normal();
-        const fs::path relative = material.lexically_relative(root);
+        fs::path relative = RelativePathUnderRoot(material, root);
+        if (relative.empty() && !source.RegistryRoot.empty())
+            relative = RelativePathUnderRoot(material, source.RegistryRoot);
         const size_t rootLength = root.native().size();
-        if (relative.empty() || *relative.begin() == ".." || rootLength <= matchedRootLength)
+        if (relative.empty() || rootLength <= matchedRootLength)
             continue;
         identity = fs::path(source.Alias) / relative;
         matchedRootLength = rootLength;
