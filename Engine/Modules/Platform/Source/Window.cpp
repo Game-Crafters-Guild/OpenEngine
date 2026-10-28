@@ -50,6 +50,8 @@ extern "C" {
     void GE_MacOS_RemoveTitleBarRightClickMonitor(void* monitor);
 }
 #elif defined(__linux__)
+#include "WebViewHost_Linux.h"
+
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <X11/cursorfont.h>
@@ -956,6 +958,9 @@ void Window::PollEvents()
         ~PollScope() { pollingWindowEvents = false; }
     } scope;
     glfwPollEvents();
+#if defined(__linux__)
+    PumpWebViewEvents();
+#endif
     for (Window* window : s_Windows)
     {
         if (window)
@@ -1587,6 +1592,10 @@ void Window::MouseButtonThunk(GLFWwindow* win, int button, int action, int mods)
             glfwGetCursorPos(win, &cx, &cy);
             self->m_MouseMove(static_cast<float>(cx), static_cast<float>(cy));
         }
+#endif
+#if defined(__linux__)
+        if (action == GLFW_PRESS)
+            ReturnWebViewFocus(win);
 #endif
         if (self->m_MouseButton)
             self->m_MouseButton(button, action == GLFW_PRESS, mods);
