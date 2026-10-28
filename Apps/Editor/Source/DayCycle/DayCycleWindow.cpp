@@ -128,7 +128,7 @@ void DayCycleWindow::OpenScrub()
     ECS::World* world = m_Services.World ? m_Services.World() : nullptr;
     Engine::Renderer::SkyEnvironmentSystem* sky = m_Services.Sky ? m_Services.Sky() : nullptr;
     if (world && sky)
-        m_Scrub = std::make_unique<DayCycleScrub>(*world, *sky, m_Services.Undo, m_Services.Notifications,
+        m_Scrub = std::make_unique<DayCycleScrub>(*world, m_Services.Sky, m_Services.Undo, m_Services.Notifications,
                                                   m_Services.IsPlaying);
 }
 
