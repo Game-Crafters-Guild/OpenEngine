@@ -191,8 +191,8 @@ class HzbCullingComputeTest : public ::testing::Test
         return out;
     }
 
-    // 8x8 R32F, single mip, uniform depth. Left in ShaderResource layout.
-    TextureHandle MakeUniformHzb(float depth)
+    // 8x8 R32F, single mip, optionally clear outside the central 2x2 texels.
+    TextureHandle MakeHzb(float depth, bool clearOuterTexels = false)
     {
         constexpr uint32_t kW = 8u, kH = 8u;
         TextureDesc td{};
@@ -209,7 +209,14 @@ class HzbCullingComputeTest : public ::testing::Test
         TextureHandle tex = m_Device->CreateTexture(td);
         m_Textures.push_back(tex);
 
-        const std::vector<float> texels(kW * kH, depth);
+        std::vector<float> texels(kW * kH, depth);
+        if (clearOuterTexels)
+        {
+            for (uint32_t y = 0; y < kH; ++y)
+                for (uint32_t x = 0; x < kW; ++x)
+                    if (x < 3u || x > 4u || y < 3u || y > 4u)
+                        texels[y * kW + x] = 0.0f;
+        }
         BufferDesc ud{};
         ud.size = texels.size() * sizeof(float);
         ud.usage = static_cast<uint32_t>(BufferUsage::TransferSrc);
@@ -269,7 +276,8 @@ class HzbCullingComputeTest : public ::testing::Test
     CullResult RunCull(uint32_t mode, const std::vector<GPUInstance>& instances,
                        const std::vector<uint32_t>& prevVisibleSeed, TextureHandle hzb,
                        float margin0 = 1.0f, uint32_t layerMask = 0xFFFFFFFFu,
-                       uint32_t passFlags = 0u, const std::vector<float>& deformationMargins = {0.0f})
+                       uint32_t passFlags = 0u, const std::vector<float>& deformationMargins = {0.0f},
+                       bool orthographic = false)
     {
         const uint32_t n = static_cast<uint32_t>(instances.size());
 
@@ -277,6 +285,12 @@ class HzbCullingComputeTest : public ::testing::Test
         Write(instanceBuf, instances);
 
         GPUCullingData cd = MakeCullingData(n, mode, margin0);
+        if (orthographic)
+        {
+            cd.projMatrix = Mathematics::MakeOrthographicLH_ZO_ReverseZ(-10.0f, 10.0f, -10.0f, 10.0f, cd.nearPlane, cd.farPlane);
+            cd.viewProjMatrix = cd.projMatrix;
+            GPUCullingUtils::ExtractFrustumPlanes(cd.viewProjMatrix, &cd.frustumPlanes[0][0]);
+        }
         cd.renderLayerMask = layerMask;
         cd.passFlags = passFlags;
         BufferHandle cullingBuf = MakeHostBuffer(sizeof(GPUCullingData), "HzbCull.CullingData");
@@ -345,7 +359,7 @@ class HzbCullingComputeTest : public ::testing::Test
 //   inst3 near-plane crossing   -> forced visible, recovers         (vis 1, prev 1)
 TEST_F(HzbCullingComputeTest, PhaseBAppliesCorrectedPrevVisibleRule)
 {
-    TextureHandle hzb = MakeUniformHzb(kOccluderDepth);
+    TextureHandle hzb = MakeHzb(kOccluderDepth);
 
     const std::vector<GPUInstance> instances = {
         MakeInstance(/*viewZ=*/50.0f, /*radius=*/1.0f), // occluded (far behind occluder)
@@ -386,7 +400,7 @@ TEST_F(HzbCullingComputeTest, PhaseBAppliesCorrectedPrevVisibleRule)
 //   inst1 viewZ=50, r=1: occluded even with margin (nearest z=48 → ndc≈0.0011).
 TEST_F(HzbCullingComputeTest, PhaseBOcclusionTestUsesMarginedRadius)
 {
-    TextureHandle hzb = MakeUniformHzb(kOccluderDepth);
+    TextureHandle hzb = MakeHzb(kOccluderDepth);
 
     const std::vector<GPUInstance> instances = {
         MakeInstance(/*viewZ=*/6.0f, /*radius=*/1.0f),
@@ -455,13 +469,13 @@ TEST_F(HzbCullingComputeTest, DeformationMarginWidensTheSphereInBothPhases)
     // (the margin added after the view's multiplier) and 1.5 x (0.1 + 0.15 x 2.24)
     // = 0.65 (the axis scale read from the rows).
     const std::vector<float> margins = {0.15f, 0.0f};
-    const TextureHandle hzb = MakeUniformHzb(kOccluderDepth);
+    const TextureHandle hzb = MakeHzb(kOccluderDepth);
     const std::vector<uint32_t> allVisible(instances.size(), 1u);
     const std::vector<uint32_t> noneVisible(instances.size(), 0u);
 
     const CullResult aBefore =
-        RunCull(kHzbModePhaseA, instances, allVisible, MakeUniformHzb(0.0f), kViewMargin);
-    const CullResult a = RunCull(kHzbModePhaseA, instances, allVisible, MakeUniformHzb(0.0f), kViewMargin,
+        RunCull(kHzbModePhaseA, instances, allVisible, MakeHzb(0.0f), kViewMargin);
+    const CullResult a = RunCull(kHzbModePhaseA, instances, allVisible, MakeHzb(0.0f), kViewMargin,
                                  0xFFFFFFFFu, 0u, margins);
     const CullResult b =
         RunCull(kHzbModePhaseB, instances, noneVisible, hzb, kViewMargin, 0xFFFFFFFFu, 0u, margins);
@@ -498,7 +512,7 @@ TEST_F(HzbCullingComputeTest, LowerGeometryRemainsVisibleAcrossFormerFrustumBoun
     corrected.boundingRadius = geometry.Bounds.Radius();
     // At z=5 the right frustum edge is x≈2.89. LOD0's small box is
     // outside, but the lower level reaches x=2 and must remain a candidate.
-    const auto result = RunCull(kHzbModePhaseA, {old, corrected}, {1u, 1u}, MakeUniformHzb(0.0f));
+    const auto result = RunCull(kHzbModePhaseA, {old, corrected}, {1u, 1u}, MakeHzb(0.0f));
     ASSERT_EQ(result.visibility.size(), 2u);
     EXPECT_EQ(result.visibility[0], 0u);
     EXPECT_EQ(result.visibility[1], 1u);
@@ -506,7 +520,7 @@ TEST_F(HzbCullingComputeTest, LowerGeometryRemainsVisibleAcrossFormerFrustumBoun
 
 TEST_F(HzbCullingComputeTest, PhaseAGatesOnPrevVisible)
 {
-    TextureHandle hzb = MakeUniformHzb(kOccluderDepth);
+    TextureHandle hzb = MakeHzb(kOccluderDepth);
 
     const std::vector<GPUInstance> instances = {
         MakeInstance(/*viewZ=*/3.0f, /*radius=*/1.0f), // in frustum, prevVisible=0 -> not drawn
@@ -534,7 +548,7 @@ TEST_F(HzbCullingComputeTest, PhaseAGatesOnPrevVisible)
 
 TEST_F(HzbCullingComputeTest, RenderLayersGateBothPhasesAndDropHiddenHistory)
 {
-    const auto hzb = MakeUniformHzb(0.0f);
+    const auto hzb = MakeHzb(0.0f);
     std::vector<GPUInstance> instances(4, MakeInstance(3.0f, .1f));
     instances[0].renderLayerMask = 0;
     instances[1].renderLayerMask = 1;
@@ -560,7 +574,7 @@ TEST_F(HzbCullingComputeTest, RenderLayersGateBothPhasesAndDropHiddenHistory)
 // leaves no history; the caster beside it is the control.
 TEST_F(HzbCullingComputeTest, ShadowsOnlyInstancesDropFromBothPhases)
 {
-    const auto hzb = MakeUniformHzb(0.0f);
+    const auto hzb = MakeHzb(0.0f);
     std::vector<GPUInstance> instances(2, MakeInstance(3.0f, .1f));
     instances[0].flags = 1u;
     instances[1].flags = 1u | kInstanceFlagShadowsOnly;
@@ -575,7 +589,7 @@ TEST_F(HzbCullingComputeTest, ShadowsOnlyInstancesDropFromBothPhases)
 // phases and keeps no history for it; the same cull without the bit, as the Game View runs it, keeps it.
 TEST_F(HzbCullingComputeTest, EditorHiddenInstancesDropFromBothPhasesOfTheSceneViewOnly)
 {
-    const auto hzb = MakeUniformHzb(0.0f);
+    const auto hzb = MakeHzb(0.0f);
     std::vector<GPUInstance> instances(2, MakeInstance(3.0f, .1f));
     instances[0].flags = 1u;
     instances[1].flags = 1u | kInstanceFlagEditorHidden;
@@ -588,4 +602,33 @@ TEST_F(HzbCullingComputeTest, EditorHiddenInstancesDropFromBothPhasesOfTheSceneV
         EXPECT_EQ(reveal.visibility, expected);
         EXPECT_EQ(reveal.prevVisible, expected);
     }
+}
+
+// An orthographic foreground sphere must recover in front of a background plane.
+// With near=0.1 and far=100, depth 0.5 lies at viewZ=50.05.
+TEST_F(HzbCullingComputeTest, OrthographicForegroundRecoversWithoutRevealingOccludedGeometry)
+{
+    const auto hzb = MakeHzb(0.5f);
+    const std::vector<GPUInstance> instances = {
+        MakeInstance(20.0f, 1.0f),
+        MakeInstance(70.0f, 1.0f),
+        MakeInstance(50.5f, 1.0f),
+    };
+    const auto result = RunCull(kHzbModePhaseB, instances, {0u, 0u, 0u}, hzb,
+                                1.0f, 0xFFFFFFFFu, 0u, {0.0f}, true);
+    EXPECT_EQ(result.visibility, (std::vector<uint32_t>{1u, 0u, 1u}));
+    EXPECT_EQ(result.prevVisible, (std::vector<uint32_t>{1u, 0u, 1u}));
+    EXPECT_EQ(result.stats.hzbCulled, 1u);
+    EXPECT_EQ(result.stats.recovered, 2u);
+}
+
+TEST_F(HzbCullingComputeTest, OrthographicBoundsDoNotShrinkWithDistance)
+{
+    // The center is hidden, but a radius-three sphere extends past the central
+    // occluder in a twenty-unit-wide orthographic view, even at viewZ=70.
+    const auto hzb = MakeHzb(0.8f, true);
+    const auto result = RunCull(kHzbModePhaseB, {MakeInstance(70.0f, 3.0f)}, {0u}, hzb,
+                                1.0f, 0xFFFFFFFFu, 0u, {0.0f}, true);
+    EXPECT_EQ(result.visibility, (std::vector<uint32_t>{1u}));
+    EXPECT_EQ(result.stats.recovered, 1u);
 }
