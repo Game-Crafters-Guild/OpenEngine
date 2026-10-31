@@ -74,6 +74,26 @@ TEST(ElementIdLookup, RenamingAndClearingRemoveTheOldId)
     EXPECT_EQ(manager.GetRootElement()->FindById("new"_sid), nullptr);
 }
 
+TEST(ElementIdLookup, LiteralNamesTrackRenamesAndClearingInTheManagerIndex)
+{
+    UIManager manager(nullptr);
+    manager.SetRoot(MakeNamedElement("root"));
+    auto child = MakeNamedElement("old");
+    UIElement* childPointer = child.get();
+    manager.GetRootElement()->AddChild(std::move(child));
+    childPointer->SetId(UI::LiteralName{"New"});
+    EXPECT_EQ(manager.GetRootElement()->FindById("old"_sid), nullptr);
+    EXPECT_EQ(manager.GetRootElement()->FindById("New"_sid), childPointer);
+    EXPECT_EQ(manager.GetRootElement()->FindById("new"_sid), nullptr);
+    childPointer->SetId(UI::LiteralName{"New"});
+    EXPECT_EQ(manager.GetRootElement()->FindById("New"_sid), childPointer);
+    childPointer->SetId(UI::LiteralName{""});
+    EXPECT_EQ(manager.GetRootElement()->FindById("New"_sid), nullptr);
+    EXPECT_EQ(childPointer->GetIdHash(), 0u);
+    childPointer->SetId("runtime");
+    EXPECT_EQ(manager.GetRootElement()->FindById("runtime"_sid), childPointer);
+}
+
 TEST(ElementIdLookup, DuplicateIdsUseTheFirstInTreeOrderInsideTheRequestedSubtree)
 {
     UIManager manager(nullptr);

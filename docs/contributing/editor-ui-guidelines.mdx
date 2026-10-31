@@ -46,6 +46,7 @@ When a value is shared across panels, add or reuse a token. When a value is loca
 
 ## Layout rules
 
+- Declare structure in XML or with the [typed C++ layout DSL](../ui/ui-api-guide.mdx#declaring-layout-in-c). Keep either declaration in the owning control and keep layout and appearance in CSS.
 - Every flexible panel root should use `min-width: 0` and `min-height: 0` so children can shrink and scroll correctly.
 - Scrollable content needs a constrained parent. Do not rely on content height to create scroll ranges.
 - Virtualized grids must keep `.grid` as a single-column flex container. The internal virtual content owns cell placement.

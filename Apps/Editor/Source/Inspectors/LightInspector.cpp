@@ -32,6 +32,7 @@
 #include "UI/Controls/CollapsibleInfoCard.h"
 #include "UI/Controls/InspectorNotice.h"
 #include "UI/InfoCard.h"
+#include "UI/ElementBuilder.h"
 #include "UI/UIPrimitive.h"
 #include "UI/UITextureRegistry.h"
 
@@ -48,6 +49,7 @@
 
 namespace GameEngine
 {
+using UI::operator""_ui;
 
 namespace
 {
@@ -328,12 +330,12 @@ static void AddIntensityReferenceGuide(UIElement* parent)
     row->AddClass("inspector-guide-row");
     InspectorUI::AddLabel(row, "Intensity Reference",
         "Lux uses real-world photometric light values. Arbitrary uses brightness values without real-world units.");
-    UIElement* fieldContainer = InspectorUI::AddFieldContainer(row);
-    fieldContainer->AddClass("inspector-guide-field");
-
-    fieldContainer->AddChild(std::make_unique<EditorUI::CollapsibleInfoCard>(
-        "Lux: real-world photometric light values.\n"
-        "Arbitrary: arbitrary, brightness values."));
+    row->AddChild(UI::Element<UIElement>()
+        .Class("inspector-field"_ui, "inspector-guide-field"_ui)
+        .Children(std::make_unique<EditorUI::CollapsibleInfoCard>(
+            "Lux: real-world photometric light values.\n"
+            "Arbitrary: arbitrary, brightness values."))
+        .Build());
 }
 
 } // namespace
@@ -373,17 +375,20 @@ static void AddSkyDrivenIntensityRow(const InspectorContext& ctx, ECS::World& wo
                                 "curve off to author the intensity here.";
     UIElement* row = InspectorUI::AddRow(ctx.Parent);
     InspectorUI::AddLabel(row, "Intensity", tooltip.c_str());
-    UIElement* field = InspectorUI::AddFieldContainer(row);
-    field->AddClass("inspector-field-inline-action");
-    auto value = std::make_unique<Label>();
-    value->AddClass("inspector-text");
-    value->SetTooltip(tooltip);
-    Label* valueRaw = value.get();
-    field->AddChild(std::move(value));
-    auto owner = std::make_unique<Label>();
-    owner->AddClass("inspector-text");
-    owner->SetText("set by the sky");
-    field->AddChild(std::move(owner));
+    UIElement::WeakRef<Label> valueRef;
+    row->AddChild(UI::Element<UIElement>()
+        .Class("inspector-field"_ui)
+        .Class("inspector-field-inline-action"_ui)
+        .Children(
+            UI::Element<Label>()
+                .Class("inspector-text"_ui)
+                .Set(&Label::SetTooltip, tooltip)
+                .Capture(valueRef),
+            UI::Element<Label>()
+                .Class("inspector-text"_ui)
+                .Set(&Label::SetText, "set by the sky"))
+        .Build());
+    Label* valueRaw = valueRef.Get();
     InspectorUI::DisableRowOfControl(valueRaw);
 
     const auto show = [valueRaw](const Components::Light& driven) {
@@ -587,12 +592,6 @@ void RegisterLightInspector()
             InspectorUI::AddLabel(ctRow, "Color Temperature",
                 "Blackbody color temperature (Kelvin). Drag the gradient thumb or type a value.\n"
                 "~1900 candle, 3200 tungsten, 6500 daylight (D65), 10000+ blue sky.");
-            UIElement* ctContainer = InspectorUI::AddFieldContainer(ctRow);
-            ctContainer->Overrides()
-                .Set(Style::FlexDir, FlexDirection::Row)
-                .Set(Style::AlignItems, AlignItems::Center)
-                .Set(Style::Gap, StyleLength::Px(6.0f));
-
             auto ctSlider = std::make_unique<KelvinSlider>();
             ctSlider->AddClass("inspector-kelvin-slider");
             ctSlider->SetMin(kKelvinGradientLoK);
@@ -602,12 +601,21 @@ void RegisterLightInspector()
             ctSlider->SetTrackPaddingPx(kSliderTrackPaddingPx);
             ctSlider->SetValueWithoutNotify(light->ColorTemperature);
 
-            auto ctField = std::make_unique<FloatField>();
-            ctField->AddClass("inspector-float-field");
-            ctField->SetValueWithoutNotify(light->ColorTemperature);
-            ctField->Overrides().Set(Style::Width, StyleLength::Px(kSliderValueFieldWidthPx));
-            FloatField* ctFieldRaw = ctField.get();
             KelvinSlider* ctSliderRaw = ctSlider.get();
+            UIElement::WeakRef<FloatField> ctFieldRef;
+            auto ctContainer = UI::Element<UIElement>()
+                .Class("inspector-field"_ui)
+                .Children(
+                    std::move(ctSlider),
+                    UI::Element<FloatField>()
+                        .Class("inspector-float-field"_ui)
+                        .Set(&FloatField::SetValueWithoutNotify, light->ColorTemperature)
+                        .Capture(ctFieldRef))
+                .Build();
+            ctContainer->Overrides()
+                .Set(Style::FlexDir, FlexDirection::Row, Style::AlignItems, AlignItems::Center, Style::Gap, StyleLength::Px(6.0f));
+            FloatField* ctFieldRaw = ctFieldRef.Get();
+            ctFieldRaw->Overrides().Set(Style::Width, StyleLength::Px(kSliderValueFieldWidthPx));
 
             // Track the drag/edit as ONE interactive undo entry (mirrors AddComponentFloatRowWithDrag):
             // lazily begin on first preview so the snapshot captures the PRE-edit temperature (the
@@ -702,13 +710,11 @@ void RegisterLightInspector()
             };
 
             // The slider syncs the field (no caret); the field must NOT re-write itself mid-typing.
-            ctSlider->SetOnValueChanging([previewKelvin](const float& v) { previewKelvin(v, /*syncField=*/true); });
-            ctSlider->SetOnValueChanged([commitKelvin](const float& v) { commitKelvin(v); });
-            ctField->SetOnValueChanging([previewKelvin](const float& v) { previewKelvin(v, /*syncField=*/false); });
-            ctField->SetOnValueChanged([commitKelvin](const float& v) { commitKelvin(v); });
-
-            ctContainer->AddChild(std::move(ctSlider));
-            ctContainer->AddChild(std::move(ctField));
+            ctSliderRaw->SetOnValueChanging([previewKelvin](const float& v) { previewKelvin(v, /*syncField=*/true); });
+            ctSliderRaw->SetOnValueChanged([commitKelvin](const float& v) { commitKelvin(v); });
+            ctFieldRaw->SetOnValueChanging([previewKelvin](const float& v) { previewKelvin(v, /*syncField=*/false); });
+            ctFieldRaw->SetOnValueChanged([commitKelvin](const float& v) { commitKelvin(v); });
+            ctRow->AddChild(std::move(ctContainer));
             if (colorDrivenBySky)
             {
                 InspectorUI::DisableRowOfControl(ctSliderRaw);
@@ -733,31 +739,33 @@ void RegisterLightInspector()
                 : std::string("Light color (click to open color picker; double-click to reset to white)");
             Label* colorLabel = InspectorUI::AddLabel(row, "Color", colorTooltip.c_str());
             if (colorLabel) colorLabel->AddClass("inspector-label-no-drag");
-            UIElement* fieldContainer = InspectorUI::AddFieldContainer(row);
-            fieldContainer->Overrides()
-                .Set(Style::FlexDir, FlexDirection::Row)
-                .Set(Style::AlignItems, AlignItems::Center)
-                .Set(Style::Gap, StyleLength::Px(6.0f));
-
             const uint32_t argb = LightColorToArgb(light->Color);
 
             auto swatch = std::make_unique<UIElement>();
             UIElement* swatchRaw = swatch.get();
             InspectorUI::StyleColorSwatch(swatchRaw, argb);
-            fieldContainer->AddChild(std::move(swatch));
-
-            auto rgbLabel = std::make_unique<Label>();
-            rgbLabel->AddClass("inspector-text");
-            rgbLabel->SetText(InspectorUI::FormatColorRgb(light->Color[0], light->Color[1], light->Color[2]));
+            UIElement::WeakRef<Label> rgbLabelRef;
+            auto field = UI::Element<UIElement>()
+                .Class("inspector-field"_ui)
+                .Children(
+                    std::move(swatch),
+                    UI::Element<Label>()
+                        .Class("inspector-text"_ui)
+                        .Set(&Label::SetText, InspectorUI::FormatColorRgb(light->Color[0], light->Color[1], light->Color[2]))
+                        .Capture(rgbLabelRef))
+                .Build();
+            UIElement* fieldContainer = field.get();
+            fieldContainer->Overrides()
+                .Set(Style::FlexDir, FlexDirection::Row, Style::AlignItems, AlignItems::Center, Style::Gap, StyleLength::Px(6.0f));
+            Label* rgbLabelRaw = rgbLabelRef.Get();
             if (!colorDrivenBySky)
-                rgbLabel->Overrides().Set(Style::Cursor, CursorStyle::Pointer);
-            Label* rgbLabelRaw = rgbLabel.get();
-            fieldContainer->AddChild(std::move(rgbLabel));
+                rgbLabelRaw->Overrides().Set(Style::Cursor, CursorStyle::Pointer);
+            row->AddChild(std::move(field));
 
             // The picker's callbacks outlive an inspector rebuild: resolve the row through
             // weak refs instead of holding the freed widgets.
             auto updateUI = [w, e, swatchRef = UIElement::MakeWeakRef(swatchRaw),
-                             rgbLabelRef = UIElement::MakeWeakRef(rgbLabelRaw)]() {
+                             rgbLabelRef]() {
                 RefreshLightColorRow(w, e, swatchRef, rgbLabelRef);
             };
 
@@ -765,11 +773,10 @@ void RegisterLightInspector()
             // frame, so the row says who owns it instead of accepting one.
             if (colorDrivenBySky)
             {
-                auto owner = std::make_unique<Label>();
-                owner->AddClass("inspector-text");
-                owner->SetText("set by the sky");
-                owner->SetTooltip(colorTooltip);
-                fieldContainer->AddChild(std::move(owner));
+                fieldContainer->AddChild(UI::Element<Label>()
+                    .Class("inspector-text"_ui)
+                    .Set(&Label::SetText, "set by the sky", &Label::SetTooltip, colorTooltip)
+                    .Build());
                 InspectorUI::DisableRowOfControl(rgbLabelRaw);
             }
             else
@@ -1267,15 +1274,15 @@ void RegisterLightInspector()
                     InspectorUI::AddLabel(rpbRow, "PCSS Receiver Plane Bias",
                         "Receiver-plane depth bias: per-pixel slope correction. Fixes acne on grazing surfaces.\nCosts a dFdx/dFdy pair per shadowed fragment.");
                     UIElement* rpbContainer = InspectorUI::AddFieldContainer(rpbRow);
-                    auto rpbCheck = std::make_unique<Checkbox>();
-                    rpbCheck->SetChecked(feature->IsPcssReceiverPlaneBias());
-                    rpbCheck->SetTooltip("Enable receiver-plane slope bias for PCSS shadows.");
-                    rpbCheck->SetOnValueChanged([](const bool& v) {
-                        auto* rs2 = EngineCore::GetInstance().GetRenderServices();
-                        if (auto* f = rs2 ? rs2->GetFeature<Engine::Renderer::ShadowMapRenderFeature>() : nullptr)
-                            f->SetPcssReceiverPlaneBias(v);
-                    });
-                    rpbContainer->AddChild(std::move(rpbCheck));
+                    rpbContainer->AddChild(UI::Element<Checkbox>()
+                        .Set(&Checkbox::SetChecked, feature->IsPcssReceiverPlaneBias())
+                        .Set(&Checkbox::SetTooltip, "Enable receiver-plane slope bias for PCSS shadows.")
+                        .Set(&Checkbox::SetOnValueChanged, [](const bool& v) {
+                            auto* rs2 = EngineCore::GetInstance().GetRenderServices();
+                            if (auto* f = rs2 ? rs2->GetFeature<Engine::Renderer::ShadowMapRenderFeature>() : nullptr)
+                                f->SetPcssReceiverPlaneBias(v);
+                        })
+                        .Build());
                 }
 
             }

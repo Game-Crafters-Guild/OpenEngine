@@ -1,4 +1,4 @@
-"""Class 05, UI controls: element trees assembled in C++ instead of a layout (.uxml) and a style (.css) of the control's own."""
+"""Class 05, UI controls: imperative assembly instead of XML or typed declarations and the control's own CSS."""
 import os
 import re
 
@@ -14,7 +14,7 @@ kStyleReference = re.compile(r"\"([\w/\-.]+\.css)\"")
 kLayoutApi = re.compile(r"InstantiateLayout\w*\s*\(|LoadLayoutFrom\w*\s*\(|LoadStylesheet\w*\s*\(|AddStylesheet\s*\(|Stylesheet\w*Handle|UILayoutAsset|UIStyleAsset")
 kHub = re.compile(r"^(EditorApplication|EditorContext|SettingsPanel|InspectorPanel|HierarchyPanel|SceneViewPanel|UIManager|UIElement)\b")
 kBaseControls = {"UIElement", "Label", "Button", "TextField", "Toggle", "Dropdown", "Slider", "ScrollView", "Foldout", "Checkbox"}
-kAssetPiece = "a control class with its own .uxml layout and .css style, loaded by asset path (UI/controls/<Name>.uxml)"
+kAssetPiece = "a control class with XML or UI::Element<T> declarations and its own CSS loaded by asset path"
 
 
 class Rule:

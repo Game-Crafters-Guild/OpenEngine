@@ -52,7 +52,7 @@ Before opening a pull request, run the `change-scrutiny` skill (`.claude/skills/
 - Reuse the engine's types: `GUID` or `StringId` for identity, the maths types, `Handle`, the job system, the event module. Every added function has a production caller in the same change; no compatibility shims, no dead code.
 - No legacy by default: there are no users or released projects to preserve. For every API, saved format, and removal, update current callers and committed assets and delete the obsolete path. No backward compatibility, saved-data migrations, deprecated aliases, fallback readers, or legacy-only warnings and checks unless explicitly requested for a concrete consumer. Keep ordinary validation of supported data.
 - Performance claims are measured in Release on a quiet machine against a rule stated before measuring.
-- Editor UI is declared, not assembled: static layout in `.uxml`, style in the control's own `.css`, one selector per rule, no styling from C++, icons by class; inspectors compose `InspectorSection` and the shared field controls. No text below 12 px.
+- Editor UI is declared, not assembled: static layout in `.uxml` or with `UI::Element<T>` in the owning control, style in the control's own `.css`, one selector per rule, no styling from C++, icons by class; inspectors compose `InspectorSection` and the shared field controls. No text below 12 px.
 - Named functions over lambdas: a lambda is a short adapter handed to an API; anything longer, reused, or defined-then-called-once becomes a named function in the owning file.
 
 ## Platform and build

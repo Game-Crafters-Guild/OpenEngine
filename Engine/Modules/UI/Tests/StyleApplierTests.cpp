@@ -1,11 +1,96 @@
-#include <gtest/gtest.h>
 #include "../Source/StyleApplier.h"
 #include "UI/ResolvedStyle.h"
 #include "UI/StyleOverrides.h"
 #include "UI/StyleProperties.h"
 #include "UI/UIStyle.h"
 
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <gtest/gtest.h>
+
 using namespace GameEngine;
+
+namespace
+{
+template<class... Arguments>
+concept CanSetStyle = requires(StyleOverrides& overrides, Arguments&&... arguments)
+{
+    overrides.Set(std::forward<Arguments>(arguments)...);
+};
+
+static_assert(CanSetStyle<decltype(Style::Gap), StyleLength>);
+static_assert(CanSetStyle<decltype(Style::FlexDir), FlexDirection,
+    decltype(Style::AlignItems), AlignItems, decltype(Style::Gap), StyleLength>);
+static_assert(CanSetStyle<decltype(Style::Gap), const StyleLength&,
+    decltype(Style::FontFamily), const std::vector<std::string>&>);
+static_assert(!CanSetStyle<decltype(Style::Gap), StyleLength,
+    decltype(Style::FontFamily), std::string>);
+static_assert(!CanSetStyle<>);
+static_assert(!CanSetStyle<decltype(Style::Gap)>);
+static_assert(!CanSetStyle<decltype(Style::Gap), float>);
+static_assert(!CanSetStyle<decltype(Style::Gap), StyleLength, decltype(Style::Width)>);
+static_assert(!CanSetStyle<decltype(Style::Gap), StyleLength, decltype(Style::Width), float>);
+static_assert(!CanSetStyle<decltype(Style::Gap), StyleLength, StyleLength, decltype(Style::Width)>);
+static_assert(!CanSetStyle<decltype(Style::FlexDir), FlexDirection,
+    decltype(Style::AlignItems), FlexDirection>);
+}
+
+TEST(StyleApplierTests, PropertyPairsPreserveTypedValuesAndLastWriteOrder)
+{
+    StyleOverrides overrides;
+    const auto kGap = StyleLength::Px(6.0f);
+    std::vector<std::string> fonts{"Inter", "sans-serif"};
+    EXPECT_EQ(&overrides.Set(Style::FlexDir, FlexDirection::Row,
+        Style::AlignItems, AlignItems::Center, Style::Gap, kGap,
+        Style::BackgroundColor, 0xFF102030u, Style::Gap, StyleLength::Px(9.0f),
+        Style::FontFamily, fonts), &overrides);
+    fonts.clear();
+
+    EXPECT_EQ(overrides.PropCount(), 5u);
+    EXPECT_EQ(overrides.Get(Style::AlignItems), AlignItems::Center);
+    EXPECT_EQ(overrides.Get(Style::FontFamily), (std::vector<std::string>{"Inter", "sans-serif"}));
+    ResolvedStyle resolved;
+    ApplyOverridesToResolvedStyle(resolved, overrides);
+    EXPECT_EQ(resolved.Layout.FlexDirection, FlexDirection::Row);
+    EXPECT_FLOAT_EQ(resolved.Layout.Gap, 9.0f);
+    EXPECT_FLOAT_EQ(resolved.Layout.RowGap, 9.0f);
+    EXPECT_FLOAT_EQ(resolved.Layout.ColumnGap, 9.0f);
+    EXPECT_EQ(resolved.Visual.BackgroundColor, 0xFF102030u);
+}
+
+TEST(StyleOverridesDirtyTests, PropertyPairsNotifyInOrderAndSkipUnchangedValues)
+{
+    StyleOverrides overrides;
+    std::vector<std::uint32_t> notifications;
+    overrides.SetDirtyCallback([](void* state, uint32_t flags)
+    {
+        static_cast<std::vector<std::uint32_t>*>(state)->push_back(flags);
+    }, &notifications);
+
+    overrides.Set(Style::Width, StyleLength::Px(100.0f), Style::BackgroundColor, 0xFF102030u);
+    EXPECT_EQ(notifications, (std::vector<std::uint32_t>{StyleOverrides::Layout, StyleOverrides::Visual}));
+    EXPECT_TRUE(overrides.IsLayoutDirty());
+    EXPECT_TRUE(overrides.IsVisualDirty());
+    EXPECT_FALSE(overrides.NeedsCascadeRerun());
+
+    notifications.clear();
+    overrides.ClearDirty();
+    overrides.Set(Style::Width, StyleLength::Px(100.0f), Style::BackgroundColor, 0xFF203040u);
+    EXPECT_EQ(notifications, (std::vector<std::uint32_t>{StyleOverrides::Visual}));
+    EXPECT_FALSE(overrides.IsLayoutDirty());
+    EXPECT_TRUE(overrides.IsVisualDirty());
+
+    notifications.clear();
+    overrides.ClearDirty();
+    overrides.Set(Style::Width, StyleLength::Px(100.0f), Style::BackgroundColor, 0xFF203040u);
+    EXPECT_TRUE(notifications.empty());
+    EXPECT_FALSE(overrides.IsLayoutDirty());
+    EXPECT_FALSE(overrides.IsVisualDirty());
+    EXPECT_FALSE(overrides.NeedsCascadeRerun());
+}
 
 TEST(StyleApplierTests, GapOverrideSetsRowAndColumnGap)
 {

@@ -1,6 +1,6 @@
 ---
 title: UI API guide
-description: Building UI with XML, CSS, and C++, registering controls, and changing styles and properties at runtime.
+description: Declare UI with XML or typed C++, style it with CSS, register controls, and update properties at runtime.
 sidebar:
   order: 1
 ---
@@ -34,13 +34,14 @@ The three-argument overload clears the target. To composite a HUD over existing
 scene content, pass `Rendering::RenderGraph::RGLoadOp::Load` as the fourth argument.
 The host executes the completed graph after declaration. Do not retain frame texture IDs.
 
-Manual root setup:
+Code-declared root:
 
-```cpp title="Set up the root by hand"
-auto root = std::make_unique<GameEngine::UIElement>("UIElement");
-root->SetId("Root");
-root->AddClass("root");
-ui.SetRoot(std::move(root));
+```cpp title="Declare a root in C++"
+#include "UI/ElementBuilder.h"
+
+auto root = GameEngine::UI::Element<GameEngine::UIElement>().Id("Root").Class("root").Build();
+if (root)
+    ui.SetRoot(std::move(root));
 ```
 
 ## Loading layouts and styles
@@ -114,35 +115,139 @@ constexpr StringId kPad = "--pad"_sid;
 float pad = style->GetCustomNumber(kPad, 0.0f);
 ```
 
-## Programmatic UI construction
+## Declaring layout in C++
 
-```cpp title="Build UI in code"
-auto root = std::make_unique<UIElement>("UIElement");
-auto label = std::make_unique<Label>();
-label->SetText("Hello");
-label->AddClass("title");
-root->AddChild(std::move(label));
+XML and the C++ DSL are peer authoring formats. Both create retained controls that
+use the same CSS cascade, layout, input, and rendering. Declare structure and
+control properties in C++. Put flex layout, dimensions, spacing, colors, and fonts
+in CSS and select them with classes.
 
-ui.SetRoot(std::move(root));
+```cpp title="Declare a control subtree"
+#include "UI/ElementBuilder.h"
+#include "UI/Controls/Button.h"
+#include "UI/Controls/Label.h"
+#include "UI/UIEvents.h"
+
+using namespace GameEngine;
+
+UIElement::WeakRef<Label> status;
+auto caption = UI::Element<Label>().Class("title")
+    .Set(&Label::SetText, "Ready").Capture(status);
+auto root = UI::Element<UIElement>().Id("Root").Class("panel")
+    .Children(
+        std::move(caption),
+        UI::Element<Button>().Set(&Button::SetText, "Run")
+            .On(kEventButtonClick, [status](UIEvent&)
+            {
+                if (Label* label = status.Get())
+                    label->SetText("Running");
+            }))
+    .Build();
+
+if (root)
+    ui.SetRoot(std::move(root));
 ```
 
-If you add children after the root is attached to a `UIManager`, ownership
-propagates automatically.
+Capture a control before creating handlers that copy its reference. C++ does not
+guarantee the evaluation order of sibling arguments to `Children`.
+
+`Element<T>()` uses the registered factory for `T`, including factories for controls
+that require constructor arguments. Built-in controls are registered by the UI
+module. Register custom controls through the existing registration API. When one
+C++ type has several canonical tags, use `Element<T>("tag")` to choose one.
+Registered aliases are accepted and retain their canonical CSS tag identity.
+
+| Operation | Behavior |
+|---|---|
+| `Id(value)` | Sets the element ID. |
+| `Class(name, ...)` | Adds one or more CSS classes in argument order using existing deduplication rules. |
+| `Set(setter, arguments...)` | Immediately invokes a compiler-checked void member setter. Inherited setters are supported. |
+| `Set(setter, value, setter, value, ...)` | Applies pairs of single-argument setters and values in order. Each pair is checked at compile time. |
+| `Children(children...)` | Consumes builders or `unique_ptr` subtrees and appends them in argument order. |
+| `On(eventId, handler)` | Registers a handler for the lifetime of the element, preserving native module ownership. |
+| `Capture(reference)` | Immediately assigns a `UIElement::WeakRef<T>` without retaining the destination variable. |
+| `Build()` | Consumes an rvalue builder and transfers its `unique_ptr<T>`. |
+
+Use the `_ui` literal for IDs and classes known at compile time. It returns a
+`UI::LiteralName` whose `consteval` constructor retains the text and computes its
+`StringId` with the engine's hash.
+The builder consumes that hash directly and copies the text into the element.
+Mix literal metadata and runtime strings in a class list:
+
+```cpp title="Compile-time names and runtime names"
+using GameEngine::UI::operator""_ui;
+
+auto root = UI::Element<UIElement>()
+    .Id("Root"_ui)
+    .Class("panel"_ui, runtimeClass, "selected"_ui)
+    .Build();
+```
+
+`UIElement::SetId` and `AddClass` also accept `UI::LiteralName`. IDs and classes
+remain case-sensitive, class order and deduplication are unchanged, and an empty
+ID has hash zero. Use a `std::string` or `std::string_view` for runtime names.
+The literal preserves embedded null bytes. For other constant text, construct
+`UI::LiteralName` from a `std::string_view` with an explicit length. Registry tags
+still use the registered canonical names and aliases.
+
+Builders are move-only. Use ordinary C++ functions, loops, and conditions to compose
+fragments. A named builder accepts repeated `Children` calls. Finish it with
+`std::move(builder).Build()`. A child parsed from XML can be passed to `Children`.
+Add a completed C++ subtree to an XML-created host with `AddChild`.
+
+For layout embedded in an inspector's C++ implementation, keep using the shared
+inspector row helpers and declare the field's children with the DSL. Existing
+custom control instances can be passed as owned children without registering a
+new factory. `Apps/Editor/Source/Inspectors/LightInspector.cpp` uses this pattern
+for its temperature slider and numeric field, color field, and intensity readout.
+Controls that already own a separate XML layout can continue using that asset.
+
+Construction, setters, handlers, and weak reference access run on the UI thread.
+For work arriving from another thread, post through the existing UI dispatcher.
+A weak reference expires when its control is destroyed. Capturing one does not
+extend the control's lifetime.
+
+Registered defaults apply before explicit setters. `Set` updates control state and
+does not create XML authored attributes for attribute selectors. Use classes and
+existing pseudo states for styling. Constructor-created internal children remain
+owned by their controls.
+
+A missing or ambiguous registration, an incompatible factory, or a null child
+invalidates the declaration. Factory errors name the registration fix in the log.
+All supplied children are consumed and the incomplete tree is destroyed. `Build`
+returns null, including when called again on an already consumed builder. Check
+the result before replacing an existing root. References captured from a failed
+tree expire.
+
+Create the tree once and update live controls through their setters. `On` does not
+return a revocation token. For an independently revocable handler, call the
+control's `RegisterEventHandler` after construction.
+
+C++ structure changes require rebuilding. CSS assets retain their existing hot
+reload. Code-added subtrees follow the XML reconciler's existing rules, including
+destruction when an owning XML element is replaced. The DSL does not add reactive
+bindings or state-preserving native layout reload.
 
 ## Style overrides (code)
 
 Use `StyleOverrides` for programmatic overrides. An override wins over the
 stylesheet and over the element's own `style` attribute. Typed property keys provide
-compile-time safety. Dirty flags are tracked automatically via the
-`StyleProp<T, StyleImpact>` template.
+compile-time safety through `StyleProp<T>`. Dirty flags use each property's
+canonical impact classification.
 
 ```cpp title="Override styles from code"
 el.Overrides()
-  .Set(Style::Width, StyleLength::Px(200.0f))
-  .Set(Style::Height, StyleLength::Px(40.0f))
-  .Set(Style::BackgroundColor, 0xFF202020u);
+  .Set(Style::Width, StyleLength::Px(200.0f),
+       Style::Height, StyleLength::Px(40.0f),
+       Style::BackgroundColor, 0xFF202020u);
 el.Overrides().SetCustomNumber("--pad"_sid, 4.0f);
 ```
+
+`Set` accepts one or more property/value pairs. Each value must match its
+property's type. Pairs apply from left to right, so the last value for a repeated
+property wins. Each pair keeps the existing dirty notification and skips an
+unchanged value. The return value supports chaining. An incomplete pair or a
+value with the wrong type fails to compile. Keep static presentation in CSS.
 
 Reading back an override:
 

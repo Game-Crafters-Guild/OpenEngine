@@ -29,6 +29,7 @@
 
 #include "UI/Controls/AxisHeaderBar.h"
 #include "UI/Controls/TreeView.h"
+#include "UI/ElementBuilder.h"
 #include "UI/ModuleOwnedHandlers.h"
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
@@ -171,6 +172,26 @@ class ModuleOwnedHandlers : public ::testing::Test
 // The constraint. Engine-owned handlers are not merely skipped by revocation —
 // they are never stamped, so there is nothing for revocation to find.
 // ---------------------------------------------------------------------------
+
+TEST_F(ModuleOwnedHandlers, BuilderHandlersRetainTheirModuleOwnerAndCanBeRevoked)
+{
+    PretendModuleImage image;
+    if (image.Size() == 0)
+        GTEST_SKIP() << "This test's module image range is available only on Windows";
+
+    int calls = 0;
+    auto button = UI::Element<Button>().On(kEventButtonClick,
+        [&calls](UIEvent&) { ++calls; }).Build();
+    ASSERT_NE(button, nullptr);
+    EXPECT_EQ(UIEventHandlerAccess::OwnedHandlerCount(*button), 1u);
+    EXPECT_EQ(image.Pins(), 1u);
+    button->TriggerClick();
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(image.Revoke(), 1u);
+    button->TriggerClick();
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(image.Pins(), 0u);
+}
 
 TEST_F(ModuleOwnedHandlers, EngineRegisteredHandlersAreNeverStamped)
 {

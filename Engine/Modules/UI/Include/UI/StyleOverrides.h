@@ -7,10 +7,25 @@
 
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <variant>
 
 namespace GameEngine
 {
+
+namespace Detail
+{
+template<class... Arguments>
+struct StyleOverridePairs : std::false_type {};
+
+template<>
+struct StyleOverridePairs<> : std::true_type {};
+
+template<class T, class Value, class... Remaining>
+struct StyleOverridePairs<StyleProp<T>, Value, Remaining...> : std::bool_constant<
+    std::is_same_v<T, Value> && StyleOverridePairs<Remaining...>::value> {};
+}
 
 struct StyleOverrideEntry
 {
@@ -23,12 +38,16 @@ struct StyleOverrideEntry
 class StyleOverrides
 {
   public:
-    // Typed set: compile-time type safety via StyleProp<T>. Impact comes from
-    // the canonical classification via StyleProp::Impact().
-    template <typename T>
-    StyleOverrides& Set(StyleProp<T> prop, const T& value)
+    /** Applies typed property/value pairs in order, with the last value winning.
+     * Each pair retains its existing no-op detection and dirty notification.
+     */
+    template <typename T, typename... Remaining>
+        requires Detail::StyleOverridePairs<std::remove_cvref_t<Remaining>...>::value
+    StyleOverrides& Set(StyleProp<T> prop, const T& value, Remaining&&... remaining)
     {
         SetImpl(prop.id, StyleOverrideEntry{StyleKeyword::None, StyleValue{value}}, prop.Impact());
+        if constexpr (sizeof...(Remaining) > 0)
+            Set(std::forward<Remaining>(remaining)...);
         return *this;
     }
 

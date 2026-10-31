@@ -1251,10 +1251,22 @@ void UIElement::SetId(const std::string& id)
 {
     if (m_Id == id)
         return;
+    SetIdInternal(id, id.empty() ? StringId{0} : HashStringId(id));
+}
+
+void UIElement::SetId(UI::LiteralName id)
+{
+    if (m_Id == id.GetText())
+        return;
+    SetIdInternal(id.GetText(), id.GetText().empty() ? StringId{0} : id.GetHash());
+}
+
+void UIElement::SetIdInternal(std::string_view id, StringId idHash)
+{
     if (m_OwnerManager)
         m_OwnerManager->m_ElementIdIndex.Unregister(*this);
     m_Id = id;
-    m_IdHash = id.empty() ? StringId{0} : HashStringId(id);
+    m_IdHash = idHash;
     if (m_OwnerManager)
         m_OwnerManager->m_ElementIdIndex.Register(*this);
     // Id selectors affect descendants and, when used, following sibling selectors.

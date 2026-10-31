@@ -255,6 +255,10 @@ set_target_properties(UI PROPERTIES
     FOLDER "UI"
 )
 
+if(BUILD_BENCHMARKS)
+    add_subdirectory(Benchmarks)
+endif()
+
 if(MSVC)
     target_compile_options(UI PRIVATE /bigobj)
 endif()
@@ -499,6 +503,7 @@ if(BUILD_TESTING)
     # invalidation, transitions, and every test that reads the shipped editor
     # stylesheets or layouts.
     ge_add_ui_test(UIStyleTests
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ElementBuilderStyleTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/UITransitionCostTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CSSParserTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/CssImportsTests.cpp
@@ -647,6 +652,7 @@ if(BUILD_TESTING)
     # AbiNativeSmokeTest links the exports but has no host, so every call there
     # stops at not-found before a type is ever examined.
     ge_add_ui_test(UITests
+        ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ElementBuilderTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ElementIdAttachmentTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ElementIdLookupTests.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ModuleOwnedHandlerRevocationTests.cpp
