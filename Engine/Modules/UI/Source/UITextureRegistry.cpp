@@ -213,7 +213,7 @@ UITextureRegistry::UITextureRegistry(IDevice* device)
     SamplerDesc sampDesc{};
     sampDesc.minFilter = 1;
     sampDesc.magFilter = 1;
-    sampDesc.mipFilter = 0;
+    sampDesc.mipFilter = 1;
     sampDesc.addressModeU = 2;
     sampDesc.addressModeV = 2;
     sampDesc.addressModeW = 2;
@@ -242,7 +242,7 @@ void UITextureRegistry::CreateDeviceResourcesLocked()
     SamplerDesc sampDesc{};
     sampDesc.minFilter = 1;
     sampDesc.magFilter = 1;
-    sampDesc.mipFilter = 0;
+    sampDesc.mipFilter = 1;
     sampDesc.addressModeU = 2;
     sampDesc.addressModeV = 2;
     sampDesc.addressModeW = 2;
@@ -257,6 +257,7 @@ void UITextureRegistry::CreateDeviceResourcesLocked()
         nearestDesc.minFilter = 0; // nearest
         nearestDesc.magFilter = 0; // nearest
         nearestDesc.mipFilter = 0;
+        nearestDesc.maxLod = 0.0f;
         nearestDesc.addressModeU = 2; // clamp-to-edge
         nearestDesc.addressModeV = 2;
         nearestDesc.addressModeW = 2;

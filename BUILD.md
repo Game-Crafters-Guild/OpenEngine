@@ -126,7 +126,7 @@ node --version && python3 --version    # optional tools
 |---|---|---|
 | **C++20 toolchain** (recent GCC or Clang), **CMake 3.25 or newer**, **Ninja**, **pkg-config**, **Git** | | your distribution's packages |
 | **NASM (x86/x64)** | Required by FFmpeg when the video feature is enabled. | `sudo apt install nasm` |
-| **Windowing packages** | Required by vcpkg's `glfw3`. | `sudo apt install libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev pkg-config` |
+| **Windowing packages** | Required by vcpkg's `glfw3`. | `sudo apt install libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev pkg-config` |
 | **Vulkan driver and tools** | Runtime requirement, plus the validation layers. | `sudo apt install mesa-vulkan-drivers vulkan-tools vulkan-validationlayers` |
 | **.NET 10 SDK** | C# scripting host and managed assemblies; not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0) |
 | **Node.js 20 or newer** *(optional)* | Same use as on Windows. | your distribution's `nodejs` package, or [nodejs.org](https://nodejs.org/) |
@@ -144,7 +144,7 @@ sudo dnf install cmake ninja-build git pkgconf-pkg-config \
   dotnet-sdk-10.0 nodejs python3
 ```
 
-If a port needs another system package, the vcpkg configure error prints the install command. `vcpkg.json` builds the Vulkan loader with X11 and Wayland surface support; GLFW is built for X11, so a Wayland session needs XWayland. For a pure Wayland session, add the `wayland` feature to `glfw3` in `vcpkg.json` and install your distribution's Wayland development packages.
+If a port needs another system package, the vcpkg configure error prints the install command. `vcpkg.json` builds the Vulkan loader and GLFW with X11 and Wayland support. Install your distribution's Wayland development packages when configuring on Linux; see the [GLFW dependency guide](https://www.glfw.org/docs/latest/compile.html#compile_deps). The Editor preserves compositor window decorations and displays its application menus inside the windowing environment.
 
 ## Platform notes
 

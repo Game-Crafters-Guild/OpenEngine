@@ -6,6 +6,7 @@ set(PLATFORM_SOURCES
 	Source/Capabilities.cpp
 	Source/Platform.cpp
 	Source/Thread.cpp
+    Source/Toolbar/ClientToolbar.cpp
 )
 
 # Desktop-only implementations: GLFW clipboard and gamepad mapping, OS shell
@@ -79,6 +80,7 @@ elseif (WIN32)
 	list(APPEND PLATFORM_SOURCES
 		Source/OverlayWindow_Win32.cpp
 		Source/Toolbar/Toolbar_Win32.cpp
+		Source/Toolbar/WindowFrame_Win32.cpp
 		Source/ContextMenu/ContextMenu_Win32.cpp
 		Source/MenuIconBitmap_Win32.cpp
 		Source/Theme_Win32.cpp
@@ -115,6 +117,9 @@ endif()
 add_library(Platform OBJECT ${PLATFORM_SOURCES})
 
 target_compile_features(Platform PUBLIC cxx_std_20)
+if(APPLE)
+    set_target_properties(Platform PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
+endif()
 
 # Public headers now live under Engine/Modules/Platform/Include
 # Keep Engine/Include for existing headers like Platform/Platform.h
@@ -243,7 +248,37 @@ if(BUILD_TESTING)
     # here rather than exported for the sake of a test.
     target_include_directories(PlatformContextMenuTests PRIVATE Source)
 
+    add_executable(PlatformClientToolbarTests Tests/ClientToolbarTests.cpp)
+    target_include_directories(PlatformClientToolbarTests PRIVATE Source)
+    target_link_libraries(PlatformClientToolbarTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+    if(NOT EMSCRIPTEN)
+        target_link_libraries(PlatformClientToolbarTests PRIVATE glfw)
+    endif()
+    target_compile_features(PlatformClientToolbarTests PRIVATE cxx_std_20)
+    ge_set_output_tests(PlatformClientToolbarTests)
+    ge_stage_runtime_dependencies(PlatformClientToolbarTests)
+    add_test(NAME PlatformClientToolbarTests COMMAND PlatformClientToolbarTests)
+    set_tests_properties(PlatformClientToolbarTests PROPERTIES RUN_SERIAL TRUE)
+
+    if(APPLE)
+        add_executable(PlatformToolbarMacTests Tests/ToolbarMacTests.mm)
+        set_target_properties(PlatformToolbarMacTests PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
+        target_link_libraries(PlatformToolbarMacTests PRIVATE Engine GTest::gtest GTest::gtest_main "-framework Cocoa")
+        ge_set_output_tests(PlatformToolbarMacTests)
+        ge_stage_runtime_dependencies(PlatformToolbarMacTests)
+        add_test(NAME PlatformToolbarMacTests COMMAND PlatformToolbarMacTests)
+        set_tests_properties(PlatformToolbarMacTests PROPERTIES RUN_SERIAL TRUE)
+    endif()
+
     if (WIN32)
+        add_executable(PlatformTitleBarTests Tests/TitleBarTests.cpp)
+        target_compile_definitions(PlatformTitleBarTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_link_libraries(PlatformTitleBarTests PRIVATE Engine glfw User32 GTest::gtest GTest::gtest_main)
+        ge_set_output_tests(PlatformTitleBarTests)
+        ge_stage_runtime_dependencies(PlatformTitleBarTests)
+        add_test(NAME PlatformTitleBarTests COMMAND PlatformTitleBarTests)
+        set_tests_properties(PlatformTitleBarTests PROPERTIES RUN_SERIAL TRUE)
+
         target_sources(PlatformContextMenuTests PRIVATE Tests/MenuIconBitmapTests.cpp)
 
         # A PNG with partial alpha and one SVG of the editor's artwork, staged at

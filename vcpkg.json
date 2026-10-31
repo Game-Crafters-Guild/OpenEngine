@@ -36,7 +36,12 @@
     "glm",
     {
       "name": "glfw3",
-      "platform": "!wasm32"
+      "platform": "!wasm32 & !linux"
+    },
+    {
+      "name": "glfw3",
+      "features": ["wayland"],
+      "platform": "linux"
     },
     {
       "name": "vulkan-memory-allocator",

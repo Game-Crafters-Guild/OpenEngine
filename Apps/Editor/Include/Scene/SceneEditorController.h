@@ -261,6 +261,7 @@ class SceneEditorController
     // crash-recovery staging. The chosen resolution re-queues as a pending
     // action (opens never run inside UI callbacks).
     void BeginRecoveryPrompt(const std::filesystem::path& scenePath);
+    void RequestLoadScene();
     void DoSave();
     // Save that has already cleared (or does not need) the degraded-document guard.
     void DoSaveConfirmed(DegradedSavePolicy degradedPolicy);

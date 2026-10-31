@@ -1,0 +1,76 @@
+.editor-title-bar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 32px;
+    flex-shrink: 0;
+    background-color: #222222;
+    color: var(--ui_color_text);
+    font-family: var(--ui_font_family);
+    font-size: var(--ui_font_size_base);
+    overflow: hidden;
+}
+
+.editor-title-bar .title-bar-icon {
+    width: 32px;
+    height: 20px;
+    flex-shrink: 0;
+    background-image: url("editor:Icons/TitleBarLogo.png");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.editor-title-bar .title-bar-menus {
+    display: flex;
+    flex-direction: row;
+    height: 100%;
+    flex-shrink: 0;
+}
+
+.editor-title-bar .title-bar-menu {
+    height: 100%;
+    padding: 0px 10px;
+    margin: 0px;
+    border-width: 0px;
+    border-radius: 0px;
+    min-width: 0px;
+    flex-shrink: 0;
+    background-color: transparent;
+    color: var(--ui_color_text);
+}
+
+.editor-title-bar .title-bar-menu:hover,
+.editor-title-bar .title-bar-menu:focus {
+    background-color: var(--ui_color_bg_hover);
+}
+
+.editor-title-bar .title-bar-overflow { display: none; }
+
+.title-bar-mnemonic {
+    position: absolute;
+    height: 1px;
+    margin-top: 1px;
+    background-color: var(--ui_color_text);
+    pointer-events: none;
+}
+
+.editor-title-bar .title-bar-title {
+    position: absolute;
+    top: 0px;
+    height: 100%;
+    min-width: 0px;
+    text-align: center;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.editor-title-bar .title-bar-caption-icon {
+    position: absolute;
+    font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+    font-size: 10px;
+    font-weight: normal;
+    text-align: center;
+    pointer-events: none;
+}

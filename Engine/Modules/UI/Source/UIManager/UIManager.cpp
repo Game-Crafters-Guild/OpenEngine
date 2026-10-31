@@ -1301,6 +1301,7 @@ void UIManager::CreateDeviceSamplersAndFallbackTexture()
         nearestClamp.minFilter = 0;
         nearestClamp.magFilter = 0;
         nearestClamp.mipFilter = 0;
+        nearestClamp.maxLod = 0.0f; // explicit point filtering keeps the authored texels
         nearestClamp.debugName = "UI_Sampler_NearestClamp";
         m_SamplerNearestClamp = m_Device->CreateSampler(nearestClamp);
     }

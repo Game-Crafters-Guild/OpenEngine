@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Platform/Toolbar.h" // INativeToolbar
+#include "UI/UIElement.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -11,6 +12,7 @@ namespace GameEngine
 
 class EditorApplication; // fwd
 class EditorPanelManager; // fwd
+class EditorTitleBar;
 namespace Platform
 {
 class Window;
@@ -30,6 +32,10 @@ class EditorToolbar
 
     // Rebuild the menu structure (used to refresh Undo/Redo labels).
     void Refresh();
+    /// Bind the declarative title bar after the main window's UI is loaded.
+    void AttachToUI(UIElement* root);
+    /// Drain deferred menu refreshes and synchronize caption state before UI update.
+    void Update();
     void SetPanelManager(EditorPanelManager* panelManager) { m_PanelManager = panelManager; }
 
     // Efficiently refresh just the Undo/Redo menu item titles without
@@ -49,6 +55,10 @@ class EditorToolbar
     std::unique_ptr<INativeToolbar> m_Toolbar; // platform-native toolbar instance
     EditorApplication* m_App = nullptr;        // non-owning, cleared on Uninstall
     EditorPanelManager* m_PanelManager = nullptr; // non-owning, owned by EditorApplication
+    Platform::Window* m_Window = nullptr;
+    UIElement::WeakRef<EditorTitleBar> m_TitleBar;
+    UIElement::WeakRef<> m_Root;
+    bool m_RefreshPending = false;
     std::unordered_map<uint32_t, std::string> m_WindowPanelCommands;
 };
 

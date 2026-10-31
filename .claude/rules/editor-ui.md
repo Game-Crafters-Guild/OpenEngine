@@ -11,14 +11,14 @@ paths:
 
 ## Declared, not assembled
 
-- Static layout is a `.uxml` in the owning folder; style is in the control's own `.css` in the control's own folder, loaded by the control; behaviour goes on the control or a manipulator. An inspector composes `InspectorSection` and the shared field controls (`Apps/Editor/Include/UI/`) and owns presentation only. A hand-built element tree in C++ with hard-coded geometry, ad hoc rows or its own copies of shared widgets is a defect even when it renders correctly. A composite widget is its own `UIElement` class instantiated from the layout file.
+- Declare static layout in a `.uxml` in the owning folder or with `UI::Element<T>` in the owning C++ UI implementation. The typed DSL applies to any C++-defined UI structure. Style belongs in the owning UI's `.css` file, loaded by its control; behavior goes on the control or a manipulator. Compose existing shared controls and keep presentation separate from application logic. Hard-coded geometry, ad hoc rows or copies of shared widgets are defects in either authoring format. A composite widget is its own `UIElement` class.
 - No styling from C++, no colours in code; colours come from CSS variables; icons are assigned by class, not by a C++ map. The shared style is the default: when every call site adds the same classes, fold them into the stylesheet or add one modifier class; style a category with one shared class, never one class per item; fix the art asset instead of per-item pixel compensation.
 - One selector per CSS rule. No selector groups, no ancestor chains, no `button.x` / `.button.x` / `.x` variants, no `:checked` repeated as `.checked`. Several elements that share a style share one class, set at the C++ creation site. This is the single most repeated review comment in the repository's history. The cascade is specificity first, then last wins; sweep for cascade regressions.
 - No font size below 12 px in the editor unless the owner asks for it.
 - Drags emit value-changing; commit on value-changed. A field that must not propagate stops propagation itself. Popup lifecycle lives in a base class with one hook. For interaction semantics, match Chrome and the CSS specification.
 - Generic stays generic: a base class carries only what every subtype uses; engine UI core never special-cases a control type; a view does not know whether it is "primary" or in play mode.
 
-- A control is a class on the UI control base with its layout in XML and its styling in CSS, placed in the module that owns its use under that module's UI folder (`Controls`, `Inspectors`, `Panels` as the module needs) and registered through the registries. No imperative layout inside a panel, no control assembled from raw elements in place, no control filed under a hub. A control two modules share lives in the UI module's controls.
+- A control is a class on the UI control base with its layout declared in XML or the typed C++ DSL and its styling in CSS, placed in the module that owns its use under that module's UI folder (`Controls`, `Inspectors`, `Panels` as the module needs) and registered through the registries. No imperative geometry inside a panel, no copies of shared controls assembled in place, no control filed under a hub. A control two modules share lives in the UI module's controls.
 
 ## Understood without explanation
 

@@ -1,4 +1,5 @@
 <UIElement id="root" class="dock-root">
+  <EditorTitleBar id="EditorTitleBar" />
   <!-- Instantiated by the UI factory (EditorTopToolbar.cpp); the control loads
        its own controls/EditorTopToolbar.uxml and .css. The authored id must
        match the ctor-assigned id: hot-reload layout reconciliation matches by

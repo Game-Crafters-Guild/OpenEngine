@@ -166,6 +166,8 @@ class EditorApplication : public Application
     void SyncHiDpiPlatformSettingsFromPreferences();
 
     // Actions callable from native menu handlers
+    /// Prompt to save dirty scene, graph and script documents; true when quitting is deferred.
+    bool TryInterceptQuitForDirtyScene();
     void ResetLayoutToDefault();
     /// Show or activate the named panel in the main editor window.
     /// preferredLeafId optionally hints which existing leaf the new tab should join.
@@ -316,8 +318,6 @@ class EditorApplication : public Application
     void OnFilesDropped(EditorWindowContext* ctx, const std::vector<std::filesystem::path>& paths);
 
   private:
-    // When the scene document is dirty, shows the save modal; returns true when the quit was intercepted.
-    bool TryInterceptQuitForDirtyScene();
     // UI replay command invoker: used by UiReplayRunner's invokeCommand event.
     bool InvokeUiReplayCommand(std::uint32_t commandId, std::string* outError);
     // UI replay window resize hook: used by UiReplayRunner's windowResize event.
@@ -760,7 +760,7 @@ class EditorApplication : public Application
 
     // Destroy toolbar early during teardown by placing it last so it is released first
     std::unique_ptr<EditorToolbar> m_EditorToolbar;
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__)
     bool m_EnableNativeToolbar = true;
 #else
     bool m_EnableNativeToolbar = false;

@@ -58,6 +58,58 @@ std::unique_ptr<UIElement> ElementFactoryRegistry::Create(std::string_view tagLo
     return el;
 }
 
+std::unique_ptr<UIElement> ElementFactoryRegistry::CreateTyped(
+    const std::type_info& type, std::string_view tag) const
+{
+    std::string key = ToLowerAscii(tag);
+    if (key.empty())
+    {
+        // The reverse display-name map is lossy when several canonical tags share
+        // one native type. Aliases do not make creation ambiguous.
+        for (const auto& [name, registeredType] : m_TypeInfoByTag)
+        {
+            if (!registeredType || *registeredType != type)
+                continue;
+            const auto canonical = m_CanonicalByLower.find(name);
+            if (canonical == m_CanonicalByLower.end() || canonical->second != name)
+                continue;
+            if (!key.empty())
+            {
+                Logger::Log::Error(
+                    "UI C++ layout: type '{}' has several canonical tags. Pass an explicit tag to Element<T>(tag).",
+                    type.name());
+                return nullptr;
+            }
+            key = name;
+        }
+        if (key.empty())
+        {
+            Logger::Log::Error(
+                "UI C++ layout: type '{}' is not registered. Register its factory before calling Element<T>().",
+                type.name());
+            return nullptr;
+        }
+    }
+
+    const std::type_info* registeredType = GetTypeInfoFromKey(key);
+    if (!registeredType || *registeredType != type)
+    {
+        Logger::Log::Error(
+            "UI C++ layout: tag '{}' is not registered for type '{}'. Register that type or choose its tag.",
+            key, type.name());
+        return nullptr;
+    }
+    auto element = Create(key);
+    if (!element || typeid(*element) != type)
+    {
+        Logger::Log::Error(
+            "UI C++ layout: factory '{}' did not return type '{}'. Fix the registered factory.",
+            key, type.name());
+        return nullptr;
+    }
+    return element;
+}
+
 void ElementFactoryRegistry::RegisterFactoryAlias(std::string_view aliasLower, std::string_view existingLower) {
     const std::string existingKey = ToLowerAscii(existingLower);
     auto it = m_Factories.find(existingKey);

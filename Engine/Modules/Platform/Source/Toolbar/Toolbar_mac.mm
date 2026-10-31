@@ -1,12 +1,12 @@
 #include "Platform/Toolbar.h"
 #include "Platform/Window.h"
+#include "Types/FlatMap.h"
 
 #if defined(__APPLE__)
 #define GLFW_EXPOSE_NATIVE_COCOA
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
 #import <Cocoa/Cocoa.h>
-#include <unordered_map>
 #include <memory>
 #include <string>
 
@@ -20,10 +20,47 @@ namespace GameEngine { class MacToolbar; }
 
 namespace GameEngine {
 
+namespace {
+void ApplyItemTitle(NSMenuItem* item, const std::string& title)
+{
+    NSString* text = [NSString stringWithUTF8String:title.c_str()];
+    NSArray<NSString*>* parts = [text componentsSeparatedByString:@"\t"];
+    [item setTitle:[parts firstObject]];
+    [item setKeyEquivalent:@""];
+    if ([parts count] < 2)
+        return;
+    NSArray<NSString*>* chord = [parts[1] componentsSeparatedByString:@"+"];
+    NSEventModifierFlags modifiers = 0;
+    for (NSUInteger index = 0; index + 1 < [chord count]; ++index)
+    {
+        NSString* modifier = [chord[index] lowercaseString];
+        if ([modifier isEqualToString:@"cmd"])
+            modifiers |= NSEventModifierFlagCommand;
+        else if ([modifier isEqualToString:@"ctrl"])
+            modifiers |= NSEventModifierFlagControl;
+        else if ([modifier isEqualToString:@"shift"])
+            modifiers |= NSEventModifierFlagShift;
+        else if ([modifier isEqualToString:@"alt"])
+            modifiers |= NSEventModifierFlagOption;
+        else
+            return;
+    }
+    NSString* key = [[chord lastObject] lowercaseString];
+    if ([key length] == 1)
+    {
+        [item setKeyEquivalent:key];
+        [item setKeyEquivalentModifierMask:modifiers];
+    }
+}
+}
+
 class MacToolbar : public INativeToolbar {
 public:
+    ~MacToolbar() override { Uninstall(); }
     bool Install(Platform::Window* /*window*/) override {
         if (!m_MenuBar) {
+            m_PreviousMenu = [[NSApp mainMenu] retain];
+            m_PreviousServicesMenu = [[NSApp servicesMenu] retain];
             m_MenuBar = [[NSMenu alloc] initWithTitle:@"MainMenu"];
             [NSApp setMainMenu:m_MenuBar];
             InsertAppMenuPlaceholder();
@@ -36,9 +73,25 @@ public:
     }
 
     void Uninstall() override {
-        // On macOS, the menu bar is app-global. We'll just clear our items.
-        Clear();
         m_Callback = nullptr;
+        if ([GE_MacToolbarTarget shared].toolbar == this)
+            [GE_MacToolbarTarget shared].toolbar = nullptr;
+        if ([NSApp servicesMenu] == m_ServicesMenu)
+            [NSApp setServicesMenu:m_PreviousServicesMenu];
+        if (m_MenuBar) {
+            if ([NSApp mainMenu] == m_MenuBar)
+                [NSApp setMainMenu:m_PreviousMenu];
+            [m_MenuBar release];
+            m_MenuBar = nil;
+        }
+        [m_PreviousMenu release];
+        m_PreviousMenu = nil;
+        [m_PreviousServicesMenu release];
+        m_PreviousServicesMenu = nil;
+        m_ServicesMenu = nil;
+        m_QuitItem = nil;
+        m_Menus.Clear();
+        m_Items.Clear();
     }
 
     void Clear() override {
@@ -46,9 +99,9 @@ public:
         while ([m_MenuBar numberOfItems] > 0) {
             [m_MenuBar removeItemAtIndex:0];
         }
-        m_Menus.clear();
+        m_Menus.Clear();
         m_NextMenuId = 1;
-        m_Items.clear();
+        m_Items.Clear();
         InsertAppMenuPlaceholder();
     }
 
@@ -74,9 +127,12 @@ public:
                                                               action:nil
                                                        keyEquivalent:@""];
         NSMenu* servicesMenu = [[NSMenu alloc] initWithTitle:@"Services"];
+        m_ServicesMenu = servicesMenu;
         [servicesItem setSubmenu:servicesMenu];
         [appMenu addItem:servicesItem];
         [NSApp setServicesMenu:servicesMenu];
+        [servicesMenu release];
+        [servicesItem release];
         [appMenu addItem:[NSMenuItem separatorItem]];
 
         NSString* hideTitle = [@"Hide " stringByAppendingString:appName];
@@ -95,17 +151,28 @@ public:
         [appMenu addItem:[NSMenuItem separatorItem]];
 
         NSString* quitTitle = [@"Quit " stringByAppendingString:appName];
-        [appMenu addItemWithTitle:quitTitle
+        m_QuitItem = [appMenu addItemWithTitle:quitTitle
                            action:@selector(terminate:)
                     keyEquivalent:@"q"];
 
         [appItem setSubmenu:appMenu];
         [m_MenuBar addItem:appItem];
+        [appMenu release];
+        [appItem release];
     }
 
     void SetCommandHandler(CommandCallback cb) override {
         m_Callback = std::move(cb);
         [GE_MacToolbarTarget shared].toolbar = this;
+    }
+
+    bool SetApplicationQuitCommand(uint32_t commandId) override {
+        if (!m_QuitItem) return false;
+        [m_QuitItem setTarget:[GE_MacToolbarTarget shared]];
+        [m_QuitItem setAction:@selector(onMenuItem:)];
+        [m_QuitItem setTag:static_cast<NSInteger>(commandId)];
+        m_Items.InsertOrAssign(commandId, m_QuitItem);
+        return true;
     }
 
     uint32_t AddMenu(const std::string& title) override {
@@ -116,7 +183,9 @@ public:
         [topItem setSubmenu:sub];
         [m_MenuBar addItem:topItem];
         uint32_t id = m_NextMenuId++;
-        m_Menus[id] = sub;
+        m_Menus.InsertOrAssign(id, sub);
+        [sub release];
+        [topItem release];
         return id;
     }
 
@@ -129,7 +198,9 @@ public:
         [item setSubmenu:sub];
         [parent addItem:item];
         uint32_t id = m_NextMenuId++;
-        m_Menus[id] = sub;
+        m_Menus.InsertOrAssign(id, sub);
+        [sub release];
+        [item release];
         return id;
     }
 
@@ -138,35 +209,39 @@ public:
         if (!parent) return;
         NSString* t = [NSString stringWithUTF8String:title.c_str()];
         NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:t action:@selector(onMenuItem:) keyEquivalent:@""];
+        ApplyItemTitle(item, title);
         [item setTarget:[GE_MacToolbarTarget shared]];
         [item setTag:(NSInteger)commandId];
         [parent addItem:item];
-	        m_Items[commandId] = item;
+        m_Items.InsertOrAssign(commandId, item);
+        [item release];
     }
 
     void SetItemIcon(uint32_t commandId, const std::string& imagePath) override {
-        auto it = m_Items.find(commandId);
-        if (it == m_Items.end() || !it->second || imagePath.empty()) return;
+        auto* item = m_Items.Find(commandId);
+        if (!item || !*item || imagePath.empty()) return;
 
         NSString* path = ResolveIconPath(imagePath);
         if (!path) return;
         NSImage* image = [[NSImage alloc] initWithContentsOfFile:path];
         if (!image) return;
         [image setSize:NSMakeSize(16.0, 16.0)];
-        [it->second setImage:image];
+        [*item setImage:image];
         [image release];
     }
 
     void UpdateItemTitle(uint32_t commandId, const std::string& title) override {
-        auto it = m_Items.find(commandId);
-        if (it == m_Items.end()) return;
-        NSMenuItem* item = it->second;
+        auto* found = m_Items.Find(commandId);
+        if (!found) return;
+        NSMenuItem* item = *found;
         if (!item) return;
-        NSString* t = [NSString stringWithUTF8String:title.c_str()];
-        [item setTitle:t];
+        ApplyItemTitle(item, title);
     }
 
-    void Dispatch(uint32_t cmd) { if (m_Callback) m_Callback(cmd); }
+    void Dispatch(uint32_t commandId) {
+        auto callback = m_Callback;
+        if (callback) callback(commandId);
+    }
 
 private:
     static NSString* ResolveIconPath(const std::string& imagePath) {
@@ -195,13 +270,17 @@ private:
     }
 
     NSMenu* GetMenuById(uint32_t id) const {
-        auto it = m_Menus.find(id);
-        return (it == m_Menus.end()) ? nil : it->second;
+        auto* menu = m_Menus.Find(id);
+        return menu ? *menu : nil;
     }
 
     NSMenu* m_MenuBar = nil;
-	    std::unordered_map<uint32_t, NSMenu*> m_Menus;
-	    std::unordered_map<uint32_t, NSMenuItem*> m_Items;
+    NSMenu* m_PreviousMenu = nil;
+    NSMenu* m_PreviousServicesMenu = nil;
+    NSMenu* m_ServicesMenu = nil;
+    NSMenuItem* m_QuitItem = nil;
+    FlatMap<uint32_t, NSMenu*> m_Menus;
+    FlatMap<uint32_t, NSMenuItem*> m_Items;
     uint32_t m_NextMenuId = 1;
     CommandCallback m_Callback;
 };

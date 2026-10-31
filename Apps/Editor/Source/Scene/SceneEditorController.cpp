@@ -1,6 +1,7 @@
 #include "Scene/SceneEditorController.h"
 
 #include "EditorInputActions.h"
+#include "Editor/Registries/EditorMenuRegistry.h"
 #include "Editor/Settings/BuildSettingsStore.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Editor/Shortcuts/EditorShortcuts.h"
@@ -19,6 +20,7 @@
 #include "ECS/Entity.h"
 #include "Input/InputSystem.h"
 #include "Logger/Logger.h"
+#include "Platform/Shell.h"
 #include "TerrainECS/TerrainService.h"
 #include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
@@ -251,6 +253,11 @@ void SceneEditorController::AttachToRoot(UIElement& root,
     }
 
     PollAutoSavePreferences();
+
+    auto& menus = EditorMenuRegistry::Get();
+    menus.RegisterMenuItem({"File/New Scene", 0, [this]() { RequestNewScene(); }});
+    menus.RegisterMenuItem({"File/Load Scene", 1, [this]() { RequestLoadScene(); }});
+    menus.RegisterMenuItem({"File/Save Scene", 2, [this]() { RequestSaveScene(); }});
 }
 
 void SceneEditorController::Update(Input::InputSystem* inputSystem)
@@ -1161,6 +1168,14 @@ void SceneEditorController::RequestNewScene()
     PendingAction a{};
     a.kind = PendingAction::Kind::NewScene;
     m_Pending = a;
+}
+
+void SceneEditorController::RequestLoadScene()
+{
+    const auto path = Platform::SelectFile(EngineCore::GetInstance().GetResolvedAssetRoot(),
+                                         "Scene files", "*.scene");
+    if (!path.empty())
+        RequestOpenScene(path, false);
 }
 
 void SceneEditorController::RequestSaveScene()

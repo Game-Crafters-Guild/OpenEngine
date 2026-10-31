@@ -2762,7 +2762,7 @@ bool EditorApplication::Initialize()
         }
     }
 
-    // Attach native OS menu to the main window (does not consume UI content space)
+    // Attach the main window's platform menu backend.
     if (m_EnableNativeToolbar)
     {
         auto* main = m_Windows[0].get();
@@ -4446,6 +4446,8 @@ bool EditorApplication::Initialize()
                         m_TopToolbar->SetPanelManager(m_PanelManager.get());
                         (void)m_TopToolbar->LoadAssets();
                     }
+                    if (m_EditorToolbar)
+                        m_EditorToolbar->AttachToUI(rootEl);
                     {
                         EditorTopToolbar::Callbacks toolbarCb;
                         toolbarCb.getPanelMenuEntries = [this]() {
@@ -6711,6 +6713,8 @@ void EditorApplication::Update(float64 deltaTime)
         const bool nativeDirty = Editor::EditorMenuRegistry::Get().ConsumeDirty();
         if (m_EditorToolbar && (scriptDirty || nativeDirty))
             m_EditorToolbar->Refresh();
+        if (m_EditorToolbar)
+            m_EditorToolbar->Update();
     }
 
     // UI hot reload is handled by UIManager/UIHotReload via AssetManager-driven

@@ -248,6 +248,7 @@ set(EDITOR_SOURCES
 	Source/UI/Controls/LayoutPresetToolbar.cpp
 	Source/UI/Controls/DraggableModal.cpp
 	Source/UI/Controls/EditorTopToolbar.cpp
+	Source/UI/Controls/EditorTitleBar.cpp
 	Source/UI/Controls/InspectorNotice.cpp
 	Source/UI/Controls/ListItemActions.cpp
 	Source/UI/Controls/PictureChoiceField.cpp

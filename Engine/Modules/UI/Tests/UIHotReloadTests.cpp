@@ -1,4 +1,5 @@
 #include "UI/Controls/Button.h"
+#include "UI/ElementBuilder.h"
 #include "UI/UIManager.h"
 #include "UI/UIHotReload.h"
 #include "UI/ResolvedStyle.h"
@@ -236,8 +237,17 @@ TEST_P(SharedStylesheetReloadTests, ManagersObserveOneCommitAndKeepCachedRulesAl
     for (UIManager* ui : {&first, &second})
     {
         std::unique_ptr<UIElement> root;
-        ASSERT_TRUE(UIParsing::XMLParser::ParseLayoutFromString(
-            "<uielement id='root'><uielement id='sample'/></uielement>", root));
+        if (ui == &first)
+        {
+            root = UI::Element<UIElement>().Id("root").Children(
+                UI::Element<UIElement>().Id("sample")).Build();
+            ASSERT_NE(root, nullptr);
+        }
+        else
+        {
+            ASSERT_TRUE(UIParsing::XMLParser::ParseLayoutFromString(
+                "<uielement id='root'><uielement id='sample'/></uielement>", root));
+        }
         ui->SetRoot(std::move(root));
         ui->OnMouseMove(-100.0f, -100.0f);
     }

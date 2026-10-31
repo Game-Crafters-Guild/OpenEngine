@@ -2,10 +2,13 @@
 #include "Core/Engine.h"
 #include "Editor/Registries/EditorMenuRegistry.h"
 #include "EditorApplication/EditorApplication.h"
+#include "EditorContextMenu/UIContextMenu.h"
 #include "EditorPanelManager.h"
 #include "Platform/Toolbar.h"
+#include "Platform/Capabilities.h"
 #include "Platform/Window.h"
 #include "UI/EditorIcons.h"
+#include "UI/Controls/EditorTitleBar.h"
 #include "Scripting/EditorScriptMenuRegistry.h"
 
 #include <algorithm>
@@ -39,7 +42,8 @@ static void BuildUndoRedoTitles(EditorApplication* app, std::string& undoTitle, 
             undoTitle += name;
         }
     }
-    undoTitle += "\tCtrl+Z";
+    const bool commandModifier = Platform::PrimaryShortcutModifierIsCommand();
+    undoTitle += commandModifier ? "\tCmd+Z" : "\tCtrl+Z";
 
     redoTitle = "Redo";
     if (app && app->CanRedo())
@@ -50,7 +54,7 @@ static void BuildUndoRedoTitles(EditorApplication* app, std::string& undoTitle, 
             redoTitle += name;
         }
     }
-    redoTitle += "\tCtrl+Y";
+    redoTitle += commandModifier ? "\tCmd+Shift+Z" : "\tCtrl+Y";
 }
 } // namespace
 
@@ -66,6 +70,7 @@ bool EditorToolbar::Install(Platform::Window* window, EditorApplication* app)
     m_Toolbar = CreateNativeToolbar();
     if (!m_Toolbar)
         return false;
+    m_Toolbar->SetMenuFactory([] { return CreateContextMenu(); });
     if (!m_Toolbar->Install(window))
     {
         m_Toolbar.reset();
@@ -73,6 +78,12 @@ bool EditorToolbar::Install(Platform::Window* window, EditorApplication* app)
     }
 
     m_App = app;
+    m_Window = window;
+    Editor::EditorMenuRegistry::Get().RegisterMenuItem({
+        "File/Exit", 3, [app]() {
+            if (!app->TryInterceptQuitForDirtyScene())
+                app->RequestExit();
+        }});
     m_Toolbar->SetCommandHandler([this](uint32_t cmd)
                                  {
         if (!m_App)
@@ -117,6 +128,12 @@ bool EditorToolbar::Install(Platform::Window* window, EditorApplication* app)
 
 void EditorToolbar::Uninstall()
 {
+    if (auto* titleBar = m_TitleBar.Get())
+        titleBar->Bind(nullptr, nullptr);
+    m_TitleBar = {};
+    m_Root = {};
+    m_Window = nullptr;
+    m_RefreshPending = false;
     if (m_Toolbar)
     {
         m_Toolbar->Uninstall();
@@ -136,7 +153,43 @@ void EditorToolbar::Refresh()
 {
     if (!m_Toolbar || !m_App)
         return;
+    if (m_Toolbar->IsMenuOpen())
+    {
+        m_RefreshPending = true;
+        return;
+    }
+    m_RefreshPending = false;
     Build(m_App);
+}
+
+void EditorToolbar::AttachToUI(UIElement* root)
+{
+    if (!root || !m_Toolbar || m_Toolbar->GetPresentation() == ToolbarPresentation::NativeMenuBar)
+        return;
+    auto* titleBar = dynamic_cast<EditorTitleBar*>(root->FindById("EditorTitleBar"_sid));
+    if (!titleBar)
+    {
+        auto control = std::make_unique<EditorTitleBar>();
+        titleBar = control.get();
+        root->InsertChild(0, std::move(control));
+    }
+    m_Root = UIElement::MakeWeakRef(root);
+    m_TitleBar = UIElement::MakeWeakRef(titleBar);
+    if (titleBar)
+        titleBar->Bind(m_Toolbar.get(), m_Window);
+}
+
+void EditorToolbar::Update()
+{
+    if (m_RefreshPending)
+        Refresh();
+    if (!m_TitleBar.Get())
+    {
+        if (auto* root = m_Root.Get())
+            AttachToUI(root);
+    }
+    if (auto* titleBar = m_TitleBar.Get())
+        titleBar->UpdateState();
 }
 
 void EditorToolbar::UpdateUndoRedoTitles()
@@ -176,11 +229,10 @@ void EditorToolbar::SetItemIcon(uint32_t commandId, const std::string& imagePath
 
 void EditorToolbar::Build(EditorApplication* app)
 {
-    // Build minimal menu structure (extend as needed)
     Clear();
     m_WindowPanelCommands.clear();
 
-    // Edit — first menu becomes the macOS application menu (shown as "Open Engine Editor").
+    const uint32_t fileMenu = AddMenu("File");
     const uint32_t editMenu = AddMenu("Edit");
     {
         std::string undoTitle;
@@ -234,6 +286,7 @@ void EditorToolbar::Build(EditorApplication* app)
             // Cache menu ids by prefix path (e.g. "Tools" or "Tools/Sub").
             std::unordered_map<std::string, uint32_t> prefixToMenuId;
             // Seed with built-in menus so contributors extend them without creating duplicates.
+            prefixToMenuId["File"] = fileMenu;
             prefixToMenuId["Edit"] = editMenu;
             prefixToMenuId["Window"] = windowMenu;
             prefixToMenuId["Window/Layout"] = layoutMenu;
@@ -310,8 +363,12 @@ void EditorToolbar::Build(EditorApplication* app)
                 }
             };
 
-            for (const auto& it : nativeItems)
-                addPathItem(it.Path, it.CommandId);
+            for (const auto& item : nativeItems)
+            {
+                if (item.Path == "File/Exit" && m_Toolbar && m_Toolbar->SetApplicationQuitCommand(item.CommandId))
+                    continue;
+                addPathItem(item.Path, item.CommandId);
+            }
             for (const auto& it : scriptItems)
             {
                 if (it.path.empty() || it.commandId == 0)

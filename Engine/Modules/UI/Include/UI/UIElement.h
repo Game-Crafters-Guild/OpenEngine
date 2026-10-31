@@ -6,6 +6,7 @@
 #include "UI/UiPostHandle.h"
 #include "UI/UiPostTarget.h"
 #include "UI/ModuleOwnedHandlers.h"
+#include "UI/LiteralName.h"
 
 
 
@@ -276,6 +277,8 @@ public:
     const std::string& GetId() const { return m_Id; }
     StringId GetIdHash() const { return m_IdHash; }
     void SetId(const std::string& id);
+    /** Assigns constant text without hashing it at runtime. Empty IDs retain hash zero. */
+    void SetId(UI::LiteralName id);
     uint64_t GetInstanceId() const { return m_InstanceId; }
 
     // The canonical tag this element was created as, or 0 when it was constructed directly
@@ -304,6 +307,11 @@ public:
     void AddClass(const std::string& className)
     {
         AddClassInternal(className, HashStringId(className));
+    }
+    /** Adds constant text with its compile-time hash and the existing class rules. */
+    void AddClass(UI::LiteralName className)
+    {
+        AddClassInternal(className.GetText(), className.GetHash());
     }
     void RemoveClass(const std::string& className)
     {
@@ -1428,14 +1436,16 @@ public:
     // Re-cascades this subtree with freshly matched rules.
     void RestyleForStructuralChange();
 
-    void AddClassInternal(const std::string& className, StringId classId)
+    void SetIdInternal(std::string_view id, StringId idHash);
+
+    void AddClassInternal(std::string_view className, StringId classId)
     {
         for (StringId existing : m_ClassIds)
         {
             if (existing == classId)
                 return; // Already present; preserve insertion order.
         }
-        m_ClassNames.push_back(className);
+        m_ClassNames.emplace_back(className);
         m_ClassIds.push_back(classId);
         // Class changes almost always affect paint, and only sometimes affect layout.
         // Avoid marking LayoutDirty here so interactive input (e.g. scroll drags that rebind
