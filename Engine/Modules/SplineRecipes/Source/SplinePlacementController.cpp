@@ -14,6 +14,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Matrix4x4.h"
+#include "Scene/SceneTlas.h"
 #include "SplineLayout/CenterlineSampling.h"
 #include "SplineLayout/PieceEntity.h"
 #include "SplineLayout/SeamShear.h"
@@ -23,6 +24,7 @@
 #include "Spline/SplineData.h"
 #include "Spline/SplineEvaluator.h"
 #include "SplineECS/SplineService.h"
+#include "Types/Fnv1a.h"
 
 #include <algorithm>
 #include <cmath>
@@ -98,6 +100,14 @@ void SplinePlacementController::Update(ECS::World& world,
         candidates.begin(), candidates.end(), [](const Candidate& c)
         { return c.Recipe.ConformMode != Components::SplinePlacementConform::None; });
     const uint64 surfaceRevision = anyConforms ? ConformSurfaceRevision(world, /*conforms by raycast*/ nullptr) : 0u;
+    // One request of the scene TLAS per frame, shared by every candidate that conforms to the scene.
+    const bool anyConformsToScene = std::any_of(
+        candidates.begin(), candidates.end(), [](const Candidate& c)
+        { return c.Recipe.ConformMode != Components::SplinePlacementConform::None &&
+                 c.Recipe.ConformTarget == Components::SplineConformTarget::Scene; });
+    Scene::SceneTlas* sceneTlas = anyConformsToScene ? &Scene::GetSceneTlas(world) : nullptr;
+    if (sceneTlas)
+        sceneTlas->RequestCurrent(world);
 
     for (const Candidate& candidate : candidates)
     {
@@ -125,12 +135,22 @@ void SplinePlacementController::Update(ECS::World& world,
         const bool tilesAlive =
             std::all_of(state.Tiles.begin(), state.Tiles.end(),
                         [&world](ECS::EntityHandle t) { return world.IsValid(t); });
-        // Only the terrains near this run can hold its first build.
+        if (conforms && state.RunSpline != current.Spline)
+        {
+            state.RunBounds = RunWorldBounds(*splineService, candidate.SplineDataIndex, candidate.SplineDataGeneration,
+                                             candidate.WorldMatrix);
+            state.RunSpline = current.Spline;
+        }
+        // Only the terrains near this run can hold its first build. A Scene conform also reads
+        // the meshes under the run, so they join its surface term.
         const ConformSurfaceReadiness surfaceReadiness =
-            conforms ? ConformSurfaceState(world, RunWorldBounds(*splineService, candidate.SplineDataIndex,
-                                                               candidate.SplineDataGeneration,
-                                                               candidate.WorldMatrix))
-                   : ConformSurfaceReadiness::NoSurface;
+            conforms ? ConformSurfaceState(world, state.RunBounds) : ConformSurfaceReadiness::NoSurface;
+        if (conforms && candidate.Recipe.ConformTarget == Components::SplineConformTarget::Scene)
+        {
+            RefreshSceneConformDigest(world, *sceneTlas, state.RunBounds, state.SceneDigest);
+            current.SurfaceRevision = Hashing::Fnv1a64(&state.SceneDigest.Value, sizeof(state.SceneDigest.Value),
+                                                       current.SurfaceRevision);
+        }
         if (!state.Gate.ShouldRebuild(current, tilesAlive, surfaceReadiness, conforms, deltaSeconds,
                                       candidate.Entity.id))
         {

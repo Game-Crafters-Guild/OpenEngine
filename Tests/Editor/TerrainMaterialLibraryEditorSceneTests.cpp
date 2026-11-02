@@ -281,8 +281,8 @@ TEST_F(TerrainMaterialLibraryEditorScene, ExtractionCarriesTheLibrarysAuthoredGr
         // The real load path over the real file.
         GameEngine::Scene::EnsureTerrainSceneSchemasRegistered();
         GameEngine::ECS::World world;
-        ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(
-            world, m_ScenePath, GameEngine::Scene::LoadOptions{GameEngine::Scene::LoadMode::Replace}))
+        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(
+            world, m_ScenePath, GameEngine::Scene::SceneReadOptions{}))
             << GameEngine::Scene::GetLastSceneIOError().message;
 
         // Chain link 0, asserted before any extraction: the loaded island component carries the
@@ -524,8 +524,8 @@ TEST_F(TerrainMaterialLibraryEditorScene, AnEditAndItsUndoReachATerrainBoundThro
 
         GameEngine::Scene::EnsureTerrainSceneSchemasRegistered();
         GameEngine::ECS::World world;
-        ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(
-            world, m_ScenePath, GameEngine::Scene::LoadOptions{GameEngine::Scene::LoadMode::Replace}))
+        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(
+            world, m_ScenePath, GameEngine::Scene::SceneReadOptions{}))
             << GameEngine::Scene::GetLastSceneIOError().message;
 
         GameEngine::Engine::Renderer::TransformHierarchySystem transforms;

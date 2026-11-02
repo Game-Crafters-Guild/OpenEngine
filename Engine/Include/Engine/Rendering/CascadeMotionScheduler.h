@@ -21,13 +21,19 @@
 // density and the most visible staleness), with a hard staleness bound: a
 // cascade whose content would exceed `maxAge` frames of drift is
 // force-rendered, displacing nearer cascades from the budget. If more
-// cascades hit the bound than the budget allows, ALL of them render — the
-// staleness bound is the quality contract, the cap is best-effort.
+// cascades hit the bound than the budget allows, ALL of them render: the
+// staleness bound is the quality contract, the cap is best-effort. With 4
+// cascades, cap 2 and maxAge 2 the steady cycle is {0,1}, {0,1}, {2,3}: 2.00
+// renders per frame.
 //
 // Staleness is caller-computed from the content-fit commit stamps (ground
 // truth), not from internal counters — a hidden view, a cascade-count regrow,
 // or any tracking lapse shows up as large staleness and forces a render
 // instead of silently deferring against arbitrarily old content.
+//
+// Under CascadeMotionSource::CasterDeformation (vegetation sway at a still
+// camera) a forced render goes on top of the budget, because a held near
+// cascade shows as a hitch: the cycle is {0,1}, {0,1}, {0,1,2,3}.
 //
 // Correctness classes (caster content, contributor, under-draw, physical,
 // config, first render, cull-settle) NEVER defer and NEVER consume budget:
@@ -49,11 +55,19 @@ namespace Engine::Renderer
 
 enum class CascadeCacheDirtyCause : uint8_t;
 
+// What drives a view's Motion-class cascades this frame.
+enum class CascadeMotionSource : uint8_t
+{
+    Camera,            // a Camera or Fit cause on at least one Motion pair
+    CasterDeformation, // CasterDeformed is the only motion cause (static camera)
+};
+
 // Per-frame update class of one cascade PAIR (depth slot + tint twin).
 enum class CascadeUpdateClass : uint8_t
 {
     Cached = 0,  // content matches every current input — skips via the cache
-    Motion,      // dirty ONLY through camera motion (Camera / Fit) — deferrable
+    Motion,      // dirty ONLY through motion: the camera (Camera / Fit) or caster vertex
+                 // deformation (CasterDeformed) — stale by a bounded drift, deferrable
     Correctness, // any other dirty cause — must render this frame, no budget
 };
 
@@ -78,6 +92,12 @@ CascadeUpdateClass ClassifyCascadePair(CascadeCacheDirtyCause depthCause,
                                        const CascadeCacheDirtyCause* tintCause,
                                        bool contentFitsLockstep);
 
+// True when a Motion pair moves with the camera: CameraChanged or
+// CascadeFitChanged on the depth slot or on the tint twin (`tintCause`
+// non-null). One such pair makes the view's source CascadeMotionSource::Camera.
+bool IsCameraMotionPair(CascadeUpdateClass pairClass, CascadeCacheDirtyCause depthCause,
+                        const CascadeCacheDirtyCause* tintCause);
+
 class CascadeMotionScheduler
 {
   public:
@@ -98,11 +118,13 @@ class CascadeMotionScheduler
     // byte-identical to the current fit (a Cached skip refreshes the stamp) —
     // i.e. how many frames of camera-motion drift receivers sample if the
     // slot defers this frame. Deferral requires staleness <= maxAge;
-    // `motionCap` == 0 disables deferral entirely.
+    // `motionCap` == 0 disables deferral entirely. `source` selects whether a
+    // forced render takes budget (Camera) or goes on top of it
+    // (CasterDeformation).
     FramePlan PlanFrame(uint32_t viewId, uint32_t numCascades,
                         const std::array<CascadeUpdateClass, kMaxCascades>& classes,
                         const std::array<uint64_t, kMaxCascades>& staleness,
-                        uint32_t motionCap, uint32_t maxAge);
+                        uint32_t motionCap, uint32_t maxAge, CascadeMotionSource source);
 
     void Reset();
 

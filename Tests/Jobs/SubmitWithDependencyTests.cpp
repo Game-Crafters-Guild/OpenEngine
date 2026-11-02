@@ -4,7 +4,7 @@
 // Covers: lambda chains and fan-in (including the mirror-node bridge for
 // plain-Submit lambda dependencies), F8 already-terminal deps, failure
 // cascade from a lambda dependency, cancel cascade to lambda dependents,
-// cancel of a parked dependent, mixed lambda/Task-subclass dependencies,
+// cancel of a parked dependent, mixed plain and graph dependencies,
 // mirror-node erasure (the B4 leak tripwire extended to mirrors), and the
 // deps overload racing Shutdown (F13 coverage).
 
@@ -16,7 +16,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <functional>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -31,21 +30,6 @@ std::span<const JobSystem::TaskHandle> DepSpan(const JobSystem::TaskHandle& hand
 {
     return {&handle, 1};
 }
-
-// Minimal Task subclass for the mixed lambda/subclass dependency test.
-class ScriptedGraphTask final : public JobSystem::Task
-{
-  public:
-    ScriptedGraphTask(JobSystem::WorkStealingThreadPool* pool, std::function<void()> fn)
-        : Task(pool), m_Fn(std::move(fn))
-    {
-    }
-
-    void Execute() override { m_Fn(); }
-
-  private:
-    std::function<void()> m_Fn;
-};
 
 // Bounded terminal poll: a strand must FAIL the test, not hang the suite
 // (TaskHandle::Wait on a stranded dependent never returns).
@@ -268,8 +252,8 @@ TEST(SubmitWithDependencyTest, CancelOfParkedDependentIsInherited)
 }
 
 // Mixed dependencies: one plain-lambda handle (mirror-bridged) and one
-// Task-subclass handle (natively tracked) gate the same dependent.
-TEST(SubmitWithDependencyTest, MixedLambdaAndSubclassDependencies)
+// graph-task handle (natively tracked) gate the same dependent.
+TEST(SubmitWithDependencyTest, MixedPlainAndGraphDependencies)
 {
     JobSystem::WorkStealingThreadPool pool(1);
 
@@ -286,11 +270,11 @@ TEST(SubmitWithDependencyTest, MixedLambdaAndSubclassDependencies)
     std::atomic<int> depsDone{0};
     auto lambdaDep =
         pool.Submit([&depsDone] { depsDone.fetch_add(1, std::memory_order_relaxed); });
-    auto subclassDep = pool.Submit(JobSystem::MakeUnique<ScriptedGraphTask>(
-        &pool, [&depsDone] { depsDone.fetch_add(1, std::memory_order_relaxed); }));
+    auto graphDep = pool.Submit([&depsDone] { depsDone.fetch_add(1, std::memory_order_relaxed); },
+                                std::span<const JobSystem::TaskHandle>());
 
     std::atomic<int> seenAtRun{-1};
-    const std::array<JobSystem::TaskHandle, 2> deps{lambdaDep, subclassDep};
+    const std::array<JobSystem::TaskHandle, 2> deps{lambdaDep, graphDep};
     auto dependent = pool.Submit([&depsDone, &seenAtRun] { seenAtRun.store(depsDone.load()); },
                                  std::span<const JobSystem::TaskHandle>(deps));
 

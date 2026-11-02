@@ -114,7 +114,7 @@ void UIManager::HealDeviceResourcesIfRebuilt()
     // IsValid(), which a dead handle still passes, and hands the result to
     // UITextureRegistry::Register. Clearing is not a complete fix: publishers
     // re-publish the handle they still hold, which after a rebuild is itself
-    // dead. What contains that is CreateTransientFrameSet's IsTextureHandleLive
+    // dead. What contains that is GetFrameSet's IsTextureHandleLive
     // substitution, which swaps any dead slot texture for the live dummy; the
     // publishers healing their own handles is tracked separately.
     m_ExternalDeviceTextures.clear();
@@ -163,7 +163,7 @@ void UIManager::HealDeviceResourcesIfRebuilt()
     // Cached primitives store texture SLOT INDICES, and the heal just reset the
     // registry's slot space. Without this the editor sitting idle after a
     // rebuild — the exact post-rebuild window — never re-runs primitive
-    // generation, so the transient set carries slot 0 alone while every cached
+    // generation, so the frame set carries slot 0 alone while every cached
     // primitive still indexes 1..N. Same cause the texture-slot-availability
     // paths in UIManager_Assets.cpp use.
     MarkPrimitivesNeedRegen(PrimitiveRegenCause::TextureSlots);

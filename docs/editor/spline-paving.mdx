@@ -96,7 +96,7 @@ The inspector shows its sections in this order: **Surface**, **Curb**, **Road Mo
 
 | Section | Setting | Default | What it does |
 |---|---|---|---|
-| Surface | Material | Empty (flat gray) | The surface drawn on the paving. Texture coordinates are in meters on the ground, so the stone size is the material's own tiling. |
+| Surface | Material | Empty (flat gray) | The surface drawn on the paving. On a road and up to one road width beside it, the paving continues the pattern of the road's strip, at the strip's tiles per meter. Elsewhere, and everywhere inside a square's outline, the texture coordinates are meters on the ground, so the stone size is the material's own tiling. |
 | Surface | Seed | 0 | Offsets the paving pattern on the ground. Any whole number gives another placement of the pattern; the outline and the curb stay as they are. Change it when two Spline Paving components with one material look alike. |
 | Curb | Width (m) | 0.3 m | How wide the curb is, from 0 m to 10 m. 0 builds no curb. |
 | Curb | Height (m) | 0.12 m | How high the curb stands above the paving, from 0.01 m to 10 m. |

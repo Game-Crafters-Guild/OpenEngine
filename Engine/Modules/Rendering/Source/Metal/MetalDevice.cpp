@@ -1387,6 +1387,8 @@ bool MetalDevice::BeginFrame()
         transientSets.clear();
         m_TransientDescriptorArenas[m_FrameIndex].Reset();
     }
+    // This slot's previous frame has finished, so the set cache ages one frame here.
+    AgeCachedDescriptorSets();
 
     MetalSwapchain* swapchain = GetSwapchain(m_ActiveWindowTarget);
     if (swapchain != nullptr && m_Desc.enableSwapchain)

@@ -9,6 +9,7 @@
 #include "Core/Engine.h"
 #include "Terrain/RawHeightmapSettingsCommit.h"
 #include "TerrainECS/RawHeightmap.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 #include "Inspectors/InspectorUIHelpers.h"
@@ -48,7 +49,7 @@ constexpr SampleCountRow kSamplesZRow{
 // The facts a user checks a grid against: what the file is and how many samples it holds.
 std::string FileFactsText(const std::filesystem::path& path)
 {
-    const bool r16 = ToLowerAscii(path.extension().string()) == ".r16";
+    const bool r16 = LowerCaseExtension(path) == ".r16";
     const std::string format = r16 ? "R16 unsigned 16-bit" : "R32 float";
     std::error_code ec;
     const uint64 bytes = std::filesystem::file_size(path, ec);

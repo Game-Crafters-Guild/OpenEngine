@@ -4,8 +4,8 @@
 #include "ECS/World.h"
 #include "UI/Controls/InspectorNotice.h"
 #include "UI/UIElement.h"
+#include "Types/StringUtils.h"
 
-#include <cctype>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,20 +14,6 @@ namespace GameEngine::Editor
 {
 namespace
 {
-
-bool EqualsFold(std::string_view a, std::string_view b)
-{
-    if (a.size() != b.size())
-        return false;
-    const auto lower = [](char c)
-    { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); };
-    for (std::size_t i = 0; i < a.size(); ++i)
-    {
-        if (lower(a[i]) != lower(b[i]))
-            return false;
-    }
-    return true;
-}
 
 const ECS::PreservedField* FindPreservedField(const ECS::World& world, ECS::EntityHandle entity,
                                               ECS::ComponentTypeId typeId, std::string_view fieldName)
@@ -40,7 +26,7 @@ const ECS::PreservedField* FindPreservedField(const ECS::World& world, ECS::Enti
         return nullptr;
     for (const ECS::PreservedField& f : *fields)
     {
-        if (f.TypeId == typeId && EqualsFold(f.Field, fieldName))
+        if (f.TypeId == typeId && EqualsIgnoreCase(f.Field, fieldName))
             return &f;
     }
     return nullptr;

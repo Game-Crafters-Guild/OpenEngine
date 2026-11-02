@@ -1,6 +1,6 @@
 #include "Panels/ShaderErrors/ShaderErrorRows.h"
+#include "Types/StringUtils.h"
 
-#include <algorithm>
 #include <cctype>
 #include <system_error>
 
@@ -51,9 +51,7 @@ bool ParseShaderDiagnosticLine(std::string_view line, std::string& outFile, size
 
     static constexpr std::string_view kExts[] = {".glsl:", ".vert:", ".frag:",
                                                  ".comp:", ".geom:", ".hlsl:"};
-    std::string lower(line);
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string lower = ToLowerAscii(line);
 
     for (std::string_view ext : kExts)
     {
@@ -77,10 +75,7 @@ bool ParseShaderDiagnosticLine(std::string_view line, std::string& outFile, size
         rest = TrimView(rest);
         for (std::string_view sev : {std::string_view("error:"), std::string_view("warning:")})
         {
-            if (rest.size() >= sev.size()
-                && std::equal(sev.begin(), sev.end(), rest.begin(),
-                              [](char a, char b)
-                              { return std::tolower(static_cast<unsigned char>(b)) == a; }))
+            if (StartsWithIgnoreCase(rest, sev))
             {
                 rest = TrimView(rest.substr(sev.size()));
                 break;

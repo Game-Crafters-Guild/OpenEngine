@@ -4,10 +4,10 @@
 #include "Editor/Vcs/EditorVcsProviderRegistry.h"
 #include "VCSIntegration/IVCSIntegration.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 #include <regex>
 #include <algorithm>
-#include <cctype>
 
 namespace GameEngine {
 
@@ -19,8 +19,7 @@ std::string NormalizePathForCompare(const std::filesystem::path& p)
     // of assets and must stay fast; lexically_normal is purely string-based.
     std::string s = p.lexically_normal().generic_string(); // '/' separators
 #if defined(_WIN32)
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    s = ToLowerAscii(s);
 #endif
     return s;
 }
@@ -154,11 +153,7 @@ std::vector<std::filesystem::path> SmartFolderFilterEvaluator::Evaluate(
 
         const std::string filename = file.filename().string();
         const std::string filenameLower = ToLowerAscii(filename);
-        std::string extLower;
-        if (file.has_extension())
-        {
-            extLower = ToLowerAscii(file.extension().string());
-        }
+        const std::string extLower = LowerCaseExtension(file);
 
         auto matchesOne = [&](const PreparedFilter& pf) -> bool
         {
@@ -293,8 +288,7 @@ bool SmartFolderFilterEvaluator::MatchesFilter(const std::filesystem::path& file
             if (!file.has_extension()) {
                 return false;
             }
-            std::string ext = file.extension().string();
-            std::string extLower = ToLowerAscii(ext);
+            const std::string extLower = LowerCaseExtension(file);
             
             // Handle both ".png" and "png" formats
             std::string filterExt = valueLower;

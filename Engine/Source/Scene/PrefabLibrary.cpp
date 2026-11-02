@@ -97,24 +97,27 @@ const PrefabTemplate& PrefabLibrary::Insert(PrefabTemplate built)
     return *record->Current;
 }
 
-void PrefabLibrary::Hold(const ECS::World& world, const PrefabTemplate& prefab)
+void PrefabLibrary::Hold(ECS::World& world, const PrefabTemplate& prefab)
 {
     AssertWritable();
     WorldHolds& holds = m_HoldsByWorld[world.GetWorldId()];
+    holds.World = &world;
     if (holds.Epoch != world.GetEntityHandleEpoch())
     {
         ReleaseHolds(holds);
         holds.Epoch = world.GetEntityHandleEpoch();
     }
     std::string key = RecordKey(prefab.Path);
-    if (std::find(holds.Keys.begin(), holds.Keys.end(), key) != holds.Keys.end())
+    if (std::any_of(holds.Prefabs.begin(), holds.Prefabs.end(),
+                    [&key](const HeldPrefab& held)
+                    { return held.Key == key; }))
         return;
     const auto it = m_Records.find(key);
     assert(it != m_Records.end() && "Hold names a resident prefab");
     if (it == m_Records.end())
         return;
     ++it->second->References;
-    holds.Keys.push_back(std::move(key));
+    holds.Prefabs.push_back({std::move(key), &prefab});
 }
 
 void PrefabLibrary::ReleaseWorld(const ECS::World& world)
@@ -129,13 +132,13 @@ void PrefabLibrary::ReleaseWorld(const ECS::World& world)
 
 void PrefabLibrary::ReleaseHolds(WorldHolds& holds)
 {
-    for (const std::string& key : holds.Keys)
+    for (const HeldPrefab& held : holds.Prefabs)
     {
-        const auto it = m_Records.find(key);
+        const auto it = m_Records.find(held.Key);
         if (it != m_Records.end() && it->second->References > 0)
             --it->second->References;
     }
-    holds.Keys.clear();
+    holds.Prefabs.clear();
 }
 
 void PrefabLibrary::CollectAtFrameBoundary()
@@ -152,13 +155,40 @@ void PrefabLibrary::CollectAtFrameBoundary()
         ReleaseHolds(it->second);
         it = m_HoldsByWorld.erase(it);
     }
+    std::vector<std::uint64_t> destroyed;
+    for (const std::uint64_t worldId : m_DeferredWorlds)
+    {
+        if (!ECS::World::FindLiveEntityHandleEpoch(worldId))
+            destroyed.push_back(worldId);
+    }
+    for (const std::uint64_t worldId : destroyed)
+        m_DeferredWorlds.Erase(worldId);
 
+    // A deferred world's instances still show a retired generation: its resume compares with it.
+    // A frame with no retired generation builds no set.
+    FastHashSet<const PrefabTemplate*> shown;
+    const bool anyRetired = std::any_of(m_Records.begin(), m_Records.end(),
+                                        [](const auto& entry)
+                                        { return !entry.second->Retired.empty(); });
+    if (anyRetired)
+    {
+        for (const auto& [worldId, holds] : m_HoldsByWorld)
+        {
+            for (const HeldPrefab& held : holds.Prefabs)
+                shown.insert(held.Shown);
+        }
+    }
     for (auto it = m_Records.begin(); it != m_Records.end();)
     {
         Record& record = *it->second;
-        for (const auto& retired : record.Retired)
-            DestroyTemplate(*retired);
-        record.Retired.clear();
+        std::erase_if(record.Retired,
+                      [this, &shown](const std::unique_ptr<PrefabTemplate>& retired)
+                      {
+                          if (shown.contains(retired.get()))
+                              return false;
+                          DestroyTemplate(*retired);
+                          return true;
+                      });
         if (record.References > 0)
         {
             ++it;
@@ -187,18 +217,53 @@ void PrefabLibrary::RebuildChanged(std::span<const GUID> changed)
     RebuildKeys(changedFiles);
 }
 
-std::vector<RebuiltPrefab> PrefabLibrary::RebuildFiles(std::span<const std::filesystem::path> files)
+void PrefabLibrary::RebuildFiles(std::span<const std::filesystem::path> files)
 {
     AssertWritable();
     if (!m_AssetManager || m_Records.empty())
-        return {};
+        return;
     std::vector<std::string> changedFiles;
     for (const std::filesystem::path& file : files)
         changedFiles.push_back(AssetPaths::NormalizeForRegistryKey(file));
-    return RebuildKeys(changedFiles);
+    RebuildKeys(changedFiles);
 }
 
-std::vector<RebuiltPrefab> PrefabLibrary::RebuildKeys(std::span<const std::string> changedFiles)
+void PrefabLibrary::SetPropagationDeferred(ECS::World& world, bool deferred)
+{
+    AssertWritable();
+    if (deferred)
+    {
+        m_DeferredWorlds.Insert(world.GetWorldId());
+        return;
+    }
+    m_DeferredWorlds.Erase(world.GetWorldId());
+    const auto it = m_HoldsByWorld.find(world.GetWorldId());
+    if (it == m_HoldsByWorld.end())
+        return;
+    it->second.World = &world;
+    if (PropagateToHolder(it->first, it->second))
+        InstancesChanged.Invoke(world);
+}
+
+bool PrefabLibrary::PropagateToHolder(std::uint64_t worldId, WorldHolds& holds)
+{
+    if (ECS::World::FindLiveEntityHandleEpoch(worldId) != holds.Epoch)
+        return false;
+    bool changed = false;
+    for (std::size_t index = 0; index < holds.Prefabs.size(); ++index)
+    {
+        const auto record = m_Records.find(holds.Prefabs[index].Key);
+        if (record == m_Records.end() || holds.Prefabs[index].Shown == record->second->Current.get())
+            continue;
+        const PrefabTemplate& before = *holds.Prefabs[index].Shown;
+        const PrefabTemplate& after = *record->second->Current;
+        holds.Prefabs[index].Shown = &after;
+        changed = PropagatePrefabGeneration(*holds.World, *this, before, after) || changed;
+    }
+    return changed;
+}
+
+void PrefabLibrary::RebuildKeys(std::span<const std::string> changedFiles)
 {
     std::vector<const PrefabTemplate*> stale;
     for (const auto& [key, record] : m_Records)
@@ -207,31 +272,45 @@ std::vector<RebuiltPrefab> PrefabLibrary::RebuildKeys(std::span<const std::strin
             stale.push_back(record->Current.get());
     }
     if (stale.empty())
-        return {};
+        return;
 
     EngineCore& engine = EngineCore::GetInstance();
     AssetManagerSceneResolver resolver(*m_AssetManager, engine.GetResolvedAssetRoot(),
                                        AssetManagerSceneResolver::UnknownFile::AssignGuid);
     SceneEngineEmbedMaterializer materializer(*m_AssetManager);
-    LoadOptions options;
+    SceneReadOptions options;
     options.assetResolver = &resolver;
     options.assetRootOverride = resolver.GetAssetRoot();
     options.projectRoot = engine.GetWorkspaceRoot();
     options.embedMaterializer = &materializer;
-    std::vector<RebuiltPrefab> rebuilt;
     for (const PrefabTemplate* prefab : stale)
     {
-        // A rebuild retires the old generation, which stays alive until the frame boundary.
+        // A rebuild retires the old generation, which stays alive while a world's instances show it.
         const std::filesystem::path& path = prefab->Path;
         std::string error;
-        if (const PrefabTemplate* built = BuildTemplateFromFile(*this, path, prefab->Source, options, error))
-            rebuilt.push_back({prefab, built});
-        else
+        if (!BuildTemplateFromFile(*this, path, prefab->Source, options, error))
             Logger::Log::Error("Prefab {} changed but could not be rebuilt, so spawns and loads still use the "
                                "previous version: {}",
                                path.filename().string(), error);
     }
-    return rebuilt;
+
+    // A propagation can hold prefabs, which adds holders: walk a copy of the world ids.
+    std::vector<std::uint64_t> worldIds;
+    worldIds.reserve(m_HoldsByWorld.size());
+    for (const auto& [worldId, holds] : m_HoldsByWorld)
+    {
+        if (!m_DeferredWorlds.Contains(worldId))
+            worldIds.push_back(worldId);
+    }
+    std::vector<ECS::World*> changedWorlds;
+    for (const std::uint64_t worldId : worldIds)
+    {
+        const auto it = m_HoldsByWorld.find(worldId);
+        if (it != m_HoldsByWorld.end() && PropagateToHolder(worldId, it->second))
+            changedWorlds.push_back(it->second.World);
+    }
+    for (ECS::World* world : changedWorlds)
+        InstancesChanged.Invoke(*world);
 }
 
 void PrefabLibrary::ReportNotResident(const GUID& source) const

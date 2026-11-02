@@ -14,6 +14,7 @@
 #include "ECS/ECS.h"
 #include "Events/Event.h"
 #include "Scene/SceneIO.h"
+#include "Types/FlatSet.h"
 #include "Types/Types.h"
 
 #include <cstdint>
@@ -45,7 +46,7 @@ struct PrefabTemplate
     // recorded on (-1 for none).
     struct Row
     {
-        SceneLoadSkip Skip;
+        SceneDegradation::Skip Skip;
         std::int32_t EntityIndex = -1;
     };
     // Where an entity is authored: Files[File], at the entity's header line.
@@ -78,14 +79,6 @@ struct PrefabTemplate
     bool RootTakesFallbackName = false;
 };
 
-// A resident prefab that a rebuild gave a new generation. Both generations stay valid until the next
-// CollectAtFrameBoundary.
-struct RebuiltPrefab
-{
-    const PrefabTemplate* Before = nullptr;
-    const PrefabTemplate* After = nullptr;
-};
-
 class PrefabLibrary
 {
   public:
@@ -111,19 +104,30 @@ class PrefabLibrary
     /// new generation; the old one stays valid until the next CollectAtFrameBoundary.
     const PrefabTemplate& Insert(PrefabTemplate built);
 
-    /// Keeps `prefab` resident while `world` lives and has not been cleared since.
-    void Hold(const ECS::World& world, const PrefabTemplate& prefab);
+    /// Keeps `prefab` resident while `world` lives and has not been cleared since. The instances
+    /// of `world` show `prefab`'s generation until a rebuild gives them a newer one.
+    void Hold(ECS::World& world, const PrefabTemplate& prefab);
     /// Drops every hold of `world`.
     void ReleaseWorld(const ECS::World& world);
 
-    /// The frame boundary: drops the holds of destroyed or cleared worlds, frees retired
-    /// generations (no holder of a retired generation exists) and evicts every prefab no world holds.
+    /// The frame boundary: drops the holds of destroyed or cleared worlds, frees every retired
+    /// generation that no world's instances show, and evicts every prefab no world holds.
     void CollectAtFrameBoundary();
 
-    /// Rebuilds, as a new generation, every resident template built from a file `changed` names.
+    /// Rebuilds, as a new generation, every resident template built from a file `changed` names,
+    /// and gives the instances of every world that holds it the new generation.
     void RebuildChanged(std::span<const GUID> changed);
-    /// Rebuilds, as a new generation, every resident template built from one of `files` (absolute).
-    std::vector<RebuiltPrefab> RebuildFiles(std::span<const std::filesystem::path> files);
+    /// RebuildChanged for the absolute paths `files`.
+    void RebuildFiles(std::span<const std::filesystem::path> files);
+
+    /// While `deferred` is true, a rebuild does not change the instances of `world`, also after a
+    /// World::Clear. Setting it back to false gives them the newest generation of every prefab the world
+    /// holds.
+    void SetPropagationDeferred(ECS::World& world, bool deferred);
+
+    /// Fires on the main thread after a rebuild changed an instance of a world: a field written, or an
+    /// entity added or removed. A rebuild that changes no instance fires nothing.
+    Event<ECS::World&> InstancesChanged;
 
     /// Logs, once per GUID, that a spawn named the prefab `source` while it is not resident, with
     /// the fix. Any thread.
@@ -141,14 +145,24 @@ class PrefabLibrary
         std::vector<std::unique_ptr<PrefabTemplate>> Retired;
         std::uint32_t References = 0;
     };
+    // A prefab a world holds, by its record key, with the generation the world's instances show.
+    struct HeldPrefab
+    {
+        std::string Key;
+        const PrefabTemplate* Shown = nullptr;
+    };
     struct WorldHolds
     {
+        ECS::World* World = nullptr; // alive while FindLiveEntityHandleEpoch of its id gives Epoch
         std::uint64_t Epoch = 0;
-        std::vector<std::string> Keys;
+        std::vector<HeldPrefab> Prefabs;
     };
 
     void AssertWritable() const;
-    std::vector<RebuiltPrefab> RebuildKeys(std::span<const std::string> changedFiles);
+    void RebuildKeys(std::span<const std::string> changedFiles);
+    // Gives the instances of the world `worldId` the newest generation of every prefab `holds` names.
+    // Returns true when an instance changed. Does nothing when that world is destroyed or cleared.
+    bool PropagateToHolder(std::uint64_t worldId, WorldHolds& holds);
     void ReleaseHolds(WorldHolds& holds);
     void DestroyTemplate(const PrefabTemplate& prefab);
 
@@ -156,6 +170,7 @@ class PrefabLibrary
     FastHashMap<std::string, std::unique_ptr<Record>> m_Records; // by the registry key of Path
     FastHashMap<GUID, std::string> m_KeyBySource;
     FastHashMap<std::uint64_t, WorldHolds> m_HoldsByWorld;
+    FlatSet<std::uint64_t> m_DeferredWorlds; // by world id; kept until the world is destroyed
 
     AssetManager* m_AssetManager = nullptr; // set for the engine's library
     EventSubscription m_FilesChanged;
@@ -163,5 +178,12 @@ class PrefabLibrary
     mutable std::mutex m_NotResidentMutex;
     mutable FastHashSet<GUID> m_ReportedNotResident;
 };
+
+// Gives every outermost instance of the prefab of `after` in `world` the change from the generation
+// `before` to `after`: the fields and components it does not override, the children the prefab gained
+// and the children it lost. Returns true when an instance changed. Defined with the override edits
+// (PrefabOverrideEdits.cpp).
+bool PropagatePrefabGeneration(ECS::World& world, PrefabLibrary& library, const PrefabTemplate& before,
+                               const PrefabTemplate& after);
 
 } // namespace GameEngine::Scene

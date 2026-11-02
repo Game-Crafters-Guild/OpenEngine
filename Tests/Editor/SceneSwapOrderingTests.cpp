@@ -107,7 +107,7 @@ std::string FunctionBody(const std::string& src, const std::string& qualifier,
 
 } // namespace
 
-// The replace-open swap site. LoadSceneFromFile is what reaches World::Clear,
+// The replace-open swap site. ReadSceneInto is what reaches World::Clear,
 // so the release has to precede the call, not merely appear in the function.
 TEST(SceneSwapOrdering, ReplaceOpenReleasesSceneScopedStateBeforeTheLoad)
 {
@@ -118,12 +118,12 @@ TEST(SceneSwapOrdering, ReplaceOpenReleasesSceneScopedStateBeforeTheLoad)
     ASSERT_FALSE(body.empty());
 
     const size_t release = body.find("ReleaseSceneScopedState(");
-    const size_t load = body.find("Scene::LoadSceneFromFile(");
+    const size_t load = body.find("Scene::ReadSceneInto(");
     ASSERT_NE(release, std::string::npos)
         << "the replace-open must release the outgoing scene's state through the shared step";
     ASSERT_NE(load, std::string::npos);
     EXPECT_LT(release, load)
-        << "the release must precede LoadSceneFromFile — that call is what reaches World::Clear, "
+        << "the release must precede ReadSceneInto — that call is what reaches World::Clear, "
            "and a Retire after it destroys entities of the scene being loaded";
 }
 

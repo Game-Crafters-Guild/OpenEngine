@@ -3,7 +3,7 @@
 #include "Assets/AssetManager.h"
 #include "Assets/PackagedTexturePayload.h"
 #include "Assets/TextureAsset.h"
-#include "Types/StringUtils.h"
+#include "Types/PathUtils.h"
 
 namespace GameEngine
 {
@@ -26,6 +26,6 @@ AssetDecodeInputs TextureParser::ResolveDecodeInputs(
     if (const auto payload = ResolvePackagedTexturePayload(registry, metadata.Guid))
         return TextureAsset::ResolvePackagedDecodeInputs(registry, metadata.Guid, *payload);
     return TextureAsset::ResolveCookDecodeInputs(registry, metadata.Guid,
-                                                 ToLowerAscii(metadata.Path.extension().string()), bytes);
+                                                 LowerCaseExtension(metadata.Path), bytes);
 }
 } // namespace GameEngine

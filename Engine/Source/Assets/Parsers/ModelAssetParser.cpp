@@ -5,11 +5,10 @@
 #include "AssetCore/DepEdge.h"
 #include "AssetCore/GUID.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
 
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -24,14 +23,6 @@ namespace
 bool IsDataUri(std::string_view uri)
 {
     return uri.size() >= 5 && uri.compare(0, 5, "data:") == 0;
-}
-
-std::string LowerExtension(const std::filesystem::path& p)
-{
-    std::string ext = p.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext;
 }
 
 // Try to extract the JSON body from a .glb file. .glb structure:
@@ -115,7 +106,7 @@ bool ModelAssetParser::ExtractDependencies(const GUID& referrer,
                                            const AssetMetadata& metadata,
                                            DepEdgeSink& sink) const
 {
-    const std::string ext = LowerExtension(metadata.Path);
+    const std::string ext = LowerCaseExtension(metadata.Path);
 
     if (ext == ".gltf")
     {

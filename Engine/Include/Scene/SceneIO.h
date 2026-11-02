@@ -36,59 +36,60 @@ struct SceneIOError
 const SceneIOError& GetLastSceneIOError();
 void ClearLastSceneIOError();
 
-// What a load-report row records: a line the load could not apply, an override line of a prefab instance whose
-// address names no entity of the prefab, or an override line under a child that the same instance removes.
-enum class SceneLoadSkipKind
-{
-    Unapplied,
-    OrphanedOverride,
-    UnderRemovedEntity,
-};
-
-// One component or field assignment the loader could not apply. The load CONTINUED past it, so the
-// entity exists and everything else about it is live — this records exactly what did not make it in.
-// A scene authored against a newer build than the one opening it (a field or an enumerator that this
-// binary does not know), a field name the component does not have (renamed, removed or misspelled),
-// or a value whose syntax this parser cannot read at all produces one of these per assignment instead
-// of costing the user the whole scene. A component type no module registers is kept, not recorded
-// here. Structural errors are not in this class and still fail the load: a dangling
-// entity or resource reference is a claim about the document, not a value a component can decline.
-struct SceneLoadSkip
-{
-    std::string entityId;       // instantiated scene entity id (include/prefab prefix applied)
-    std::string component;      // authored component name
-    std::string field;          // authored property key; empty when the whole component failed
-    std::string message;        // the schema's error, or the fix for a field the component does not have
-    std::filesystem::path file; // file the line came from (an include, for included entities)
-    int line = 0;               // 0 when unknown
-
-    // The authored text was kept in the world's preserved-field side table AT LOAD TIME, so a save
-    // re-emits it verbatim rather than writing the default the field fell back to. False means the
-    // assignment exists nowhere but this record, and saving WILL drop it.
-    //
-    // A load-time answer, and the override can retire afterwards — see SkipIsOutstanding, which is
-    // what any surface reporting on a save's behaviour must ask instead.
-    bool preserved = false;
-
-    // The entity the row describes, so SkipIsOutstanding can ask the live world about it without resolving
-    // `entityId` back through the scene tags; the instance root for an OrphanedOverride or an UnderRemovedEntity
-    // row. Null when the row describes no entity.
-    ECS::EntityHandle entityHandle{};
-
-    // The registered type of `component` on a field row, so SkipIsOutstanding can ask whether the
-    // entity still carries it. 0 on a row that names no field or no registered component.
-    ECS::ComponentTypeId componentType = 0;
-
-    SceneLoadSkipKind kind = SceneLoadSkipKind::Unapplied;
-    // The address under the instance root that an OrphanedOverride or an UnderRemovedEntity row names (entity ids
-    // joined by '.'); else empty.
-    std::string address;
-};
-
 // Everything one load could not apply. Empty => the scene loaded cleanly.
-struct SceneLoadDegradation
+struct SceneDegradation
 {
-    std::vector<SceneLoadSkip> skips;
+    // What a load-report row records: a line the load could not apply, an override line of a prefab instance
+    // whose address names no entity of the prefab, or an override line under a child that the same instance
+    // removes.
+    enum class SkipKind
+    {
+        Unapplied,
+        OrphanedOverride,
+        UnderRemovedEntity,
+    };
+
+    // One component or field assignment the loader could not apply. The load CONTINUED past it, so the
+    // entity exists and everything else about it is live — this records exactly what did not make it in.
+    // A scene authored against a newer build than the one opening it (a field or an enumerator that this
+    // binary does not know), a field name the component does not have (renamed, removed or misspelled),
+    // or a value whose syntax this parser cannot read at all produces one of these per assignment instead
+    // of costing the user the whole scene. A component type no module registers is kept, not recorded
+    // here. Structural errors are not in this class and still fail the load: a dangling
+    // entity or resource reference is a claim about the document, not a value a component can decline.
+    struct Skip
+    {
+        std::string entityId;       // instantiated scene entity id (include/prefab prefix applied)
+        std::string component;      // authored component name
+        std::string field;          // authored property key; empty when the whole component failed
+        std::string message;        // the schema's error, or the fix for a field the component does not have
+        std::filesystem::path file; // file the line came from (an include, for included entities)
+        int line = 0;               // 0 when unknown
+
+        // The authored text was kept in the world's preserved-field side table AT LOAD TIME, so a save
+        // re-emits it verbatim rather than writing the default the field fell back to. False means the
+        // assignment exists nowhere but this record, and saving WILL drop it.
+        //
+        // A load-time answer, and the override can retire afterwards — see SkipIsOutstanding, which is
+        // what any surface reporting on a save's behaviour must ask instead.
+        bool preserved = false;
+
+        // The entity the row describes, so SkipIsOutstanding can ask the live world about it without
+        // resolving `entityId` back through the scene tags; the instance root for an OrphanedOverride or an
+        // UnderRemovedEntity row. Null when the row describes no entity.
+        ECS::EntityHandle entityHandle{};
+
+        // The registered type of `component` on a field row, so SkipIsOutstanding can ask whether the
+        // entity still carries it. 0 on a row that names no field or no registered component.
+        ECS::ComponentTypeId componentType = 0;
+
+        SkipKind kind = SkipKind::Unapplied;
+        // The address under the instance root that an OrphanedOverride or an UnderRemovedEntity row names
+        // (entity ids joined by '.'); else empty.
+        std::string address;
+    };
+
+    std::vector<Skip> skips;
 
     bool IsDegraded() const { return !skips.empty(); }
 
@@ -101,7 +102,7 @@ struct SceneLoadDegradation
     std::size_t DroppedCount() const
     {
         std::size_t n = 0;
-        for (const SceneLoadSkip& s : skips)
+        for (const Skip& s : skips)
             n += s.preserved ? 0u : 1u;
         return n;
     }
@@ -111,16 +112,10 @@ struct SceneLoadDegradation
 // call. A never-preserved row stands while its entity (and, on a field row, its component) is alive,
 // or until a save when it names no entity. A preserved row stands while the world holds its override.
 // An UnderRemovedEntity row never stands: the instance removes the child, and a save drops the line.
-bool SkipIsOutstanding(const ECS::World& world, const SceneLoadSkip& skip);
+bool SkipIsOutstanding(const ECS::World& world, const SceneDegradation::Skip& skip);
 
 // How many of a census's skips are still outstanding against `world`. See SkipIsOutstanding.
-std::size_t OutstandingSkipCount(const ECS::World& world, const SceneLoadDegradation& census);
-
-enum class LoadMode
-{
-    Replace,
-    Additive
-};
+std::size_t OutstandingSkipCount(const ECS::World& world, const SceneDegradation& census);
 
 // Optional editor snapshot stored under [hierarchy_ui] in .scene files (foldout expansion + selection by SceneEntityTag).
 struct SceneHierarchyUi
@@ -154,22 +149,24 @@ struct SceneEditorCameraFromFile
     SceneEditorCamera camera{};
 };
 
-// Main-thread phase split of one LoadSceneFromFile call, in milliseconds. The
+// Main-thread phase split of one ReadSceneInto call, in milliseconds. The
 // single "parse+instantiate" number a caller can measure from outside hides
 // which phase dominates, and a delta-based reload can only ever skip the
 // instantiate half — so the split is what makes that trade-off falsifiable.
-struct SceneLoadTimings
+struct SceneReadTimings
 {
     double ReadMs = 0.0;
     double ParseMs = 0.0;     // tokenise + include expansion
     double ValidateMs = 0.0;
-    double ClearMs = 0.0;     // World::Clear, Replace mode only
+    double ClearMs = 0.0;     // World::Clear, only when clearWorldFirst
     double InstantiateMs = 0.0;
 };
 
-struct LoadOptions
+struct SceneReadOptions
 {
-    LoadMode mode = LoadMode::Replace;
+    // True: clear the world, then read the scene into it. False: keep the world's entities; the scene's entity
+    // ids get a unique "import_N." prefix so they cannot collide with them.
+    bool clearWorldFirst = true;
 
     // Optional resolver for GUID/path/asset-root integration.
     // If null, SceneIO falls back to best-effort lexical GUID derivation and extension-based typing.
@@ -196,17 +193,17 @@ struct LoadOptions
     SceneEditorCameraFromFile* outEditorCameraFromFile = nullptr;
 
     // When non-null, filled with the main-thread phase split. Phases that did
-    // not run (an early failure, or Clear on an additive load) stay 0.
-    SceneLoadTimings* outTimings = nullptr;
+    // not run (an early failure, or Clear when clearWorldFirst is false) stay 0.
+    SceneReadTimings* outTimings = nullptr;
 
     // When non-null, filled with every assignment the load could not apply. A non-empty census on a
     // load that RETURNED TRUE means the scene is degraded: it opened, but it is not all of what the
     // file says. The loader always logs the census; this is how a caller gets the full list rather
     // than the first few, and how the editor marks the document.
-    SceneLoadDegradation* outDegradation = nullptr;
+    SceneDegradation* outDegradation = nullptr;
 };
 
-struct SaveOptions
+struct SceneWriteOptions
 {
     bool ensureSceneEntityTags = true; // assign SceneEntityTag to entities that lack one
 
@@ -223,7 +220,7 @@ struct SaveOptions
     // back to [subscene] sections (with [resource] lines), rather than being flattened into [entity] blocks.
     bool preserveSubscenes = true;
 
-    // Optional resolver for GUID/path lookups during save. If provided, SaveSceneToFile will try
+    // Optional resolver for GUID/path lookups during save. If provided, WriteSceneFile will try
     // to fill missing resource guid= fields (best-effort) using the resolver.
     ISceneAssetResolver* assetResolver = nullptr;
 
@@ -237,19 +234,19 @@ struct SaveOptions
     const SceneEditorCamera* editorCamera = nullptr;
 };
 
-// Load a human-readable .scene file into an ECS world.
-// - Replace: clears the world first.
-// - Additive: keeps existing entities; loaded entity ids are namespace-prefixed where needed (subscenes/prefabs).
+// Read a human-readable .scene file into an ECS world.
+// - clearWorldFirst (the default): clears the world first.
+// - Otherwise: keeps existing entities; loaded entity ids are namespace-prefixed where needed (subscenes/prefabs).
 // A false return is reported through GetLastSceneIOError, not the log: the caller owns the outcome
 // and logs the record once, at the level the outcome deserves. The loader logs only Debug detail.
-bool LoadSceneFromFile(ECS::World& world,
-                       const std::filesystem::path& sceneFilePath,
-                       const LoadOptions& options = {});
+bool ReadSceneInto(ECS::World& world,
+                   const std::filesystem::path& sceneFilePath,
+                   const SceneReadOptions& options = {});
 
 // Serialize the world to a human-readable .scene file (INI-like schema format).
-bool SaveSceneToFile(ECS::World& world,
-                     const std::filesystem::path& sceneFilePath,
-                     const SaveOptions& options = {});
+bool WriteSceneFile(ECS::World& world,
+                    const std::filesystem::path& sceneFilePath,
+                    const SceneWriteOptions& options = {});
 
 // Helpers for AssetReference encoding in .scene files.
 // The path is optional and non-authoritative (debugging only).
@@ -261,14 +258,14 @@ struct SceneAssetRef
 
 // Resolve a resource id (from a `#id` reference) to an AssetReference during scene load.
 // Returns false if the load context has no scene file bound.
-bool TryResolveResourceIdToAssetReference(const SceneLoadContext& ctx,
-                                         std::string_view resourceId,
-                                         AssetReference& outRef,
-                                         std::string* outError = nullptr);
+bool TryResolveResourceIdToAssetReference(const SceneReadContext& ctx,
+                                          std::string_view resourceId,
+                                          AssetReference& outRef,
+                                          std::string* outError = nullptr);
 
 // Fetch an embed definition (type + properties) during scene load.
 // Properties are returned as raw key/value strings (no further parsing).
-bool TryGetEmbedDefinition(const SceneLoadContext& ctx,
+bool TryGetEmbedDefinition(const SceneReadContext& ctx,
                            std::string_view embedId,
                            std::string& outType,
                            std::unordered_map<std::string, std::string>& outProperties,
@@ -288,7 +285,7 @@ bool TryGetEmbedDefinition(const SceneLoadContext& ctx,
 //
 // Returns the formatted SceneValue string (e.g. `[path="Models/X.fbx" guid="<g>"]`).
 // The caller embeds this verbatim in the line they push into outLines.
-std::string FormatAssetReferenceForSave(const SceneSaveContext& ctx,
+std::string FormatAssetReferenceForSave(const SceneWriteContext& ctx,
                                         const GUID& guid,
                                         std::string_view authoredPath);
 
@@ -305,7 +302,7 @@ std::string FormatAssetReferenceForSave(const SceneSaveContext& ctx,
 // with its authored path on ctx.TargetWorld's UnresolvedComponentStore so a save writes it back.
 //
 // Returns false on parse error or when no fields can be resolved.
-bool TryResolveAssetReference(const SceneLoadContext& ctx,
+bool TryResolveAssetReference(const SceneReadContext& ctx,
                               const SceneValue& value,
                               AssetType expectedType,
                               AssetReference& outRef,
@@ -314,12 +311,12 @@ bool TryResolveAssetReference(const SceneLoadContext& ctx,
 // Format an EntityHandle field for save: the referenced entity's stable scene-id
 // string (quoted), resolved via ctx.EntityTagById. Returns "" for an invalid handle
 // or one whose target is not part of this save (the caller then omits the line).
-std::string FormatEntityReferenceForSave(const SceneSaveContext& ctx, ECS::EntityHandle handle);
+std::string FormatEntityReferenceForSave(const SceneWriteContext& ctx, ECS::EntityHandle handle);
 
 // Resolve an EntityHandle field on load: parse the quoted scene-id string and look
 // it up (prefixed by ctx.EntityIdPrefix) in ctx.EntityIdMap. Sets out to the live
 // handle, or an invalid handle when the reference is empty/unknown (a dangling link
 // just unlinks — it never fails the load). Returns false only on malformed text.
-bool TryResolveEntityReference(const SceneLoadContext& ctx, std::string_view value, ECS::EntityHandle& out);
+bool TryResolveEntityReference(const SceneReadContext& ctx, std::string_view value, ECS::EntityHandle& out);
 
 } // namespace GameEngine::Scene

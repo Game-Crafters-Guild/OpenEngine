@@ -262,6 +262,30 @@ TEST(SplineStrip, VFollowsTheWidthChannelSoATaperKeepsItsTexelDensity)
     EXPECT_NEAR(mesh.Vertices[mesh.RingVertexCount + 1u].UV.y, 6.0f, 1e-5f);
 }
 
+TEST(SplineStrip, StripProfileVIsTheVTheSweepGivesEachProfilePoint)
+{
+    const SplineProfile profile = FlatRibbon(2.0f); // nominal half-width 1 m
+    auto stations = StraightStations(2u, 4.0f, 1.0f);
+    stations[1].HalfWidthLeft = 2.0f;
+    stations[1].HalfWidthRight = 0.5f;
+    const SplineStripMesh mesh = BuildSplineStrip(profile, stations, {});
+    SplineStripScale scale;
+    scale.Left = 2.0f;
+    scale.Right = 0.5f;
+    std::vector<Mathematics::Vector2> scaledPoints(profile.Points.size());
+    std::vector<float32> pointV(profile.Points.size());
+
+    StripProfileV(profile, scale, scaledPoints, pointV);
+
+    ASSERT_TRUE(mesh.IsValid());
+    ASSERT_EQ(mesh.RingVertexCount, 2u);
+    ASSERT_EQ(pointV.size(), 2u);
+    // 2 m left of the centerline and 0.5 m right of it.
+    EXPECT_NEAR(pointV[1], 2.5f, 1e-5f);
+    for (uint32 point = 0; point < 2u; ++point)
+        EXPECT_FLOAT_EQ(mesh.Vertices[mesh.RingVertexCount + point].UV.y, pointV[point]);
+}
+
 TEST(SplineStrip, TheWidthChannelScalesLaterallyWithoutChangingHeight)
 {
     const SplineProfile profile = WallProfile(2.0f, 4.0f); // nominal half-width 1 m

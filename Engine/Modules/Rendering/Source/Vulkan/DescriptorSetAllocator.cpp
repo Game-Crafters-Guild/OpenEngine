@@ -87,11 +87,8 @@ void DescriptorSetAllocator::BeginFrameReset(uint32_t frameIndex) {
     }
 }
 
-VkDescriptorSet DescriptorSetAllocator::AllocateFromPoolsLocked(std::vector<Pool>& pools, VkDescriptorSetLayout layout, const char* /*debugName*/) {
-    return AllocateFromPoolsLockedImpl(pools, layout, false);
-}
-
-VkDescriptorSet DescriptorSetAllocator::AllocateFromPoolsLockedImpl(std::vector<Pool>& pools, VkDescriptorSetLayout layout, bool updateAfterBind) {
+VkDescriptorSet DescriptorSetAllocator::AllocateFromPoolsLocked(std::vector<Pool>& pools, VkDescriptorSetLayout layout, bool updateAfterBind,
+                                                                VkDescriptorPool& outPool) {
     // Try existing pools
     for (auto& p : pools) {
         if (p.Handle != VK_NULL_HANDLE && p.AllocatedSets < p.Capacity) {
@@ -103,7 +100,7 @@ VkDescriptorSet DescriptorSetAllocator::AllocateFromPoolsLockedImpl(std::vector<
 
             VkDescriptorSet set = VK_NULL_HANDLE;
             VkResult res = vkAllocateDescriptorSets(m_Device, &alloc, &set);
-            if (res == VK_SUCCESS) { p.AllocatedSets++; return set; }
+            if (res == VK_SUCCESS) { p.AllocatedSets++; outPool = p.Handle; return set; }
         }
     }
     // Need a new pool
@@ -122,28 +119,55 @@ VkDescriptorSet DescriptorSetAllocator::AllocateFromPoolsLockedImpl(std::vector<
 
     VkDescriptorSet set = VK_NULL_HANDLE;
     VkResult res = vkAllocateDescriptorSets(m_Device, &alloc, &set);
-    if (res == VK_SUCCESS) { p.AllocatedSets++; return set; }
+    if (res == VK_SUCCESS) { p.AllocatedSets++; outPool = p.Handle; return set; }
     return VK_NULL_HANDLE;
 }
 
-VkDescriptorSet DescriptorSetAllocator::AllocateTransient(VkDescriptorSetLayout layout, const char* debugName) {
+VkDescriptorSet DescriptorSetAllocator::AllocatePersistentLocked(std::vector<Pool>& pools, VkDescriptorSetLayout layout, bool updateAfterBind) {
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    const VkDescriptorSet set = AllocateFromPoolsLocked(pools, layout, updateAfterBind, pool);
+    if (set != VK_NULL_HANDLE)
+        m_PersistentSetPools.InsertOrAssign(set, pool);
+    return set;
+}
+
+VkDescriptorSet DescriptorSetAllocator::AllocateTransient(VkDescriptorSetLayout layout, const char* /*debugName*/) {
     std::lock_guard<std::mutex> lock(m_Mutex);
+    VkDescriptorPool pool = VK_NULL_HANDLE;
     if (!m_TransientPoolsPerFrame.empty())
     {
         auto& pools = m_TransientPoolsPerFrame[m_CurrentFrameIndex % m_TransientPoolsPerFrame.size()];
-        return AllocateFromPoolsLocked(pools, layout, debugName);
+        return AllocateFromPoolsLocked(pools, layout, false, pool);
     }
-    return AllocateFromPoolsLocked(m_TransientPools, layout, debugName);
+    return AllocateFromPoolsLocked(m_TransientPools, layout, false, pool);
 }
 
-VkDescriptorSet DescriptorSetAllocator::AllocatePersistent(VkDescriptorSetLayout layout, const char* debugName) {
+VkDescriptorSet DescriptorSetAllocator::AllocatePersistent(VkDescriptorSetLayout layout, const char* /*debugName*/) {
     std::lock_guard<std::mutex> lock(m_Mutex);
-    return AllocateFromPoolsLocked(m_PersistentPools, layout, debugName);
+    return AllocatePersistentLocked(m_PersistentPools, layout, false);
 }
 
-VkDescriptorSet DescriptorSetAllocator::AllocatePersistentUpdateAfterBind(VkDescriptorSetLayout layout, const char* debugName) {
+VkDescriptorSet DescriptorSetAllocator::AllocatePersistentUpdateAfterBind(VkDescriptorSetLayout layout, const char* /*debugName*/) {
     std::lock_guard<std::mutex> lock(m_Mutex);
-    return AllocateFromPoolsLockedImpl(m_PersistentPoolsUpdateAfterBind, layout, true);
+    return AllocatePersistentLocked(m_PersistentPoolsUpdateAfterBind, layout, true);
+}
+
+void DescriptorSetAllocator::FreePersistent(VkDescriptorSet set) {
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    const VkDescriptorPool* recorded = m_PersistentSetPools.Find(set);
+    if (!recorded)
+        return;
+    const VkDescriptorPool poolHandle = *recorded;
+    m_PersistentSetPools.Erase(set);
+    for (std::vector<Pool>* pools : {&m_PersistentPools, &m_PersistentPoolsUpdateAfterBind}) {
+        for (Pool& pool : *pools) {
+            if (pool.Handle != poolHandle)
+                continue;
+            vkFreeDescriptorSets(m_Device, poolHandle, 1, &set);
+            --pool.AllocatedSets;
+            return;
+        }
+    }
 }
 
 void DescriptorSetAllocator::Destroy() {
@@ -158,6 +182,7 @@ void DescriptorSetAllocator::Destroy() {
     for (auto& p : m_PersistentPools) { if (p.Handle != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_Device, p.Handle, nullptr); }
     for (auto& p : m_PersistentPoolsUpdateAfterBind) { if (p.Handle != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_Device, p.Handle, nullptr); }
     m_TransientPools.clear(); m_PersistentPools.clear(); m_PersistentPoolsUpdateAfterBind.clear();
+    m_PersistentSetPools.Clear();
 }
 
 DescriptorSetAllocator::Stats DescriptorSetAllocator::GetStats() const {

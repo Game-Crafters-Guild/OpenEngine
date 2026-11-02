@@ -26,13 +26,9 @@ namespace
             std::vector<std::vector<float>> RetiredStreams;
         };
         using GroupVec = ViewGroups<GizmoLineGroup>;
-        // NOTE:
-        // Gizmo groups are produced and consumed during SceneViewController::Record(), which
-        // is executed as part of RenderGraph pass execution. RenderGraph may execute passes
-        // on worker threads; using a single global map here can cause data races and heap
-        // corruption (e.g., vector reallocation while another thread is writing).
-        //
-        // Use thread-local storage to keep gizmo accumulation isolated per executing thread.
+        // The Scene View records and packs a view's groups in SceneViewController::DeclareOverlaysRG
+        // and releases them in ~SceneViewController, both on the editor frame-loop thread. The maps
+        // are thread_local, so each thread that records gizmos has its own groups.
         static thread_local std::unordered_map<Rendering::ViewId, GroupVec> g_LineGroups;
 
         using TriangleGroupVec = ViewGroups<GizmoTriangleGroup>;
@@ -223,6 +219,12 @@ const std::vector<GizmoLineGroup>* GetGizmoLineGroups(Rendering::ViewId viewId)
 		        return nullptr;
 		    }
 		    return &it->second.Groups;
+		}
+
+		void ReleaseGizmoGroups(Rendering::ViewId viewId)
+		{
+		    g_LineGroups.erase(viewId);
+		    g_TriangleGroups.erase(viewId);
 		}
 
 		bool ProjectRayOntoLine(const GizmoRay& ray,

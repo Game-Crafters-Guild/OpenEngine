@@ -338,11 +338,10 @@ Mathematics::AABB RunWorldBounds(const SplineECS::SplineService& splineService, 
     return bounds;
 }
 
-bool RefreshSceneConformDigest(ECS::World& world, const Mathematics::AABB& runBounds,
+bool RefreshSceneConformDigest(ECS::World& world, Scene::SceneTlas& tlas, const Mathematics::AABB& runBounds,
                                SceneConformDigest& digest)
 {
-    Scene::SceneTlas& tlas = Scene::GetSceneTlas(world);
-    if (tlas.RequestCurrent(world) != Scene::SceneTlas::Readiness::Ready)
+    if (tlas.CheckRequest(world) != Scene::SceneTlas::Readiness::Ready)
         return false;
     const uint64 tlasVersion = tlas.Version();
     if (tlasVersion == digest.TlasVersion && std::memcmp(&runBounds, &digest.RunBounds, sizeof(runBounds)) == 0)
@@ -352,11 +351,18 @@ bool RefreshSceneConformDigest(ECS::World& world, const Mathematics::AABB& runBo
     digest.Value = 0u;
     if (runBounds.IsEmpty())
         return true;
-    const Mathematics::Vector3 center = (runBounds.min + runBounds.max) * 0.5f;
-    const float32 radius = (runBounds.max - center).Length();
+    // The column the conform rays sweep: the run's XZ bounds, from kConformRayLift above the run
+    // to the end of the rays below it. Inward normals.
+    const float32 top = runBounds.max.y + kConformRayLift;
+    const float32 bottom = runBounds.min.y + kConformRayLift - kConformRayMaxDistance;
+    const Mathematics::Plane column[] = {
+        {{1.0f, 0.0f, 0.0f}, -runBounds.min.x}, {{-1.0f, 0.0f, 0.0f}, runBounds.max.x},
+        {{0.0f, 0.0f, 1.0f}, -runBounds.min.z}, {{0.0f, 0.0f, -1.0f}, runBounds.max.z},
+        {{0.0f, 1.0f, 0.0f}, -bottom},          {{0.0f, -1.0f, 0.0f}, top},
+    };
     // A sum of per-mesh hashes, so the traversal order does not change it.
     uint64& value = digest.Value;
-    tlas.TraverseSphere(center, radius, {}, [&world, &runBounds, &value](const Scene::TlasInstance& leaf) {
+    tlas.TraverseFrustum(column, {}, [&world, &runBounds, &value](const Scene::TlasInstance& leaf) {
         value += SceneConformLeafHash(world, runBounds, leaf);
     });
     return true;

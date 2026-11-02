@@ -514,6 +514,12 @@ function(ge_stage_engine_sdk host_target sdk_output_dir)
     if(ENABLE_SCRIPTING)
         set(_ge_sdk_dotnet_line "dotnet=${DOTNET_EXECUTABLE}\n")
     endif()
+    # The oldest macOS the engine runs on. User modules build for the same version, so
+    # they load wherever the engine loads. Without a value, CMake's default applies.
+    set(_ge_sdk_macos_line "")
+    if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(_ge_sdk_macos_line "macosdeploymenttarget=${CMAKE_OSX_DEPLOYMENT_TARGET}\n")
+    endif()
     set(_ge_sdk_editor_lines "")
     if(TARGET EditorSDK)
         set(_ge_sdk_editor_lines
@@ -537,7 +543,7 @@ defs=$<TARGET_PROPERTY:Engine,INTERFACE_COMPILE_DEFINITIONS>
 globaldefs=GLM_FORCE_DEPTH_ZERO_TO_ONE;NOMINMAX;WIN32_LEAN_AND_MEAN;GE_DEBUG_INSTRUMENTATION=${GE_DEBUG_INSTRUMENTATION_VALUE}
 engineincludes=vcpkg-include;vcpkg-include/harfbuzz;generated-include
 cmake=${CMAKE_COMMAND}
-${_ge_sdk_dotnet_line}${_ge_sdk_editor_lines}")
+${_ge_sdk_dotnet_line}${_ge_sdk_macos_line}${_ge_sdk_editor_lines}")
 
     # Create the SDK directories
     add_custom_command(TARGET ${host_target} POST_BUILD

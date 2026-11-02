@@ -62,7 +62,7 @@ void ClearLastSceneIOError()
 
 // A save drops a never-preserved row's text only while the entity, and for a field row its
 // component, is still in the world. A row with no entity stands until a save.
-static bool NeverPreservedSkipIsOutstanding(const ECS::World& world, const SceneLoadSkip& skip)
+static bool NeverPreservedSkipIsOutstanding(const ECS::World& world, const SceneDegradation::Skip& skip)
 {
     if (!skip.entityHandle.IsValid())
         return true;
@@ -71,10 +71,10 @@ static bool NeverPreservedSkipIsOutstanding(const ECS::World& world, const Scene
     return skip.componentType == 0 || world.HasComponent(skip.entityHandle, skip.componentType);
 }
 
-bool SkipIsOutstanding(const ECS::World& world, const SceneLoadSkip& skip)
+bool SkipIsOutstanding(const ECS::World& world, const SceneDegradation::Skip& skip)
 {
     // The instance removes the child, so a line under it has no effect and a save drops it.
-    if (skip.kind == SceneLoadSkipKind::UnderRemovedEntity)
+    if (skip.kind == SceneDegradation::SkipKind::UnderRemovedEntity)
         return false;
     if (!skip.preserved)
         return NeverPreservedSkipIsOutstanding(world, skip);
@@ -110,10 +110,10 @@ bool SkipIsOutstanding(const ECS::World& world, const SceneLoadSkip& skip)
     return false;
 }
 
-std::size_t OutstandingSkipCount(const ECS::World& world, const SceneLoadDegradation& census)
+std::size_t OutstandingSkipCount(const ECS::World& world, const SceneDegradation& census)
 {
     std::size_t n = 0;
-    for (const SceneLoadSkip& s : census.skips)
+    for (const SceneDegradation::Skip& s : census.skips)
         n += SkipIsOutstanding(world, s) ? 1u : 0u;
     return n;
 }
@@ -162,10 +162,10 @@ std::string InsertHeaderAttribute(const std::string& headerLine,
 }
 } // namespace
 
-bool TryResolveResourceIdToAssetReference(const SceneLoadContext& ctx,
-                                         std::string_view resourceId,
-                                         AssetReference& outRef,
-                                         std::string* outError)
+bool TryResolveResourceIdToAssetReference(const SceneReadContext& ctx,
+                                          std::string_view resourceId,
+                                          AssetReference& outRef,
+                                          std::string* outError)
 {
     if (!ctx.SceneFile)
     {
@@ -322,7 +322,7 @@ bool TryResolveResourceIdToAssetReference(const SceneLoadContext& ctx,
     return false;
 }
 
-bool TryGetEmbedDefinition(const SceneLoadContext& ctx,
+bool TryGetEmbedDefinition(const SceneReadContext& ctx,
                            std::string_view embedId,
                            std::string& outType,
                            std::unordered_map<std::string, std::string>& outProperties,
@@ -375,7 +375,7 @@ std::string RelativizeToAssetRoot(const std::filesystem::path& abs,
 // asset root, then to the owner file's directory — the shape tools and tests
 // without an AssetManager-backed resolver take, since a resolver that has one
 // answers with its project-root candidate even on a miss.
-std::filesystem::path ResolveAuthoredAssetPath(const SceneLoadContext& ctx,
+std::filesystem::path ResolveAuthoredAssetPath(const SceneReadContext& ctx,
                                                const std::filesystem::path& ownerFile,
                                                const std::filesystem::path& authoredPath)
 {
@@ -396,7 +396,7 @@ std::filesystem::path ResolveAuthoredAssetPath(const SceneLoadContext& ctx,
 
 // Resolve an authored path string to an absolute path using the save
 // context's asset root (or the scene file's directory as a fallback).
-std::filesystem::path AbsolutizeAuthoredPath(const SceneSaveContext& ctx, std::string_view authoredPath)
+std::filesystem::path AbsolutizeAuthoredPath(const SceneWriteContext& ctx, std::string_view authoredPath)
 {
     std::filesystem::path p((std::string(authoredPath)));
     if (p.is_absolute())
@@ -419,7 +419,7 @@ std::filesystem::path AbsolutizeAuthoredPath(const SceneSaveContext& ctx, std::s
 // per-property heal preserves authored data) and the [resource] save
 // pass (mintIfUnknown=true, declared resources are expected to bind
 // even for paths the registry didn't observe yet).
-std::string HealGuidFromAuthoredPath(const SceneSaveContext& ctx, std::string_view authoredPath, bool mintIfUnknown)
+std::string HealGuidFromAuthoredPath(const SceneWriteContext& ctx, std::string_view authoredPath, bool mintIfUnknown)
 {
     if (authoredPath.empty() || !ctx.Resolver)
         return {};
@@ -443,7 +443,7 @@ std::string HealGuidFromAuthoredPath(const SceneSaveContext& ctx, std::string_vi
 // The path the scene authored for `guid` when the load could not bind it (UnresolvedComponentStore),
 // or empty. Components keep the GUID alone, so without this a save of a scene with a missing asset
 // writes `[guid=...]` and the path that would heal the reference once the asset returns is gone.
-std::string_view RecordedUnresolvedReferencePath(const SceneSaveContext& ctx, const GUID& guid)
+std::string_view RecordedUnresolvedReferencePath(const SceneWriteContext& ctx, const GUID& guid)
 {
     if (!ctx.Unresolved || guid.IsNull())
         return {};
@@ -455,7 +455,7 @@ std::string_view RecordedUnresolvedReferencePath(const SceneSaveContext& ctx, co
 // The [resource] path a prefab instance's source GUID writes as: the asset database's path for the
 // GUID (redirects chased), relative to the asset root. False when there is no asset database or it
 // does not know the GUID; the saver then has no path to write.
-bool ResolvePrefabSourceForSave(const SceneSaveContext& ctx, const GUID& source, std::string& outPath)
+bool ResolvePrefabSourceForSave(const SceneWriteContext& ctx, const GUID& source, std::string& outPath)
 {
     if (!ctx.Resolver || source.IsNull())
         return false;
@@ -467,7 +467,7 @@ bool ResolvePrefabSourceForSave(const SceneSaveContext& ctx, const GUID& source,
     return true;
 }
 
-std::string FormatAssetReferenceForSave(const SceneSaveContext& ctx,
+std::string FormatAssetReferenceForSave(const SceneWriteContext& ctx,
                                         const GUID& guid,
                                         std::string_view authoredPath)
 {
@@ -475,7 +475,7 @@ std::string FormatAssetReferenceForSave(const SceneSaveContext& ctx,
         authoredPath = RecordedUnresolvedReferencePath(ctx, guid);
 
     // Both inputs empty is a cleared slot: its clear form `0`, which TryResolveAssetReference reads
-    // back as a null reference. A plain save skips the line instead (SceneSaveContext::WriteEveryField).
+    // back as a null reference. A plain save skips the line instead (SceneWriteContext::WriteEveryField).
     if (guid.IsNull() && authoredPath.empty())
         return std::string("0");
 
@@ -532,7 +532,7 @@ std::string FormatAssetReferenceForSave(const SceneSaveContext& ctx,
     return FormatAssetRef(outPath, outGuid);
 }
 
-bool TryResolveAssetReference(const SceneLoadContext& ctx,
+bool TryResolveAssetReference(const SceneReadContext& ctx,
                               const SceneValue& value,
                               AssetType expectedType,
                               AssetReference& outRef,
@@ -2079,7 +2079,7 @@ static void EnsureTags(ECS::World& world, const std::vector<ECS::EntityHandle>& 
 }
 
 // Editor hierarchy sorts siblings by HierarchyOrder then entity id. Re-dense orders per parent group
-// (0,10,20,...) before writing .scene so sibling order survives round-trip; SaveSceneToFile emits
+// (0,10,20,...) before writing .scene so sibling order survives round-trip; WriteSceneFile emits
 // entity blocks depth-first sorted by HierarchyOrder (see SortEntitiesDepthFirstForSave).
 static void NormalizeHierarchySiblingOrderForSave(ECS::World& world, const std::vector<ECS::EntityHandle>& entities)
 {
@@ -2235,7 +2235,7 @@ static void SortEntitiesDepthFirstForSave(ECS::World& world, std::vector<ECS::En
     entities = std::move(out);
 }
 
-std::filesystem::path ResolveResourcePath(const SceneLoadContext& ctx,
+std::filesystem::path ResolveResourcePath(const SceneReadContext& ctx,
                                           const std::filesystem::path& ownerFile,
                                           const SceneDoc::Resource& r)
 {
@@ -2427,7 +2427,7 @@ static bool FieldHasSerializedLine(const ECS::World& world, ECS::EntityHandle h,
                                    const ISceneComponentSchema& schema,
                                    const std::string& loweredProp)
 {
-    SceneSaveContext stubCtx{};
+    SceneWriteContext stubCtx{};
     std::vector<std::string> lines;
     schema.Serialize(world, h, stubCtx, lines);
     for (const std::string& l : lines)
@@ -2465,7 +2465,7 @@ static bool FindReflectedFieldSpan(ECS::ComponentTypeId typeId, const std::strin
 static void RecordUnknownFields(const std::vector<std::string>& unknownFields,
                                 const SceneDoc::ComponentProps& comp, const std::string& entityId,
                                 const std::filesystem::path& ownerFile, ECS::EntityHandle h,
-                                ECS::ComponentTypeId typeId, SceneLoadDegradation* degradation)
+                                ECS::ComponentTypeId typeId, SceneDegradation* degradation)
 {
     if (!degradation)
         return;
@@ -2477,7 +2477,7 @@ static void RecordUnknownFields(const std::vector<std::string>& unknownFields,
         const bool authored = prop != comp.props.end();
         const std::string authoredProp =
             authored && !prop->second.originalKey.empty() ? prop->second.originalKey : key;
-        degradation->skips.push_back(SceneLoadSkip{
+        degradation->skips.push_back(SceneDegradation::Skip{
             entityId, authoredComp, authoredProp,
             UnknownFieldMessage(authoredComp, authoredProp),
             ownerFile, authored ? prop->second.line : 0, /*preserved=*/false, h, typeId});
@@ -2503,18 +2503,19 @@ static std::string QuoteUnreadLine(const std::string& text)
 // from `firstRow` on, in line order. A save drops an unread line.
 void RecordUnreadLines(const SceneDoc::UnreadLines& unreadLines, const std::string& entityId,
                        const std::filesystem::path& ownerFile, ECS::EntityHandle h,
-                       std::size_t firstRow, SceneLoadDegradation* degradation)
+                       std::size_t firstRow, SceneDegradation* degradation)
 {
     if (!degradation)
         return;
     for (const auto& [line, text] : unreadLines)
-        degradation->skips.push_back(SceneLoadSkip{
+        degradation->skips.push_back(SceneDegradation::Skip{
             entityId, {}, {},
             "'" + QuoteUnreadLine(text) +
                 "' is not an assignment: write it as Component.field = value, or delete the line",
             ownerFile, line, /*preserved=*/false, h});
     std::stable_sort(degradation->skips.begin() + static_cast<std::ptrdiff_t>(firstRow), degradation->skips.end(),
-                     [](const SceneLoadSkip& a, const SceneLoadSkip& b) { return a.line < b.line; });
+                     [](const SceneDegradation::Skip& a, const SceneDegradation::Skip& b)
+                     { return a.line < b.line; });
 }
 
 // Apply one component's authored properties, tolerating individual failures.
@@ -2527,12 +2528,12 @@ void RecordUnreadLines(const SceneDoc::UnreadLines& unreadLines, const std::stri
 // Re-applying individually is what makes the good data survive: the grouped apply parses into a
 // scratch byte buffer and discards it on the first bad value, so a single unknown enumerator would
 // otherwise cost the component EVERY one of its fields, not just the offending one.
-static void ApplyComponentPropertiesTolerantly(ECS::World& world, const SceneLoadContext& ctx,
+static void ApplyComponentPropertiesTolerantly(ECS::World& world, const SceneReadContext& ctx,
                                                const ISceneComponentSchema& schema, ECS::EntityHandle h,
                                                ECS::ComponentTypeId typeId, const SceneDoc::ComponentProps& comp,
                                                const std::string& entityId,
                                                const std::filesystem::path& ownerFile,
-                                               SceneLoadDegradation* degradation)
+                                               SceneDegradation* degradation)
 {
     std::vector<std::pair<std::string_view, std::string_view>> pairs;
     pairs.reserve(comp.props.size());
@@ -2591,8 +2592,8 @@ static void ApplyComponentPropertiesTolerantly(ECS::World& world, const SceneLoa
             world.GetUnresolvedComponents().AddField(h, std::move(pf));
 
         if (degradation)
-            degradation->skips.push_back(SceneLoadSkip{entityId, authoredComp, authoredProp, propErr,
-                                                       ownerFile, propKv.second.line, preserved, h, typeId});
+            degradation->skips.push_back(SceneDegradation::Skip{entityId, authoredComp, authoredProp, propErr,
+                                                                ownerFile, propKv.second.line, preserved, h, typeId});
     }
     ctx.UnknownFields = nullptr;
     RecordUnknownFields(unknownFields, comp, entityId, ownerFile, h, typeId, degradation);
@@ -2665,11 +2666,11 @@ constexpr std::string_view kComponentSwitchKey = "enabled";
 // schema reads the switch the same way and none has to know about it. A switch line whose value
 // is not a bool stays in the block for the schema to refuse and the census to record. A block
 // with no properties, or none left once the switch line is out, adds the component's defaults.
-void ApplyComponentBlock(ECS::World& world, const SceneLoadContext& ctx,
+void ApplyComponentBlock(ECS::World& world, const SceneReadContext& ctx,
                          const ISceneComponentSchema& schema, ECS::EntityHandle h,
                          const SceneDoc::ComponentProps& authored, const std::string& entityId,
                          const std::filesystem::path& ownerFile, int headerLine,
-                         SceneLoadDegradation* degradation)
+                         SceneDegradation* degradation)
 {
     const ECS::ComponentTypeId typeId = SceneSchemaRegistry::ComponentTypeForSchema(schema);
     std::optional<bool> enabled;
@@ -2702,7 +2703,7 @@ void ApplyComponentBlock(ECS::World& world, const SceneLoadContext& ctx,
     {
         std::string addErr;
         if (!schema.AddDefault(world, h, &addErr) && block->props.empty() && degradation)
-            degradation->skips.push_back(SceneLoadSkip{
+            degradation->skips.push_back(SceneDegradation::Skip{
                 entityId, !authored.originalName.empty() ? authored.originalName : authored.name, {},
                 addErr, ownerFile, headerLine, /*preserved=*/false, h});
     }
@@ -2716,7 +2717,7 @@ void ApplyComponentBlock(ECS::World& world, const SceneLoadContext& ctx,
 // Fills an absent or empty Name from `fallbackName` (the scene id, or the prefab's local id) through
 // the Name schema. An auto-generated id (e_123) gets no Name: the hierarchy shows "Entity <id>". An
 // empty `fallbackName` asks for no name.
-void ApplyFallbackName(ECS::World& world, const SceneLoadContext& ctx, ECS::EntityHandle h,
+void ApplyFallbackName(ECS::World& world, const SceneReadContext& ctx, ECS::EntityHandle h,
                        std::string_view fallbackName, const std::string& entityId)
 {
     if (fallbackName.empty() || LooksLikeAutoGeneratedNumericSceneId(fallbackName))
@@ -2737,13 +2738,13 @@ void ApplyFallbackName(ECS::World& world, const SceneLoadContext& ctx, ECS::Enti
 // Applies every component authored on one entity. Cannot fail: a component or property this binary
 // cannot apply is recorded in `degradation` and skipped, never propagated as a load failure.
 void ApplyEntityComponents(ECS::World& world,
-                          const SceneLoadContext& ctx,
-                          const std::filesystem::path& ownerFile,
-                          ECS::EntityHandle h,
-                          const SceneDoc::Entity& e,
-                          const std::string& entityId,
-                          std::string_view fallbackName,
-                          SceneLoadDegradation* degradation)
+                           const SceneReadContext& ctx,
+                           const std::filesystem::path& ownerFile,
+                           ECS::EntityHandle h,
+                           const SceneDoc::Entity& e,
+                           const std::string& entityId,
+                           std::string_view fallbackName,
+                           SceneDegradation* degradation)
 {
     const std::size_t firstRow = degradation ? degradation->skips.size() : 0;
     for (const auto& comp : e.components)
@@ -2764,15 +2765,15 @@ void ApplyEntityComponents(ECS::World& world,
 }
 
 static bool InstantiateEntities(ECS::World& world,
-                               const SceneLoadContext& ctx,
-                               const std::filesystem::path& ownerFile,
-                               const SceneDoc& doc,
-                               const std::string& idPrefix,
-                               Instantiated& out,
-                               std::string* outError,
-                               std::filesystem::path* outErrorFile,
-                               int* outErrorLine,
-                               SceneLoadDegradation* degradation)
+                                const SceneReadContext& ctx,
+                                const std::filesystem::path& ownerFile,
+                                const SceneDoc& doc,
+                                const std::string& idPrefix,
+                                Instantiated& out,
+                                std::string* outError,
+                                std::filesystem::path* outErrorFile,
+                                int* outErrorLine,
+                                SceneDegradation* degradation)
 {
     // Create entities first
     for (const auto& e : doc.entities)
@@ -2795,7 +2796,7 @@ static bool InstantiateEntities(ECS::World& world,
     // Apply components. The full idToEntity map exists now, so EntityHandle fields
     // (e.g. SkyEnvironment.SunLight) resolve references — including forward ones —
     // directly against it.
-    SceneLoadContext applyCtx = ctx;
+    SceneReadContext applyCtx = ctx;
     applyCtx.EntityIdMap = &out.idToEntity;
     applyCtx.EntityIdPrefix = idPrefix;
     const std::size_t firstCreated = out.created.size() - doc.entities.size();
@@ -2883,10 +2884,10 @@ bool IsMemberTag(std::string_view tag)
 }
 
 // The tables a document's lines resolve against: its resources and its embeds.
-SceneLoadContext MakeDocumentLoadContext(ECS::World& world, const std::filesystem::path& file,
-                                         const SceneDoc& doc, const LoadOptions& options)
+SceneReadContext MakeDocumentLoadContext(ECS::World& world, const std::filesystem::path& file,
+                                         const SceneDoc& doc, const SceneReadOptions& options)
 {
-    SceneLoadContext ctx{};
+    SceneReadContext ctx{};
     ctx.SceneFile = &file;
     ctx.TargetWorld = &world;
     ctx.Resolver = options.assetResolver;
@@ -2904,7 +2905,7 @@ SceneLoadContext MakeDocumentLoadContext(ECS::World& world, const std::filesyste
     ctx.EmbedsById.reserve(doc.embeds.size());
     for (const auto& kv : doc.embeds)
     {
-        SceneLoadContext::EmbedDef e{};
+        SceneReadContext::EmbedDef e{};
         e.Type = kv.second.type;
         e.Guid = kv.second.guid;
         e.Properties.reserve(kv.second.properties.size());
@@ -2956,20 +2957,20 @@ static void ParentRootsTo(ECS::World& world, const Instantiated& inst, ECS::Enti
 }
 
 static bool LoadParsedIntoWorld(ECS::World& world,
-                               const std::filesystem::path& sceneFilePath,
-                               const SceneDoc& doc,
-                               const LoadOptions& options,
-                               const std::string& idPrefix,
-                               PrefabPlacement& placement,
-                               Instantiated& out,
-                               std::string* outError,
-                               std::filesystem::path* outErrorFile,
-                               int* outErrorLine,
-                               SceneLoadDegradation* degradation)
+                                const std::filesystem::path& sceneFilePath,
+                                const SceneDoc& doc,
+                                const SceneReadOptions& options,
+                                const std::string& idPrefix,
+                                PrefabPlacement& placement,
+                                Instantiated& out,
+                                std::string* outError,
+                                std::filesystem::path* outErrorFile,
+                                int* outErrorLine,
+                                SceneDegradation* degradation)
 {
     // Build the per-load context. Threaded through schema dispatch and
     // SceneIO helpers (TryResolveAssetReference et al) by const reference.
-    SceneLoadContext localCtx = MakeDocumentLoadContext(world, sceneFilePath, doc, options);
+    SceneReadContext localCtx = MakeDocumentLoadContext(world, sceneFilePath, doc, options);
 
     // Base entities
     if (!InstantiateEntities(world, localCtx, sceneFilePath, doc, idPrefix, out, outError, outErrorFile, outErrorLine, degradation))
@@ -3066,8 +3067,8 @@ static bool LoadParsedIntoWorld(ECS::World& world,
 
         Instantiated subInst{};
         const std::string subPrefix = idPrefix + ss.id + ".";
-        LoadOptions subOpts = options;
-        subOpts.mode = LoadMode::Additive;
+        SceneReadOptions subOpts = options;
+        subOpts.clearWorldFirst = false;
         if (!LoadParsedIntoWorld(world, subPath, subDoc, subOpts, subPrefix, placement, subInst, outError, outErrorFile, outErrorLine, degradation))
             return false;
         if (ss.hasOffset)
@@ -3081,9 +3082,9 @@ static bool LoadParsedIntoWorld(ECS::World& world,
     return true;
 }
 
-bool LoadSceneFromFile(ECS::World& world,
-                       const std::filesystem::path& sceneFilePath,
-                       const LoadOptions& options)
+bool ReadSceneInto(ECS::World& world,
+                   const std::filesystem::path& sceneFilePath,
+                   const SceneReadOptions& options)
 {
     if (sceneFilePath.empty())
         return false;
@@ -3101,9 +3102,9 @@ bool LoadSceneFromFile(ECS::World& world,
             *out = std::chrono::duration<double, std::milli>(now - phaseStart).count();
         phaseStart = now;
     };
-    SceneLoadTimings* timings = options.outTimings;
+    SceneReadTimings* timings = options.outTimings;
     if (timings)
-        *timings = SceneLoadTimings{};
+        *timings = SceneReadTimings{};
 
     std::string text;
     if (!ReadTextFile(sceneFilePath, text))
@@ -3151,7 +3152,7 @@ bool LoadSceneFromFile(ECS::World& world,
     // below it can — the clear is the point of no return, and the only failure
     // past it is LoadParsedIntoWorld's, which strands a partial scene.
     bool worldCleared = false;
-    if (options.mode == LoadMode::Replace)
+    if (options.clearWorldFirst)
     {
         world.Clear();
         worldCleared = true;
@@ -3160,7 +3161,7 @@ bool LoadSceneFromFile(ECS::World& world,
 
     Instantiated inst{};
     std::string idPrefix;
-    if (options.mode == LoadMode::Additive)
+    if (!options.clearWorldFirst)
     {
         const uint64_t n = ++g_AdditiveImportCounter;
         idPrefix = "import_" + std::to_string(n) + ".";
@@ -3168,7 +3169,7 @@ bool LoadSceneFromFile(ECS::World& world,
 
     std::filesystem::path loadErrFile;
     int loadErrLine = 0;
-    SceneLoadDegradation degradation;
+    SceneDegradation degradation;
     PrefabPlacement placement{world, options, &degradation};
     placement.usesLibrary = true;
     // The engine's library on the main thread (its thread rule); a library of this load's own
@@ -3211,7 +3212,7 @@ bool LoadSceneFromFile(ECS::World& world,
         const std::size_t shown = std::min(kMaxLoggedSkips, degradation.skips.size());
         for (std::size_t i = 0; i < shown; ++i)
         {
-            const SceneLoadSkip& s = degradation.skips[i];
+            const SceneDegradation::Skip& s = degradation.skips[i];
             Logger::Log::Error("  [{}/{}] entity '{}'{}{}{}{} at {}:{} — {}{}", i + 1,
                                degradation.skips.size(), s.entityId, s.component.empty() ? "" : ", ",
                                s.component, s.field.empty() ? "" : ".", s.field, s.file.string(), s.line,
@@ -3252,7 +3253,7 @@ bool LoadSceneFromFile(ECS::World& world,
 // (the reflection fallback). Engine + user components lacking a built-in schema flow through here;
 // components a built-in schema already wrote are skipped by ReflectionSchemaForUnhandledType.
 static void SerializeReflectedComponents(const ECS::World& world, ECS::EntityHandle entity,
-                                         const SceneSaveContext& ctx, std::vector<std::string>& lines)
+                                         const SceneWriteContext& ctx, std::vector<std::string>& lines)
 {
     auto* arch = world.GetEntityArchetype(entity);
     if (!arch)
@@ -3399,7 +3400,7 @@ void ApplyPreservedFieldOverrides(ECS::World& world, ECS::EntityHandle entity,
     }
 }
 
-std::string FormatEntityReferenceForSave(const SceneSaveContext& ctx, ECS::EntityHandle handle)
+std::string FormatEntityReferenceForSave(const SceneWriteContext& ctx, ECS::EntityHandle handle)
 {
     if (!handle.IsValid() || !ctx.EntityTagById)
         return {};
@@ -3409,7 +3410,7 @@ std::string FormatEntityReferenceForSave(const SceneSaveContext& ctx, ECS::Entit
     return FormatQuoted(it->second);
 }
 
-bool TryResolveEntityReference(const SceneLoadContext& ctx, std::string_view value, ECS::EntityHandle& out)
+bool TryResolveEntityReference(const SceneReadContext& ctx, std::string_view value, ECS::EntityHandle& out)
 {
     out = ECS::EntityHandle{};
     std::string id;
@@ -3423,9 +3424,9 @@ bool TryResolveEntityReference(const SceneLoadContext& ctx, std::string_view val
     return true; // unknown id -> leave invalid (a dangling link just unlinks)
 }
 
-bool SaveSceneToFile(ECS::World& world,
-                     const std::filesystem::path& sceneFilePath,
-                     const SaveOptions& options)
+bool WriteSceneFile(ECS::World& world,
+                    const std::filesystem::path& sceneFilePath,
+                    const SceneWriteOptions& options)
 {
     if (sceneFilePath.empty())
         return false;
@@ -3436,7 +3437,7 @@ bool SaveSceneToFile(ECS::World& world,
 
     // Build the save context, threaded by const reference through schema
     // Serialize calls and SceneIO helpers (FormatAssetReferenceForSave et al).
-    SceneSaveContext saveCtx{};
+    SceneWriteContext saveCtx{};
     saveCtx.SceneFile = &sceneFilePath;
     saveCtx.AssetRoot = !options.assetRootOverride.empty()
                             ? options.assetRootOverride

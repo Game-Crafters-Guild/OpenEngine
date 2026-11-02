@@ -9,6 +9,7 @@
 #include "Engine/Rendering/ExposureReadbackFeature.h"
 #include "Engine/Rendering/IncidentLightMeter.h"
 #include "SceneView/SceneViewAutoExposure.h"
+#include "SceneView/SceneViewGizmos.h"
 #include "SceneView/SceneViewLayerFilter.h"
 #include "Engine/Rendering/PlanetCameraFraming.h"
 #include "Engine/Rendering/RenderServices.h"
@@ -848,6 +849,8 @@ void SceneViewController::DeactivateRenderView()
             if (auto* exposureReadback =
                     m_RenderServices->GetFeature<Engine::Renderer::ExposureReadbackFeature>())
                 exposureReadback->SetReadbackEnabled(m_ViewId, false);
+            // DeclareOverlaysRG records the gizmo groups on this thread, so this call reaches them.
+            Editor::SceneTools::ReleaseGizmoGroups(m_ViewId);
             m_RenderServices->Views().ReleaseView(m_ViewId);
             m_ViewId = 0;
         }

@@ -141,12 +141,9 @@ MaterialBinder::~MaterialBinder() = default;
 
 void MaterialBinder::OnBeginFrame()
 {
-    // Transient descriptor sets are reset by the device's per-frame pool at
-    // frame boundary; clearing the cache releases the now-stale handles so
-    // the next-frame lookups allocate fresh sets. Serial (frame boundary,
-    // before any parallel record window opens — A2.4-D6). Move to a fresh epoch
-    // so per-thread L1 slots holding last frame's (now-stale) handles are
-    // retired on their next probe.
+    // The per-pass key names no frame slot, but the ring buffers a pass binds change every frame,
+    // so a cached set is valid for one frame only. Serial (frame boundary, before any parallel
+    // record window opens). A fresh epoch retires the per-thread L1 slots of the last frame.
     m_PerPassCache.clear();
     m_PerPassEpoch.store(NextPerPassEpoch(), std::memory_order_release);
 }
@@ -393,8 +390,7 @@ DescriptorSetHandle MaterialBinder::BuildSetForBindingFromMeta(
             }
         }
 
-        // Build without the lock (per-draw descriptor allocation is thread-safe;
-        // it draws from the device's own pool).
+        // Build without the lock: the device's set cache is thread-safe.
         bool unresolvable = false;
         auto handle = BuildSetInternal(pass, material, setMeta, SetScope::PerPass, draw, &unresolvable);
         // Never cache a set that tripped the unresolved-buffer guard: it would hand the
@@ -408,7 +404,7 @@ DescriptorSetHandle MaterialBinder::BuildSetForBindingFromMeta(
             AssertPerPassLockHeld();
             // Double-check: another worker may have inserted the same (view,
             // keywords, layout, passInstance) set while we built without the lock.
-            // Keep the first; ours is a redundant transient set the pool reclaims.
+            // Keep the first; the device's cache owns both sets.
             auto [it, inserted] = m_PerPassCache.try_emplace(key, handle);
             handle = it->second;
             slot = {key, handle, epoch};
@@ -451,14 +447,6 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
     if (needsUpdateAfterBind)
         return {};
 
-    DescriptorSetDesc dsDesc{};
-    dsDesc.layout    = std::move(layout);
-    dsDesc.transient = true;
-    dsDesc.debugName = "MaterialBinder.Set";
-    auto handle = m_Device.CreateDescriptorSet(dsDesc);
-    if (!handle.IsValid())
-        return {};
-
     // Warn-once diagnostics are per-worker thread_local (A2.4-D6): operator[]
     // mutates on every lookup (default-constructs the slot), so a shared map is
     // racy under concurrent record. A genuinely-missing binding may then log
@@ -466,12 +454,10 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
     thread_local std::unordered_map<WarnKey, uint64_t, WarnKeyHash> warnedBindings;
     uint64_t& warnedMask = warnedBindings[WarnKey{&material, setMeta.Set}];
 
-    // Scratch buffer reused across draws on the same recording thread. Made
-    // thread_local because parallel command recording calls this concurrently
-    // from per-thread command lists.
-    thread_local std::vector<DescriptorSetUpdate> updates;
-    updates.clear();
-    updates.reserve(setMeta.Bindings.size());
+    // One write per resolved binding, in the meta's binding order: the device keys a per-pass set
+    // on this list. thread_local because parallel command recording calls this concurrently.
+    thread_local std::vector<DescriptorWrite> writes;
+    writes.clear();
 
     auto materialSamplerCached = SamplerHandle{};
     auto getMaterialSampler = [&]() {
@@ -493,31 +479,15 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
                 // Resolve buffer by name across sources.
                 if (const auto* e = FindDrawBuffer(draw, nameId))
                 {
-                    DescriptorSetUpdate u{};
-                    u.binding = b.Binding;
-                    u.type    = type;
-                    u.buffers = {e->Buffer};
-                    if (e->Offset != 0 || e->Range != 0)
-                    {
-                        u.bufferOffsets = {static_cast<size_t>(e->Offset)};
-                        u.bufferRanges  = {static_cast<size_t>(e->Range)};
-                    }
-                    updates.push_back(std::move(u));
+                    writes.push_back({.Binding = b.Binding, .Type = type, .Buffer = e->Buffer,
+                                      .Offset = e->Offset, .Range = e->Range});
                     break;
                 }
                 if (const auto* e = FindPassBuffer(pass.PassResources, nameId);
                     e && e->Buffer.IsValid())
                 {
-                    DescriptorSetUpdate u{};
-                    u.binding = b.Binding;
-                    u.type    = type;
-                    u.buffers = {e->Buffer};
-                    if (e->Offset != 0 || e->Range != 0)
-                    {
-                        u.bufferOffsets = {static_cast<size_t>(e->Offset)};
-                        u.bufferRanges  = {static_cast<size_t>(e->Range)};
-                    }
-                    updates.push_back(std::move(u));
+                    writes.push_back({.Binding = b.Binding, .Type = type, .Buffer = e->Buffer,
+                                      .Offset = e->Offset, .Range = e->Range});
                     break;
                 }
                 // Material params live in the shared MaterialParams SSBO (a
@@ -551,22 +521,8 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
                     auto sampler = e->Sampler;
                     if (!sampler.IsValid())
                         sampler = getMaterialSampler();
-                    if (type == DescriptorType::CombinedImageSampler && sampler.IsValid())
-                    {
-                        m_Device.UpdateCombinedImageSamplerBinding(
-                            handle, b.Binding, e->Texture, sampler, e->ArrayIndex);
-                    }
-                    else
-                    {
-                        DescriptorSetUpdate u{};
-                        u.binding      = b.Binding;
-                        u.arrayElement = e->ArrayIndex;
-                        u.type         = type;
-                        u.textures     = {e->Texture};
-                        if (sampler.IsValid())
-                            u.samplers = {sampler};
-                        updates.push_back(std::move(u));
-                    }
+                    writes.push_back({.Binding = b.Binding, .ArrayElement = e->ArrayIndex, .Type = type,
+                                      .Texture = e->Texture, .Sampler = sampler});
                     break;
                 }
                 // Then per-pass (shadow map, MSM moments). Material textures are
@@ -578,23 +534,12 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
                     auto sampler = e->Sampler;
                     if (!sampler.IsValid())
                         sampler = getMaterialSampler();
-                    if (type == DescriptorType::CombinedImageSampler && sampler.IsValid())
-                    {
-                        m_Device.UpdateCombinedImageSamplerBinding(
-                            handle, b.Binding, e->Texture, sampler);
-                    }
-                    else
-                    {
-                        // A separate sampled image (ibl.glsl's compat arm) takes a
-                        // texture-only write: the combined update would also write
-                        // a split sampler at binding+64 that the reflected layout
-                        // never declared.
-                        DescriptorSetUpdate u{};
-                        u.binding  = b.Binding;
-                        u.type     = type;
-                        u.textures = {e->Texture};
-                        updates.push_back(std::move(u));
-                    }
+                    // A separate sampled image (ibl.glsl's compat arm) takes a texture-only
+                    // write: a combined write would also write a split sampler at binding+64
+                    // that the reflected layout never declared.
+                    writes.push_back({.Binding = b.Binding, .Type = type, .Texture = e->Texture,
+                                      .Sampler = type == DescriptorType::CombinedImageSampler
+                                                     ? sampler : SamplerHandle{}});
                     break;
                 }
                 // Nothing provides this slot. Bind the slot's default rather than
@@ -606,19 +551,9 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
                 const SlotDefault fallback = ResolveSlotDefault(b, getMaterialSampler());
                 if (fallback.Texture.IsValid())
                 {
-                    const SamplerHandle sampler = fallback.Sampler;
-                    if (type == DescriptorType::CombinedImageSampler && sampler.IsValid())
-                    {
-                        m_Device.UpdateCombinedImageSamplerBinding(handle, b.Binding, fallback.Texture, sampler);
-                    }
-                    else
-                    {
-                        DescriptorSetUpdate u{};
-                        u.binding  = b.Binding;
-                        u.type     = type;
-                        u.textures = {fallback.Texture};
-                        updates.push_back(std::move(u));
-                    }
+                    writes.push_back({.Binding = b.Binding, .Type = type, .Texture = fallback.Texture,
+                                      .Sampler = type == DescriptorType::CombinedImageSampler
+                                                     ? fallback.Sampler : SamplerHandle{}});
                 }
                 // No default has this slot's shape: the entry stays unwritten, which is an
                 // invalid bind group on WebGPU and a garbage descriptor under descriptor
@@ -654,7 +589,7 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
                 // one flat colour.
                 if (const auto* e = FindDrawTexture(draw, nameId); e && e->Sampler.IsValid())
                 {
-                    m_Device.UpdateSamplerBinding(handle, b.Binding, e->Sampler);
+                    writes.push_back({.Binding = b.Binding, .Type = type, .Sampler = e->Sampler});
                     break;
                 }
                 // Then pass resources by name; the entry's texture is carriage (TextureEntry has
@@ -663,7 +598,7 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
                 if (const auto* e = FindPassTexture(pass.PassResources, nameId);
                     e && e->Sampler.IsValid())
                 {
-                    m_Device.UpdateSamplerBinding(handle, b.Binding, e->Sampler);
+                    writes.push_back({.Binding = b.Binding, .Type = type, .Sampler = e->Sampler});
                     break;
                 }
                 // Same completeness rule as the texture case above: an unwritten
@@ -671,7 +606,7 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
                 // own sampler. The throttle only gates the log.
                 if (const auto sampler = getMaterialSampler(); sampler.IsValid())
                 {
-                    m_Device.UpdateSamplerBinding(handle, b.Binding, sampler);
+                    writes.push_back({.Binding = b.Binding, .Type = type, .Sampler = sampler});
                 }
                 if (b.Binding < kMaxWarnTrackedBinding && !(warnedMask & (1ull << b.Binding)))
                 {
@@ -711,10 +646,18 @@ DescriptorSetHandle MaterialBinder::BuildSetInternal(
         }
     }
 
-    if (!updates.empty())
-        m_Device.UpdateDescriptorSetBatch(handle, updates);
+    // A per-pass set comes from the device's content cache: the rings it binds all rotate at
+    // IDevice::GetFrameRingDepth(), so its content repeats every that many frames.
+    if (scope == SetScope::PerPass)
+        return m_Device.GetOrCreateDescriptorSet(layout, writes, "MaterialBinder.PassSet");
 
-    (void)scope;
+    DescriptorSetDesc dsDesc{};
+    dsDesc.layout    = std::move(layout);
+    dsDesc.transient = true;
+    dsDesc.debugName = "MaterialBinder.Set";
+    const DescriptorSetHandle handle = m_Device.CreateDescriptorSet(dsDesc);
+    if (handle.IsValid())
+        m_Device.WriteDescriptorSet(handle, writes);
     return handle;
 }
 

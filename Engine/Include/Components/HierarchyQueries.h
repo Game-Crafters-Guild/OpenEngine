@@ -1,10 +1,14 @@
 #pragma once
 
 #include "Components/Hierarchy.h"
+#include "Components/Transform.h"
 #include "ECS/Query.h"
 #include "ECS/RelationIndex.h"
 #include "ECS/World.h"
+#include "Mathematics/Matrix4x4.h"
+#include "Mathematics/MatrixOps.h"
 
+#include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -161,6 +165,31 @@ inline void DestroySubtreeImmediate(ECS::World& world, ECS::EntityHandle root) {
     DescendantsOf(world, root, tree);
     tree.push_back(root);
     world.DestroyEntitiesImmediate(tree);
+}
+
+// Moves `entity` under `newParent` ({} = the scene root) and keeps its world pose: the local Transform
+// becomes the inverse of the new parent's WorldTransform times the entity's WorldTransform. When either
+// WorldTransform is missing, the local Transform stays as it was. The caller rules out cycles.
+inline void ReparentKeepingWorldPose(ECS::World& world, ECS::EntityHandle entity, ECS::EntityHandle newParent) {
+    if (!newParent.IsValid()) {
+        if (const auto* entityWorld = world.GetComponent<WorldTransform>(entity)) {
+            Transform local{};
+            std::memcpy(local.matrix, entityWorld->matrix, sizeof(local.matrix));
+            world.AddComponentImmediate(entity, local);
+        }
+        world.RemoveComponentImmediate<Parent>(entity);
+        return;
+    }
+    world.AddComponentImmediate(entity, Parent{newParent});
+    // Read after the add: adding Parent can move the entity to another archetype.
+    const auto* parentWorld = world.GetComponent<WorldTransform>(newParent);
+    const auto* entityWorld = world.GetComponent<WorldTransform>(entity);
+    if (!parentWorld || !entityWorld) return;
+    const Mathematics::Matrix4x4 local = Mathematics::Inverse(Mathematics::Matrix4x4::FromColumnMajor(parentWorld->matrix)) *
+                                         Mathematics::Matrix4x4::FromColumnMajor(entityWorld->matrix);
+    Transform transform{};
+    std::memcpy(transform.matrix, local.Data(), sizeof(transform.matrix));
+    world.AddComponentImmediate(entity, transform);
 }
 
 // Practical cap on hierarchy depth. Any real scene deeper than this is a

@@ -10,6 +10,7 @@
 #include "WebPackReader.h"
 
 #include "Assets/AssetManager.h"
+#include "Audio/AudioTypes.h"
 #include "Core/Engine.h"
 #include "Core/EngineLoggerBridge.h"
 #include "Logger/Logger.h"
@@ -167,6 +168,7 @@ ApplicationConfig MakeApplicationConfig()
     config.Name = "Web page";
     // The canvas is the window; its CSS size, not this, sizes the drawing buffer.
     config.Fullscreen = false;
+    config.AudioOutput = Audio::AudioOutput::Device;
     config.AssetDirectory = std::string(kContentRoot) + "Assets";
     // The module's file system is memory: runtime caches stay inside it.
     config.WorkspaceDirectory = std::string(kContentRoot) + ".workspace";

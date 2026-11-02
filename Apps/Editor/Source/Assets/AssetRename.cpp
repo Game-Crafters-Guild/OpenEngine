@@ -34,7 +34,7 @@ constexpr std::array<std::string_view, 22> kWindowsReservedNames = {
 
 bool IsShaderPath(const std::filesystem::path& path)
 {
-    return GetAssetTypeFromExtension(ToLowerAscii(path.extension().string())) == AssetType::Shader;
+    return GetAssetTypeFromExtension(path.extension().string()) == AssetType::Shader;
 }
 
 bool FilenameMatches(const std::string& reference, const std::string& filename)

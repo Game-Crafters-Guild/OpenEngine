@@ -35,6 +35,7 @@
 #include "UI/Controls/BaseField.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
+#include "UI/Controls/MarkdownText.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/StyleDeclaration.h"
@@ -275,6 +276,27 @@ GE_API GE_Result GE_CDECL GE_UIElement_SetLabelText(uint64_t instanceId, const c
         if (!label)
             return GE_Result_InvalidArg;
         label->SetText(text ? text : "");
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+// Set a MarkdownText element's text, with the same results as GE_UIElement_SetLabelText.
+// A null text is "" and clears the control.
+GE_API GE_Result GE_CDECL GE_UIElement_SetMarkdownText(uint64_t instanceId, const char* text)
+{
+    try
+    {
+        GameEngine::UIElement* el = ResolveElement(instanceId);
+        if (!el)
+            return GE_Result_NotFound;
+        auto* markdown = dynamic_cast<GameEngine::MarkdownText*>(el);
+        if (!markdown)
+            return GE_Result_InvalidArg;
+        markdown->SetMarkdown(text ? text : "");
         return GE_Result_Ok;
     }
     catch (...)

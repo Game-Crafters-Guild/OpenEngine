@@ -11,6 +11,7 @@
 
 namespace GameEngine
 {
+class ByteBuffer;
 class SharedFileReader;
 }
 
@@ -43,8 +44,9 @@ public:
     /// Where the store starts in File(); a page's file position is BaseOffset() + its entry's Offset.
     uint64 BaseOffset() const { return m_BaseOffset; }
 
-    /// Reads a present page's stored bytes. False when the page is absent or the read fails.
-    bool ReadPageBytes(const PageAddress& address, std::vector<uint8>& outBytes) const;
+    /// Reads a present page's stored bytes. False, with `outBytes` empty, when the page is absent
+    /// or the read fails.
+    bool ReadPageBytes(const PageAddress& address, ByteBuffer& outBytes) const;
 
     /// Reads and decodes a present page into its samples with the store's codec: PageStrideTexels(format)^2
     /// samples of PageTexelBytes(format) bytes, row-major, apron included. False when the page is

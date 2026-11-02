@@ -330,7 +330,7 @@ void ShadowReceiverReduce::Record(RenderGraph::RGContext& ctx, ShadowMapRenderFe
 
     uint32_t binding = 0;
     DescriptorType type{};
-    if (Detail::TryGetSet0BindingByName(*pipeline.Meta, "ReceiverBoundsBuffer", binding, type))
+    if (Rendering::TryGetSet0BindingByName(*pipeline.Meta, "ReceiverBoundsBuffer", binding, type))
     {
         DescriptorSetUpdate u{};
         u.binding = binding;
@@ -338,7 +338,7 @@ void ShadowReceiverReduce::Record(RenderGraph::RGContext& ctx, ShadowMapRenderFe
         u.buffers = {slot};
         dev->UpdateDescriptorSet(set0, u);
     }
-    if (Detail::TryGetSet0BindingByName(*pipeline.Meta, "ReceiverReduceParams", binding, type))
+    if (Rendering::TryGetSet0BindingByName(*pipeline.Meta, "ReceiverReduceParams", binding, type))
     {
         DescriptorSetUpdate u{};
         u.binding = binding;

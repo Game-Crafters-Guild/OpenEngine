@@ -128,7 +128,6 @@
 #include "Types/StringUtils.h"
 #include <algorithm>
 #include <cassert>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -4573,9 +4572,7 @@ void HierarchyPanel::ApplySearchFilter(const std::string& searchText)
             continue;
         SearchableComponentType type;
         type.Id = info->TypeId;
-        type.FullName = registeredName;
-        std::transform(type.FullName.begin(), type.FullName.end(), type.FullName.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        type.FullName = ToLowerAscii(registeredName);
         type.LeafName = std::string(UnqualifiedName(type.FullName));
         componentTypes.push_back(std::move(type));
     }

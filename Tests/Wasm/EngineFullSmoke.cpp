@@ -128,7 +128,7 @@ int main()
         }
         std::printf("PASS: AssetManager initialized on MEMFS root\n");
 
-        // --- Audio (init may fail soft: node has no audio device) ----------
+        // --- Audio (the default Silent output; init may fail soft) ---------
         {
             Audio::AudioSystem audio(assets);
             Audio::AudioSystemConfig config;
@@ -140,7 +140,7 @@ int main()
             }
             else
             {
-                std::printf("PASS: Audio init declined softly (no device in this environment)\n");
+                std::printf("PASS: Audio init declined softly\n");
             }
         }
 

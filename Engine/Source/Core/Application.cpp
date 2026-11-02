@@ -15,6 +15,7 @@
 #include "Core/Time.h"
 #include "Memory/FrameJoinedScope.h"
 #include "Memory/FrameMemory.h"
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <thread>
@@ -403,17 +404,9 @@ bool Application::Tick() {
 	        // Close the frame's NVTX range before any throttling below.
 	        frameRange.reset();
 
-        // Frame rate limiting, only on request: GE_FRAME_CAP set to a positive
-        // rate (e.g. 60, 120) holds each frame to it with a CPU wait. Unset,
-        // empty, 0 or unparsable means no limiter, in every application: with
-        // VSync on, present paces the frame, and an application that turns VSync
-        // off asked for uncapped frames. A fixed frame rate (SetFixedFrameRate)
-        // ignores GE_FRAME_CAP. A headless application at a fixed frame rate
-        // holds each frame to that rate: nothing presents, so nothing else paces it.
-        //
-        // A plain sleep under a coarse timer (common on Windows) quantizes to
-        // ~15.6 ms and turns a 60 fps cap into 30 to 40 fps, so the wait below
-        // sleeps most of the remainder on a precise timer and yields for the tail.
+        // A CPU wait holds the frame to the lowest rate that GE_FRAME_CAP, SetFrameRateCap or a
+        // headless fixed frame rate asks for. With no request, the frame does not wait: VSync or
+        // the uncapped choice paces it. A fixed frame rate ignores GE_FRAME_CAP.
         double targetFps = 0.0;
         if (IsFixedFrameRateEnabled())
         {
@@ -435,6 +428,8 @@ bool Application::Tick() {
                 }
             }
         }
+        if (m_FrameRateCap > 0.0)
+            targetFps = targetFps > 0.0 ? std::min(targetFps, m_FrameRateCap) : m_FrameRateCap;
 
         if (targetFps > 0.0)
         {
@@ -446,7 +441,8 @@ bool Application::Tick() {
             {
                 const double remaining = targetFrameTime - frameTime;
                 const auto tSleep0 = std::chrono::high_resolution_clock::now();
-                // Sleep most of the remaining time, then spin/yield for the tail to reduce oversleep.
+                // A plain sleep on a coarse timer (common on Windows) rounds up to ~15.6 ms.
+                // Sleep most of the remainder on a precise timer, then yield for the tail.
                 if (remaining > 0.002)
                 {
                     Platform::SleepPrecise(std::chrono::duration<double>(remaining - 0.001));
@@ -584,6 +580,11 @@ void Application::SetFixedFrameRate(double fps)
 void Application::ClearFixedFrameRate()
 {
     m_FixedDeltaTime = 0.0;
+}
+
+void Application::SetFrameRateCap(double fps)
+{
+    m_FrameRateCap = fps > 0.0 ? fps : 0.0;
 }
 
 } // namespace GameEngine

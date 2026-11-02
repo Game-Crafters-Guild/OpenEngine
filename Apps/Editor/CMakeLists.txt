@@ -986,10 +986,12 @@ set(EDITOR_HEADERS
 		Source/UI/Controls/Widgets/CameraBookmarksWidget.cpp
         Include/UI/Controls/Widgets/ViewportRotationGizmo.h
 		Source/UI/Controls/Widgets/ViewportRotationGizmo.cpp
-        Include/UI/Controls/Widgets/SceneViewRulerOverlay.h
-		Source/UI/Controls/Widgets/SceneViewRulerOverlay.cpp
-        Include/UI/Controls/Widgets/SceneViewMeasureOverlay.h
-		Source/UI/Controls/Widgets/SceneViewMeasureOverlay.cpp
+        Include/UI/Controls/Widgets/SceneView/SceneViewRulerOverlay.h
+		Source/UI/Controls/Widgets/SceneView/SceneViewRulerOverlay.cpp
+        Include/UI/Controls/Widgets/SceneView/SceneViewMeasureOverlay.h
+		Source/UI/Controls/Widgets/SceneView/SceneViewMeasureOverlay.cpp
+        Include/UI/Controls/Widgets/SceneView/SceneViewToolOverlay.h
+		Source/UI/Controls/Widgets/SceneView/SceneViewToolOverlay.cpp
 	Include/VersionControl/EditorVersionControlService.h
 	Include/VersionControl/EditorVersionControlUi.h
 	Include/VersionControl/Ui/VcsCommitDialog.h

@@ -5,8 +5,8 @@
 // inspector's empty state has to name the language of the file that produced it: telling a
 // surface-shader author to write `public int myField` is advice from the wrong language.
 
-#include <algorithm>
-#include <cctype>
+#include "Types/PathUtils.h"
+
 #include <filesystem>
 #include <string>
 
@@ -15,9 +15,7 @@ namespace GameEngine::Editor
 
 inline std::string EmptyScriptVariablesText(const std::filesystem::path& scriptPath)
 {
-    std::string ext = scriptPath.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string ext = LowerCaseExtension(scriptPath);
 
     if (ext == ".cs")
     {

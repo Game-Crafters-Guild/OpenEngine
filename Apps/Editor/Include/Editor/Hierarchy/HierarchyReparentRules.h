@@ -16,7 +16,7 @@ namespace GameEngine::Editor
 // its source and never written to the scene, so an authored child parented under
 // one would serialize a `parent=` naming no entity in the file, and the loader
 // hard-rejects a missing parent — a scene that fails to open, which the editor
-// reports silently. SaveSceneToFile refuses that edge as well; this is the half
+// reports silently. WriteSceneFile refuses that edge as well; this is the half
 // that stops it being created.
 //
 // An invalid handle means the scene root, which always accepts children.

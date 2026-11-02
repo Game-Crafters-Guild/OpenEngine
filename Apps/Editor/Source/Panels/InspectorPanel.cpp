@@ -43,6 +43,8 @@
 #include "Platform/Window.h"
 #include "PlayMode/PlayModeManager.h"
 #include "Scene/WorldSnapshotCommand.h"
+#include "Types/FormatNumber.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 #include "Panels/ConfirmActionModal.h"
@@ -943,14 +945,9 @@ static int SortKeyForComponent(ECS::ComponentTypeId typeId)
 
 static std::string ToHex(const std::vector<uint8_t>& bytes)
 {
-    static const char kHex[] = "0123456789abcdef";
     std::string s;
     s.reserve(bytes.size() * 2);
-    for (uint8_t b : bytes)
-    {
-        s.push_back(kHex[(b >> 4) & 0xF]);
-        s.push_back(kHex[b & 0xF]);
-    }
+    AppendHexBytes(s, bytes);
     return s;
 }
 
@@ -2837,9 +2834,7 @@ const char* ClassifyAssetHeaderKind(const std::filesystem::path& p)
 {
     if (!p.has_extension())
         return "inspector-header-kind-asset";
-    std::string ext = p.extension().string();
-    for (auto& c : ext)
-        c = (char)std::tolower((unsigned char)c);
+    const std::string ext = LowerCaseExtension(p);
     if (ext == ".scene")
         return "inspector-header-kind-scene";
     if (ext == ".cs" || GetAssetTypeFromExtension(ext) == AssetType::NativeSource)
@@ -2856,9 +2851,7 @@ std::string FriendlyAssetTypeLabel(AssetType type, const std::filesystem::path& 
 {
     if (type == AssetType::NativeSource)
     {
-        std::string ext = path.extension().string();
-        for (auto& c : ext)
-            c = (char)std::tolower((unsigned char)c);
+        const std::string ext = LowerCaseExtension(path);
         if (ext == ".h" || ext == ".hpp" || ext == ".hxx" || ext == ".hh")
             return "C++ Header";
         if (ext == ".c")
@@ -6638,8 +6631,7 @@ void InspectorPanel::ApplySearchFilter(const std::string& searchText)
         return;
 
     // Convert search text to lowercase for case-insensitive matching
-    std::string searchLower = searchText;
-    std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::tolower);
+    const std::string searchLower = ToLowerAscii(searchText);
 
     std::unordered_map<UIElement*, bool> subtreeMatches;
     std::unordered_set<UIElement*> directMatches;
@@ -6658,8 +6650,7 @@ void InspectorPanel::ApplySearchFilter(const std::string& searchText)
         {
             if (auto* label = dynamic_cast<Label*>(el))
             {
-                std::string textLower = label->GetText();
-                std::transform(textLower.begin(), textLower.end(), textLower.begin(), ::tolower);
+                const std::string textLower = ToLowerAscii(label->GetText());
 
                 if (textLower.find(searchLower) != std::string::npos)
                 {
@@ -6676,8 +6667,7 @@ void InspectorPanel::ApplySearchFilter(const std::string& searchText)
         {
             if (auto* foldout = dynamic_cast<Foldout*>(el))
             {
-                std::string titleLower = foldout->GetTitle();
-                std::transform(titleLower.begin(), titleLower.end(), titleLower.begin(), ::tolower);
+                const std::string titleLower = ToLowerAscii(foldout->GetTitle());
 
                 if (titleLower.find(searchLower) != std::string::npos)
                 {

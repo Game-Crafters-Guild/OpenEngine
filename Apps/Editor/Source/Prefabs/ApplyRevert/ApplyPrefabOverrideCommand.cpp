@@ -74,7 +74,7 @@ void ApplyPrefabOverrideCommand::Redo()
 void ApplyPrefabOverrideCommand::WriteText(const Scene::PrefabFileEdit& edit, const std::string& text)
 {
     std::string error;
-    if (!Scene::WritePrefabFileText(m_World, edit.File, text, error))
+    if (!Scene::WritePrefabFileText(edit.File, text, error))
         Logger::Log::Error("Prefabs: {} could not write the prefab: {}", m_Name, error);
 }
 

@@ -78,13 +78,13 @@ class ShippedTemplateScene : public testing::TestWithParam<const char*>, public 
         const auto scenePath = projectRoot / "Assets/Scenes/Main.scene";
         ASSERT_TRUE(std::filesystem::is_regular_file(scenePath)) << scenePath;
 
-        Scene::SceneLoadDegradation degradation;
-        Scene::LoadOptions options;
+        Scene::SceneDegradation degradation;
+        Scene::SceneReadOptions options;
         options.assetResolver = this;
         options.assetRootOverride = projectRoot / "Assets";
         options.projectRoot = projectRoot;
         options.outDegradation = &degradation;
-        ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, options))
+        ASSERT_TRUE(Scene::ReadSceneInto(world, scenePath, options))
             << Scene::GetLastSceneIOError().message;
         for (const auto& skip : degradation.skips)
             ADD_FAILURE() << skip.file << ':' << skip.line << ' ' << skip.entityId << '.'

@@ -32,11 +32,11 @@ void RGUploadRing::CreateBlock(Block& b, uint64_t capacity)
     b.Mapped = m_Device->MapBuffer(b.Buffer);
 }
 
-RGUploadRing::RGUploadRing(IDevice* device, uint32_t framesInFlight, uint64_t initialSlotCapacityBytes)
+RGUploadRing::RGUploadRing(IDevice* device, uint32_t slotCount, uint64_t initialSlotCapacityBytes)
     : m_Device(device)
 {
     const uint64_t cap = initialSlotCapacityBytes ? initialSlotCapacityBytes : 256;
-    const uint32_t n = framesInFlight ? framesInFlight : 1;
+    const uint32_t n = slotCount ? slotCount : 1;
     m_Slots.resize(n);
     for (Slot& s : m_Slots)
         CreateBlock(s, cap);

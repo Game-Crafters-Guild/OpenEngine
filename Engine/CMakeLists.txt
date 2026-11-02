@@ -1131,6 +1131,9 @@ target_link_libraries(Engine PRIVATE nlohmann_json::nlohmann_json)
 
 # RenderServices also uses JSON for RenderPipeline compilation.
 target_link_libraries(RenderServices PRIVATE nlohmann_json::nlohmann_json)
+# The material system, the variant cache, the texture service and the resolve service
+# report their pending work to the tracker; their headers only forward-declare it.
+target_link_libraries(RenderServices PRIVATE SceneLoadTracker)
 
 # TextureService.h holds decoded embedded images (Image/PixelImage.h).
 target_link_libraries(RenderServices PUBLIC Image)
@@ -1181,7 +1184,7 @@ set(GE_ENGINE_MODULES
     Logger AssetCore AssetDatabase JobSystem ECS FileWatcher AssetRuntime Audio Scripting NativeScripting
     Platform FileSystem FileSystemCore Memory GameEngineRendering RenderServices VolumetricFog HeightFog GPUFogParticles Particles ParticlesAuthoring ParticlesAssets ParticlesSystems ParticlesRendering Animation NumericExpression UI Physics PhysicsECS
     Pathfinding PathfindingECS Terrain PageStreaming TerrainECS TerrainGrass CBTTerrain CBTTerrainECS Ocean Spline SplineGeometry SplineLayout SplineECS SplineRecipes MarkupECS Graph
-    GenerationalVector Scheduler Scene SceneBvh MeshPicking Text Input PluginAPI Image
+    GenerationalVector Scheduler SceneLoadTracker Scene SceneBvh MeshPicking Text Input PluginAPI Image
     PlatformServices PlatformProvider${GE_PLATFORM_BACKEND})
 target_link_libraries(Engine
     PRIVATE ${GE_ENGINE_MODULES} ${PLATFORM_LIBS} concurrentqueue::concurrentqueue
@@ -1688,6 +1691,22 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     ge_stage_runtime_dependencies(TextureAlphaCoverageGpuTests)
     add_test(NAME TextureAlphaCoverageGpuTests COMMAND $<TARGET_FILE:TextureAlphaCoverageGpuTests>)
     set_tests_properties(TextureAlphaCoverageGpuTests PROPERTIES LABELS "Texture;GPU;Integration")
+
+    # The texture drain's command lists and submits, counted on a VulkanDevice subclass; the
+    # drain reads the EngineCore asset registry and the uploads decode on its job system.
+    add_executable(TextureUploadBatchGpuTests Tests/TextureUploadBatchGpuTests.cpp
+        ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp)
+    target_include_directories(TextureUploadBatchGpuTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Modules/Rendering")
+    target_link_libraries(TextureUploadBatchGpuTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+    set_target_properties(TextureUploadBatchGpuTests PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        FOLDER "Engine/Tests"
+    )
+    ge_set_output_tests(TextureUploadBatchGpuTests)
+    ge_stage_runtime_dependencies(TextureUploadBatchGpuTests)
+    add_test(NAME TextureUploadBatchGpuTests COMMAND $<TARGET_FILE:TextureUploadBatchGpuTests>)
+    set_tests_properties(TextureUploadBatchGpuTests PROPERTIES LABELS "Texture;GPU;Integration")
 endif()
 
 if(GTest_FOUND OR TARGET GTest::gtest)
@@ -1697,6 +1716,7 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     add_executable(TextureCookUsageTagTests Tests/TextureCookUsageTagTests.cpp
         ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp)
     target_link_libraries(TextureCookUsageTagTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+    target_include_directories(TextureCookUsageTagTests PRIVATE ${CMAKE_SOURCE_DIR}/Tests) # TestTempDir.h
     set_target_properties(TextureCookUsageTagTests PROPERTIES
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
@@ -2171,6 +2191,7 @@ endif()
                 Tests/ModelRenderSetupTests.cpp
                 Tests/SceneBuildPumpTests.cpp
                 Tests/SceneResolveFrameTests.cpp
+                Tests/CompileLoadReportTests.cpp
                 Tests/SceneResolveServiceTests.cpp
                 Tests/SortedTransparentCullTests.cpp
                 Tests/SortedTransparentRunTests.cpp
@@ -2581,6 +2602,23 @@ endif()
 			    ge_set_output_tests(EngineComponentRegistrationTests)
 			    ge_stage_runtime_dependencies(EngineComponentRegistrationTests)
 			    add_test(NAME EngineComponentRegistrationTests COMMAND $<TARGET_FILE:EngineComponentRegistrationTests>)
+			endif()
+
+			if(GTest_FOUND OR TARGET GTest::gtest)
+			    # The output an engine opens from the default ApplicationConfig: Silent,
+			    # so no audio device opens unless an application asks for one.
+			    add_executable(EngineAudioOutputTests Tests/EngineAudioOutputTests.cpp
+			        ${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp)
+			    target_link_libraries(EngineAudioOutputTests PRIVATE Engine GTest::gtest GTest::gtest_main)
+			    target_include_directories(EngineAudioOutputTests PRIVATE ${CMAKE_SOURCE_DIR}/Tests) # TestTempDir.h
+			    set_target_properties(EngineAudioOutputTests PROPERTIES
+			        CXX_STANDARD 20
+			        CXX_STANDARD_REQUIRED ON
+			        FOLDER "Engine/Tests"
+			    )
+			    ge_set_output_tests(EngineAudioOutputTests)
+			    ge_stage_runtime_dependencies(EngineAudioOutputTests)
+			    add_test(NAME EngineAudioOutputTests COMMAND $<TARGET_FILE:EngineAudioOutputTests>)
 			endif()
 
 			if(GTest_FOUND OR TARGET GTest::gtest)

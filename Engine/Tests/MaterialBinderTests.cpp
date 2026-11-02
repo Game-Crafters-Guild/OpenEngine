@@ -20,9 +20,11 @@
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialBinder.h"
 #include "Engine/Rendering/PassBindingContext.h"
+#include "Engine/Rendering/PerFrameWritePool.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/RenderGraph/RGWindowFrame.h"
 #include "Rendering/Materials/Shader/ShaderMeta.h"
 #include "Rendering/Materials/Shader/ShaderVariantKey.h"
 #include "Types/StringId.h"
@@ -340,6 +342,76 @@ TEST(MaterialBinderTests, PerPassCache_DistinguishesByInstanceIndex)
 }
 
 // -- Test ---------------------------------------------------------------------
+// A per-pass set binds the window's upload ring and two pool rings. Each rotates once per
+// device frame at IDevice::GetFrameRingDepth(). The set's content then repeats at that period and the
+// device's set cache serves the same set again, not a new set every frame.
+TEST(MaterialBinderTests, PerPassSet_RepeatsAtTheFrameRingDepth)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+
+    RenderServices rs;
+    ASSERT_TRUE(rs.Initialize(device.get()));
+
+    auto meta = std::make_shared<ShaderMeta>();
+    DescriptorSetMeta s{};
+    s.Set = 3;
+    for (const char* name : {"Cam", "MaterialParams", "BonePaletteAtlas"})
+    {
+        DescriptorBindingMeta b{};
+        b.Binding    = static_cast<uint32_t>(s.Bindings.size());
+        b.Name       = name;
+        b.Type       = ShaderMetaBindingType::kStorageBuffer;
+        b.Count      = 1;
+        b.StagesMask = (1u << 0);
+        s.Bindings.push_back(b);
+    }
+    meta->Sets.push_back(s);
+    Material mat = Material::TestFactory::Create(GUID::Generate(), "PassRing", 16u);
+    Material::TestFactory::SetShaderMeta(mat, meta);
+
+    auto& binder = rs.Materials().Binder();
+    auto& pool = rs.GetPerFrameWritePool();
+    auto window = std::make_unique<RenderGraph::RGWindowFrame>(RenderGraph::MakeWindowRGFrame(*device));
+    const DrawBindings draw{};
+    std::vector<DescriptorSetHandle> sets;
+    constexpr uint32_t kFrames = 18;
+    for (uint32_t frame = 0; frame < kFrames; ++frame)
+    {
+        ASSERT_TRUE(device->BeginFrame());
+        pool.BeginFrame(device->GetFrameIndex());
+        window->UploadRing->BeginFrame(frame);
+        binder.OnBeginFrame();
+        auto pass = MakeEmptyPassContext();
+        const auto cam = window->UploadRing->Allocate(256);
+        pass.PassResources.Buffers.push_back({HashStringId("Cam"), cam.Buffer, cam.Offset, 256});
+        pass.PassResources.Buffers.push_back(
+            {HashStringId("MaterialParams"), pool.GetBuffer(FrameWriteUsage::MaterialParams), 0, 0});
+        pass.PassResources.Buffers.push_back(
+            {HashStringId("BonePaletteAtlas"), pool.GetBuffer(FrameWriteUsage::BonePalette), 0, 0});
+        const DescriptorSetHandle set = binder.BuildSetForBinding(pass, mat, 3, draw);
+        ASSERT_TRUE(set.IsValid()) << "frame " << frame;
+        sets.push_back(set);
+        device->Present();
+    }
+    // A transient set's handle recurs with the device's pacing, so the oracle is the ring period:
+    // the same set one ring depth later, and another set in the next frame.
+    const uint32_t depth = device->GetFrameRingDepth();
+    for (uint32_t frame = depth; frame < kFrames; ++frame)
+    {
+        EXPECT_EQ(sets[frame], sets[frame - depth])
+            << "frame " << frame << " binds the ring slots of frame " << frame - depth
+            << " but got another set: the set is built again instead of served from the device's set cache";
+        EXPECT_NE(sets[frame], sets[frame - 1]) << "frame " << frame << " binds other ring slots than the frame before";
+    }
+
+    window.reset();
+    rs.Shutdown();
+    device->Shutdown();
+}
+
+// -- Test ---------------------------------------------------------------------
 // The per-pass L1 is thread_local, so its slots outlive every binder that fills
 // them. A slot is only safe to trust if what stamps it cannot recur once its
 // writer is gone — an address recurs as soon as the allocator hands it back, and
@@ -347,9 +419,9 @@ TEST(MaterialBinderTests, PerPassCache_DistinguishesByInstanceIndex)
 // neither identifies the writer on its own.
 //
 // Both binders are placement-constructed in one buffer to make that address
-// reuse exact instead of incidental, and share one device so that its
-// monotonically increasing descriptor-set ids make a real build impossible to
-// confuse with a handle served out of a slot the dead binder left behind.
+// reuse exact instead of incidental. Each binds its own buffer under the same
+// per-pass key: a real build then gets a set that names the new buffer, and a
+// handle from the dead binder's slot names the destroyed one.
 
 TEST(MaterialBinderTests, PerPassL1_DoesNotServeADeadBindersHandle)
 {
@@ -375,40 +447,41 @@ TEST(MaterialBinderTests, PerPassL1_DoesNotServeADeadBindersHandle)
     Material mat = Material::TestFactory::Create(GUID::Generate(), "L1OwnerRecycle", 16u);
     Material::TestFactory::SetShaderMeta(mat, meta);
 
-    auto camBuf = MakeTestBuffer(*device, 256, BufferUsage::Uniform);
-    ASSERT_TRUE(camBuf.IsValid());
+    auto firstCam = MakeTestBuffer(*device, 256, BufferUsage::Uniform);
+    auto secondCam = MakeTestBuffer(*device, 256, BufferUsage::Uniform);
+    ASSERT_TRUE(firstCam.IsValid() && secondCam.IsValid());
 
     DrawBindings draw{};
-    const auto makePass = [&]() {
+    const auto makePass = [&](BufferHandle cam) {
         auto pass = MakeEmptyPassContext();
         pass.PassInstanceIndex = 0;
-        pass.PassResources.Buffers.push_back({HashStringId("Cam"), camBuf, 0, 0});
+        pass.PassResources.Buffers.push_back({HashStringId("Cam"), cam, 0, 0});
         return pass;
     };
 
     alignas(MaterialBinder) std::byte storage[sizeof(MaterialBinder)];
 
     auto* first = new (storage) MaterialBinder(rs, *device);
-    auto passFirst = makePass();
+    auto passFirst = makePass(firstCam);
     const auto hFirst = first->BuildSetForBinding(passFirst, mat, 3, draw);
     ASSERT_TRUE(hFirst.IsValid());
     first->~MaterialBinder();
+    device->DestroyBuffer(firstCam);
 
     auto* second = new (storage) MaterialBinder(rs, *device);
-    auto passSecond = makePass();
+    auto passSecond = makePass(secondCam);
     const auto hSecond = second->BuildSetForBinding(passSecond, mat, 3, draw);
     ASSERT_TRUE(hSecond.IsValid());
     second->~MaterialBinder();
 
     EXPECT_NE(hFirst, hSecond)
         << "A per-pass L1 slot filled by a destroyed binder was served to a new "
-           "binder occupying its address. The new binder's own per-pass cache is "
-           "empty, so it never built this handle, and on a device whose "
-           "descriptor-set ids only increase a genuine build cannot return the "
-           "earlier one. Whatever validates an L1 slot must not be a value a "
-           "later binder can repeat.";
+           "binder occupying its address. That set names the first binder's buffer, "
+           "which is destroyed; the new binder's pass names another buffer, so a "
+           "genuine build cannot return it. Whatever validates an L1 slot must not "
+           "be a value a later binder can repeat.";
 
-    device->DestroyBuffer(camBuf);
+    device->DestroyBuffer(secondCam);
     rs.Shutdown();
     device->Shutdown();
 }

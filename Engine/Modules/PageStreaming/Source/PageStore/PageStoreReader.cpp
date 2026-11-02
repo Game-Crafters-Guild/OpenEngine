@@ -4,6 +4,9 @@
 #include "PageStoreSerialization.h"
 
 #include "AssetCore/SharedFileRead.h"
+#include "Types/ByteBuffer.h"
+
+#include <utility>
 
 namespace GameEngine::PageStreaming
 {
@@ -42,21 +45,27 @@ std::string PageStoreReader::Open(const std::filesystem::path& file, PageFieldKi
     return {};
 }
 
-bool PageStoreReader::ReadPageBytes(const PageAddress& address, std::vector<uint8>& outBytes) const
+bool PageStoreReader::ReadPageBytes(const PageAddress& address, ByteBuffer& outBytes) const
 {
+    outBytes = {};
     const PageIndexEntry* entry = m_IsOpen ? m_Layout.FindPresent(address) : nullptr;
     if (!entry)
         return false;
-    outBytes.resize(m_Layout.StoredBytes(*entry));
-    std::lock_guard lock(m_ReadMutex);
-    return m_Reader->SeekTo(m_BaseOffset + entry->Offset) &&
-           m_Reader->Read(outBytes.data(), outBytes.size()) == static_cast<int64>(outBytes.size());
+    ByteBuffer bytes(m_Layout.StoredBytes(*entry));
+    {
+        std::lock_guard lock(m_ReadMutex);
+        if (!m_Reader->SeekTo(m_BaseOffset + entry->Offset) ||
+            m_Reader->Read(bytes.Data(), bytes.Size()) != static_cast<int64>(bytes.Size()))
+            return false;
+    }
+    outBytes = std::move(bytes);
+    return true;
 }
 
 bool PageStoreReader::ReadPageSamples(const PageAddress& address, std::span<uint8> outSamples) const
 {
     const uint32 stride = PageStrideTexels(m_Layout.Header.Format);
-    std::vector<uint8> bytes;
+    ByteBuffer bytes;
     if (outSamples.size() != static_cast<std::size_t>(stride) * stride * PageTexelBytes(m_Layout.Header.Format) ||
         !ReadPageBytes(address, bytes))
         return false;

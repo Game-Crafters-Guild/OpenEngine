@@ -245,7 +245,7 @@ TEST_F(UITextureRegistryFixture, GenerationRecycledHandleDoesNotAliasDeadPredece
 }
 
 // Threaded stress: many workers call Register/Unregister/UpdateSlot concurrently
-// while the main thread materialises transient frame sets. Purpose is to exercise
+// while the main thread materialises frame sets. Purpose is to exercise
 // the m_Mutex guarding the state tables and descriptor writes. Any crash or
 // invalid handle return indicates a correctness regression.
 TEST_F(UITextureRegistryFixture, ThreadedRegisterUnregisterStress)
@@ -312,13 +312,13 @@ TEST_F(UITextureRegistryFixture, ThreadedRegisterUnregisterStress)
         });
     }
 
-    // Main thread: materialise transient frame sets concurrently with workers.
+    // Main thread: materialise frame sets concurrently with workers.
     // Mirrors the real per-draw pattern and exercises the map-iteration path
     // that must not race with writers.
     int framesCreated = 0;
     while (framesCreated < 100)
     {
-        auto set = registry.CreateTransientFrameSet();
+        auto set = registry.GetFrameSet();
         // Set may be empty if the device's transient-pool is not populated in the
         // headless path; what we care about is that the call did not crash and
         // didn't observe a torn map.
@@ -407,7 +407,7 @@ TEST_F(UITextureRegistryFixture, ThreadedStressRepeated)
 
         for (int k = 0; k < 20; ++k)
         {
-            (void)registry.CreateTransientFrameSet();
+            (void)registry.GetFrameSet();
             std::this_thread::yield();
         }
 
@@ -423,8 +423,8 @@ TEST_F(UITextureRegistryFixture, ThreadedStressRepeated)
 
 // --- Binding 1 (Slug band textures) slot discipline ---
 //
-// Binding 1 is a PARTIALLY_BOUND utexture2D array materialised into transient
-// descriptor memory that is bump-allocated and never zeroed, and the fragment
+// Binding 1 is a PARTIALLY_BOUND utexture2D array over descriptor memory
+// that is not zeroed, and the fragment
 // shader turns a band record's .x into a loop trip count. A slot the shader can
 // index but the registry never wrote therefore does not read as "empty" — it
 // reads as whatever descriptor last occupied those bytes, and an arbitrary
@@ -548,14 +548,14 @@ TEST_F(UITextureRegistryFixture, ExhaustedBandPoolFallsBackToTheDummySlot)
     registry.Shutdown();
 }
 
-// The transient set writes every band slot, including those no page occupies.
+// The frame set writes every band slot, including those no page occupies.
 // Materialising a set straight after construction is the minimal exercise of
 // that loop: it must stay valid when only the dummy is populated.
-TEST_F(UITextureRegistryFixture, TransientSetMaterialisesWithOnlyTheBandDummyPopulated)
+TEST_F(UITextureRegistryFixture, FrameSetMaterialisesWithOnlyTheBandDummyPopulated)
 {
     UI::UITextureRegistry registry(device.get());
 
-    DescriptorSetHandle set = registry.CreateTransientFrameSet();
+    DescriptorSetHandle set = registry.GetFrameSet();
     EXPECT_TRUE(set.IsValid());
 
     registry.Shutdown();

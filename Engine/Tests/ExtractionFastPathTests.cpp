@@ -1795,7 +1795,7 @@ namespace
 struct CasterChangeCopy
 {
     uint64_t Version = 0;
-    bool Unattributed = true;
+    ShadowCasterChangeScope Scope = ShadowCasterChangeScope::Unbounded;
     std::vector<ShadowCasterChangeSphere> Spheres;
 };
 
@@ -1862,7 +1862,7 @@ PoolParityCapture RunPoolParityScenario(Rendering::IDevice* device, bool fastPat
         cap.moverIndicesPerFrame.push_back(std::move(movers));
         const ShadowCasterChangeSet changes = h.rs.GetShadowCasterChanges(h.worldId);
         cap.casterChangesPerFrame.push_back(
-            {changes.Version, changes.Unattributed, {changes.Spheres.begin(), changes.Spheres.end()}});
+            {changes.Version, changes.Scope, {changes.Spheres.begin(), changes.Spheres.end()}});
         if (h.Stats().FastFrame != 0)
             ++cap.fastFrames;
     }
@@ -1906,7 +1906,7 @@ TEST_F(ExtractionFastPathTest, PatchLaneOnAPoolMatchesTheFullLane)
         const CasterChangeCopy& a = poolPatch.casterChangesPerFrame[f];
         const CasterChangeCopy& b = inlinePatch.casterChangesPerFrame[f];
         EXPECT_EQ(a.Version, b.Version) << "caster version diverged at frame " << f;
-        EXPECT_EQ(a.Unattributed, b.Unattributed) << "caster attribution diverged at frame " << f;
+        EXPECT_EQ(a.Scope, b.Scope) << "caster attribution diverged at frame " << f;
         ASSERT_EQ(a.Spheres.size(), b.Spheres.size()) << "frame " << f;
         EXPECT_EQ(0, std::memcmp(a.Spheres.data(), b.Spheres.data(),
                                  a.Spheres.size() * sizeof(ShadowCasterChangeSphere)))
@@ -1938,7 +1938,7 @@ TEST_F(ExtractionFastPathTest, PatchLaneOutputsDoNotDependOnTheFeedOrder)
             << "the frame-mover list (in order) depends on the feed order at frame " << f;
         const CasterChangeCopy& a = reverse.casterChangesPerFrame[f];
         const CasterChangeCopy& b = forward.casterChangesPerFrame[f];
-        EXPECT_EQ(a.Unattributed, b.Unattributed) << "caster attribution depends on the feed order at frame " << f;
+        EXPECT_EQ(a.Scope, b.Scope) << "caster attribution depends on the feed order at frame " << f;
         ASSERT_EQ(a.Spheres.size(), b.Spheres.size()) << "frame " << f;
         EXPECT_EQ(0, std::memcmp(a.Spheres.data(), b.Spheres.data(),
                                  a.Spheres.size() * sizeof(ShadowCasterChangeSphere)))
@@ -2007,7 +2007,8 @@ TEST_F(ExtractionFastPathTest, PatchLaneAttributesCastersAgainstTheirPreviousPos
         ASSERT_EQ(expected.size(), kMovers) << "frame " << frame;
 
         const ShadowCasterChangeSet changes = h.rs.GetShadowCasterChanges(h.worldId);
-        ASSERT_FALSE(changes.Unattributed) << "frame " << frame << " lost attribution under the cap";
+        ASSERT_EQ(changes.Scope, ShadowCasterChangeScope::Bounded)
+            << "frame " << frame << " lost attribution under the cap";
         const std::vector<ShadowCasterChangeSphere> actual =
             SortedSpheres({changes.Spheres.begin(), changes.Spheres.end()});
         expected = SortedSpheres(std::move(expected));

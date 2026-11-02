@@ -4,29 +4,14 @@
 #include "Assets/AssetManager.h"
 #include "Core/Engine.h"
 #include "Logger/Logger.h"
+#include "Types/StringUtils.h"
 
-#include <cctype>
 #include <filesystem>
 #include <string>
 #include <string_view>
 
 namespace
 {
-
-bool EqualsIgnoreCaseAscii(std::string_view a, std::string_view b)
-{
-    if (a.size() != b.size())
-        return false;
-
-    for (size_t i = 0; i < a.size(); ++i)
-    {
-        const unsigned char ca = static_cast<unsigned char>(a[i]);
-        const unsigned char cb = static_cast<unsigned char>(b[i]);
-        if (std::tolower(ca) != std::tolower(cb))
-            return false;
-    }
-    return true;
-}
 
 std::string TryMakeAssetRelativePathString(const GameEngine::AssetManager& assetManager,
                                            const std::filesystem::path& absoluteAssetPath)
@@ -75,7 +60,7 @@ std::filesystem::path TryExtractRenderPipelinesTail(const std::filesystem::path&
         const std::string segment = part.generic_string();
         if (!foundRenderPipelines)
         {
-            if (!EqualsIgnoreCaseAscii(segment, "RenderPipelines"))
+            if (!GameEngine::EqualsIgnoreCase(segment, "RenderPipelines"))
                 continue;
             foundRenderPipelines = true;
         }

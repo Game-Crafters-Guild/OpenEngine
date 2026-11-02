@@ -1143,14 +1143,14 @@ TEST_F(NavigationSurfaceTest, SceneRoundTripKeepsTheAuthoredFields)
             std::filesystem::remove(Path, error);
         }
     } cleanup{path};
-    ASSERT_TRUE(Scene::SaveSceneToFile(*world, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(*world, path));
     // The grid type is written by its name, though Pathfinding::GridType is declared outside the
     // component headers.
     std::ostringstream saved;
     saved << std::ifstream(path).rdbuf();
     EXPECT_NE(saved.str().find("Hex"), std::string::npos) << saved.str();
     world->Clear();
-    ASSERT_TRUE(Scene::LoadSceneFromFile(*world, path));
+    ASSERT_TRUE(Scene::ReadSceneInto(*world, path));
 
     ASSERT_EQ(world->Query<ECS::Read<NavigationSurface>>().Count(), 1u);
     world->Query<ECS::Read<NavigationSurface>>().Each([](const NavigationSurface& loaded) {

@@ -24,6 +24,7 @@ using GameEngine::Editor::SceneTools::GizmoIconPickSphere;
 using GameEngine::Editor::SceneTools::GizmoRay;
 using GameEngine::Editor::SceneTools::GizmoRenderContext;
 using GameEngine::Editor::SceneTools::PickNearestGizmoIcon;
+using GameEngine::Editor::SceneTools::ReleaseGizmoGroups;
 using GameEngine::Editor::SceneTools::ResetGizmoLineGroups;
 using GameEngine::Editor::SceneTools::ResetGizmoTriangleGroups;
 using GameEngine::Mathematics::Vector3;
@@ -432,4 +433,50 @@ TEST(SceneViewGizmoHelpersTests, PlaneBasisSeedsFromWorldUpUnlessTheNormalIsNear
     EXPECT_FLOAT_EQ(v.x, 1.0f);
     EXPECT_FLOAT_EQ(v.y, 0.0f);
     EXPECT_FLOAT_EQ(v.z, 0.0f);
+}
+
+// A view keeps the vertex streams of its last frame for the next frame. A released view starts
+// again with empty streams; a view that is still open keeps its streams.
+TEST(SceneViewGizmoHelpersTests, AReleasedViewDropsItsGizmoStreamsAndAnOpenViewKeepsThem)
+{
+    const ViewId closedView = 9101;
+    const ViewId openView = 9102;
+    const Color white(1.0f, 1.0f, 1.0f, 1.0f);
+    const Vector3 origin(0.0f, 0.0f, 0.0f);
+    const Vector3 unit(1.0f, 1.0f, 1.0f);
+
+    std::size_t peakLineFloats = 0;
+    std::size_t peakTriangleFloats = 0;
+    for (const ViewId viewId : {closedView, openView})
+    {
+        ResetGizmoLineGroups(viewId);
+        ResetGizmoTriangleGroups(viewId);
+        GizmoRenderContext context(viewId, CameraId{1});
+        for (int i = 0; i < 256; ++i)
+        {
+            context.DrawColoredLine(origin, unit, white);
+            context.DrawSolidBox(origin, unit, white);
+        }
+        ASSERT_NE(GetGizmoLineGroups(viewId), nullptr);
+        ASSERT_NE(GetGizmoTriangleGroups(viewId), nullptr);
+        peakLineFloats = GetGizmoLineGroups(viewId)->front().vertices.size();
+        peakTriangleFloats = GetGizmoTriangleGroups(viewId)->front().vertices.size();
+        ResetGizmoLineGroups(viewId);
+        ResetGizmoTriangleGroups(viewId);
+    }
+
+    ReleaseGizmoGroups(closedView);
+
+    for (const ViewId viewId : {closedView, openView})
+    {
+        GizmoRenderContext context(viewId, CameraId{1});
+        context.DrawColoredLine(origin, unit, white);
+        context.DrawSolidBox(origin, unit, white);
+        ASSERT_NE(GetGizmoLineGroups(viewId), nullptr);
+        ASSERT_NE(GetGizmoTriangleGroups(viewId), nullptr);
+    }
+    EXPECT_LT(GetGizmoLineGroups(closedView)->front().vertices.capacity(), peakLineFloats);
+    EXPECT_LT(GetGizmoTriangleGroups(closedView)->front().vertices.capacity(), peakTriangleFloats);
+    EXPECT_GE(GetGizmoLineGroups(openView)->front().vertices.capacity(), peakLineFloats);
+    EXPECT_GE(GetGizmoTriangleGroups(openView)->front().vertices.capacity(), peakTriangleFloats);
 }

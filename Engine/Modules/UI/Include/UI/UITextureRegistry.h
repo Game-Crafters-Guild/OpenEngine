@@ -21,8 +21,8 @@ namespace UI
 // Maps GPU TextureHandles to array indices that UIPrimitive.textureIndex
 // references in the fragment shader's texture array. The state tables
 // (m_Binding0Entries / m_Binding1Entries) are the source of truth; each
-// UI draw calls CreateTransientFrameSet to materialise them into a fresh
-// descriptor set for that frame.
+// UI draw calls GetFrameSet for the descriptor set that holds them
+// in that frame.
 class UITextureRegistry
 {
 public:
@@ -81,22 +81,20 @@ public:
     void ReleaseSlot(GenerationalVector::Handle reservation);
 
     /// Bind a texture to a reserved slot. A reservation that does not hold its slot
-    /// writes nothing. CreateTransientFrameSet writes the descriptor.
+    /// writes nothing. GetFrameSet writes the descriptor.
     void UpdateSlot(GenerationalVector::Handle reservation, Rendering::TextureHandle tex,
                     Rendering::SamplerHandle sampler = {});
 
-    // Allocate a fresh transient descriptor set for the current frame, write every
-    // occupied slot from the registry's state tables into it, and return the handle.
-    // Call once per UI draw, immediately before BindDescriptorSet(1, ...). The set's
-    // backing memory is owned by the frame's transient pool / descriptor-buffer ring
-    // and rewinds automatically when the frame slot recycles.
-    Rendering::DescriptorSetHandle CreateTransientFrameSet();
+    // Return the device's descriptor set that holds every occupied slot of the state
+    // tables. The device builds it on the first call for that content and keeps it
+    // while the content repeats. Call once per UI draw, before BindDescriptorSet(1, ...).
+    Rendering::DescriptorSetHandle GetFrameSet();
 
-    // Compat-profile twin of CreateTransientFrameSet: one descriptor set per
+    // Compat-profile twin of GetFrameSet: one descriptor set per
     // UICompatDrawRun, holding only the textures that run's primitives name.
     // Slots the run left unclaimed take the dummy white so no binding is left
     // unwritten.
-    Rendering::DescriptorSetHandle CreateDrawRunSet(const UICompatDrawRun& run);
+    Rendering::DescriptorSetHandle GetDrawRunSet(const UICompatDrawRun& run);
 
     // True when the registry built the fixed-slot layout instead of the
     // bindless arrays. Resolved once at construction from the renderer's shader
@@ -120,7 +118,7 @@ private:
     // UpdateSlot runs from the render-graph execute callback which may land on
     // a JobSystem worker under parallel dispatch, while Register / Unregister /
     // RegisterSlugTextures / RegisterColorAtlasPage run from the main thread's
-    // primitive-generation pass. CreateTransientFrameSet iterates the slot
+    // primitive-generation pass. GetFrameSet iterates the slot
     // maps and must not race with writers.
     mutable std::mutex m_Mutex;
 
@@ -155,8 +153,8 @@ private:
     bool m_Compat = false;
 
     // Per-slot state maps. Source of truth for the descriptor set contents;
-    // mutators update these, and CreateTransientFrameSet writes them to a fresh
-    // transient set each draw. No persistent descriptor sets are held.
+    // mutators update these, and GetFrameSet returns the device set for
+    // their current content each draw. The registry holds no set.
     struct SlotEntry
     {
         Rendering::TextureHandle Texture{};
@@ -164,6 +162,8 @@ private:
     };
     FlatMap<uint32_t, SlotEntry> m_Binding0Entries; // slot → texture (CIS)
     FlatMap<uint32_t, SlotEntry> m_Binding1Entries; // band slot → texture (usampler2D)
+    // The writes GetFrameSet and GetDrawRunSet pass to the device, kept to reuse their capacity. Guarded by m_Mutex.
+    std::vector<Rendering::DescriptorWrite> m_SetWrites;
 
     uint32_t m_NextSlot = 1; // 0 is reserved
     // Dedup key = {FULL 64-bit generational texture id, sampler id}. Packing
@@ -190,7 +190,7 @@ private:
     void BuildBindlessLayoutDesc(const Rendering::RenderingDeviceCapabilities& caps);
     void BuildCompatLayoutDesc();
     // Resolves a registry index to the texture to bind, repairing dead handles
-    // the way CreateTransientFrameSet does. Caller holds m_Mutex.
+    // the way GetFrameSet does. Caller holds m_Mutex.
     Rendering::TextureHandle ResolveSlotTextureLocked(
         FlatMap<uint32_t, SlotEntry>& entries, uint32_t index);
 

@@ -423,7 +423,7 @@ class MarkupSceneSchema final : public ISceneComponentSchema
 
     // The component's own lines need no service; the status (a tag name) and the notes do,
     // so a world saved without MarkupService keeps the component and its switch state.
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx,
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx,
                    std::vector<std::string>& outLines) const override
     {
         const auto* markup = world.GetComponent<Markup>(entity);
@@ -462,7 +462,7 @@ class MarkupSceneSchema final : public ISceneComponentSchema
                                     : FormatEntry(*service, notes->Entries[i])));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value, std::string* outError) const override
     {
         // A mark-up's notes are not a component, and an instance overrides components only,
@@ -533,7 +533,7 @@ class MarkupSceneSchema final : public ISceneComponentSchema
 
     // The lines that name a tag or carry the notes. Each reads its whole value before it
     // writes, so a refused line changes nothing.
-    static bool ApplyServiceProperty(const SceneLoadContext& ctx, MarkupService& service, const ECS::World& world,
+    static bool ApplyServiceProperty(const SceneReadContext& ctx, MarkupService& service, const ECS::World& world,
                                      ECS::EntityHandle entity, Markup& markup, std::string_view property,
                                      std::string_view value, std::string* outError)
     {

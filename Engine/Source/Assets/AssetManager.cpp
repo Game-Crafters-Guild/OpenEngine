@@ -1747,8 +1747,7 @@ std::future<void> AssetManager::UnloadAssetAsync(const GUID& guid)
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
 
-    auto task = std::make_unique<AssetUnloadTask>(m_JobSystem, guid, *this);
-    m_JobSystem->Submit(std::move(task));
+    m_JobSystem->Submit(AssetUnloadTask(guid, *this));
 
     return future;
 }

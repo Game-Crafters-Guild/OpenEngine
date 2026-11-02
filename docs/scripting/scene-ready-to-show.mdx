@@ -1,0 +1,84 @@
+---
+title: Scene ready to show
+description: Ask the engine if the loaded scene's models, materials, shaders and textures are ready, so a game can hide its world until the first frame draws complete.
+sidebar:
+  order: 6
+---
+
+A scene that has just loaded can draw before its work is done: models still loading, materials not yet registered, shaders and pipelines still compiling, textures still decoding. Those frames show placeholders or silhouettes. The scene load tracker collects that pending work from the systems that do it and answers one question once per frame: is the scene ready to show?
+
+The query is the same in the Player and in editor play mode. A game does not need to know which engine service holds the work.
+
+## Reading the query from a game system
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Hide the world until the scene is ready"
+#include "Core/Engine.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
+
+void MenuBackdrop::OnUpdate(float deltaSeconds)
+{
+    const GameEngine::SceneLoadTracker& tracker = GameEngine::EngineCore::GetInstance().GetSceneLoadTracker();
+    m_ReadyFrames = tracker.IsReadyToShow() ? m_ReadyFrames + 1 : 0;
+    if (m_ReadyFrames >= kReadyFramesToReveal)
+        LiftCover();
+}
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call yet. The C# getters are a later step of GameEngine issue #2461. The native call is `SceneLoadTracker::IsReadyToShow`.
+:::
+
+::::
+:::::
+
+`IsReadyToShow()` describes one frame boundary: the start of the current frame. Work that a frame begins, such as a scene load, shows in the query from the next frame. Compiles often land in short bursts with gaps between them. So a game that lifts a cover sets its count to zero in the frame that starts the load, and counts a few ready frames in a row before it acts.
+
+`Ready` is raised each time the snapshot goes from not ready to ready, also in a gap between two bursts. Use it to start the count, not to lift the cover.
+
+Read the query on the main thread, in a system update. The engine takes the snapshot at the start of `EngineCore::Update`.
+
+## What holds the query
+
+| Category | Work | Holds ready |
+| --- | --- | --- |
+| `scene.resolve` | Entities whose model is still loading, and materials not yet registered. The editor's scene-open build reports here too. | Yes |
+| `shader.base-compile` | Material shader compiles, one ticket per material, named by the material. | Yes |
+| `shader.base-compile` (Background) | The project material warm-up, which compiles every material of the project for later scenes. | No: counted only |
+| `shader.variant` | Draw variants that a draw skipped because they are still compiling: a ticket per compile, named by the material, from its submit to the end of the compile, and a gate for the variants that wait for the submit or the publish. | Yes |
+| `gpu.pipeline` | The device's pipeline builds, among them the pipelines of a published draw variant. Each ticket is named `device pipeline build`, because the device does not know the material. | Yes |
+| `render.texture-upload` | Material textures from the request through decode and upload to the bind. | Yes |
+
+Background work is shown in the counts and never holds the query: a scene that draws 30 materials does not wait for a warm-up of a thousand.
+
+## Counts and the stall detail
+
+`GetStatus()` returns the snapshot with one row per category: queued and running tickets, Background tickets, session totals of done and failed work, waiting gates with their pending count and reason, and the id of the oldest pending ticket's name with its age (`NameOf` gives the name). A loading screen can show a row's `Label`. Taking the snapshot allocates no memory; the strings of the detail are built only when you ask for them.
+
+`Describe()` builds the detail: one clause per category that holds. When nothing moves forward for `kStallSeconds` (10 s) while the scene is not ready, the snapshot is marked `Stalled` and the engine logs the detail in one error line, for example:
+
+```text title="The stall line"
+SceneLoadTracker: no progress for 10.2 s; pending: shader.base-compile: 0 queued, 1 running, oldest 'Water' for 10.2 s; render.texture-upload: 0 queued, 0 running, waiting: 3 material texture binds pending
+```
+
+A gate's reason is fixed text, such as a string literal: the snapshot keeps a view of it, and the detail adds the gate's pending count before it.
+
+## Reporting work of your own
+
+A game module can register its own category at its initialization and report work the first frame needs, as the engine's systems do. Prefix the id with the game's name.
+
+```cpp title="A ticket for work the game does itself"
+GameEngine::SceneLoadTracker& tracker = GameEngine::EngineCore::GetInstance().GetSceneLoadTracker();
+m_Category = tracker.RegisterCategory({.Id = "mygame.unit-assembly", .Label = "Assembling units"});
+GameEngine::SceneLoadTracker::WorkTicket ticket = m_Category.BeginWork(tracker.Intern("Barracks"), 1.0);
+ticket.Start();
+// ... the work ...
+ticket.Complete();
+```
+
+A ticket is thread-safe and move-only. A ticket destroyed before `Complete` is logged as dropped, counted as failed, and stops holding. A module that cancels its work on purpose, as a shutdown does, destroys its `Category` first: its open tickets stop holding, and their end is not counted or logged. `Category::Track(name, need, work)` wraps a task for the job system in a ticket of its own: the ticket starts when the task runs and completes when `work` returns. A gate (`Category::RegisterGate`) reads a condition from state the module already keeps; the engine evaluates it on the main thread once per frame. Destroying the `Category` or `Gate` handle revokes the registration.

@@ -1,11 +1,18 @@
 #include "DebugServer/Capture/FrameSequence/FrameSequenceRecording.h"
 
+#include "JobSystem/WorkStealingThreadPool.h"
+#include "Platform/Thread.h"
+
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <deque>
+#include <optional>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -14,6 +21,7 @@ using GameEngine::Editor::FrameFileFormat;
 using GameEngine::Editor::FrameSequenceRecording;
 using GameEngine::Editor::kFrameRecordingDefaultFrameRate;
 using GameEngine::Editor::kFrameRecordingDefaultMaxFrames;
+using GameEngine::Editor::kFrameRecordingEncodePriority;
 using GameEngine::Editor::kFrameRecordingMaxEncodes;
 using GameEngine::Editor::kFrameRecordingMaxReadbacks;
 
@@ -327,6 +335,116 @@ TEST(FrameSequenceRecordingTests, AFrameAfterAStallDoesNotBunchTheNextTicks)
         recording.OnFrameWritten(*index, 1.0);
     }
     EXPECT_EQ(3u, recording.GetSummary().Written); // the frames at 0, 350 and 400 ms
+}
+
+struct Encode
+{
+    uint32_t Index = 0;
+    JobSystem::TaskHandle Job;
+};
+
+// Tells the recording about each finished encode and removes it from `encodes`.
+void CollectFinishedEncodes(FrameSequenceRecording& recording, std::vector<Encode>& encodes, double encodeMs)
+{
+    for (const Encode& encode : encodes)
+    {
+        if (encode.Job.IsDone())
+            recording.OnFrameWritten(encode.Index, encodeMs);
+    }
+    std::erase_if(encodes, [](const Encode& encode) { return encode.Job.IsDone(); });
+}
+
+// The encodes share the lane of the frame's own jobs, so a busy frame cannot hold them back.
+TEST(FrameSequenceRecordingTests, EncodesRunAtNormalPriority)
+{
+    EXPECT_EQ(JobSystem::JobPriority::Normal, kFrameRecordingEncodePriority);
+}
+
+// An encode slower than the present interval still writes each frame the clock takes, in order,
+// with no drop: 240 fps presented, 60 fps taken, every encode a job that sleeps 8 ms.
+TEST(FrameSequenceRecordingTests, ASlowEncodeWritesEveryTakenFrameInOrder)
+{
+    constexpr double kPresentMs = 1000.0 / 240.0;
+    constexpr uint32_t kPresentedFrames = 120;
+    constexpr uint32_t kFramesPerTick = 4;
+    constexpr auto kEncodeTime = std::chrono::milliseconds(8);
+
+    JobSystem::WorkStealingThreadPool pool{2};
+    FrameSequenceRecording recording(1000, FrameFileFormat::Png, 60.0);
+    std::vector<Encode> encodes;
+    std::optional<uint32_t> readback; // resolves on the next presented frame
+    const auto start = std::chrono::steady_clock::now();
+    for (uint32_t frame = 0; frame < kPresentedFrames || readback || !encodes.empty(); ++frame)
+    {
+        const auto due = start + std::chrono::duration<double, std::milli>(frame * kPresentMs);
+        if (const auto now = std::chrono::steady_clock::now(); now < due)
+            GameEngine::Platform::SleepPrecise(due - now);
+        CollectFinishedEncodes(recording, encodes, static_cast<double>(kEncodeTime.count()));
+        if (readback)
+        {
+            recording.OnReadbackFinished(*readback, kWidth, kHeight);
+            encodes.push_back(Encode{*readback, pool.Submit([kEncodeTime] { std::this_thread::sleep_for(kEncodeTime); },
+                                                            kFrameRecordingEncodePriority)});
+            readback.reset();
+        }
+        if (frame < kPresentedFrames)
+            readback = recording.OnFramePresented(frame, 1.0 + frame * kPresentMs);
+    }
+
+    const auto summary = recording.GetSummary();
+    EXPECT_EQ(0u, summary.Dropped);
+    EXPECT_EQ(kPresentedFrames / kFramesPerTick, summary.Written);
+    const std::string listing = recording.BuildListing();
+    size_t previousRow = 0;
+    for (uint32_t index = 0; index < summary.Written; ++index)
+    {
+        const std::string row = '\n' + std::to_string(index) + ',' + std::to_string(index * kFramesPerTick) + ',';
+        const size_t at = listing.find(row);
+        ASSERT_NE(std::string::npos, at) << row;
+        EXPECT_LT(previousRow, at);
+        previousRow = at;
+    }
+}
+
+// The recording asks for a present cap at twice its frame rate while it captures, and for none after.
+TEST(FrameSequenceRecordingTests, ThePresentCapHoldsWhileTheRecordingCaptures)
+{
+    FrameSequenceRecording stopped(100, FrameFileFormat::Png, 60.0);
+    EXPECT_DOUBLE_EQ(120.0, stopped.PresentCapFps());
+    stopped.Stop();
+    EXPECT_DOUBLE_EQ(0.0, stopped.PresentCapFps());
+
+    FrameSequenceRecording capped(1, FrameFileFormat::Png, 60.0);
+    capped.OnFramePresented(0, 0.0);
+    EXPECT_DOUBLE_EQ(0.0, capped.PresentCapFps());
+
+    const FrameSequenceRecording everyFrame(100, FrameFileFormat::Png, 0.0);
+    EXPECT_DOUBLE_EQ(0.0, everyFrame.PresentCapFps());
+}
+
+// The frame limiter holds each present to at least the cap interval and adds up to 1 ms of jitter.
+// At the present cap, every tick of the clock still takes a frame: 2 s at 60 fps writes 120 frames.
+TEST(FrameSequenceRecordingTests, PresentsAtTheCapFillEveryTick)
+{
+    constexpr uint32_t kTicks = 120;
+    constexpr double kDurationMs = kTicks * kFrameMs;
+    constexpr uint32_t kJitterSteps = 11;
+    constexpr double kJitterStepMs = 0.1;
+
+    FrameSequenceRecording recording(1000, FrameFileFormat::Png, 60.0);
+    const double capIntervalMs = 1000.0 / recording.PresentCapFps();
+    double ms = 0.0;
+    for (uint32_t frame = 0; ms < kDurationMs; ++frame)
+    {
+        if (const auto index = recording.OnFramePresented(frame, ms))
+        {
+            recording.OnReadbackFinished(*index, kWidth, kHeight);
+            recording.OnFrameWritten(*index, 1.0);
+        }
+        ms += capIntervalMs + (frame * 7 % kJitterSteps) * kJitterStepMs;
+    }
+
+    EXPECT_EQ(kTicks, recording.GetSummary().Written);
 }
 
 } // namespace

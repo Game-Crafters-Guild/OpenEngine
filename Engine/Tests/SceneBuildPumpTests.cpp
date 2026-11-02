@@ -22,6 +22,8 @@
 #include "ECS/ECSTemplates.h"
 #include "AssetCore/GUID.h"
 #include "Rendering/Core/Device.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
+#include "SceneLoadTrackerTestAccess.h"
 
 #include "HeldAssetImportFixture.h"
 #include "TestDeviceHelper.h"
@@ -233,6 +235,35 @@ TEST_F(HeldImportTest, AStepDoesNotWaitForAModelStillImporting)
     const auto* resolvedRenderer = world.GetComponent<Components::MeshRenderer>(entity.GetHandle());
     ASSERT_NE(resolvedRenderer, nullptr);
     EXPECT_NE(resolvedRenderer->meshGpuHandleId, 0u) << "the entity has no GPU mesh after the pump completed";
+}
+
+// The editor's scene-open build reports to the tracker: a model still importing holds the
+// scene.resolve row, and the query settles once the build resolves the entity.
+TEST_F(HeldImportTest, AnEditorBuildHoldsTheReadyQueryUntilItsModelLands)
+{
+    const GUID modelGuid = RegisterHeldModel(/*fails=*/false);
+    ASSERT_FALSE(modelGuid.IsNull());
+    ECS::World world;
+    Components::MeshRenderer mr{};
+    mr.modelAssetGuid.Set(modelGuid);
+    world.Create<Components::MeshRenderer>(mr);
+
+    SceneLoadTracker tracker;
+    SceneBuildPump pump;
+    pump.ReportLoadingWork(tracker);
+    pump.Begin(world, m_Services);
+    pump.StepBudgeted(world, m_Services, std::chrono::milliseconds(0));
+    ASSERT_TRUE(m_Gate.WaitForEntered(1)) << "the import never reached the held model";
+    SceneLoadTrackerTestAccess::Tick(tracker,std::chrono::steady_clock::now());
+    EXPECT_FALSE(tracker.IsReadyToShow()) << "the build's held entity does not hold the query";
+    ASSERT_EQ(tracker.GetStatus().Categories.size(), 1u);
+    EXPECT_EQ(tracker.GetStatus().Categories[0].Id, "scene.resolve");
+    EXPECT_EQ(tracker.GetStatus().Categories[0].GatePending, 1u);
+
+    m_Gate.Release();
+    StepUntilComplete(pump, world);
+    SceneLoadTrackerTestAccess::Tick(tracker,std::chrono::steady_clock::now());
+    EXPECT_TRUE(tracker.IsReadyToShow()) << tracker.Describe();
 }
 
 // An import that fails is recorded as a miss once: the entity is processed without a mesh, the

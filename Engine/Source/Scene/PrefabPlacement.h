@@ -42,15 +42,15 @@ struct ParsedPrefab
 {
     std::filesystem::path path;
     SceneDoc doc;
-    SceneLoadContext ctx;
+    SceneReadContext ctx;
 };
 
 // What one load (or one save's template placement) shares across the prefab instances it places.
 struct PrefabPlacement
 {
     ECS::World& world;
-    const LoadOptions& options;
-    SceneLoadDegradation* degradation = nullptr;
+    const SceneReadOptions& options;
+    SceneDegradation* degradation = nullptr;
 
     // Each prefab file parsed once, by its absolute path. A scene places thousands of instances
     // of a few hundred prefabs.
@@ -82,7 +82,7 @@ struct PrefabPlacement
     // Reused by every clone.
     ECS::EntityRemap remap;
 
-    PrefabPlacement(ECS::World& targetWorld, const LoadOptions& loadOptions, SceneLoadDegradation* loadDegradation);
+    PrefabPlacement(ECS::World& targetWorld, const SceneReadOptions& loadOptions, SceneDegradation* loadDegradation);
     ~PrefabPlacement();
 };
 
@@ -95,7 +95,7 @@ struct PlacedPrefab
 };
 
 // Places the prefab `section` names at `instancePath`; the section's override lines are the caller's.
-bool PlaceInstanceSection(PrefabPlacement& placement, const SceneLoadContext& ownerCtx,
+bool PlaceInstanceSection(PrefabPlacement& placement, const SceneReadContext& ownerCtx,
                           const std::filesystem::path& ownerFile, const SceneDoc& ownerDoc,
                           const SceneDoc::PrefabInstanceSection& section, const std::string& instancePath,
                           PlacedPrefab& out, const LoadFailure& failure);
@@ -108,12 +108,12 @@ std::string PathAsSpelledOnDisk(const std::filesystem::path& file, const std::fi
 // new generation when it is resident; `source` is its asset GUID, or null. Null, with `error`
 // naming the file, the line and the fix, when the prefab cannot be placed.
 const PrefabTemplate* BuildTemplateFromFile(PrefabLibrary& library, const std::filesystem::path& path,
-                                            const GUID& source, const LoadOptions& options, std::string& error);
+                                            const GUID& source, const SceneReadOptions& options, std::string& error);
 
 // Holds in `library`, for `world`, every prefab a PrefabRef field of `entities` (in `world`) names,
 // building the ones that are not resident through `options.assetResolver` (and, through their own
 // PrefabRef fields, the prefabs they name). A prefab that cannot be read is logged and skipped.
-void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const LoadOptions& options,
+void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const SceneReadOptions& options,
                            std::span<const ECS::EntityHandle> entities);
 
 // Clones `prefab` into `world` with its root at `at` under `parent`, marked with `source`; the
@@ -126,7 +126,7 @@ ECS::EntityHandle SpawnTemplate(ECS::World& world, const PrefabLibrary& library,
 std::unordered_set<std::string> CollectSceneIdentities(ECS::World& world);
 
 // Places every [prefab] section of `doc` and applies its override lines.
-bool PlaceSceneInstances(PrefabPlacement& placement, SceneLoadContext& sceneCtx,
+bool PlaceSceneInstances(PrefabPlacement& placement, SceneReadContext& sceneCtx,
                          const std::filesystem::path& sceneFilePath, const SceneDoc& doc, const std::string& idPrefix,
                          Instantiated& out, const LoadFailure& failure);
 

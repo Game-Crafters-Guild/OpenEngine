@@ -48,7 +48,15 @@ struct MonitorInfo
 // outX, outY: position of the work area origin
 // outWidth, outHeight: dimensions of the work area in screen coordinates
 void GetPrimaryMonitorWorkArea(int& outX, int& outY, int& outWidth, int& outHeight);
+
+/// Returns the monitor list. The list is read from the OS once and kept until
+/// InvalidateMonitors. Main thread only.
 std::vector<MonitorInfo> EnumerateMonitors();
+
+/// Drops the kept monitor list, so the next query reads the OS again. The window
+/// layer calls it on a display change, and on Linux and the web every frame. Call it
+/// before a read of a setting that changes with no OS message, such as the SDR white level.
+void InvalidateMonitors();
 int GetActiveMonitorIndexForWindow(GLFWwindow* window);
 MonitorInfo GetMonitorInfoForWindow(GLFWwindow* window);
 MonitorInfo GetPrimaryMonitorInfo();

@@ -23,6 +23,7 @@ Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:imperative_no_asset:1   
 Apps/Editor/Source/Projects/SubprocessStream.cpp:std_thread:1                                # a process host (pipes block)
 Apps/Editor/Source/SceneView/SceneViewExposureHintOverlay.cpp:add_child_calls:1              # ViewOverlay::Present builds an overlay's element into the layer the host gives it, as every view overlay does; the host could place what Present returns
 Apps/Editor/Source/SceneView/SceneViewExposureHintOverlay.cpp:files_assembling_ui:1          # ViewOverlay::Present builds an overlay's element into the layer the host gives it, as every view overlay does; the host could place what Present returns
+Apps/Editor/Source/Terrain/SphereSculptSaver.cpp:one_free_function_file:1                    # FlushDirtySphereSculpt, the sculpt saver's one entry point beside TerrainZonePayloadSaver.cpp; the gate names the condition at line 53
 Apps/Editor/Source/UI/Controls/EditorTitleBar.cpp:add_child_calls:1                            # one heading per menu the native toolbar reports at run time; the .uxml holds the fixed parts
 Apps/Editor/Source/UI/Controls/EditorTitleBar.cpp:control_creations:2                          # one heading per menu the native toolbar reports at run time; the .uxml holds the fixed parts
 Apps/Editor/Source/UI/Controls/EditorTitleBar.cpp:files_assembling_ui:1                        # one heading per menu the native toolbar reports at run time; the .uxml holds the fixed parts
@@ -68,6 +69,7 @@ Engine/Modules/Logger/Source/Logger.cpp:std_thread:1                            
 Engine/Modules/Ocean/Include/Ocean/OceanTypes.h:raw_array:6                                  # GPU upload struct: the shader's layout (two vec4 pads, the shoreline pad and three per-octave float[16] runs)
 Engine/Modules/Ocean/Include/Ocean/OceanWaterMaterial.h:raw_array:1                          # GPU upload struct: the shader's layout (the pad after the point count)
 Engine/Modules/Ocean/Source/Systems/OceanExtractionSystem.cpp:raw_array:3                    # the per-octave float[16] runs of OceanFFTParamsGPU, and the color out-array of Components::ResolveLightColorIntensity
+Engine/Modules/PhysicsECS/Source/ProceduralMeshCollidersInternal.h:one_free_function_file:1 # the host-only Read for PhysicsInitSystem and its test; the game-facing header holds Register and Release
 Engine/Modules/Platform/Include/Platform/ApplicationScriptApi.h:one_free_function_file:1     # scanner contract: one C# class per *ScriptApi.h
 Engine/Modules/Platform/Source/Toolbar/Toolbar_Stub.cpp:one_free_function_file:1               # CreateNativeToolbar for Linux; it can move into ClientToolbar.cpp when a Linux build verifies it
 Engine/Modules/Rendering/Include/Rendering/Core/BufferManager.h:create_buffer:1              # the resource manager that owns the resource
@@ -108,8 +110,8 @@ Engine/Source/Engine/Rendering/Pipeline/Nodes/ScreenSpaceReflectionsNode.cpp:raw
 Engine/Source/Engine/Rendering/StagingViewPool.cpp:create_texture:1                          # a staging view output outlives every frame: the UI samples it between on-demand renders
 Engine/Source/Engine/Rendering/StagingViewPool.cpp:destroy_resource:1                        # a staging view output outlives every frame: the UI samples it between on-demand renders
 Engine/Source/Engine/Rendering/TextureService.cpp:create_command_list:1                      # TextureService owns texture creation and upload
-Engine/Source/Engine/Rendering/TextureService.cpp:create_texture:5                           # TextureService owns texture creation and upload
-Engine/Source/Engine/Rendering/TextureService.cpp:destroy_resource:23                        # TextureService owns texture creation and upload
+Engine/Source/Engine/Rendering/TextureService.cpp:create_texture:4                           # TextureService owns texture creation and upload
+Engine/Source/Engine/Rendering/TextureService.cpp:destroy_resource:25                        # TextureService owns texture creation and upload
 Engine/Source/Engine/Rendering/TextureService.cpp:manual_barrier:2                           # TextureService owns texture creation and upload
 Engine/Source/Engine/Video/AsyncVideoRecorder.cpp:condition_variable:1                       # a codec / capture thread (decoder blocks)
 Engine/Source/Engine/Video/AsyncVideoRecorder.cpp:std_thread:3                               # a codec / capture thread (decoder blocks)
@@ -123,7 +125,7 @@ Engine/Source/Jobs/PipeTransport.cpp:sleep_poll:1                               
 Engine/Source/Scene/PrefabAuthoring.cpp:std_unordered_map:1                                     # whole-scene id sets built once per command; `AllocateUniqueSceneEntityId` owns the type; the scene id index is #5072
 Engine/Source/Scene/PrefabAuthoring.cpp:string_key_unordered_set:5                              # whole-scene id sets built once per command; `AllocateUniqueSceneEntityId` owns the type; the scene id index is #5072
 Engine/Source/Scene/PrefabOverrideEdits.cpp:std_unordered_map:10                             # the save and load contexts' tag maps (SceneIOContext.h) per entity of an instance: the contexts own the type
-Engine/Source/Scene/PrefabOverrideEdits.cpp:string_key_unordered_map:3                       # the load context's entity map by tag (SceneIOContext.h): the context owns the type
+Engine/Source/Scene/PrefabOverrideEdits.cpp:string_key_unordered_map:4                       # the load context's entity map by tag (SceneIOContext.h): the context owns the type
 Engine/Source/Scene/PrefabOverrideWriter.cpp:std_unordered_map:8                             # keyed per entity of a whole scene (the save context's tag map, the members by entity): a sorted insert is linear
 Engine/Source/Scene/PrefabOverrideWriter.cpp:std_unordered_set:1                             # keyed per entity of a whole scene (the excluded set, the created ids): a sorted insert is linear
 Engine/Source/Scene/PrefabOverrideWriter.cpp:string_key_unordered_set:2                      # the tags of every entity of a whole scene: a sorted insert is linear

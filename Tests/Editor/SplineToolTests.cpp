@@ -32,10 +32,13 @@
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
 #include "Memory/AllocationCountScope.h"
+#include "PendingBvhGrid.h"
 #include "SceneView/SplineTool/SplineOwnerQuery.h"
 #include "SceneView/SplineTool/SplineSceneGizmo.h"
 #include "SceneView/SplineTool/SplineTool.h"
 #include "SceneView/SplineTool/SplineToolStripEntry.h"
+#include "SceneView/TransformTool.h"
+#include "Scene/MeshBvhCache.h"
 #include "Scene/SceneTlas.h"
 #include "Scripting/ScriptsConfig.h"
 #include "Spline/SplineData.h"
@@ -46,6 +49,7 @@
 #include "TerrainECS/TerrainService.h"
 #include "Types/ColorUtils.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "UndoRedo/Spline/SplineUndoHelpers.h"
 
 using GameEngine::ApplicationConfig;
 using GameEngine::EngineCore;
@@ -154,6 +158,7 @@ class ScopedSplineSnapSettings
         m_AutoCloseLoop = settings.GetAutoCloseLoop();
         m_Smoothing = settings.GetSmoothingIterations();
         m_Conform = settings.GetConformToSurface();
+        m_SnapToMeshes = settings.GetSnapToMeshes();
         settings.SetKnotSize(0.3f);
         settings.SetConstantScreenSize(true);
         settings.SetSmartDistanceScaling(false);
@@ -161,6 +166,7 @@ class ScopedSplineSnapSettings
         settings.SetAutoCloseLoop(true);
         settings.SetSmoothingIterations(0);
         settings.SetConformToSurface(false);
+        settings.SetSnapToMeshes(true);
     }
 
     ~ScopedSplineSnapSettings()
@@ -173,6 +179,7 @@ class ScopedSplineSnapSettings
         settings.SetAutoCloseLoop(m_AutoCloseLoop);
         settings.SetSmoothingIterations(m_Smoothing);
         settings.SetConformToSurface(m_Conform);
+        settings.SetSnapToMeshes(m_SnapToMeshes);
         GameEngine::Testing::SetEnvVar("GE_EDITOR_USER_DATA_ROOT", "");
         std::error_code ec;
         std::filesystem::remove_all(m_Root, ec);
@@ -189,6 +196,7 @@ class ScopedSplineSnapSettings
     bool m_AutoCloseLoop = true;
     int m_Smoothing = 0;
     bool m_Conform = false;
+    bool m_SnapToMeshes = true;
 };
 
 Vector3 Normalized(Vector3 v)
@@ -1189,6 +1197,28 @@ std::vector<float> DrawnGizmoStreams(ViewId view)
     return streams;
 }
 
+// A 2 m cube on the ground at (x, 0), in the scene TLAS when the call returns.
+void AddCubeOnTheGround(World* world, float x)
+{
+    Entity mesh = world->Create();
+    GameEngine::Components::MeshRenderer renderer{};
+    renderer.modelAssetGuid.Set(GameEngine::Engine::Renderer::PrimitiveGenerator::CubeGuid());
+    mesh.Set(renderer);
+    GameEngine::Components::LocalBounds bounds{};
+    bounds.Box.halfExtents = {0.5f, 0.5f, 0.5f};
+    mesh.Set(bounds);
+    WorldTransform transform{};
+    transform.matrix[0] = 2.0f;
+    transform.matrix[5] = 2.0f;
+    transform.matrix[10] = 2.0f;
+    transform.matrix[12] = x;
+    transform.matrix[13] = 1.0f;
+    transform.Version = 1u;
+    mesh.Set(transform);
+    world->ProcessCommands();
+    GameEngine::Scene::GetSceneTlas(*world).WaitCurrent(*world);
+}
+
 // A Scene View that shows the same splines again allocates nothing: the gizmo's batches and the
 // view's vertex streams keep their capacity from the frame before. The test covers each knot shape,
 // the draped passive lines, the selected spline's width band and its Bezier handles.
@@ -1260,6 +1290,83 @@ TEST_F(SplineToolTests, ASteadySplineGizmoFrameAllocatesNothingAfterWarmup)
     settings.SetControlRenderShape(shapeBefore);
     settings.SetDrapeToSurface(drapeBefore);
     settings.SetShowWidthEnvelope(envelopeBefore);
+}
+
+// The drape lands on meshes too. A mesh that arrives under a spline after its first drape is
+// on the drape the next frame, as a gizmo that drapes the spline for the first time draws it.
+TEST_F(SplineToolTests, TheDrapeRidesAMeshThatArrivesUnderTheSplineAfterTheFirstDrape)
+{
+    World* world = GetWorld();
+    CreateFlatTerrain(world, 40.0f);
+    auto& settings = GameEngine::Editor::SplineEditorSettings::Get();
+    const bool drapeBefore = settings.GetDrapeToSurface();
+    settings.SetDrapeToSurface(true);
+    const SplineFixture spline = MakeSplineEntity(world, 2); // knots at x = 0 and 4, y = 10
+    world->AddComponentImmediate(spline.SplineEntity, WorldTransform{});
+
+    constexpr ViewId kView = 9084;
+    GameEngine::Editor::SceneTools::SplineSceneGizmo gizmo(*world);
+    RenderSplineGizmoFrame(gizmo, world, kView);
+    const std::vector<float> beforeTheMesh = DrawnGizmoStreams(kView);
+
+    // A 2 m cube on the ground under the middle of the spline.
+    AddCubeOnTheGround(world, 2.0f);
+
+    RenderSplineGizmoFrame(gizmo, world, kView);
+    const std::vector<float> afterTheMesh = DrawnGizmoStreams(kView);
+    GameEngine::Editor::SceneTools::SplineSceneGizmo firstDrape(*world);
+    RenderSplineGizmoFrame(firstDrape, world, kView);
+    const std::vector<float> drapedWithTheMesh = DrawnGizmoStreams(kView);
+    EXPECT_NE(drapedWithTheMesh, beforeTheMesh) << "positive control: the drape does not reach the mesh";
+    EXPECT_EQ(afterTheMesh, drapedWithTheMesh) << "the drape kept the ground it measured before the mesh arrived";
+
+    GameEngine::Editor::SceneTools::ResetGizmoLineGroups(kView);
+    GameEngine::Editor::SceneTools::ResetGizmoTriangleGroups(kView);
+    settings.SetDrapeToSurface(drapeBefore);
+}
+
+// A steady frame reads none of the meshes under the draped splines. A change in the scene makes
+// each draped spline read them once, and a moved spline reads them once for itself.
+TEST_F(SplineToolTests, TheDrapeReadsTheMeshesUnderASplineOnlyWhenTheSceneOrTheSplineChanges)
+{
+    constexpr int kSteadyFrames = 8;
+    World* world = GetWorld();
+    CreateFlatTerrain(world, 40.0f);
+    auto& settings = GameEngine::Editor::SplineEditorSettings::Get();
+    const bool drapeBefore = settings.GetDrapeToSurface();
+    settings.SetDrapeToSurface(true);
+    const SplineFixture still = MakeSplineEntity(world, 2);
+    const SplineFixture moved = MakeSplineEntity(world, 2);
+    world->AddComponentImmediate(still.SplineEntity, WorldTransform{});
+    world->AddComponentImmediate(moved.SplineEntity, WorldTransform{});
+
+    constexpr ViewId kView = 9085;
+    GameEngine::Editor::SceneTools::SplineSceneGizmo gizmo(*world);
+    RenderSplineGizmoFrame(gizmo, world, kView);
+    RenderSplineGizmoFrame(gizmo, world, kView);
+    const uint64_t warm = gizmo.GetSceneDigestRefreshCountForTesting();
+    EXPECT_EQ(warm, 2u) << "the first frames did not read the meshes once per draped spline";
+    for (int frame = 0; frame < kSteadyFrames; ++frame)
+        RenderSplineGizmoFrame(gizmo, world, kView);
+    EXPECT_EQ(gizmo.GetSceneDigestRefreshCountForTesting(), warm) << "a steady frame read the meshes again";
+
+    AddCubeOnTheGround(world, 2.0f);
+    RenderSplineGizmoFrame(gizmo, world, kView);
+    RenderSplineGizmoFrame(gizmo, world, kView);
+    EXPECT_EQ(gizmo.GetSceneDigestRefreshCountForTesting(), warm + 2u)
+        << "a mesh that arrived was not read once per draped spline";
+
+    auto* transform = world->GetComponentForWrite<WorldTransform>(moved.SplineEntity);
+    transform->matrix[12] = 1.0f;
+    ++transform->Version;
+    RenderSplineGizmoFrame(gizmo, world, kView);
+    RenderSplineGizmoFrame(gizmo, world, kView);
+    EXPECT_EQ(gizmo.GetSceneDigestRefreshCountForTesting(), warm + 3u)
+        << "the moved spline did not read the meshes under it once";
+
+    GameEngine::Editor::SceneTools::ResetGizmoLineGroups(kView);
+    GameEngine::Editor::SceneTools::ResetGizmoTriangleGroups(kView);
+    settings.SetDrapeToSurface(drapeBefore);
 }
 
 TEST(SplineInteractionStateTests, IndexDoesNotOwnTheStateAfterItsConsumersClose)
@@ -1429,6 +1536,44 @@ void MakeGeneratedSlab(World* world, const Vector3& center, const Vector3& halfE
     record.bounds.Box.halfExtents = halfExtents;
     std::vector<RenderExtractionSystem::WorldRenderableRecord> records{record};
     GameEngine::Scene::GetSceneTlas(*world).SyncFromRecords(records);
+}
+
+// The world height of every knot of `spline`.
+std::vector<float> KnotHeights(World* world, GameEngine::ECS::EntityHandle spline)
+{
+    const auto* origin = world->GetComponent<Transform>(spline);
+    const float originY = origin ? origin->matrix[13] : 0.0f;
+    std::vector<float> heights;
+    for (const auto& point : DataOf(world, spline)->Points)
+        heights.push_back(point.Position.y + originY);
+    return heights;
+}
+
+// A large grid model under a fresh GUID and one renderer of it at `center`, in the scene TLAS. Its world
+// box is 1 m tall. The first ray onto it finds its BVH pending: the cache starts the build on a job.
+GameEngine::SharedPtr<GameEngine::ModelAsset> AddGridWithAPendingBvh(World* world, const Vector3& center)
+{
+    const GameEngine::GUID guid = GameEngine::GUID::Generate();
+    auto model = GameEngine::MakeShared<GameEngine::ModelAsset>(guid, "stroke_pending_bvh_grid.glb");
+    model->SetMeshesForTest({PendingBvhGrid::MakeGrid()});
+    EngineCore::GetInstance().GetAssetManager().RegisterLoadedAsset(guid, model);
+
+    Entity mesh = world->Create();
+    GameEngine::Components::MeshRenderer renderer{};
+    renderer.modelAssetGuid.Set(guid);
+    mesh.Set(renderer);
+    GameEngine::Components::LocalBounds bounds{};
+    bounds.Box.halfExtents = {0.5f * PendingBvhGrid::kGridSize, 0.5f, 0.5f * PendingBvhGrid::kGridSize};
+    mesh.Set(bounds);
+    WorldTransform transform{};
+    transform.matrix[12] = center.x;
+    transform.matrix[13] = center.y;
+    transform.matrix[14] = center.z;
+    transform.Version = 1u;
+    mesh.Set(transform);
+    world->ProcessCommands();
+    GameEngine::Scene::GetSceneTlas(*world).WaitCurrent(*world);
+    return model;
 }
 
 } // namespace
@@ -1633,6 +1778,63 @@ TEST_F(SplineToolTests, AStrokeFromAGeneratedMeshOntoTheGroundStaysOpen)
     EXPECT_NEAR(data->Points.back().Position.y + origin->matrix[13], 0.0f, 1.0e-3f);
 }
 
+// A stroke drawn over generator output (a paved slab) lands on the ground under it: the slab is rebuilt from
+// its spline, so it is never the ground of a new stroke.
+TEST_F(SplineToolTests, AStrokeOverAGeneratedMeshLandsOnTheGroundUnderIt)
+{
+    ScopedSplineSnapSettings scope("SplineStrokeOverGenerated");
+    World* world = GetWorld();
+    world->Clear();
+    CreateFlatTerrain(world, 400.0f);
+    MakeGeneratedSlab(world, Vector3(0.0f, 0.0f, 0.0f), Vector3(5.0f, 0.5f, 5.0f));
+
+    std::vector<Vector3> points;
+    for (int i = -4; i <= 4; ++i)
+        points.push_back(Vector3(static_cast<float>(i), 0.0f, 1.0f));
+    {
+        SplineTool tool(*world);
+        Stroke(tool, points, 100.0f);
+    }
+
+    const auto strokes = Splines(world);
+    ASSERT_EQ(strokes.size(), 1u);
+    const std::vector<float> heights = KnotHeights(world, strokes[0]);
+    ASSERT_GE(heights.size(), 2u);
+    for (size_t i = 0; i < heights.size(); ++i)
+        EXPECT_NEAR(heights[i], 0.0f, 1.0e-3f) << "knot " << i << " is not on the ground under the slab";
+}
+
+// A stroke that starts over a mesh whose BVH is still building lands on the ground, not on the top of the
+// mesh's box: a box is not a surface.
+TEST_F(SplineToolTests, AStrokeOverAMeshWithAPendingBvhLandsOnTheGroundNotOnItsBox)
+{
+    ScopedSplineSnapSettings scope("SplineStrokeOverPendingBvh");
+    World* world = GetWorld();
+    world->Clear();
+    CreateFlatTerrain(world, 400.0f);
+    // The grid covers x from -19 to 1: only the first sample is over it, the one ray sure to find it pending.
+    const auto grid = AddGridWithAPendingBvh(world, Vector3(-9.0f, 0.0f, 0.0f));
+
+    std::vector<Vector3> points;
+    for (int i = 0; i <= 10; ++i)
+        points.push_back(Vector3(2.0f * static_cast<float>(i), 0.0f, 1.0f));
+    {
+        SplineTool tool(*world);
+        Stroke(tool, points, 100.0f);
+    }
+    // Waits for the build job, so none outlives the test.
+    (void)GameEngine::Scene::MeshBvhCache::Instance().GetOrBuild(grid->GetGUID(), 0, grid->GetMesh(0));
+    GameEngine::Scene::MeshBvhCache::Instance().InvalidateAsset(grid->GetGUID());
+
+    const auto strokes = Splines(world);
+    ASSERT_EQ(strokes.size(), 1u);
+    const std::vector<float> heights = KnotHeights(world, strokes[0]);
+    ASSERT_GE(heights.size(), 2u);
+    EXPECT_NEAR(heights.front(), 0.0f, 1.0e-3f) << "the first knot is not on the ground under the grid";
+    for (size_t i = 0; i < heights.size(); ++i)
+        EXPECT_LT(heights[i], 0.25f) << "knot " << i << " is on the top of the grid's box";
+}
+
 // A stroke that crosses the loop-close reach, steps back inside it, then turns and runs 20 m away saves an
 // open spline: the close arms only after a sample is twice the reach from the start.
 TEST_F(SplineToolTests, AStrokeThatStepsBackAtTheLoopCloseReachStaysOpen)
@@ -1671,4 +1873,82 @@ TEST_F(SplineToolTests, TheSplineSettingsSaveWritesNoStoredReach)
     EXPECT_TRUE(prefs.Contains("spline.autoConnect"));
     EXPECT_FALSE(prefs.Contains("spline.autoConnectTolerance"));
     EXPECT_FALSE(prefs.Contains("spline.closeLoopTolerance"));
+}
+
+TEST_F(SplineToolTests, TransformingControlsOnTwoSplinesIsOneUndoStep)
+{
+    auto* world = GetWorld();
+    const auto first = MakeSplineEntity(world, 3);
+    const auto second = MakeSplineEntity(world, 3);
+    auto* service = GameEngine::SplineECS::SplineService::TryGet();
+    const auto firstReference = *world->GetComponent<SplineComponent>(first.SplineEntity);
+    const auto secondReference = *world->GetComponent<SplineComponent>(second.SplineEntity);
+    const GameEngine::SplineECS::SplineHandle firstHandle{firstReference.SplineDataIndex, firstReference.SplineDataGeneration};
+    const GameEngine::SplineECS::SplineHandle secondHandle{secondReference.SplineDataIndex, secondReference.SplineDataGeneration};
+    const auto before = service->GetSplineData(firstHandle)->Points[0].Position;
+    auto& selection = State->Selection();
+    selection.Entity = first.SplineEntity;
+    selection.PointIndex = 0;
+    selection.Kind = 1;
+    selection.Controls = {{first.SplineEntity, 0, 1}, {second.SplineEntity, 0, 1}};
+    GameEngine::Editor::UndoRedoService undo;
+    GameEngine::Editor::SceneTools::TransformTool transform(*world);
+    SplineTool spline(*world);
+    spline.SetUndoRedoService(&undo);
+    spline.SetTransformTool(&transform);
+    GameEngine::Editor::SceneTools::GizmoCollector collector;
+    spline.GatherGizmos(collector);
+    GameEngine::Editor::SceneTools::TransformTranslateGizmo* gizmo = nullptr;
+    for (auto* candidate : collector.GetGizmos())
+        if (auto* translation = dynamic_cast<GameEngine::Editor::SceneTools::TransformTranslateGizmo*>(candidate))
+            gizmo = translation;
+    ASSERT_NE(gizmo, nullptr);
+    GameEngine::Editor::SceneTools::GizmoHit hit{};
+    hit.kind = GameEngine::Editor::SceneTools::GizmoHitKind::Axis;
+    hit.handleId = 0;
+    auto down = MakePointer(PointerPhase::Down, 400, 300, before + Vector3{0, 0, 5}, {0, 0, -1});
+    ASSERT_TRUE(gizmo->HandlePointerEvent(down, hit));
+    auto move = down;
+    move.phase = PointerPhase::Move;
+    move.ray.origin.x += 2;
+    ASSERT_TRUE(gizmo->HandlePointerEvent(move, hit));
+    auto up = move;
+    up.phase = PointerPhase::Up;
+    ASSERT_TRUE(gizmo->HandlePointerEvent(up, hit));
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
+    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x + 2);
+    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x + 2);
+    undo.Undo();
+    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x);
+    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x);
+    undo.Redo();
+    EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x + 2);
+    EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x + 2);
+}
+
+TEST_F(SplineToolTests, SnapshotFollowsTheOwnersRecreatedSplineWithoutRestoringRuntimeHandles)
+{
+    auto* world = GetWorld();
+    const auto created = MakeSplineEntity(world, 3);
+    auto* service = GameEngine::SplineECS::SplineService::TryGet();
+    auto* component = world->GetComponentForWrite<SplineComponent>(created.SplineEntity);
+    const GameEngine::SplineECS::SplineHandle original{component->SplineDataIndex, component->SplineDataGeneration};
+    component->DefaultRadius = 3;
+    service->GetSplineData(original)->SetPointPosition(0, {4, 5, 0});
+    auto target = GameEngine::Editor::SplineUndo::MakeSplineEditableSnapshotTarget(
+        service, original, world, created.SplineEntity, nullptr, "Edit spline");
+    GameEngine::Editor::UndoRedoService::SnapshotTarget::Snapshot snapshot;
+    ASSERT_TRUE(target.Capture(snapshot));
+    service->DestroySpline(original);
+    const auto replacement = service->CreateSpline();
+    component->SplineDataIndex = replacement.Index();
+    component->SplineDataGeneration = replacement.Generation();
+    component->DefaultRadius = 1;
+    ASSERT_TRUE(target.Apply(snapshot));
+    EXPECT_EQ(component->SplineDataGeneration, replacement.Generation());
+    EXPECT_FLOAT_EQ(component->DefaultRadius, 1);
+    EXPECT_FLOAT_EQ(service->GetSplineData(replacement)->Points[0].Position.x, 4);
+    world->DestroyEntityImmediate(created.SplineEntity);
+    EXPECT_FALSE(target.Apply(snapshot));
+    service->DestroySpline(replacement);
 }

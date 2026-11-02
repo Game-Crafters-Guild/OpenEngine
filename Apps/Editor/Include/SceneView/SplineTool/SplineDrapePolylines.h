@@ -11,6 +11,7 @@
 namespace GameEngine::ECS { class World; }
 namespace GameEngine::Mathematics { struct Matrix4x4; }
 namespace GameEngine::Spline { class SplineData; }
+namespace GameEngine::SplineRecipes { struct ConformMissTally; }
 
 namespace GameEngine::Editor::SceneTools
 {
@@ -64,6 +65,7 @@ struct SplineDrapedPolylines
 // polyline the conform ray never reached keeps its authored altitudes (and
 // takes no lift), which reads as "no ground here" instead of inventing one.
 // `target` is what the conform rays may land on (ConformRayDown).
+// `tally`, when not null, records every conform ray (ConformMissTally).
 // Output vectors are cleared first; an invalid or zero-length spline leaves
 // them all empty, and wantEdges=false leaves Left/Right empty (and casts no
 // edge rays).
@@ -73,6 +75,7 @@ void BuildSplineDrapedPolylines(ECS::World& world,
                                 std::span<const ECS::EntityHandle> ignore,
                                 bool wantEdges,
                                 Components::SplineConformTarget target,
-                                SplineDrapedPolylines& out);
+                                SplineDrapedPolylines& out,
+                                SplineRecipes::ConformMissTally* tally);
 
 } // namespace GameEngine::Editor::SceneTools

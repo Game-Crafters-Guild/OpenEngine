@@ -28,9 +28,10 @@ struct AudioRuntimeSettings
 /// Where the mixed signal goes.
 enum class AudioOutput : std::uint8_t
 {
-    Device = 0, // the system's default playback device
-    Silent,     // mixed on miniaudio's null backend: voices, metering and output
+    // First, so a value-initialized AudioOutput (ApplicationConfig::AudioOutput) is Silent.
+    Silent = 0, // mixed on miniaudio's null backend: voices, metering and output
                 // capture run on the same clock, and no device is opened
+    Device,     // the system's default playback device
 };
 
 /// Parses an output name ("device" or "silent", any case, whitespace
@@ -58,7 +59,9 @@ struct AudioSystemConfig
     std::uint32_t mixSampleRate = 48000;
     std::uint32_t mixBufferSizeFrames = 512;
     bool enable3D = true;
-    AudioOutput output = AudioOutput::Device;
+    // Silent unless the caller asks for the device: a test or a tool that
+    // builds an AudioSystem opens no audio device.
+    AudioOutput output = AudioOutput::Silent;
 };
 
 struct ListenerState

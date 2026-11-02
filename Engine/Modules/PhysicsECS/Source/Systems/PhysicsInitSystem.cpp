@@ -12,7 +12,9 @@
 #include "PhysicsECS/Components/SphereColliderShape.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
 #include "PhysicsECS/Components/KinematicBody.h"
+#include "PhysicsECS/Components/MeshColliderShape.h"
 #include "PhysicsECS/HeightFieldDataProvider.h"
+#include "ProceduralMeshCollidersInternal.h"
 
 #include "Components/Transform.h"
 #include "ECS/ChangeFilter.h"
@@ -178,6 +180,33 @@ void AddCollider(CollidersByBody& byBody, ECS::EntityHandle colliderEntity,
     byBody[bc.Owner].push_back(std::move(bc));
 }
 
+// Gathers a triangle mesh collider when its body is not built or its data handle changed. Returns
+// true when a changed handle must rebuild the body. A mesh needs a Static body: other motion types
+// log one warning per handle and get no collider.
+bool GatherMeshCollider(const Physics::PhysicsWorld& pw, ECS::EntityHandle entity,
+                        const GameEngine::Components::Transform& local,
+                        const GameEngine::Components::PhysicsCollider& collider,
+                        GameEngine::Components::MeshColliderShape& shape,
+                        const GameEngine::Components::PhysicsBody& body, std::vector<BuiltCollider>& meshColliders)
+{
+    const bool changed = shape.Mesh != shape.BuiltMesh;
+    if (!changed && IsBodyBuilt(pw, body))
+        return false;
+    if (body.motionType != Physics::MotionType::Static)
+    {
+        if (changed)
+            Logger::Log::Warning("[PhysicsECS] Mesh collider entity {} needs a Static physics body", entity.id);
+        shape.BuiltMesh = shape.Mesh;
+        return false;
+    }
+    const std::shared_ptr<const Physics::MeshShapeDef> mesh = ProceduralMeshColliders::Read(shape.Mesh);
+    if (!mesh)
+        return false;
+    meshColliders.push_back(MakeBuiltCollider(entity, nullptr, local, collider, *mesh));
+    shape.BuiltMesh = shape.Mesh;
+    return changed;
+}
+
 // A body built this update and whether its backend body is kinematic.
 struct BuiltBody
 {
@@ -227,6 +256,9 @@ struct PhysicsInitSystem::WorldScratch
     // Heightfield colliders gathered this frame. They follow the simple shapes in their
     // body's list, so they wait here until the simple gathers have run.
     std::vector<BuiltCollider> HeightFieldColliders;
+    // Triangle mesh colliders gathered this frame. Like the heightfields, they follow the simple
+    // shapes in their body's list.
+    std::vector<BuiltCollider> MeshColliders;
     // Bodies that must be torn down and recreated even though they are still
     // valid — e.g. a heightfield whose source data version changed mid-sim.
     std::unordered_set<ECS::EntityHandle, ECS::EntityHandleHash> RebuildBodies;
@@ -340,6 +372,7 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
         m_Scratch = std::make_unique<WorldScratch>(world);
     auto& byBody = m_Scratch->ByBody;
     auto& heightFieldColliders = m_Scratch->HeightFieldColliders;
+    auto& meshColliders = m_Scratch->MeshColliders;
     auto& rebuildBodies = m_Scratch->RebuildBodies;
     auto& rebuildWakeBoxes = m_Scratch->RebuildWakeBoxes;
     auto& bodiesWithoutCollider = m_Scratch->BodiesWithoutCollider;
@@ -559,10 +592,21 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
     // or its need for a new body: its job's result is dropped when the job ends.
     std::erase_if(m_PendingHeightFields, [](auto& entry) { return !std::exchange(entry.second->Visited, false); });
 
-    // Only a body that is not built, or one a heightfield edit rebuilds, takes colliders from
+    // Gather triangle mesh colliders. The mesh collider entity is its own body.
+    world.Query<ECS::Read<GameEngine::Components::Transform>, ECS::Read<GameEngine::Components::PhysicsCollider>,
+                ECS::Write<GameEngine::Components::MeshColliderShape>, ECS::Read<GameEngine::Components::PhysicsBody>>()
+        .Each([pw, &meshColliders, &rebuildBodies](ECS::EntityHandle e, const GameEngine::Components::Transform& local,
+                                                   const GameEngine::Components::PhysicsCollider& collider,
+                                                   GameEngine::Components::MeshColliderShape& shape,
+                                                   const GameEngine::Components::PhysicsBody& body) {
+            if (GatherMeshCollider(*pw, e, local, collider, shape, body, meshColliders))
+                rebuildBodies.insert(e);
+        });
+
+    // Only a body that is not built, or one a heightfield or mesh edit rebuilds, takes colliders from
     // the gathers below; with neither, the frame has nothing to build. A body the last build
     // pass found no collider for is not counted while no collider can have reached it.
-    bool anyBodyToBuild = !heightFieldColliders.empty() || !rebuildBodies.empty();
+    bool anyBodyToBuild = !heightFieldColliders.empty() || !meshColliders.empty() || !rebuildBodies.empty();
     if (!anyBodyToBuild)
     {
         const bool skipWithoutCollider = m_Scratch->CollidersUnchangedForBodiesWithoutCollider(structuralVersion);
@@ -661,6 +705,8 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
 
     for (BuiltCollider& bc : heightFieldColliders)
         byBody[bc.Owner].push_back(std::move(bc));
+    for (BuiltCollider& bc : meshColliders)
+        byBody[bc.Owner].push_back(std::move(bc));
 
     // Build bodies from gathered colliders.
     {
@@ -679,7 +725,7 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
             //
             // Constraint: a forced rebuild recreates the body from byBody,
             // which only contains colliders gathered THIS frame — and the
-            // heightfield gather skips up-to-date colliders. If a body ever
+            // heightfield and mesh gathers skip up-to-date colliders. If a body ever
             // owned multiple heightfield colliders (today's TerrainPhysics
             // provisioning is strictly 1:1), the unchanged siblings would be
             // missing here and silently dropped from the rebuilt body.
@@ -866,6 +912,7 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
 
     byBody.clear();
     heightFieldColliders.clear();
+    meshColliders.clear();
     rebuildBodies.clear();
     rebuildWakeBoxes.clear();
 }

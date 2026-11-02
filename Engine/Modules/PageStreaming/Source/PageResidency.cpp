@@ -1,6 +1,6 @@
 #include "PageStreaming/PageResidency.h"
 
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/PageLoader.h"
@@ -91,11 +91,11 @@ bool LoadsBefore(const PageWant& a, const PageWant& b)
 
 PageResidencyManager::PageResidencyManager(JobSystem::WorkStealingThreadPool* pool, AssetIOService* io,
                                            const PageResidencyBudget& budget, PageFetchClock clock)
-    : m_Pool(pool)
-    , m_Io(io)
-    , m_Budget(budget)
+    : m_Budget(budget)
     , m_Clock(std::move(clock))
+    , m_Fetcher(pool, io, budget.LoadsInFlight)
 {
+    m_Drained.reserve(budget.LoadsInFlight); // every load in flight can end between two Updates
 }
 
 PageResidencyManager::~PageResidencyManager()
@@ -139,7 +139,7 @@ void PageResidencyManager::Forget(uint32 stream)
         return;
     // Its outstanding loads resolve as cancelled and are counted out of the budget as they drain.
     it->second.Cancel->store(true);
-    m_CpuBytes -= static_cast<uint64>(it->second.Loaded.size()) * it->second.PageBytes;
+    m_CpuBytes -= static_cast<uint64>(it->second.Loaded.Size()) * it->second.PageBytes;
     if (const auto field = m_Fields.find(it->second.Field); field != m_Fields.end())
         field->second.ReleaseStream(stream);
     m_Streams.erase(it);
@@ -269,29 +269,25 @@ const std::vector<uint8>* PageResidencyManager::Bytes(uint32 stream, const PageA
     const auto it = m_Streams.find(stream);
     if (it == m_Streams.end())
         return nullptr;
-    const auto page = it->second.Loaded.find(address);
-    return page == it->second.Loaded.end() ? nullptr : page->second.Bytes.get();
+    const LoadedPage* page = it->second.Loaded.Find(address);
+    return page ? page->Bytes.get() : nullptr;
 }
 
 void PageResidencyManager::DrainCompletions(uint64 frameIndex)
 {
-    m_Drained.clear();
-    {
-        std::lock_guard lock(m_Completions->Mutex);
-        m_Drained.swap(m_Completions->Completions);
-    }
+    m_Fetcher.Finished(m_Drained);
     m_LoadsChanged = m_LoadsChanged || !m_Drained.empty();
-    for (Completion& done : m_Drained)
+    for (FinishedPageFetch& done : m_Drained)
     {
         --m_InFlightCount; // every load started is counted out once, its stream alive or not
-        if (done.Cpu)
+        if (done.Tag.Cpu)
             --m_CpuInFlightCount;
-        const auto it = m_Streams.find(done.Stream);
-        if (it == m_Streams.end() || it->second.Epoch != done.Epoch)
+        const auto it = m_Streams.find(done.Tag.Stream);
+        if (it == m_Streams.end() || it->second.Epoch != done.Tag.Epoch)
             continue; // a load of a stream since forgotten or restarted
-        it->second.InFlight.erase(done.Outcome.Address);
+        it->second.InFlight.Erase(done.Outcome.Address);
         // Absent at an older version of a store being baked: the page is fetched again.
-        if (done.Outcome.Absent && done.SourceVersion != it->second.SourceVersion)
+        if (done.Outcome.Absent && done.Tag.SourceVersion != it->second.SourceVersion)
             continue;
         Land(it->second, frameIndex, done.Outcome);
     }
@@ -301,10 +297,13 @@ void PageResidencyManager::Land(Stream& stream, uint64 frameIndex, PageFetchOutc
 {
     if (outcome.Bytes)
     {
-        const auto [page, inserted] = stream.Loaded.try_emplace(outcome.Address);
-        page->second = LoadedPage{std::move(outcome.Bytes), std::max(page->second.LastWantedFrame, frameIndex)};
-        assert(page->second.Bytes->size() == stream.PageBytes && "a loaded page holds its source's page bytes");
-        SetCpuEntry(stream, outcome.Address, CpuPageEntry{page->second.Bytes->data(), CpuPageState::Resident});
+        const bool inserted = !stream.Loaded.Contains(outcome.Address);
+        LoadedPage& page = stream.Loaded.GetOrInsert(outcome.Address);
+        if (stream.Source.Store)
+            m_Fetcher.Reuse(std::move(page.Bytes)); // a reloaded page's old bytes
+        page = LoadedPage{std::move(outcome.Bytes), std::max(page.LastWantedFrame, frameIndex)};
+        assert(page.Bytes->size() == stream.PageBytes && "a loaded page holds its source's page bytes");
+        SetCpuEntry(stream, outcome.Address, CpuPageEntry{page.Bytes->data(), CpuPageState::Resident});
         stream.Failures.erase(outcome.Address);
         m_ChangedFields.Insert(stream.Field);
         if (inserted)
@@ -328,7 +327,7 @@ void PageResidencyManager::Land(Stream& stream, uint64 frameIndex, PageFetchOutc
 
 bool PageResidencyManager::NeedsLoad(const Stream& stream, const PageAddress& address, uint64 frameIndex) const
 {
-    if (stream.Loaded.count(address) || stream.InFlight.count(address) || stream.Absent.count(address))
+    if (stream.Loaded.Contains(address) || stream.InFlight.Contains(address) || stream.Absent.count(address))
         return false;
     const auto failed = stream.Failures.find(address);
     return failed == stream.Failures.end() || frameIndex >= failed->second.RetryAtFrame;
@@ -369,7 +368,7 @@ void PageResidencyManager::DropUploadedPlaneBytes()
     for (const CachedPage& page : m_UploadedPlanePages)
     {
         const auto it = m_Streams.find(page.Stream);
-        if (it != m_Streams.end() && it->second.Loaded.erase(page.Address) != 0)
+        if (it != m_Streams.end() && it->second.Loaded.Erase(page.Address))
             m_CpuBytes -= it->second.PageBytes;
     }
     m_UploadedPlanePages.clear();
@@ -398,7 +397,7 @@ bool PageResidencyManager::FetchCpuPage(uint32 streamId, const PageAddress& addr
     Stream& stream = found->second;
     if (NeedsLoad(stream, address, m_FrameIndex))
         FetchNow(stream, m_FrameIndex, address);
-    return stream.Loaded.count(address) != 0;
+    return stream.Loaded.Contains(address);
 }
 
 void PageResidencyManager::FetchCpuNow(uint64 frameIndex, std::chrono::steady_clock::time_point start)
@@ -419,8 +418,8 @@ void PageResidencyManager::FetchCpuNow(uint64 frameIndex, std::chrono::steady_cl
                         FetchNow(stream, frameIndex, address);
                 }
         for (const PageAddress& address : stream.CpuWindow)
-            if (const auto page = stream.Loaded.find(address); page != stream.Loaded.end())
-                page->second.LastWantedFrame = frameIndex;
+            if (LoadedPage* page = stream.Loaded.Find(address))
+                page->LastWantedFrame = frameIndex;
         longest = std::max(longest, stream.CpuWindow.size());
     }
     // Every stream's first window page, then every stream's second, and so on: a second terrain
@@ -453,7 +452,7 @@ void PageResidencyManager::StartCpuLoads(uint64 frameIndex, bool pinned)
     {
         if (pinned)
             std::erase_if(stream.CpuPinnedPending, [&stream](const PageAddress& address) {
-                return stream.Loaded.count(address) != 0 || stream.Absent.count(address) != 0;
+                return stream.Loaded.Contains(address) || stream.Absent.count(address) != 0;
             });
         for (const PageAddress& address : pinned ? stream.CpuPinnedPending : stream.CpuWindow)
         {
@@ -485,10 +484,9 @@ void PageResidencyManager::RebuildCandidates(uint64 lastFrame)
         // The trim drops the least recently placeable pages first: these were placeable at the last Update.
         m_Visits += static_cast<uint32>(stream.Placeable.size() + stream.Wanted.size());
         for (const PageWant& want : stream.Placeable)
-            if (const auto page = stream.Loaded.find(want.Address); page != stream.Loaded.end())
-                page->second.LastWantedFrame = lastFrame;
+            if (LoadedPage* page = stream.Loaded.Find(want.Address))
+                page->LastWantedFrame = lastFrame;
         stream.Placeable.clear();
-        stream.PlaceableSet.clear();
         for (const PageWant& want : stream.Wanted)
             m_Candidates.push_back(Candidate{id, want});
     }
@@ -506,7 +504,6 @@ void PageResidencyManager::RebuildCandidates(uint64 lastFrame)
             continue;
         ++taken;
         stream.Placeable.push_back(candidate.Want);
-        stream.PlaceableSet.insert(candidate.Want.Address);
         m_Candidates[kept++] = candidate;
     }
     m_Candidates.resize(kept);
@@ -514,19 +511,12 @@ void PageResidencyManager::RebuildCandidates(uint64 lastFrame)
 
 void PageResidencyManager::StartLoad(uint32 streamId, Stream& stream, const PageAddress& address, bool cpu)
 {
-    const std::shared_ptr<CompletionQueue> queue = m_Completions;
-    const uint64 epoch = stream.Epoch;
-    const uint64 version = stream.SourceVersion;
-    stream.InFlight.insert(address);
+    stream.InFlight.Insert(address);
     ++m_InFlightCount;
     if (cpu)
         ++m_CpuInFlightCount;
     ++m_LoadsStarted;
-    SubmitPageFetch(m_Pool, m_Io, stream.Source, address, stream.Cancel,
-                    [queue, streamId, epoch, version, cpu](PageFetchOutcome outcome) {
-                        std::lock_guard lock(queue->Mutex);
-                        queue->Completions.push_back(Completion{streamId, epoch, version, std::move(outcome), cpu});
-                    });
+    m_Fetcher.Fetch(stream.Source, address, stream.Cancel, PageFetchTag{streamId, stream.Epoch, stream.SourceVersion, cpu});
 }
 
 void PageResidencyManager::Refresh(uint32 streamId, uint8 face, const PageSampleRect& level0Rect)
@@ -554,7 +544,7 @@ void PageResidencyManager::StartLoads(uint64 frameIndex)
         {
             if (m_InFlightCount >= m_Budget.LoadsInFlight)
                 return;
-            if (!stream.Loaded.count(address) && !stream.InFlight.count(address))
+            if (!stream.Loaded.Contains(address) && !stream.InFlight.Contains(address))
                 StartLoad(id, stream, address, false);
         }
     // A candidate needs a load only after the order, a load, a residency change or a retry's frame.
@@ -571,7 +561,7 @@ void PageResidencyManager::StartLoads(uint64 frameIndex)
         ++m_Visits;
         Stream& stream = m_Streams.at(candidate.Stream);
         const PageAddress& address = candidate.Want.Address;
-        if (stream.Loaded.count(address) != 0)
+        if (stream.Loaded.Contains(address))
             continue;
         if (m_Fields.at(stream.Field).SlotOf(candidate.Want.Page()) != kNoResidentSlot)
             continue; // resident: its samples were uploaded and trimmed since
@@ -603,7 +593,7 @@ void PageResidencyManager::AssignLoaded(uint64 frameIndex, float32 deltaSeconds,
             break;
         ++m_Visits;
         const Stream& stream = m_Streams.at(candidate.Stream);
-        if (stream.Loaded.count(candidate.Want.Address) &&
+        if (stream.Loaded.Contains(candidate.Want.Address) &&
             m_Fields.at(stream.Field).SlotOf(candidate.Want.Page()) == kNoResidentSlot)
         {
             ++m_Allowance[stream.Field];
@@ -625,7 +615,7 @@ void PageResidencyManager::AssignLoaded(uint64 frameIndex, float32 deltaSeconds,
                 continue;
             m_Visits += static_cast<uint32>(stream.Placeable.size());
             for (const PageWant& want : stream.Placeable)
-                if (stream.Loaded.count(want.Address) || cache.SlotOf(want.Page()) != kNoResidentSlot)
+                if (stream.Loaded.Contains(want.Address) || cache.SlotOf(want.Page()) != kNoResidentSlot)
                     m_LoadedPlaceable.push_back(want);
         }
         const auto allowance = m_Allowance.find(field);
@@ -648,7 +638,7 @@ void PageResidencyManager::RewriteRefreshed(uint32 field, PageCache& cache)
         stream.Stale.EraseIf([id, &stream, &cache](const PageAddress& address, const PageSampleRect& level0Rect) {
             const CachedPage cached{id, address};
             return cache.SlotOf(cached) == kNoResidentSlot ||
-                   (stream.Loaded.count(address) != 0 && cache.Rewrite(cached, level0Rect));
+                   (stream.Loaded.Contains(address) && cache.Rewrite(cached, level0Rect));
         });
     }
 }
@@ -660,11 +650,16 @@ void PageResidencyManager::TrimCpuPages(uint64 frameIndex)
     if (m_CpuBytes <= m_Budget.CpuBytes)
         return;
     m_TrimOrder.clear();
-    for (const auto& [id, stream] : m_Streams)
+    for (auto& [id, stream] : m_Streams)
+    {
+        // A placeable page is wanted at this frame, as a CPU window page is.
+        for (const PageWant& want : stream.Placeable)
+            if (LoadedPage* page = stream.Loaded.Find(want.Address))
+                page->LastWantedFrame = frameIndex;
         for (const auto& [address, page] : stream.Loaded)
-            if (!stream.PlaceableSet.count(address) && page.LastWantedFrame < frameIndex &&
-                address.Level < stream.CpuPinnedLevel)
+            if (page.LastWantedFrame < frameIndex && address.Level < stream.CpuPinnedLevel)
                 m_TrimOrder.push_back(TrimCandidate{page.LastWantedFrame, id, address});
+    }
     std::sort(m_TrimOrder.begin(), m_TrimOrder.end(), [](const TrimCandidate& a, const TrimCandidate& b) {
         return a.LastWantedFrame < b.LastWantedFrame;
     });
@@ -673,7 +668,10 @@ void PageResidencyManager::TrimCpuPages(uint64 frameIndex)
         if (m_CpuBytes <= m_Budget.CpuBytes)
             break;
         Stream& stream = m_Streams.at(candidate.Stream);
-        stream.Loaded.erase(candidate.Address);
+        // A store page's bytes go back to the fetcher, the one place that decodes store pages.
+        if (LoadedPage* page = stream.Loaded.Find(candidate.Address); page && stream.Source.Store)
+            m_Fetcher.Reuse(std::move(page->Bytes));
+        stream.Loaded.Erase(candidate.Address);
         SetCpuEntry(stream, candidate.Address, CpuPageEntry{});
         m_CpuBytes -= stream.PageBytes;
     }

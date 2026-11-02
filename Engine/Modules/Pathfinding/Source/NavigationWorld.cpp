@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -236,10 +237,15 @@ void NavigationWorld::SolveGridPathLane(std::span<GridPathSolve> solves, std::at
         if (!grid)
         {
             solve.Points.clear();
+            solve.Record = GridSolveRecord{};
             solve.Status = PathStatus::Failed;
             continue;
         }
-        solve.Status = grid->FindPathPoints(solve.Request, lease.Solver(), solve.Points);
+        const auto begin = std::chrono::steady_clock::now();
+        solve.Status = grid->FindPathPoints(solve.Request, lease.Solver(), solve.Points, solve.Record);
+        const auto elapsed = std::chrono::steady_clock::now() - begin;
+        solve.Record.Microseconds =
+            static_cast<uint32>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count());
     }
 }
 

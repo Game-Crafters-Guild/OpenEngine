@@ -19,6 +19,8 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Matrix4x4.h"
+#include "Paving/PavingRoadUV.h"
+#include "Scene/SceneTlas.h"
 #include "SplineLayout/CenterlineSampling.h"
 #include "SplineRecipes/GeneratedSplineMesh.h"
 #include "SplineRecipes/Paving/PavingRoadTrim.h"
@@ -250,6 +252,14 @@ void SplineExtrudeController::Update(ECS::World& world,
         std::any_of(candidates.begin(), candidates.end(),
                     [](const Candidate& c) { return Components::ReadsSurface(c.Recipe); });
     const uint64 surfaceRevision = anyReadsSurface ? ConformSurfaceRevision(world, ResolveTerrainModifierSystem()) : 0u;
+    // One request of the scene TLAS per frame, shared by every candidate that conforms to the scene.
+    const bool anyConformsToScene =
+        std::any_of(candidates.begin(), candidates.end(), [](const Candidate& c)
+                    { return c.Recipe.ConformMode != Components::SplinePlacementConform::None &&
+                             c.Recipe.ConformTarget == Components::SplineConformTarget::Scene; });
+    Scene::SceneTlas* sceneTlas = anyConformsToScene ? &Scene::GetSceneTlas(world) : nullptr;
+    if (sceneTlas)
+        sceneTlas->RequestCurrent(world);
 
     for (const Candidate& candidate : candidates)
     {
@@ -301,7 +311,7 @@ void SplineExtrudeController::Update(ECS::World& world,
         if (candidate.Recipe.ConformMode != Components::SplinePlacementConform::None &&
             candidate.Recipe.ConformTarget == Components::SplineConformTarget::Scene)
         {
-            RefreshSceneConformDigest(world, runBounds, state.SceneDigest);
+            RefreshSceneConformDigest(world, *sceneTlas, runBounds, state.SceneDigest);
             current.SurfaceRevision = Hashing::Fnv1a64(&state.SceneDigest.Value, sizeof(state.SceneDigest.Value),
                                                        current.SurfaceRevision);
         }
@@ -629,7 +639,7 @@ bool SplineExtrudeController::Rebuild(ECS::World& world,
         std::vector<float32> runDistance;
         for (uint32 i = first; i <= last; ++i)
             runDistance.push_back(trimmed.Stations[i].Distance);
-        for (const auto [low, high] : CarveChunkRanges(runDistance, kChunkLengthMetres, kMaxChunks))
+        for (const auto& [low, high] : CarveChunkRanges(runDistance, kChunkLengthMetres, kMaxChunks))
         {
             chunkRanges.emplace_back(first + low, first + high);
             chunkRuns.push_back(run);
@@ -731,6 +741,61 @@ float32 SplineExtrudeController::StripTopHalfWidth(const Components::SplineExtru
     const float32 placed =
         recipe.WidthScale == Components::SplineExtrudeWidthScale::None ? profile.NominalHalfWidth : stationHalfWidth;
     return top / profile.NominalHalfWidth * placed;
+}
+
+std::optional<PavingCapUV> StripCapUV(const Components::SplineExtrude& authored,
+                                      const Mathematics::Matrix4x4& worldMatrix, float32 topHalfLeft,
+                                      float32 topHalfRight, float32 roadLoopMeters)
+{
+    const Components::SplineExtrude recipe = SanitizeExtrudeRecipe(authored);
+    if (recipe.WidthMode == Components::SplineExtrudeWidthMode::FitToBanks)
+        return std::nullopt;
+    const SG::SplineProfile profile = BuildRecipeProfile(recipe);
+    if (!profile.IsValid() || profile.Closed)
+        return std::nullopt;
+    const float32 axisScale = SplineLayout::LargestAxisScale(worldMatrix);
+    if (!(axisScale > 0.0f))
+        return std::nullopt;
+
+    // The top's ends in the profile: the outermost points at y = 0 and above on each side.
+    float32 topLeftX = 0.0f;
+    float32 topRightX = 0.0f;
+    for (const SG::SplineProfilePoint& point : profile.Points)
+    {
+        if (point.Position.y < 0.0f)
+            continue;
+        topLeftX = std::max(topLeftX, -point.Position.x);
+        topRightX = std::max(topRightX, point.Position.x);
+    }
+    if (!(topLeftX > 0.0f) || !(topRightX > 0.0f))
+        return std::nullopt;
+
+    // V is the scaled profile's perimeter from its first point; the top starts at the first point
+    // at y = 0 or above. The cap is flat, so every height above zero scales to zero.
+    const SG::SplineProfileScale mode = MapWidthScale(recipe.WidthScale);
+    SG::SplineStripScale scale;
+    if (mode != SG::SplineProfileScale::None)
+    {
+        scale.Left = topHalfLeft / axisScale / topLeftX;
+        scale.Right = topHalfRight / axisScale / topRightX;
+        scale.ScaleVertical = mode == SG::SplineProfileScale::Uniform;
+    }
+    scale.Rise = 0.0f;
+    std::vector<Mathematics::Vector2> scaledPoints(profile.Points.size());
+    std::vector<float32> pointV(profile.Points.size());
+    SG::StripProfileV(profile, scale, scaledPoints, pointV);
+    const auto top = std::find_if(profile.Points.begin(), profile.Points.end(),
+                                  [](const SG::SplineProfilePoint& point) { return point.Position.y >= 0.0f; });
+    const float32 leftV = pointV[static_cast<size_t>(top - profile.Points.begin())];
+
+    PavingCapUV uv;
+    uv.TilesPerMeterU = recipe.TilesPerMetreU;
+    // A closed road rounds its length to whole tiles, as the sweep does.
+    if (roadLoopMeters > 0.0f && recipe.TilesPerMetreU > 0.0f)
+        uv.TilesPerMeterU = std::max(1.0f, std::round(roadLoopMeters * recipe.TilesPerMetreU)) / roadLoopMeters;
+    uv.TilesPerMeterV = recipe.TilesPerMetreV;
+    uv.LeftV = leftV * recipe.TilesPerMetreV * axisScale;
+    return uv;
 }
 
 Components::MeshRenderer SplineExtrudeController::ChunkRenderer(Engine::Renderer::RenderServices& renderServices,

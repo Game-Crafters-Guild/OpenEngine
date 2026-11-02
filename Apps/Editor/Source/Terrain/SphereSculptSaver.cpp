@@ -9,9 +9,8 @@
 #include "ECS/World.h"
 #include "Logger/Logger.h"
 #include "TerrainECS/TerrainService.h"
+#include "Types/PathUtils.h"
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <string>
 #include <system_error>
@@ -19,18 +18,6 @@
 
 namespace GameEngine::Editor
 {
-namespace
-{
-
-std::string LowerExtension(const std::filesystem::path& path)
-{
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext;
-}
-
-} // namespace
 
 uint32_t FlushDirtySphereSculpt(ECS::World& world, const std::filesystem::path& scenePath,
                                 AssetRegistry& registry, TerrainECS::TerrainService& service,
@@ -63,7 +50,7 @@ uint32_t FlushDirtySphereSculpt(ECS::World& world, const std::filesystem::path& 
     bool hasExisting = false;
     AssetMetadata meta{};
     if (!guid.IsNull() && registry.TryGetAssetMetadata(guid, meta) && !meta.Path.empty()
-        && LowerExtension(meta.Path) == ".tsculpt")
+        && LowerCaseExtension(meta.Path) == ".tsculpt")
     {
         liveTarget = meta.Path;
         hasExisting = true;

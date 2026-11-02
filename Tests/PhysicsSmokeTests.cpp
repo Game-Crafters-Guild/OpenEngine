@@ -2,12 +2,14 @@
 
 #include "EngineLogCapture.h"
 #include "PagedTiledTerrain.h"
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
 #include "Physics/PhysicsWorld.h"
 #include "PhysicsECS/HeightFieldDataProvider.h"
+#include "PhysicsECS/ProceduralMeshColliders.h"
+#include "ProceduralMeshCollidersInternal.h"
 #include "PhysicsECS/PhysicsEntityEventCallbacks.h"
 #include "PhysicsECS/PhysicsScriptApi.h"
 #include "PhysicsECS/PhysicsWorldService.h"
@@ -15,6 +17,7 @@
 #include "PhysicsECS/Components/CapsuleColliderShape.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
 #include "PhysicsECS/Components/KinematicBody.h"
+#include "PhysicsECS/Components/MeshColliderShape.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
 #include "PhysicsECS/Components/PhysicsCollider.h"
 #include "PhysicsECS/Components/PhysicsColliderOwner.h"
@@ -3358,9 +3361,10 @@ TEST(Physics, APageEditUpdatesItsBodyInPlace)
     const PageStreaming::PageSampleRect rect{200, 200, 203, 203};
     constexpr float32 kRaise = 0.25f; // normalized: 16 m at a height scale of 64
     PagedTE::PagedTerrainRequest& request = terrain.Paged.Request;
-    request.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
-        uint8{0}, PageStreaming::BuildPageStoreLevels(request.Shape.SamplesX, request.Shape.SamplesZ), rect,
-        std::vector<float32>(static_cast<std::size_t>(rect.Width()) * rect.Height(), kRaise));
+    auto layer = std::make_shared<PageStreaming::HeightPageLayer>(
+        1u, PageStreaming::BuildPageStoreLevels(request.Shape.SamplesX, request.Shape.SamplesZ));
+    layer->WriteLevel0(0, rect, std::vector<float32>(static_cast<std::size_t>(rect.Width()) * rect.Height(), kRaise));
+    request.Overlay = layer;
     request.OverlayVersion = 1;
     request.OverlayChanged = rect;
     request.OverlayChangedSince = 0;
@@ -3501,9 +3505,9 @@ TEST(Physics, PageColliderEntitiesAreRuntimeOnlyAndExcludedFromSave)
     EXPECT_EQ(tagged, 4);
 
     const auto scenePath = std::filesystem::temp_directory_path() / "ge_page_collider_runtime_only.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, Scene::SaveOptions{}));
+    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, Scene::SceneWriteOptions{}));
     ECS::World reloaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, scenePath, Scene::SceneReadOptions{}));
     int reloadedTotal = 0;
     int reloadedColliders = 0;
     for (auto* arch : reloaded.GetAllArchetypes())
@@ -5092,4 +5096,73 @@ TEST(PhysicsWorldHooks, HooksNeverResolveASiblingComponent)
                "must be self-sufficient from its own component.";
         EXPECT_EQ(src.find("world.Get"), std::string::npos) << path.filename().string();
     }
+}
+
+TEST(Physics, ProceduralMeshReaderSurvivesReleaseAndRejectsStaleHandle)
+{
+    GameEngine::Physics::MeshShapeDef mesh;
+    mesh.vertices = {{-1, 0, -1}, {1, 0, -1}, {0, 0, 1}};
+    mesh.indices = {0, 2, 1};
+    const auto handle = GameEngine::PhysicsECS::ProceduralMeshColliders::Register(mesh);
+    const auto reader = GameEngine::PhysicsECS::ProceduralMeshColliders::Read(handle);
+    ASSERT_NE(reader, nullptr);
+    GameEngine::PhysicsECS::ProceduralMeshColliders::Release(handle);
+    EXPECT_EQ(reader->indices.size(), 3u);
+    EXPECT_EQ(GameEngine::PhysicsECS::ProceduralMeshColliders::Read(handle), nullptr);
+    const auto replacement = GameEngine::PhysicsECS::ProceduralMeshColliders::Register(mesh);
+    EXPECT_NE(replacement, handle);
+    EXPECT_EQ(GameEngine::PhysicsECS::ProceduralMeshColliders::Read(handle), nullptr);
+    GameEngine::PhysicsECS::ProceduralMeshColliders::Release(replacement);
+    mesh.indices = {0, 2, 99};
+    EXPECT_FALSE(GameEngine::PhysicsECS::ProceduralMeshColliders::Register(mesh).IsValid());
+}
+
+// The height where a ray straight down at (x, z) hits the physics world; -100 for a miss.
+static float MeshSurfaceHeightAt(float x, float z)
+{
+    GameEngine::Physics::RayCastQuery query{};
+    query.ray = GameEngine::Mathematics::Ray3D(GameEngine::Mathematics::Vector3(x, 10.0f, z),
+                                               GameEngine::Mathematics::Vector3(0.0f, -1.0f, 0.0f));
+    GameEngine::Physics::RayCastResult hit{};
+    return GameEngine::PhysicsECS::PhysicsWorldService::Get().RayCast(query, hit) ? hit.hitPoint.y : -100.0f;
+}
+
+TEST(Physics, ProceduralMeshColliderBuildsAndRebuildsWithoutARenderer)
+{
+    ScopedPhysicsWorldService service(SmallDeterministicSettings());
+    GameEngine::ECS::World world;
+    GameEngine::PhysicsECS::RegisterPhysicsWorldHooks(world);
+    const auto entity = world.CreateEntity();
+    world.AddComponentImmediate(entity, GameEngine::Components::Transform{});
+    world.AddComponentImmediate(entity, GameEngine::Components::WorldTransform{});
+    GameEngine::Components::PhysicsBody body;
+    body.motionType = GameEngine::Physics::MotionType::Static;
+    world.AddComponentImmediate(entity, body);
+    GameEngine::Physics::MeshShapeDef mesh;
+    mesh.vertices = {{-1, 0, -1}, {1, 0, -1}, {0, 0, 1}};
+    mesh.indices = {0, 2, 1};
+    const auto first = GameEngine::PhysicsECS::ProceduralMeshColliders::Register(mesh);
+    GameEngine::Components::MeshColliderShape collider;
+    collider.Mesh = first;
+    world.AddComponentImmediate(entity, collider);
+    GameEngine::PhysicsECS::PhysicsInitSystem init;
+    RunPhysicsInitFrame(world, init);
+    ASSERT_TRUE(world.GetComponent<GameEngine::Components::PhysicsBody>(entity)->initialized);
+    EXPECT_EQ(world.GetComponent<GameEngine::Components::MeshColliderShape>(entity)->BuiltMesh, first);
+    EXPECT_NEAR(MeshSurfaceHeightAt(-0.5f, -0.9f), 0.0f, 1e-3f);
+    // The new mesh takes the released slot, so only the handle generation tells the two apart.
+    auto* written = world.GetComponentForWrite<GameEngine::Components::MeshColliderShape>(entity);
+    written->Mesh = {};
+    GameEngine::PhysicsECS::ProceduralMeshColliders::Release(first);
+    mesh.vertices[0].y = 1;
+    const auto replacement = GameEngine::PhysicsECS::ProceduralMeshColliders::Register(mesh);
+    ASSERT_EQ(replacement.Index(), first.Index());
+    written->Mesh = replacement;
+    RunPhysicsInitFrame(world, init);
+    EXPECT_TRUE(world.GetComponent<GameEngine::Components::PhysicsBody>(entity)->initialized);
+    EXPECT_EQ(world.GetComponent<GameEngine::Components::MeshColliderShape>(entity)->BuiltMesh, replacement);
+    // The rebuilt body has the raised triangle: its plane is at height 0.725 above that point.
+    EXPECT_NEAR(MeshSurfaceHeightAt(-0.5f, -0.9f), 0.725f, 1e-3f);
+    world.DestroyEntityImmediate(entity);
+    GameEngine::PhysicsECS::ProceduralMeshColliders::Release(replacement);
 }

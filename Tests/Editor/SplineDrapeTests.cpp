@@ -216,7 +216,8 @@ TEST_F(SplineDrapeTests, CenterlineDrapesToTerrainWithLift)
     ASSERT_GT(data.TotalArcLength, 0.0f);
 
     SplineDrapedPolylines out;
-    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/false, SplineConformTarget::Scene, out);
+    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/false, SplineConformTarget::Scene, out,
+                               /*tally=*/nullptr);
 
     ASSERT_GE(out.Center.size(), 2u);
     EXPECT_TRUE(out.Left.empty());
@@ -248,7 +249,8 @@ TEST_F(SplineDrapeTests, ConformMissKeepsAuthoredAltitude)
     const auto data = MakeStraightSpline(1000.0f, 1010.0f, authoredY);
 
     SplineDrapedPolylines out;
-    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/false, SplineConformTarget::Scene, out);
+    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/false, SplineConformTarget::Scene, out,
+                               /*tally=*/nullptr);
 
     ASSERT_GE(out.Center.size(), 2u);
     for (const Vector3& pt : out.Center)
@@ -268,7 +270,8 @@ TEST_F(SplineDrapeTests, PartialGapHoldsNearestMeasuredAltitude)
     const auto data = MakeStraightSpline(0.0f, 30.0f, authoredY);
 
     SplineDrapedPolylines out;
-    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/false, SplineConformTarget::Scene, out);
+    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/false, SplineConformTarget::Scene, out,
+                               /*tally=*/nullptr);
     ASSERT_GE(out.Center.size(), 2u);
 
     size_t hitCount = 0;
@@ -312,7 +315,8 @@ TEST_F(SplineDrapeTests, ScaledEntityScalesWidthAndDensity)
     const Matrix4x4 worldM(glm::scale(glm::mat4(1.0f), glm::vec3(2.0f)));
 
     SplineDrapedPolylines out;
-    BuildSplineDrapedPolylines(*world, data, worldM, {}, /*wantEdges=*/true, SplineConformTarget::Scene, out);
+    BuildSplineDrapedPolylines(*world, data, worldM, {}, /*wantEdges=*/true, SplineConformTarget::Scene, out,
+                               /*tally=*/nullptr);
 
     // Sampling density follows WORLD length: ~20 m at the 1 m step is ~21
     // samples, where sampling the local arc against the world step gives 11.
@@ -343,7 +347,8 @@ TEST_F(SplineDrapeTests, EdgesBuildOnlyWhenRequested)
     const auto data = MakeStraightSpline(-5.0f, 5.0f, 5.0f);
 
     SplineDrapedPolylines out;
-    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/true, SplineConformTarget::Scene, out);
+    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/true, SplineConformTarget::Scene, out,
+                               /*tally=*/nullptr);
 
     ASSERT_GE(out.Center.size(), 2u);
     ASSERT_EQ(out.Left.size(), out.Center.size());
@@ -377,7 +382,8 @@ TEST_F(SplineDrapeTests, EdgeAllMissKeepsAuthoredAltitudeWhileCenterDrapes)
     GameEngine::Spline::RebuildSplineCache(data);
 
     SplineDrapedPolylines out;
-    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/true, SplineConformTarget::Scene, out);
+    BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/true, SplineConformTarget::Scene, out,
+                               /*tally=*/nullptr);
 
     ASSERT_GE(out.Center.size(), 2u);
     ASSERT_EQ(out.Left.size(), out.Center.size());
@@ -405,7 +411,8 @@ TEST_F(SplineDrapeTests, WorldMatrixAppliesBeforeDrape)
     const Matrix4x4 worldM = Matrix4x4::Translation(Vector3(2.0f, 0.0f, 0.0f));
 
     SplineDrapedPolylines out;
-    BuildSplineDrapedPolylines(*world, data, worldM, {}, /*wantEdges=*/false, SplineConformTarget::Scene, out);
+    BuildSplineDrapedPolylines(*world, data, worldM, {}, /*wantEdges=*/false, SplineConformTarget::Scene, out,
+                               /*tally=*/nullptr);
 
     ASSERT_GE(out.Center.size(), 2u);
     EXPECT_NEAR(out.Center.front().x, -3.0f, 1.0e-3f);
@@ -726,7 +733,7 @@ TEST_F(SplineDrapeTests, DrapeConformsToTheTargetItIsGiven)
 
     const auto heightOverTheCart = [&](SplineConformTarget target) {
         SplineDrapedPolylines out;
-        BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/false, target, out);
+        BuildSplineDrapedPolylines(*world, data, Matrix4x4{}, {}, /*wantEdges=*/false, target, out, /*tally=*/nullptr);
         const auto middle = std::min_element(out.Center.begin(), out.Center.end(),
                                              [](const Vector3& a, const Vector3& b) {
                                                  return std::abs(a.x) < std::abs(b.x);

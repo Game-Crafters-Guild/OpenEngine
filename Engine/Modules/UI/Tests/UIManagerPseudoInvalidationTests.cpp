@@ -1038,3 +1038,68 @@ TEST(UIManagerPseudoInvalidationTests, HoverDescendantTransitionAppliesToRuntime
     tick();
     expectHoverTintWorks("card-hidden-add", 150.0f, "hidden-then-shown card under churn");
 }
+
+// The :focus-within chain holds the focused element between frames. Once that element is
+// destroyed, a later frame finds the element that now has the focus id.
+TEST(UIManagerPseudoInvalidationTests, FocusChainFindsReplacementOfDestroyedFocusedElement)
+{
+    auto* dev = SharedHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+
+    UIRegistration::RegisterBuiltInControls();
+
+    const std::string xml = R"(<uielement id='root'>
+        <uielement id='container'>
+            <uielement id='box' />
+        </uielement>
+        <uielement id='other' />
+    </uielement>)";
+    std::unique_ptr<UIElement> root;
+    ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
+
+    // Only the chain sets :focus-within on an ancestor of the focused element.
+    const auto cssPath = MakeTempCssPath("ui_focus_replacement");
+    {
+        std::ofstream f(cssPath);
+        f << R"(
+#root { display: flex; width: 600px; height: 80px; }
+#container { display: flex; width: 100px; height: 80px; }
+#box { width: 40px; height: 40px; }
+#container:focus-within { width: 250px; }
+#other { display: flex; width: 100px; height: 80px; flex-shrink: 0; }
+#other:focus-within { width: 250px; }
+)";
+    }
+
+    UIManager ui(dev);
+    ui.SetRoot(std::move(root));
+    ASSERT_TRUE(ui.AttachStyleFromFile(cssPath.string()));
+
+    UIElement* container = ui.GetRootElement()->FindById("container"_sid);
+    ASSERT_NE(container, nullptr);
+    UIElement* box = container->FindById("box"_sid);
+    ASSERT_NE(box, nullptr);
+    box->SetFocusable(true);
+    ui.SetFocusById("box");
+    ui.Update(0.0f, /*interactive=*/true);
+    ui.Update(0.0f, /*interactive=*/true);
+    ASSERT_NEAR(container->GetLayoutWidth(), 250.0f, 0.5f);
+
+    // The replacement exists before the box is destroyed, so it cannot take its address.
+    auto replacement = std::make_unique<UIElement>();
+    replacement->SetId("box");
+    replacement->SetFocusable(true);
+    container->RemoveChild(box);
+    UIElement* other = ui.GetRootElement()->FindById("other"_sid);
+    ASSERT_NE(other, nullptr);
+    other->AddChild(std::move(replacement));
+    ui.SetFocusById("box");
+    ui.Update(0.0f, /*interactive=*/true);
+    ui.Update(0.0f, /*interactive=*/true);
+
+    EXPECT_NEAR(other->GetLayoutWidth(), 250.0f, 0.5f)
+        << "The parent of the element that has the focus id after the focused one is destroyed must match :focus-within";
+    EXPECT_NEAR(container->GetLayoutWidth(), 100.0f, 0.5f)
+        << "The parent of the destroyed element must not match :focus-within";
+}

@@ -280,6 +280,28 @@ TEST_F(AssetLoadPipelineTest, SingleAssetCompletePipeline) {
     std::cout << "[ MEASURE  ] single-asset pipeline: " << duration.count() << "ms\n";
 }
 
+// UnloadAssetWithDependencies unloads the asset in a job on the pool: the handle completes
+// without failure and the asset is no longer loaded.
+TEST_F(AssetLoadPipelineTest, UnloadWithDependenciesRunsTheUnloadJob) {
+    const auto& metadata = testMetadata[0];
+    assetManager->GetRegistry().RegisterAssetMetadata(metadata);
+    auto future = assetManager->LoadAssetAsync(metadata.Guid, AssetLoadPriority::Normal);
+    ASSERT_EQ(future.wait_for(std::chrono::milliseconds(10000)), std::future_status::ready)
+        << "load did not complete within timeout";
+    ASSERT_NE(future.get(), nullptr);
+    ASSERT_TRUE(assetManager->IsAssetLoaded(metadata.Guid));
+
+    JobSystem::TaskHandle handle = assetManager->UnloadAssetWithDependencies(metadata.Guid);
+    ASSERT_TRUE(handle.IsValid());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!handle.IsDone() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(handle.IsDone()) << "the unload job did not finish within timeout";
+    EXPECT_TRUE(handle.IsCompleted()) << handle.GetErrorMessage();
+    EXPECT_FALSE(assetManager->IsAssetLoaded(metadata.Guid));
+}
+
 // A load request for an asset whose file is missing completes, delivers no asset and leaves
 // nothing loaded (the request path: LoadAsset(AssetLoadRequest) and its handle).
 TEST_F(AssetLoadPipelineTest, AMissingFileFailsItsLoad) {

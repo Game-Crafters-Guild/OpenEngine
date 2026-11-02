@@ -265,7 +265,7 @@ void PrefabBar::Refresh()
     }
     // The pills count the rows of the Overrides list: the teal pill its overrides, the amber pill its stale rows.
     SceneDocumentManager* document = m_Document ? m_Document() : nullptr;
-    std::span<const Scene::SceneLoadSkip> skips;
+    std::span<const Scene::SceneDegradation::Skip> skips;
     if (document && document->GetLastLoadDegraded().has_value())
         skips = document->GetLastLoadDegraded()->Census.skips;
     const PrefabOverrideCounts rows = PrefabOverridesListModel::Count(m_World, m_Entity, skips);

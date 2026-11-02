@@ -734,7 +734,7 @@ void ParticleExtraction::Extract(ECS::World& world, uint64 worldId, RenderServic
         meshHandle = meshReg.RegisterSubmesh({PrimitiveGenerator::PlaneSpriteUvGuid(), 0u}, PrimitiveGenerator::GeneratePlaneSpriteUv());
     const uint64 frameId = ++m_Impl->m_ParticleFrameCounter;
     const uint32 frameSlot =
-        m_Impl->m_SortedIndirectionFrameCounter.Tick(device->GetFrameIndex()) % Impl::kSortedIndirectionSlots;
+        static_cast<uint32>(m_Impl->m_SortedIndirectionFrameCounter.Tick(device->GetFrameIndex()) % Impl::kSortedIndirectionSlots);
     const uint32 recordBudget = std::min(m_Impl->m_ParticleState->Budget * 4u, 262144u);
     uint32 particleLights = 0;
 

@@ -105,9 +105,9 @@ class SceneDocumentManager
 
     // Takes the skip at `index` out of the last load's record: the user discards an override line that a save
     // drops, so the save guard stops counting it. Empty when there is no such skip. Marks the document dirty.
-    std::optional<Scene::SceneLoadSkip> DiscardLoadSkip(std::size_t index);
+    std::optional<Scene::SceneDegradation::Skip> DiscardLoadSkip(std::size_t index);
     // Puts back at `index` a skip that DiscardLoadSkip took out: the undo of the discard. Marks the document dirty.
-    void RestoreLoadSkip(std::size_t index, Scene::SceneLoadSkip skip);
+    void RestoreLoadSkip(std::size_t index, Scene::SceneDegradation::Skip skip);
 
     // Whether a save aimed at `targetPath` would be refused because this document did not fully
     // load and that path is the file it was read from. Callers use it to tell that refusal apart
@@ -283,7 +283,7 @@ class SceneDocumentManager
     // Announce and record `census` against `documentPath` when it holds anything, or clear a
     // standing record when it does not. Called after every successful document load.
     void RecordLoadDegradation(const std::filesystem::path& documentPath,
-                               Scene::SceneLoadDegradation census);
+                               Scene::SceneDegradation census);
 
     // The degraded-overwrite refusal text for `targetPath`, naming what a save would cost.
     // Only valid while a degraded record stands (WouldRefuseDegradedOverwrite gates the call).

@@ -65,9 +65,10 @@ public:
     // plus the calling thread, each lane on one of the world's solvers and
     // claiming solves one at a time, so a long solve does not hold back the
     // rest; a null pool solves them on the caller in order. Each solve writes only
-    // its own Status and Points (Failed for a handle that names no grid map)
-    // and allocates nothing in the PathBuffer, so the results do not depend
-    // on the pool or on timing. Opens a path-solve window on every grid map
+    // its own Status, Points and Record (Failed and a Refused record for a
+    // handle that names no grid map) and allocates nothing in the PathBuffer,
+    // so the results, all but Record.Microseconds, do not depend on the pool
+    // or on timing. Opens a path-solve window on every grid map
     // for the call, which takes each map's reservation lock once on the
     // calling thread; the solves read through GridMap::ReadView, unlocked.
     void SolveGridPaths(JobSystem::WorkStealingThreadPool* pool, std::span<GridPathSolve> solves);

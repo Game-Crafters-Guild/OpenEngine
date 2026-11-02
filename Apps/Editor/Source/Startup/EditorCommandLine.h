@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Mathematics/RectInt.h"
+
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -40,6 +42,16 @@ struct EditorCommandLineArgs
     // GE_EDITOR_DEBUG_PORT: an explicit flag beats the ambient environment.
     // Unset leaves the port to the env var, then the built-in default.
     std::optional<std::uint16_t> debugPort;
+
+    // --window <W>x<H>[+<X>+<Y>]: the main window's client size and position in pixels
+    // (points on macOS). Unset: the window opens maximized. X and Y apply only when
+    // windowHasPosition is true; otherwise the OS places the window.
+    std::optional<Mathematics::RectInt> windowRect;
+    bool windowHasPosition = false;
+
+    // Arguments the editor refuses to start with, each a message that states the
+    // accepted form. The caller logs each as an Error and exits.
+    std::vector<std::string> refusedArgs;
 
     // Dash-prefixed arguments this parser did not consume, verbatim and in
     // order. Reported as a Warning by the caller once logging is up, because a

@@ -36,6 +36,11 @@ namespace GameEngine::Rendering::RenderGraph
 class RGContext;
 }
 
+namespace GameEngine
+{
+class SceneLoadTracker;
+}
+
 namespace GameEngine::Engine::Renderer
 {
 namespace CullModeFlagBits = ::GameEngine::Rendering::CullModeFlagBits;
@@ -309,16 +314,9 @@ class PipelineVariantCache
     size_t PendingEvictionCount() const;
     void DrainPendingEvictions();
 
-    // Publish-gate drain. A record-worker variant miss does NOT compile inline
-    // (a cold shaderc variant is 10+s and would stall the record thread / scene-
-    // build pump); it enqueues the miss and skips the draw. This serial main-
-    // thread drain — called from MaterialSystem::BeginFrame before any parallel
-    // record window opens — submits each queued compile to the prewarm workers
-    // (or compiles inline when the engine job system is down: headless/tests).
-    // The compiled unit is queued as a publish, applied to the cache by
-    // ApplyPendingVariantPublishes, and the draw self-heals to visible.
-    // Deterministic seam: FlushAsyncMaterialCompiles drains the submitted work
-    // and applies the publishes; after it the requested variants are warm.
+    // Submits every variant miss that record workers queued to the compile gate, which bounds how
+    // many run (inline when the job system is down). MaterialSystem::BeginFrame calls it on the main
+    // thread before any record window opens. FlushAsyncMaterialCompiles waits for the work and applies it.
     void SubmitPendingVariantCompiles();
     size_t PendingVariantCompileCount() const;
 
@@ -337,6 +335,13 @@ class PipelineVariantCache
     // this to clear before it recaptures, so a level's compile burst costs it
     // one recapture rather than one per landing.
     bool HasAnyPipelineBuildsInFlight() const;
+
+    // Report the draw variant compiles in shader.variant: a submitted compile as a ticket
+    // named by its material, a request not yet submitted and a compile not yet published as a gate.
+    void ReportLoadingWork(SceneLoadTracker& tracker);
+    // Revoke the shader.variant category and gate. The material system's shutdown calls it
+    // before it cancels the queued compiles, so the tracker does not count them as failed.
+    void StopReportingLoadingWork();
 
     // Apply the variant units the compile workers (or the inline headless path)
     // queued since the last drain: insert/republish the cache nodes, clear the
@@ -508,10 +513,11 @@ class PipelineVariantCache
     void RequestConcreteWarm(const Material& material, GraphicsPipelineId id,
                              const Rendering::PipelineFormatKey& fk);
 
-    // Rate-limited (power-of-two) warning for a dual-cold serve — fires per draw
-    // per frame during a backend-build window, so the raw line would flood.
-    void WarnColdServe(const Material& material, GraphicsPipelineId pipelineId,
-                       const Rendering::PipelineFormatKey& fk);
+    // Rate-limited (power-of-two) info line for a dual-cold serve: the draw is
+    // skipped while its pipeline builds, or until the next invalidation when the build failed. It
+    // fires per draw per frame, so the raw line would flood.
+    void LogColdServe(const Material& material, GraphicsPipelineId pipelineId,
+                      const Rendering::PipelineFormatKey& fk);
 
     // Publish-gate: a queued variant miss (enqueued by the record path, drained
     // by SubmitPendingVariantCompiles). Carries only the cache key — which now
@@ -531,10 +537,10 @@ class PipelineVariantCache
         InstancedVariantKey Key;
         ShaderCacheKey CacheKey;
         MaterialCompileSpec Spec;
-        // Snapshotted by value on the serial drain: EnsureMaterialBuildContextReady
-        // reassigns the live m_MaterialBuildContext's vectors every BeginFrame, which
-        // would tear under an off-thread GetOrCompile mid-copy during source-set churn.
-        MaterialBuildContext BuildContext;
+        // One immutable snapshot per drain, shared by every request of that drain:
+        // EnsureMaterialBuildContextReady reassigns the live m_MaterialBuildContext's
+        // vectors every BeginFrame, which would tear under an off-thread GetOrCompile.
+        std::shared_ptr<const MaterialBuildContext> BuildContext;
         std::string Name;
         std::filesystem::path MaterialAssetPath;
         uint32_t MaterialVersion = 0;
@@ -556,8 +562,8 @@ class PipelineVariantCache
     // throw mid-compile — so a key is never wedged.
     void RunColorVariantCompile(const VariantCompileRequest& req);
     void RunDepthVariantCompile(const VariantCompileRequest& req);
-    // Clear a key's in-flight marker and decrement the running counter. Called by
-    // the Run* scope guard on failure exits and by the submit-failure path.
+    // Clear a key's in-flight marker. Called by the Run* scope guard on failure
+    // exits and by the submit-failure path.
     void ReleaseVariantCompile(const InstancedVariantKey& key, bool isDepth);
 
     // A compiled variant unit handed back by a worker (or the inline headless
@@ -667,17 +673,10 @@ class PipelineVariantCache
     // worker/inline compile path; read for diagnostics like the cache-size getters.
     std::atomic<uint64_t> m_AsyncVariantCompilesTotal{0};
 
-    // Occurrence count for the dual-cold serve warning (neither the current nor
-    // the previous pipeline warm for the active pass). Fires per draw per frame
-    // for the whole backend-build window, so the log line is rate-limited to
-    // powers of two of this count.
-    std::atomic<uint64_t> m_ColdServeWarnCount{0};
-
-    // Variant compiles currently dispatched-but-not-finished. Incremented before
-    // each submit, decremented on every Run* exit (via ReleaseVariantCompile). The
-    // drain submits only while this is below a worker-count-derived cap so the cold
-    // burst can't oversubscribe the pool (the compiles also ride the Background lane).
-    std::atomic<uint32_t> m_VariantCompilesRunning{0};
+    // Occurrence count for the dual-cold serve line (neither the current nor
+    // the previous pipeline warm for the active pass). The line is
+    // rate-limited to powers of two of this count.
+    std::atomic<uint64_t> m_ColdServeLogCount{0};
 
     // The materials whose draws found a backend pipeline cold, keyed by the
     // device's combined (pipeline id, format key) (materials share interned
@@ -698,6 +697,10 @@ class PipelineVariantCache
     };
     mutable std::mutex m_ConcreteWarmMutex;
     std::unordered_map<uint64_t, ConcreteWarmWait> m_ConcreteWarmWaits;
+
+    // The shader.variant category and gate; null until ReportLoadingWork and after StopReportingLoadingWork.
+    struct LoadReport;
+    std::shared_ptr<LoadReport> m_LoadReport;
 
     // Lazy-loaded SPV + reflected variant for the shared depth-only shader.
     // [0] = non-skinned, [1] = skinned.

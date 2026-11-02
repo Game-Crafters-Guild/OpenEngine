@@ -210,12 +210,11 @@ private:
     // FindPath on `solver`'s scratch.
     PathStatus FindPath(const PathRequest& request, AStarSolver& solver, PathBuffer& pathBuffer,
                         PathHandle& outPath) const;
-    // FindPath on `solver`'s scratch, without the PathBuffer and without a
-    // window of its own: called inside an open path-solve window, it reads
-    // through View(), writes a Complete path's points to outPoints (cleared
-    // first) and nothing else, so solves on several threads, each on its own
-    // solver, may run at once inside one window.
-    PathStatus FindPathPoints(const PathRequest& request, AStarSolver& solver, std::vector<PathPoint>& outPoints) const;
+    // FindPath inside an open path-solve window, without the PathBuffer: reads through View() and
+    // writes only outPoints (a Complete path, cleared first) and outRecord (Microseconds stays 0).
+    // Solves on several threads, each on its own solver, may run at once inside one window.
+    PathStatus FindPathPoints(const PathRequest& request, AStarSolver& solver, std::vector<PathPoint>& outPoints,
+                              GridSolveRecord& outRecord) const;
 
     GridSettings m_Settings;
     std::vector<float32> m_Costs;

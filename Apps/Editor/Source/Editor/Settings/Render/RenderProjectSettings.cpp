@@ -11,6 +11,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
 #include "Logger/Logger.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -125,8 +126,7 @@ bool CarriesRetiredAutoToken(const SettingsStore& store)
     value.erase(std::remove_if(value.begin(), value.end(),
                                [](unsigned char ch) { return std::isspace(ch) != 0; }),
                 value.end());
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    value = ToLowerAscii(value);
     return value == kRetiredAutoAAModeSettingValue;
 }
 

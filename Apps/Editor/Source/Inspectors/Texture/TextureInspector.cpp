@@ -28,10 +28,11 @@
 #include "UI/StyleProperties.h"
 #include "UndoRedo/SetAssetMetaValueCommand.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -336,9 +337,10 @@ std::array<char, 4> ReadCurrentSwizzle(const std::filesystem::path& assetPath)
     std::string value;
     if (registry.TryGetMetaValue(assetPath, kTextureSwizzleMetaKey, value) && value.size() == 4)
     {
+        const std::string lowered = ToLowerAscii(value);
         for (int i = 0; i < 4; ++i)
         {
-            const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(value[i])));
+            const char c = lowered[i];
             if (c == 'r' || c == 'g' || c == 'b' || c == 'a' || c == '0' || c == '1')
                 sw[i] = c;
         }
@@ -454,9 +456,7 @@ void CommitTextureMeta(const MetaWriteContext& writes, const std::filesystem::pa
 
 bool IsSvgTexturePath(const std::filesystem::path& assetPath)
 {
-    std::string extension = assetPath.extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string extension = LowerCaseExtension(assetPath);
     return extension == ".svg";
 }
 
@@ -1152,9 +1152,7 @@ void BuildTextureInspector(const InspectorContext& ctx, TextureAsset* tex)
         // cooking uncorrected mips. So the block re-reads the panel's current values after
         // every write that can invalidate it, and the two rows above carry the conflict in
         // their own lists while the policy is on.
-        std::string extension = assetPath.extension().string();
-        std::transform(extension.begin(), extension.end(), extension.begin(),
-            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string extension = LowerCaseExtension(assetPath);
         auto readCoverageInputs = [assetPath, extension]() {
             auto& registry = EngineCore::GetInstance().GetAssetManager().GetRegistry();
             Editor::TextureCoveragePolicyInputs inputs;

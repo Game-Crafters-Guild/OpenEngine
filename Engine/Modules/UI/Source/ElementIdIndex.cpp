@@ -85,7 +85,10 @@ void ElementIdIndex::Register(UIElement& element)
         return;
     }
     if (std::find(matches.begin(), matches.end(), &element) == matches.end())
+    {
         matches.push_back(&element);
+        ++m_Generation;
+    }
 }
 
 void ElementIdIndex::Unregister(UIElement& element)
@@ -95,7 +98,8 @@ void ElementIdIndex::Unregister(UIElement& element)
     auto entry = m_Elements.find(element.GetIdHash());
     if (entry == m_Elements.end())
         return;
-    std::erase(entry->second, &element);
+    if (std::erase(entry->second, &element) > 0)
+        ++m_Generation;
     if (entry->second.empty())
         m_Elements.erase(entry);
 }

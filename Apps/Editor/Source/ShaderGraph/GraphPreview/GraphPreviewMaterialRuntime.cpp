@@ -10,25 +10,13 @@
 #include "Logger/Logger.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Thumbnails/ModelThumbnail/ModelThumbnailHandler.h"
+#include "Types/StringUtils.h"
 
-#include <algorithm>
-#include <cctype>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
 namespace GameEngine {
 namespace Editor {
-namespace {
-
-std::string LowerAscii(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
-
-} // namespace
 
 GraphPreviewCacheSource ResolveGraphPreviewCacheSource(const EditorContext* ctx)
 {
@@ -45,8 +33,8 @@ GraphPreviewCacheSource ResolveGraphPreviewCacheSource(const EditorContext* ctx)
         if (firstSource.Root.empty())
             firstSource = {root, source.Alias};
 
-        if (LowerAscii(source.Alias) == "editor"
-            || LowerAscii(root.filename().string()) == "editorassets")
+        if (ToLowerAscii(source.Alias) == "editor"
+            || ToLowerAscii(root.filename().string()) == "editorassets")
             return {root, source.Alias};
     }
 

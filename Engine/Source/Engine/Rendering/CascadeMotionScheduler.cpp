@@ -18,6 +18,7 @@ CascadeUpdateClass ClassifyCascadeDirtyCause(CascadeCacheDirtyCause cause)
         return CascadeUpdateClass::Cached;
     case CascadeCacheDirtyCause::CameraChanged:
     case CascadeCacheDirtyCause::CascadeFitChanged:
+    case CascadeCacheDirtyCause::CasterDeformed:
         return CascadeUpdateClass::Motion;
     default:
         // FirstRender, ContributorPresent, ExecUnderDraw, ContributorChanged,
@@ -45,10 +46,28 @@ CascadeUpdateClass ClassifyCascadePair(CascadeCacheDirtyCause depthCause,
     return cls;
 }
 
+namespace
+{
+bool IsCameraMotionCause(CascadeCacheDirtyCause cause)
+{
+    return cause == CascadeCacheDirtyCause::CameraChanged ||
+           cause == CascadeCacheDirtyCause::CascadeFitChanged;
+}
+} // namespace
+
+bool IsCameraMotionPair(CascadeUpdateClass pairClass, CascadeCacheDirtyCause depthCause,
+                        const CascadeCacheDirtyCause* tintCause)
+{
+    if (pairClass != CascadeUpdateClass::Motion)
+        return false;
+    return IsCameraMotionCause(depthCause) || (tintCause && IsCameraMotionCause(*tintCause));
+}
+
 CascadeMotionScheduler::FramePlan CascadeMotionScheduler::PlanFrame(
     uint32_t viewId, uint32_t numCascades,
     const std::array<CascadeUpdateClass, kMaxCascades>& classes,
-    const std::array<uint64_t, kMaxCascades>& staleness, uint32_t motionCap, uint32_t maxAge)
+    const std::array<uint64_t, kMaxCascades>& staleness, uint32_t motionCap, uint32_t maxAge,
+    CascadeMotionSource source)
 {
     assert(numCascades <= kMaxCascades);
     numCascades = std::min(numCascades, kMaxCascades);
@@ -72,12 +91,10 @@ CascadeMotionScheduler::FramePlan CascadeMotionScheduler::PlanFrame(
 
     Stats& stats = m_Views[viewId];
 
-    // Staleness-forced renders first (the bound beats the budget), most-stale
-    // first so a burst drains in order; then nearest-first until the budget
-    // runs out; the rest defer. A slot with unknown content staleness can
-    // never defer — it always classifies as forced.
+    // A slot past the staleness bound always renders, most stale first; the rest
+    // take the budget nearest-first or defer. A forced slot takes budget under
+    // Camera and renders on top of it under CasterDeformation.
     const auto forced = [&](uint32_t c) { return staleness[c] > maxAge; };
-    uint32_t budget = motionCap;
     std::sort(motionSlots, motionSlots + std::min(motionCount, kMaxCascades),
               [&](uint32_t a, uint32_t b)
               {
@@ -89,22 +106,31 @@ CascadeMotionScheduler::FramePlan CascadeMotionScheduler::PlanFrame(
                       return staleness[a] > staleness[b]; // most stale first
                   return a < b;                           // nearest-first otherwise
               });
+    const bool forcedTakesBudget = source == CascadeMotionSource::Camera;
+    uint32_t budget = motionCap;
+    uint32_t renders = 0;
     for (uint32_t i = 0; i < motionCount; ++i)
     {
         const uint32_t c = motionSlots[i];
-        if (forced(c) || budget > 0)
+        const bool isForced = forced(c);
+        if (isForced)
+            ++stats.ForcedByAge;
+        if (budget > 0 && (!isForced || forcedTakesBudget))
         {
-            if (budget > 0)
-                --budget;
-            else
-                ++stats.ForcedBeyondCap;
-            if (forced(c))
-                ++stats.ForcedByAge;
-            continue; // renders this frame
+            --budget;
+            ++renders;
+            continue;
+        }
+        if (isForced)
+        {
+            ++renders;
+            continue;
         }
         plan.DeferMask |= 1u << c;
         ++stats.Deferred;
     }
+    if (renders > motionCap)
+        stats.ForcedBeyondCap += renders - motionCap;
     return plan;
 }
 

@@ -651,12 +651,13 @@ TEST(TerrainBakeCache, MalformedArtifactsAreMissesNotCrashes)
 }
 
 // A writer that died between its write and its rename leaves a temporary sibling;
-// the next store of that terrain removes it.
+// the next store of that terrain removes it. The writer id is one no process has: process 1
+// is the init process on macOS and Linux, so it is always running there.
 TEST(TerrainBakeCache, AStoreRemovesTemporarySiblingsOfDeadWriters)
 {
     TempDirectory dir;
     const fs::path file = TerrainBakeFile(dir.Path, kSceneGuid, kTerrainTag);
-    const fs::path orphan = file.string() + ".1-1-0.tmp";
+    const fs::path orphan = file.string() + ".2147483600-1-0.tmp";
     WriteBytes(orphan, {1, 2, 3});
     fs::last_write_time(orphan, fs::last_write_time(orphan) - std::chrono::hours(24));
     BakeScene({}, {dir.Path, true});

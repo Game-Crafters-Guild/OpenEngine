@@ -626,6 +626,16 @@ static int EditorMainImpl(int argc, char** argv) {
     #endif
     }
 
+    // Refused arguments stop the run here, after the file sink is up, so the
+    // message reaches the log of a launch that has no console.
+    if (!editorArgs.refusedArgs.empty())
+    {
+        for (const std::string& refused : editorArgs.refusedArgs)
+            Logger::Log::Error("Editor: {}", refused);
+        Logger::Log::Shutdown();
+        return 1;
+    }
+
     GameEngine::ApplicationConfig config =
         GameEngine::Editor::Startup::BuildEditorApplicationConfig(editorArgs, engineArgs);
     config.AudioOutput = ReadAudioOutputOverride();

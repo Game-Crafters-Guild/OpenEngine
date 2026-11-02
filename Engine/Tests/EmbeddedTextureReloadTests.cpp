@@ -13,6 +13,8 @@
 #include "Engine/Rendering/TextureService.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Materials/MaterialDocument.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
+#include "SceneLoadTrackerTestAccess.h"
 #include "TestDeviceHelper.h"
 #include "TestTempDir.h"
 #include "Types/Fnv1a.h"
@@ -224,6 +226,21 @@ TEST_F(EmbeddedTextureReload, AnEmbeddedImageDecodesOnAJobAndBindsAtTheDrain)
     EXPECT_TRUE(m_Device->IsTextureAlive(mat->GetTexture(kAlbedo)));
     EXPECT_FALSE(mat->IsTextureAwaited(static_cast<uint32_t>(TextureSlot::kAlbedo)));
     EXPECT_EQ(Textures().PendingMaterialTextureBindCount(), 0u);
+}
+
+// A pending material texture bind holds the render.texture-upload row until the drain binds it.
+TEST_F(EmbeddedTextureReload, APendingBindHoldsTheReadyQueryUntilTheDrainBindsIt)
+{
+    SceneLoadTracker tracker;
+    Textures().ReportLoadingWork(tracker);
+    Material* mat = SpawnMaterial(OneImage(kOrangePng));
+    ASSERT_NE(mat, nullptr);
+    SceneLoadTrackerTestAccess::Tick(tracker,std::chrono::steady_clock::now());
+    EXPECT_FALSE(tracker.IsReadyToShow()) << "a pending bind does not hold the query";
+
+    PumpUntilSettled(*mat);
+    SceneLoadTrackerTestAccess::Tick(tracker,std::chrono::steady_clock::now());
+    EXPECT_TRUE(tracker.IsReadyToShow()) << tracker.Describe();
 }
 
 // A later bind of a slot replaces an earlier one that still waits on its job: the earlier job can

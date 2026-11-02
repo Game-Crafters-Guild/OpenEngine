@@ -20,26 +20,16 @@ namespace GameEngine::TerrainECS
 namespace
 {
 
-// The overlay's delta at stride texel (x, z) of the page `texel` names at `level` (stride texel s of
-// page p is level sample p x kPageOwnedSamples + s - kPageApronSamples).
-float32 OverlayTap(const PageStreaming::HeightPageOverlay& overlay, uint32 level, const PageTexel& texel, uint32 x,
-                   uint32 z)
-{
-    const int64 sampleX =
-        static_cast<int64>(texel.PageX) * PageStreaming::kPageOwnedSamples + x - PageStreaming::kPageApronSamples;
-    const int64 sampleZ =
-        static_cast<int64>(texel.PageZ) * PageStreaming::kPageOwnedSamples + z - PageStreaming::kPageApronSamples;
-    if (sampleX < 0 || sampleZ < 0)
-        return 0.0f; // the apron before the first sample: no tap inside the footprint reads it
-    return overlay.Delta(level, static_cast<uint32>(sampleX), static_cast<uint32>(sampleZ));
-}
-
 // The overlay's delta at `texel` of a page of `level`: the same four taps and weights as
-// SampleGridBilinearTexel over the page's stride grid, read from the overlay's level samples. The
+// SampleGridBilinearTexel over the page's stride grid, read from the layer's page there. The
 // bilinear sum is linear, so base plus this equals the bilinear sample of the uploaded page (at a
 // lattice point bit for bit: the weights are zero there).
-float32 OverlayDelta(const PageStreaming::HeightPageOverlay& overlay, uint32 level, const PageTexel& texel)
+float32 OverlayDelta(const PageStreaming::HeightPageLayer& overlay, uint32 level, const PageTexel& texel)
 {
+    const std::span<const float32> deltas =
+        overlay.PageDeltas(PageStreaming::PageAddress{0, static_cast<uint8>(level), texel.PageX, texel.PageZ});
+    if (deltas.empty())
+        return 0.0f;
     constexpr uint32 kStride = PageStreaming::kPageStrideSamples;
     const float32 tx = std::clamp(texel.StrideX, 0.0f, static_cast<float32>(kStride - 1u));
     const float32 tz = std::clamp(texel.StrideZ, 0.0f, static_cast<float32>(kStride - 1u));
@@ -49,11 +39,8 @@ float32 OverlayDelta(const PageStreaming::HeightPageOverlay& overlay, uint32 lev
     const uint32 z1 = std::min(z0 + 1u, kStride - 1u);
     const float32 fx = tx - static_cast<float32>(x0);
     const float32 fz = tz - static_cast<float32>(z0);
-    const float32 d00 = OverlayTap(overlay, level, texel, x0, z0);
-    const float32 d10 = OverlayTap(overlay, level, texel, x1, z0);
-    const float32 d01 = OverlayTap(overlay, level, texel, x0, z1);
-    const float32 d11 = OverlayTap(overlay, level, texel, x1, z1);
-    return Math::Lerp(Math::Lerp(d00, d10, fx), Math::Lerp(d01, d11, fx), fz);
+    const auto tap = [&deltas](uint32 x, uint32 z) { return deltas[static_cast<std::size_t>(z) * kStride + x]; };
+    return Math::Lerp(Math::Lerp(tap(x0, z0), tap(x1, z0), fx), Math::Lerp(tap(x0, z1), tap(x1, z1), fx), fz);
 }
 
 } // namespace
@@ -61,7 +48,7 @@ float32 OverlayDelta(const PageStreaming::HeightPageOverlay& overlay, uint32 lev
 SurfaceHeightQuery::SurfaceHeightQuery(const PageStreaming::CpuPageDirectory& pages,
                                        std::span<const PageStreaming::PageStoreLevel> levels,
                                        const PageRequestTerrain& shape, float32 originY, float32 heightScale,
-                                       const PageStreaming::HeightPageOverlay* overlay, const SurfaceHeightEdits& edits)
+                                       const PageStreaming::HeightPageLayer* overlay, const SurfaceHeightEdits& edits)
     : m_Pages(pages)
     , m_Overlay(overlay)
     , m_Levels(levels)
@@ -171,13 +158,15 @@ bool SurfaceHeightQuery::FillFinestPage(uint32 pageX, uint32 pageZ, std::span<fl
     // Grid sample i of the page is its stride sample i + kPageApronSamples: the first owned sample on.
     constexpr uint32 kApron = PageStreaming::kPageApronSamples;
     constexpr uint32 kStride = PageStreaming::kPageStrideSamples;
-    const PageTexel page{pageX, pageZ, 0.0f, 0.0f};
+    const std::span<const float32> deltas =
+        m_Overlay ? m_Overlay->PageDeltas(PageStreaming::PageAddress{0, 0, pageX, pageZ}) : std::span<const float32>();
     for (uint32 z = 0; z < kFinestPageGridSamples; ++z)
         for (uint32 x = 0; x < kFinestPageGridSamples; ++x)
         {
-            float32 normalized = samples[static_cast<std::size_t>(z + kApron) * kStride + x + kApron];
-            if (m_Overlay)
-                normalized += OverlayTap(*m_Overlay, 0, page, x + kApron, z + kApron);
+            const std::size_t stored = static_cast<std::size_t>(z + kApron) * kStride + x + kApron;
+            float32 normalized = samples[stored];
+            if (!deltas.empty())
+                normalized += deltas[stored];
             out[static_cast<std::size_t>(z) * kFinestPageGridSamples + x] = normalized;
         }
     return true;

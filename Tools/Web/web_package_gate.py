@@ -118,24 +118,25 @@ canvas {{ display: block; width: 100%; height: 100%; }}</style></head>
 <script type="module">
 const report = (outcome) => {{ window.__gate = outcome; console.log('GATE ' + JSON.stringify(outcome)); }};
 const why = (error) => String((error && error.message) || error);
-// The entities under a model loaded into a fresh world: the factory creates them right after the
-// model root, so their ids follow its id with no recycled slot between them.
-const CountParts = (scene, model) => {{
-    let parts = 0;
-    for (let id = model.id + 1; ; ++id) {{
-        try {{ if (scene.entityFor(id).transform.parent !== model) break; }} catch {{ break; }}
-        ++parts;
+// The number of the model's children. Each child's parent must read back as the model; if it
+// does not, or a read throws, the function throws and the error gives the reason.
+const CountParts = (model) => {{
+    const children = model.transform.children;
+    for (const child of children) {{
+        const parent = child.transform.parent;
+        if (parent !== model)
+            throw new Error(`child ${{child.id}} reads its parent as ${{parent && parent.id}}, not the model ${{model.id}}`);
     }}
-    return parts;
+    return children.length;
 }};
 try {{
     const {{ Engine, OrbitControls }} = await import({facade});
     const canvas = document.querySelector('canvas');
     const engine = await Engine.create({{ canvas, threads: {threads}{coreUrl} }});
-    let loaded = false, error = null, parts = null;
+    let loaded = false, error = null, parts = null, partsError = null;
     try {{
         const model = await engine.scene.load({model});
-        parts = CountParts(engine.scene, model);
+        try {{ parts = CountParts(model); }} catch (partsFailure) {{ partsError = why(partsFailure); }}
         const {{ center, size }} = model.bounds;
         const controls = new OrbitControls(engine.scene.camera, canvas);
         controls.target.copy(center);
@@ -143,7 +144,7 @@ try {{
         loaded = true;
     }} catch (loadError) {{ error = why(loadError); }}
     engine.run();
-    report({{ created: true, isolated: crossOriginIsolated, loaded, error, parts }});
+    report({{ created: true, isolated: crossOriginIsolated, loaded, error, parts, partsError }});
 }} catch (createError) {{
     report({{ created: false, isolated: crossOriginIsolated, loaded: false, error: why(createError) }});
 }}
@@ -298,7 +299,8 @@ def RunCase(cdp: browser_gate.Cdp, case: Case, url: str, seconds: float, out: Pa
     if outcome.get("loaded") is not case.expectLoaded:
         failures.append(f"model loaded {outcome.get('loaded')}, expected {case.expectLoaded}")
     if case.expectParts is not None and outcome.get("parts") != case.expectParts:
-        failures.append(f"{outcome.get('parts')} entities under the model, expected {case.expectParts}")
+        failures.append(f"{outcome.get('parts')} entities under the model, expected {case.expectParts}"
+                        + (f": {outcome['partsError']}" if outcome.get("partsError") else ""))
     if case.expectError and case.expectError not in (outcome.get("error") or ""):
         failures.append(f"the error does not contain \"{case.expectError}\"")
     if case.expectCreated:

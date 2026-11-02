@@ -5,6 +5,7 @@
 #include "PageStoreSerialization.h"
 
 #include "FileSystem/FileSystem.h"
+#include "Types/ByteBuffer.h"
 
 #include <algorithm>
 #include <system_error>
@@ -128,8 +129,9 @@ bool PageStoreWriter::WritePage(const PageAddress& address, const EncodedPage& p
     return WriteAtLocked(entry.Offset, page.Bytes.data(), page.Bytes.size());
 }
 
-bool PageStoreWriter::ReadPage(const PageAddress& address, std::vector<uint8>& outBytes, PageIndexEntry& outEntry) const
+bool PageStoreWriter::ReadPage(const PageAddress& address, ByteBuffer& outBytes, PageIndexEntry& outEntry) const
 {
+    outBytes = {};
     outEntry = {};
     const PageIndexEntry* entry = m_Layout.FindPresent(address);
     if (!entry)
@@ -139,8 +141,11 @@ bool PageStoreWriter::ReadPage(const PageAddress& address, std::vector<uint8>& o
     outEntry = *entry;
     if (outEntry.Offset == 0)
         return false;
-    outBytes.resize(m_Layout.StoredBytes(outEntry));
-    return ReadAtLocked(outEntry.Offset, outBytes.data(), outBytes.size());
+    ByteBuffer bytes(m_Layout.StoredBytes(outEntry));
+    if (!ReadAtLocked(outEntry.Offset, bytes.Data(), bytes.Size()))
+        return false;
+    outBytes = std::move(bytes);
+    return true;
 }
 
 std::string PageStoreWriter::Finish()

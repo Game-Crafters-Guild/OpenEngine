@@ -11,9 +11,8 @@
 #include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainZonePayload.h"
+#include "Types/PathUtils.h"
 
-#include <algorithm>
-#include <cctype>
 #include <fstream>
 #include <string>
 #include <system_error>
@@ -24,14 +23,6 @@ namespace GameEngine::Editor
 {
 namespace
 {
-
-std::string LowerExtension(const std::filesystem::path& path)
-{
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext;
-}
 
 // Points the zone component of kind `typeId` on `entity` at `guid`.
 void SetZonePayloadRef(ECS::World& world, ECS::EntityHandle entity, ECS::ComponentTypeId typeId, const GUID& guid)
@@ -125,7 +116,7 @@ uint32_t FlushDirtyZonePayloads(ECS::World& world, const std::filesystem::path& 
         bool hasExisting = false;
         AssetMetadata meta{};
         if (registry.TryGetAssetMetadata(guid, meta) && !meta.Path.empty()
-            && LowerExtension(meta.Path) == ".tzone")
+            && LowerCaseExtension(meta.Path) == ".tzone")
         {
             liveTarget = meta.Path;
             hasExisting = true;

@@ -92,10 +92,10 @@ class PrefabSpawnTests : public ::testing::Test
 
     bool Load(ECS::World& world, const std::string& file, std::string_view text)
     {
-        Scene::LoadOptions options{Scene::LoadMode::Replace};
+        Scene::SceneReadOptions options{};
         options.assetResolver = &*m_Resolver;
         options.assetRootOverride = m_Resolver->GetAssetRoot();
-        return Scene::LoadSceneFromFile(world, Write(file, text), options);
+        return Scene::ReadSceneInto(world, Write(file, text), options);
     }
 
     std::filesystem::path m_OriginalWorkingDirectory;

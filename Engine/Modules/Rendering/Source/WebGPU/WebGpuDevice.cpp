@@ -1019,6 +1019,8 @@ bool WebGpuDevice::BeginFrame()
             DestroyDescriptorSet(handle);
         }
     }
+    // This slot's previous frame has finished, so the set cache ages one frame here.
+    AgeCachedDescriptorSets();
 
     ReportPushConstantRefusals();
     if (m_PushConstantSliceBytes != 0)

@@ -1,26 +1,35 @@
 // The conform's targets and its hold, the same in every process. A conform ray over a mesh whose
 // BVH is still being built neither waits for it nor lands on the mesh's box: it holds the rebuild
 // and lands once the BVH is published, and a recipe controller builds nothing until then. A pick
-// provider's mesh and a renderer with no CPU mesh are never ground. The world here has no editor
-// running: the fixture is the engine and one model.
+// provider's mesh and a renderer with no CPU mesh are never ground. A built recipe follows a mesh
+// that arrives under it. The world here has no editor running: the fixture is the engine and one model.
 
 #include "Components/Hierarchy.h"
 #include "Components/RuntimeOnlyEntity.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Spline/SplineExtrude.h"
+#include "Components/Spline/SplineFence.h"
 #include "Components/Spline/SplineNetworkMember.h"
 #include "Components/Spline/SplinePaving.h"
+#include "Components/Spline/SplinePlacement.h"
+#include "Engine/Rendering/PrimitiveGenerator.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Picking/EditorPickProviders.h"
 #include "SplineRecipes/RecipeBuildStates.h"
 #include "SplineRecipes/RecipeControllers.h"
 #include "SplineRecipes/SplineExtrudeController.h"
+#include "SplineRecipes/SplineFenceController.h"
+#include "SplineRecipes/SplinePlacementController.h"
 #include "SplineRecipes/SplineSurfaceConform.h"
 #include "SharedHeadlessDevice.h"
 #include "SplineECS/SplineNetwork.h"
 #include "SplineECS/SplineService.h"
 
 #include "PendingBvhGrid.h"
+
+#include <algorithm>
+#include <iterator>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -69,6 +78,8 @@ class SplineConformHoldTests : public PendingBvhGridTest
     void TearDown() override
     {
         s_ProviderWorld = nullptr;
+        if (m_Box)
+            MeshBvhCache::Instance().InvalidateAsset(m_BoxGuid);
         if (m_OwnsSplines)
             GameEngine::SplineECS::SplineService::Shutdown();
         PendingBvhGridTest::TearDown();
@@ -88,8 +99,9 @@ class SplineConformHoldTests : public PendingBvhGridTest
         return entity;
     }
 
-    // A straight extrude recipe across the grid, conforming to the scene (the recipe's defaults).
-    GameEngine::ECS::EntityHandle CreateExtrudeAcrossTheGrid()
+    // A straight spline across the grid at y = 0, with a recipe `recipe`.
+    template <class Recipe>
+    GameEngine::ECS::EntityHandle CreateRecipeAcrossTheGrid(const Recipe& recipe)
     {
         auto& splines = GameEngine::SplineECS::SplineService::Get();
         const auto handle = splines.CreateSpline(GameEngine::Spline::SplineType::Linear, false);
@@ -103,9 +115,75 @@ class SplineConformHoldTests : public PendingBvhGridTest
         spline.SplineDataIndex = handle.Index();
         spline.SplineDataGeneration = handle.Generation();
         m_World.AddComponentImmediate(entity, spline);
-        m_World.AddComponentImmediate(entity, Components::SplineExtrude{});
+        m_World.AddComponentImmediate(entity, recipe);
         m_World.AddComponentImmediate(entity, Components::WorldTransform{});
         return entity;
+    }
+
+    // A straight extrude recipe across the grid, conforming to the scene (the recipe's defaults).
+    GameEngine::ECS::EntityHandle CreateExtrudeAcrossTheGrid()
+    {
+        return CreateRecipeAcrossTheGrid(Components::SplineExtrude{});
+    }
+
+    // A unit cube model registered with the asset manager, its BVH published: the pieces' mesh
+    // and the mesh that arrives under a run.
+    GUID RegisterBox()
+    {
+        m_Box = GameEngine::MakeShared<GameEngine::ModelAsset>(m_BoxGuid, "conform_box.glb");
+        m_Box->SetMeshesForTest({GameEngine::Engine::Renderer::PrimitiveGenerator::GenerateCube()});
+        EngineCore::GetInstance().GetAssetManager().RegisterLoadedAsset(m_BoxGuid, m_Box);
+        EXPECT_NE(MeshBvhCache::Instance().GetOrBuild(m_BoxGuid, 0, m_Box->GetMesh(0)), nullptr);
+        return m_BoxGuid;
+    }
+
+    // The box stretched to 6 m across the middle of the run, its top at y = 1.5, above the grid.
+    void AddSlabUnderTheRun()
+    {
+        const GameEngine::ECS::EntityHandle slab = m_World.CreateEntity();
+        Components::MeshRenderer renderer{};
+        renderer.modelAssetGuid.Set(m_BoxGuid);
+        m_World.AddComponentImmediate(slab, renderer);
+        Components::WorldTransform transform{};
+        transform.matrix[0] = 6.0f;
+        transform.matrix[10] = 4.0f;
+        transform.matrix[13] = 1.0f;
+        transform.matrix[14] = 0.5f;
+        transform.Version = 1u;
+        m_World.AddComponentImmediate(slab, transform);
+        Components::LocalBounds bounds{};
+        bounds.Box.halfExtents = Vector3(0.5f, 0.5f, 0.5f);
+        m_World.AddComponentImmediate(slab, bounds);
+    }
+
+    // The local matrices of the pieces under `parent`, sorted: they change when a piece moves.
+    std::vector<std::vector<float>> PiecePosesUnder(GameEngine::ECS::EntityHandle parent)
+    {
+        std::vector<std::vector<float>> poses;
+        m_World.Query<GameEngine::ECS::Read<Components::Transform>, GameEngine::ECS::Read<Components::Parent>>().Each(
+            [&](GameEngine::ECS::EntityHandle, const Components::Transform& transform, const Components::Parent& link)
+            {
+                if (link.Entity == parent)
+                    poses.emplace_back(std::begin(transform.matrix), std::end(transform.matrix));
+            });
+        std::sort(poses.begin(), poses.end());
+        return poses;
+    }
+
+    static constexpr GameEngine::uint64 kSettleUpdates = 10u;
+
+    // Enough updates of a fence or a placement controller for a change to settle, a held
+    // rebuild included.
+    template <class Controller>
+    void UpdateUntilSettled(Controller& controller, GameEngine::Engine::Renderer::RenderServices& renderServices)
+    {
+        constexpr float kFrameSeconds = 0.3f;
+        GameEngine::SplineRecipes::RecipeBuildStates states;
+        for (GameEngine::uint64 i = 0; i < kSettleUpdates; ++i)
+        {
+            controller.Update(m_World, renderServices, kFrameSeconds, states);
+            m_World.ProcessCommands();
+        }
     }
 
     // A linear network member of `kind` through `points` at y = 0, closed when `closed`.
@@ -152,6 +230,8 @@ class SplineConformHoldTests : public PendingBvhGridTest
     }
 
     bool m_OwnsSplines = false;
+    const GUID m_BoxGuid = GUID::Generate();
+    GameEngine::SharedPtr<GameEngine::ModelAsset> m_Box;
 
     size_t CountGeneratedChunks()
     {
@@ -301,4 +381,116 @@ TEST_F(SplineConformHoldTests, ARoadEditedWhileItsPavedRegionIsHeldKeepsItsStrip
     controllers.ReleaseSceneScoped(m_World, &renderServices);
     if (ownsNetwork)
         GameEngine::SplineECS::SplineNetwork::Shutdown();
+}
+
+// A fence conforms to the meshes under it. A mesh that arrives under a built fence moves its
+// pieces onto the mesh, as a first build over the mesh places them.
+TEST_F(SplineConformHoldTests, AFenceRidesAMeshThatArrivesUnderItAfterItsFirstBuild)
+{
+    // The pieces register their mesh and material with a device's render services.
+    GameEngine::Rendering::IDevice* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "no Vulkan device available";
+    GameEngine::Engine::Renderer::RenderServices renderServices;
+    ASSERT_TRUE(renderServices.Initialize(device));
+    ASSERT_NE(MeshBvhCache::Instance().GetOrBuild(m_Guid, 0, Grid()), nullptr);
+    Components::SplineFence recipe{};
+    recipe.Parts[0] = {Components::ModelRef(RegisterBox()), Components::SplineFencePartKind::Span};
+    const GameEngine::ECS::EntityHandle fence = CreateRecipeAcrossTheGrid(recipe);
+
+    GameEngine::SplineRecipes::SplineFenceController controller;
+    UpdateUntilSettled(controller, renderServices);
+    const std::vector<std::vector<float>> beforeTheMesh = PiecePosesUnder(fence);
+    ASSERT_FALSE(beforeTheMesh.empty()) << "the fence built no pieces";
+
+    AddSlabUnderTheRun();
+    UpdateUntilSettled(controller, renderServices);
+    const std::vector<std::vector<float>> afterTheMesh = PiecePosesUnder(fence);
+    // A settled fence requests the scene TLAS once per update and casts no conform ray.
+    const GameEngine::uint64 requestsBefore = GameEngine::Scene::GetSceneTlas(m_World).GetRequestCountForTesting();
+    UpdateUntilSettled(controller, renderServices);
+    EXPECT_EQ(GameEngine::Scene::GetSceneTlas(m_World).GetRequestCountForTesting() - requestsBefore, kSettleUpdates);
+    controller.Shutdown(m_World, &renderServices);
+    m_World.ProcessCommands();
+
+    GameEngine::SplineRecipes::SplineFenceController firstBuild;
+    UpdateUntilSettled(firstBuild, renderServices);
+    const std::vector<std::vector<float>> builtOverTheMesh = PiecePosesUnder(fence);
+    EXPECT_NE(builtOverTheMesh, beforeTheMesh) << "positive control: the fence does not reach the mesh";
+    EXPECT_EQ(afterTheMesh, builtOverTheMesh) << "the fence kept the ground it measured before the mesh arrived";
+    firstBuild.Shutdown(m_World, &renderServices);
+}
+
+// Tiles placed along a spline conform to the meshes under them. A mesh that arrives under a
+// built row moves its tiles onto the mesh, as a first build over the mesh places them.
+TEST_F(SplineConformHoldTests, APlacementRidesAMeshThatArrivesUnderItAfterItsFirstBuild)
+{
+    GameEngine::Rendering::IDevice* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "no Vulkan device available";
+    GameEngine::Engine::Renderer::RenderServices renderServices;
+    ASSERT_TRUE(renderServices.Initialize(device));
+    ASSERT_NE(MeshBvhCache::Instance().GetOrBuild(m_Guid, 0, Grid()), nullptr);
+    Components::SplinePlacement recipe{};
+    recipe.StraightPool[0] = Components::ModelRef(RegisterBox());
+    const GameEngine::ECS::EntityHandle row = CreateRecipeAcrossTheGrid(recipe);
+
+    GameEngine::SplineRecipes::SplinePlacementController controller;
+    UpdateUntilSettled(controller, renderServices);
+    const std::vector<std::vector<float>> beforeTheMesh = PiecePosesUnder(row);
+    ASSERT_FALSE(beforeTheMesh.empty()) << "the placement built no tiles";
+
+    AddSlabUnderTheRun();
+    UpdateUntilSettled(controller, renderServices);
+    const std::vector<std::vector<float>> afterTheMesh = PiecePosesUnder(row);
+    // A settled row requests the scene TLAS once per update and casts no conform ray.
+    const GameEngine::uint64 requestsBefore = GameEngine::Scene::GetSceneTlas(m_World).GetRequestCountForTesting();
+    UpdateUntilSettled(controller, renderServices);
+    EXPECT_EQ(GameEngine::Scene::GetSceneTlas(m_World).GetRequestCountForTesting() - requestsBefore, kSettleUpdates);
+    controller.Shutdown(m_World);
+    m_World.ProcessCommands();
+
+    GameEngine::SplineRecipes::SplinePlacementController firstBuild;
+    UpdateUntilSettled(firstBuild, renderServices);
+    const std::vector<std::vector<float>> builtOverTheMesh = PiecePosesUnder(row);
+    EXPECT_NE(builtOverTheMesh, beforeTheMesh) << "positive control: the tiles do not reach the mesh";
+    EXPECT_EQ(afterTheMesh, builtOverTheMesh) << "the tiles kept the ground they measured before the mesh arrived";
+    firstBuild.Shutdown(m_World);
+}
+
+// One update of the extrude recipes requests the scene TLAS once, however many of them conform
+// to the scene.
+TEST_F(SplineConformHoldTests, AnExtrudeUpdateRequestsTheSceneTlasOnceForAllItsRecipes)
+{
+    constexpr int kUpdates = 10;
+    constexpr int kSteadyUpdates = 4;
+    constexpr float kFrameSeconds = 0.3f;
+    GameEngine::Rendering::IDevice* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "no Vulkan device available";
+    GameEngine::Engine::Renderer::RenderServices renderServices;
+    ASSERT_TRUE(renderServices.Initialize(device));
+    ASSERT_NE(MeshBvhCache::Instance().GetOrBuild(m_Guid, 0, Grid()), nullptr);
+    CreateExtrudeAcrossTheGrid();
+    CreateExtrudeAcrossTheGrid();
+    GameEngine::SplineRecipes::SplineExtrudeController controller;
+    GameEngine::SplineRecipes::RecipeBuildStates states;
+    const GameEngine::SplineRecipes::PavingRoadTrims trims;
+    for (int i = 0; i < kUpdates; ++i)
+    {
+        controller.Update(m_World, renderServices, kFrameSeconds, states, trims, {});
+        m_World.ProcessCommands();
+    }
+    ASSERT_GT(CountGeneratedChunks(), 0u) << "the recipes never built";
+
+    const GameEngine::Scene::SceneTlas& tlas = GameEngine::Scene::GetSceneTlas(m_World);
+    const GameEngine::uint64 requestsBefore = tlas.GetRequestCountForTesting();
+    for (int i = 0; i < kSteadyUpdates; ++i)
+    {
+        controller.Update(m_World, renderServices, kFrameSeconds, states, trims, {});
+        m_World.ProcessCommands();
+    }
+    EXPECT_EQ(tlas.GetRequestCountForTesting() - requestsBefore, static_cast<GameEngine::uint64>(kSteadyUpdates));
+
+    controller.Shutdown(m_World, &renderServices);
 }

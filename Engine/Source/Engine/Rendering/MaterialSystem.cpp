@@ -20,6 +20,7 @@
 #include "Engine/Rendering/MaterialPrewarmVariants.h"
 #include "Engine/Rendering/PipelineVariantCache.h"
 #include "Engine/Rendering/ProjectMaterialPrewarmService.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Engine/Rendering/TextureService.h"
 #include "Mathematics/Interpolation.h"
@@ -290,12 +291,12 @@ void MaterialSystem::Initialize(Rendering::IDevice* device, PerFrameWritePool& f
     m_ResolveWorldPassKeywords = std::move(resolveWorldPassKeywords);
     m_ProjectPrewarm = std::make_unique<ProjectMaterialPrewarmService>();
 
-    // Global shader-compile admission gate. Bounds concurrent shaderc work so a
-    // cold-load prewarm burst leaves cores + worker lanes for extraction and the
-    // main thread. The dispatch closure captures nothing with lifetime concerns
-    // (it reaches the engine job system through the singleton) and is only
-    // invoked while the pool is up (SubmitTrackedPrewarm is guarded on that).
-    const uint32_t compileCap = ComputeShaderCompileConcurrencyCap();
+    // The compile gate's cap is read once: the pool exists from before the renderer until after it,
+    // with a fixed worker count (none in a test without the engine). The dispatch reaches the pool
+    // through the engine singleton, only while the pool is up (SubmitTrackedPrewarm checks it).
+    GameEngine::EngineCore& engineCore = GameEngine::EngineCore::GetInstance();
+    const size_t workerCount = engineCore.IsInitialized() ? engineCore.GetJobSystem().GetWorkerCount() : 0;
+    const uint32_t compileCap = ComputeShaderCompileConcurrencyCap(workerCount);
     m_CompileGate = std::make_unique<CompileConcurrencyGate>(
         compileCap,
         [](std::function<void()> work, JobSystem::JobPriority priority)
@@ -303,7 +304,7 @@ void MaterialSystem::Initialize(Rendering::IDevice* device, PerFrameWritePool& f
             GameEngine::EngineCore::GetInstance().GetJobSystem().EnqueueWork(std::move(work),
                                                                             priority);
         });
-    Logger::Log::Info("MaterialSystem: shader-compile concurrency cap = {}", compileCap);
+    Logger::Log::Info("MaterialSystem: shader-compile concurrency cap = {} ({} job workers)", compileCap, workerCount);
 
     // The device's asynchronous pipeline builds (Request*Pipeline) run on the
     // tracked prewarm workers: capped by the compile gate, drained at shutdown.
@@ -383,13 +384,21 @@ void MaterialSystem::ShutdownPhaseA()
     if (m_Device)
         m_Device->SetPipelineBuildDispatcher({});
 
-    // Stop accepting new shader-variant prewarm jobs and wait for in-flight ones
-    // to finish before anything they touch is torn down. They hold a raw pointer
-    // to m_ShaderCompilationCache and would lock/use it after free otherwise
-    // (ASan-confirmed shutdown heap-use-after-free). (was :1030-1038)
+    // Revoke the load reports first, so the tracker does not count a canceled job as failed.
+    // Then refuse new prewarm jobs, cancel the queued ones and wait for the running ones: they
+    // hold a raw pointer to m_ShaderCompilationCache.
+    if (m_PipelineVariants)
+        m_PipelineVariants->StopReportingLoadingWork();
     {
         std::lock_guard<std::mutex> lk(m_PrewarmDrainMutex);
         m_PrewarmShutdown = true;
+        m_LoadReport.reset();
+    }
+    if (m_CompileGate)
+    {
+        const size_t canceled = m_CompileGate->Close();
+        Logger::Log::Info("MaterialSystem: shutdown canceled {} queued compile tasks; waiting for {} running",
+                          canceled, m_CompileGate->Running());
     }
     DrainPrewarmJobs();
 
@@ -2345,7 +2354,8 @@ void MaterialSystem::SubmitAsyncBaseCompile(const GUID& guid, Material& mat,
     Rendering::IDevice* device = m_Device;
     auto* cache = &m_ShaderCompilationCache;
 
-    SubmitTrackedPrewarm(
+    SubmitTrackedPrewarm(TrackLoadWork(
+        LoadWork::BaseCompile, materialName, PrewarmOrigin::OnDemand,
         [this, guid, cacheKey, spec, buildContext, derivedBlend, cullMode, frontFace,
          vertexFlags, materialName, materialAssetPath, device, cache]() mutable
         {
@@ -2363,7 +2373,7 @@ void MaterialSystem::SubmitAsyncBaseCompile(const GUID& guid, Material& mat,
             std::lock_guard<std::mutex> lk(m_PendingPublishMutex);
             m_PendingPipelinePublishes.push_back(
                 {guid, pipelineId, variant ? variant->meta : nullptr, cacheKey});
-        });
+        }));
 }
 
 void MaterialSystem::RedriveAsyncBaseCompile(const GUID& guid, Material& mat)
@@ -2563,11 +2573,48 @@ void MaterialSystem::PrewarmMaterialBaseShader(const MaterialDocument& doc,
     const std::string materialName = doc.materialName.empty() ? std::string("<prewarm>") : doc.materialName;
     const Rendering::ShaderSourceKind sourceKind = m_Device->PreferredShaderSource();
 
-    SubmitTrackedPrewarm(
+    SubmitTrackedPrewarm(TrackLoadWork(
+        LoadWork::BaseCompile, materialName, PrewarmOrigin::OnDemand,
         [cache, cacheKey, spec, buildContext, materialName, materialAssetPath, sourceKind]() mutable
         {
             cache->GetOrCompile(cacheKey, spec, buildContext, materialName, materialAssetPath, sourceKind);
-        });
+        }));
+}
+
+struct MaterialSystem::LoadReport
+{
+    SceneLoadTracker::Category BaseCompiles;
+    SceneLoadTracker::Category PipelineBuilds;
+};
+
+void MaterialSystem::ReportLoadingWork(SceneLoadTracker& tracker)
+{
+    {
+        // Once. A task on a worker can read the report while this runs.
+        std::lock_guard<std::mutex> lk(m_PrewarmDrainMutex);
+        if (m_LoadReport)
+            return;
+        m_LoadReport = std::make_shared<LoadReport>();
+        m_LoadReport->BaseCompiles = tracker.RegisterCategory(
+            {.Id = "shader.base-compile", .Label = "Compiling shaders", .Unit = SceneLoadTracker::CostUnit::Variants});
+        m_LoadReport->PipelineBuilds = tracker.RegisterCategory(
+            {.Id = "gpu.pipeline", .Label = "Building pipelines", .Unit = SceneLoadTracker::CostUnit::Pipelines});
+    }
+    Variants().ReportLoadingWork(tracker);
+}
+
+std::function<void()> MaterialSystem::TrackLoadWork(LoadWork kind, std::string_view name, PrewarmOrigin origin,
+                                                    std::function<void()> work)
+{
+    // Under the drain lock: the shutdown drops the report under it.
+    std::lock_guard<std::mutex> lk(m_PrewarmDrainMutex);
+    if (!m_LoadReport)
+        return work;
+    SceneLoadTracker::Category& category =
+        kind == LoadWork::PipelineBuild ? m_LoadReport->PipelineBuilds : m_LoadReport->BaseCompiles;
+    const SceneLoadTracker::Need need =
+        origin == PrewarmOrigin::ProjectWarmUp ? SceneLoadTracker::Need::Background : SceneLoadTracker::Need::Frame;
+    return category.Track(name, need, std::move(work));
 }
 
 void MaterialSystem::SubmitTrackedPrewarm(std::function<void()> work,
@@ -2648,7 +2695,9 @@ void MaterialSystem::DispatchPipelineBuild(std::function<void()> build)
         build();
         return;
     }
-    SubmitTrackedPrewarm(std::move(build), JobSystem::JobPriority::Background);
+    SubmitTrackedPrewarm(TrackLoadWork(LoadWork::PipelineBuild, "device pipeline build", PrewarmOrigin::OnDemand,
+                                       std::move(build)),
+                         JobSystem::JobPriority::Background);
 }
 
 void MaterialSystem::DrainPrewarmJobs()
@@ -2841,9 +2890,13 @@ void MaterialSystem::PrewarmMaterialVariantSet(const Rendering::ShaderVariantKey
     const MaterialKeyword colorPassKw = colorPassKeywords;
     const Rendering::ShaderSourceKind sourceKind = m_Device->PreferredShaderSource();
 
-    SubmitTrackedPrewarm(
+    // ShutdownPhaseA waits for this task to end, so the flag pointer stays valid.
+    const std::atomic<bool>* shutdown = &m_PrewarmShutdown;
+
+    SubmitTrackedPrewarm(TrackLoadWork(
+        LoadWork::BaseCompile, materialName, origin,
         [cache, variantKey, spec, alphaMode, ignoresVertexColor, buildContext, materialName, materialAssetPath,
-         colorPassKw, sourceKind]() mutable
+         colorPassKw, sourceKind, shutdown]() mutable
         {
             using Clock = std::chrono::high_resolution_clock;
             const auto t0 = Clock::now();
@@ -2851,6 +2904,8 @@ void MaterialSystem::PrewarmMaterialVariantSet(const Rendering::ShaderVariantKey
                                                          alphaMode, ignoresVertexColor);
             for (const auto& key : keys)
             {
+                if (shutdown->load(std::memory_order_relaxed))
+                    return;
                 ShaderCacheKey ck{};
                 ck.Source = MakeShaderSourceKey(spec.surfaceShaderPath, spec.vertexModifierPath, materialAssetPath);
                 ck.VariantKey = key;
@@ -2859,7 +2914,7 @@ void MaterialSystem::PrewarmMaterialVariantSet(const Rendering::ShaderVariantKey
 
             const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
             Logger::Log::Trace("[Prewarm] '{}' {} variants: {:.1f}ms (background)", materialName, keys.size(), ms);
-        },
+        }),
         origin == PrewarmOrigin::ProjectWarmUp ? JobSystem::JobPriority::Background
                                                : JobSystem::JobPriority::Normal,
         origin);

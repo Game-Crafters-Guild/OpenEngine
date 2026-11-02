@@ -25,6 +25,7 @@
 #include "UI/Controls/Label.h"
 #include "UI/Controls/TextField.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 #include "UI/StyleProperties.h"
 
@@ -444,7 +445,7 @@ static void BuildShaderSourceInspector(UIElement* root, ShaderSourceAsset* src, 
 
     const std::filesystem::path srcPath = src->GetPath();
     const std::string sourceText = LoadShaderSourceText(src);
-    std::string ext = ToLowerAscii(srcPath.extension().string());
+    std::string ext = LowerCaseExtension(srcPath);
 
     if (ShaderGraph::IsShaderGraphSource(sourceText))
     {

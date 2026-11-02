@@ -41,6 +41,10 @@ class SceneBuildPump
     /// prior state, so it also restarts the build for a new scene.
     void Begin(ECS::World& world, RenderServices& renderServices);
 
+    /// Report the build's pending resolves to `tracker`, so a scene opened in the
+    /// editor holds the ready-to-show query as the engine's resolve does.
+    void ReportLoadingWork(SceneLoadTracker& tracker) { m_Resolves.ReportLoadingWork(tracker); }
+
     /// Resolve what has landed until `budget` wall-clock elapses; always takes
     /// one ready item, even under a zero budget. Never waits for a load. The
     /// editor's per-frame driver.

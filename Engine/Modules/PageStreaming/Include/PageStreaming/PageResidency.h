@@ -11,7 +11,6 @@
 #include <chrono>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -169,16 +168,6 @@ private:
         uint32 Attempts = 0;
     };
 
-    // One finished load, from a reader or job thread.
-    struct Completion
-    {
-        uint32 Stream = 0;
-        uint64 Epoch = 0;
-        uint64 SourceVersion = 0; // the stream's SourceVersion when the load started
-        PageFetchOutcome Outcome;
-        bool Cpu = false; // counted against the CPU's share of the loads in flight
-    };
-
     struct Stream
     {
         PageSource Source;
@@ -192,9 +181,10 @@ private:
         std::vector<PageWant> Wanted;
         bool WantedChanged = true;
         std::vector<PageWant> Placeable; // the wanted pages its field's cache can hold, in priority order
-        std::unordered_set<PageAddress, PageAddressHash> PlaceableSet;
-        std::unordered_map<PageAddress, LoadedPage, PageAddressHash> Loaded;
-        std::unordered_set<PageAddress, PageAddressHash> InFlight;
+        // About the CPU budget's pages (a thousand height pages at 64 MiB), or the placeable pages when
+        // they are more: an insert moves about that many entries and allocates nothing once the map has grown.
+        FlatMap<PageAddress, LoadedPage> Loaded;
+        FlatSet<PageAddress> InFlight; // at most PageResidencyBudget::LoadsInFlight pages
         std::unordered_set<PageAddress, PageAddressHash> Absent;
         // Resident pages to load and rewrite (Refresh), each with the union of the level-0 rects
         // refreshed under it since its last rewrite.
@@ -219,12 +209,6 @@ private:
     {
         uint32 Stream = 0;
         PageWant Want;
-    };
-
-    struct CompletionQueue
-    {
-        std::mutex Mutex;
-        std::vector<Completion> Completions;
     };
 
     // Clears the absent pages that a change of a plane's Version can have made readable
@@ -253,8 +237,6 @@ private:
     void RewriteRefreshed(uint32 field, PageCache& cache);
     void TrimCpuPages(uint64 frameIndex);
 
-    JobSystem::WorkStealingThreadPool* m_Pool = nullptr;
-    AssetIOService* m_Io = nullptr;
     PageResidencyBudget m_Budget;
     PageFetchClock m_Clock;
     // Node-based on purpose: a CpuPageDirectory points at its stream's CpuChangeCount, so a Stream
@@ -262,8 +244,8 @@ private:
     std::unordered_map<uint32, Stream> m_Streams;
     std::unordered_map<uint32, PageCache> m_Fields;
     std::vector<PageWant> m_Stamped; // the request being compared, its pages tagged (reused)
-    std::shared_ptr<CompletionQueue> m_Completions = std::make_shared<CompletionQueue>();
-    std::vector<Completion> m_Drained;     // reused each frame
+    PageFetcher m_Fetcher;
+    std::vector<FinishedPageFetch> m_Drained; // reused each frame
     std::vector<Candidate> m_Candidates;   // every stream's placeable pages, in the one order
     std::unordered_map<uint32, uint32> m_Allowance; // per field: assignments its cache may make this frame
     std::unordered_map<uint32, uint32> m_FieldPlaced; // per field: pages placed while rebuilding the order

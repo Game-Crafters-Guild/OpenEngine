@@ -80,30 +80,33 @@ bool AnyCasterOverlapsCascade(std::span<const ShadowCasterChangeSphere> spheres,
 }
 } // namespace
 
-uint64_t CascadeShadowCache::TrackCasterChanges(uint32_t viewId, uint32_t slot, uint64_t worldId,
-                                                const ShadowCasterChangeSet& changes,
-                                                const float lightVP[16], uint32_t resolution)
+CascadeShadowCache::CasterEpochs CascadeShadowCache::TrackCasterChanges(
+    uint32_t viewId, uint32_t slot, uint64_t worldId, const ShadowCasterChangeSet& changes,
+    const float lightVP[16], uint32_t resolution)
 {
     assert(slot < kSlotsPerView);
     SlotState& state = m_Views[viewId].Slots[slot];
     if (!state.HasObservedCasters || state.ObservedWorldId != worldId ||
         state.ObservedCasterEpoch != changes.Version)
     {
-        const bool attributed = state.HasObservedCasters && state.ObservedWorldId == worldId &&
+        const bool oneStep = state.HasObservedCasters && state.ObservedWorldId == worldId &&
             changes.Version > state.ObservedCasterEpoch &&
-            changes.Version - state.ObservedCasterEpoch == 1u && !changes.Unattributed;
+            changes.Version - state.ObservedCasterEpoch == 1u;
         // Motion scheduling can retain the OLD fit for another frame. A mover
         // touching that footprint must force an immediate refresh even when it
         // misses the newly requested fit, or deferral would serve a stale shadow.
-        if (!attributed || AnyCasterOverlapsCascade(changes.Spheres, lightVP, resolution) ||
-            (state.HasRendered && AnyCasterOverlapsCascade(changes.Spheres,
-                state.Rendered.LightVP, state.Rendered.Resolution)))
+        if (oneStep && changes.Scope == ShadowCasterChangeScope::VertexDeformation)
+            state.DeformationEpoch = changes.Version;
+        else if (!oneStep || changes.Scope != ShadowCasterChangeScope::Bounded ||
+                 AnyCasterOverlapsCascade(changes.Spheres, lightVP, resolution) ||
+                 (state.HasRendered && AnyCasterOverlapsCascade(changes.Spheres,
+                     state.Rendered.LightVP, state.Rendered.Resolution)))
             state.RelevantCasterEpoch = changes.Version;
         state.ObservedWorldId = worldId;
         state.ObservedCasterEpoch = changes.Version;
         state.HasObservedCasters = true;
     }
-    return state.RelevantCasterEpoch;
+    return {state.RelevantCasterEpoch, state.DeformationEpoch};
 }
 
 CascadeShadowCache::Decision CascadeShadowCache::Evaluate(uint32_t viewId, uint32_t slot,
@@ -172,6 +175,10 @@ CascadeCacheDirtyCause CascadeShadowCache::ResolveCause(const SlotState& s,
         return CascadeCacheDirtyCause::ConfigChanged;
     if (!s.CullSettled)
         return CascadeCacheDirtyCause::CullNotSettled;
+    // Last on purpose: every cause above makes the layer wrong and must win, so
+    // the deferrable class never hides a correctness one.
+    if (in.DeformationEpoch != s.Rendered.DeformationEpoch)
+        return CascadeCacheDirtyCause::CasterDeformed;
     return CascadeCacheDirtyCause::Cached;
 }
 

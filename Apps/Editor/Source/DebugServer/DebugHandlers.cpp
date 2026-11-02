@@ -187,6 +187,9 @@
 #include "UndoRedo/GenericEditUndo.h"
 #include "UndoRedo/Spline/SplineUndoHelpers.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "Types/FormatNumber.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 
 #include <nlohmann/json.hpp>
 
@@ -222,16 +225,6 @@ using json = nlohmann::json;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-static bool IEquals(std::string_view a, std::string_view b)
-{
-    if (a.size() != b.size())
-        return false;
-    for (std::size_t i = 0; i < a.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
-            return false;
-    return true;
-}
 
 // The number a JSON array holds at `index`, or `stored` when the array is short there or the
 // entry is not a number, so a partial array keeps the components it does not name.
@@ -307,7 +300,7 @@ static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
         const std::string name = value.get<std::string>();
         for (const auto& enumerator : field.EnumNames)
         {
-            if (IEquals(enumerator.Name, name))
+            if (EqualsIgnoreCase(enumerator.Name, name))
                 return ECS::WriteFieldInteger(field, component, 0, enumerator.Value);
         }
         // Accept a numeric STRING (e.g. "1") as the underlying integer too, matching the lenient
@@ -478,7 +471,7 @@ static bool SetReflectedComponentFields(ECS::World* world, ECS::EntityHandle ent
             bool matched = false;
             for (const ECS::FieldInfo& f : fields)
             {
-                if (f.Name == it.key() || IEquals(f.Name, it.key()))
+                if (f.Name == it.key() || EqualsIgnoreCase(f.Name, it.key()))
                 {
                     matched = true;
                     // Honor field policy: don't let set_component write fields a
@@ -560,15 +553,15 @@ static json UnappliedFieldsError(std::string_view operation, const std::string& 
 // the schema it still resolves to.
 static const char* RetiredModifierReplacement(const std::string& componentName)
 {
-    if (IEquals(componentName, "TerrainFlattenModifier"))
+    if (EqualsIgnoreCase(componentName, "TerrainFlattenModifier"))
         return "TerrainModifierVolume + TerrainFlattenEffect";
-    if (IEquals(componentName, "TerrainNoiseModifier"))
+    if (EqualsIgnoreCase(componentName, "TerrainNoiseModifier"))
         return "TerrainModifierVolume + TerrainNoiseEffect";
-    if (IEquals(componentName, "TerrainStampModifier"))
+    if (EqualsIgnoreCase(componentName, "TerrainStampModifier"))
         return "TerrainModifierVolume + TerrainStampEffect";
-    if (IEquals(componentName, "TerrainPaintLayerModifier"))
+    if (EqualsIgnoreCase(componentName, "TerrainPaintLayerModifier"))
         return "TerrainModifierVolume + TerrainPaintLayerEffect";
-    if (IEquals(componentName, "TerrainSplineModifier"))
+    if (EqualsIgnoreCase(componentName, "TerrainSplineModifier"))
         return "TerrainModifierVolume (Shape = SplineArea) + TerrainFlattenEffect";
     return nullptr;
 }
@@ -1276,13 +1269,7 @@ static bool ResolveCaptureResource(const Rendering::RenderGraph::RGFrame& frame,
     const auto& graph = frame.Graph();
     const size_t count = graph.ResourceCount();
 
-    auto lower = [](std::string s)
-    {
-        for (char& c : s)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return s;
-    };
-    const std::string needle = lower(requested);
+    const std::string needle = ToLowerAscii(requested);
 
     std::vector<CaptureResourceMatch> partial;
     for (uint32_t id = 0; id < count; ++id)
@@ -1299,7 +1286,7 @@ static bool ResolveCaptureResource(const Rendering::RenderGraph::RGFrame& frame,
             outMatch = CaptureResourceMatch{id, isTexture, name};
             return true;
         }
-        if (lower(name).find(needle) != std::string::npos)
+        if (ToLowerAscii(name).find(needle) != std::string::npos)
             partial.push_back(CaptureResourceMatch{id, isTexture, name});
     }
 
@@ -1599,14 +1586,9 @@ static json SerializeDynamicComponent(ECS::World* world, ECS::EntityHandle entit
         }
     }
 
-    static constexpr char kHex[] = "0123456789abcdef";
     std::string hexStr;
     hexStr.reserve(bytes.size() * 2);
-    for (auto b : bytes)
-    {
-        hexStr.push_back(kHex[b >> 4]);
-        hexStr.push_back(kHex[b & 0xF]);
-    }
+    AppendHexBytes(hexStr, bytes);
     return json{{"size", bytes.size()}, {"data", hexStr}};
 }
 
@@ -3056,9 +3038,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             if (!assetRoot.empty())
                 scenePath = assetRoot / scenePath;
         }
-        std::string ext = scenePath.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string ext = LowerCaseExtension(scenePath);
         if (ext != ".scene")
             scenePath.replace_extension(".scene");
         scenePath = scenePath.lexically_normal();
@@ -7198,9 +7178,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         if (path.empty())
             return Editor::RefuseRequest("Cannot resolve asset path: " + requestedPath);
 
-        std::string ext = path.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string ext = LowerCaseExtension(path);
 
         if (ext == ".anim" || ext == ".animation" || ext == ".fbx" || ext == ".gltf" ||
             ext == ".glb" || ext == ".timeline" || ext == ".clipset")

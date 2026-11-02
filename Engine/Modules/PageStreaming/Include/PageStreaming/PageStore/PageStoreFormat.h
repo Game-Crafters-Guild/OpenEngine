@@ -155,6 +155,19 @@ struct PageFaceEdge
 /// The face of an EqualAngleCube store that shares `side` of `face`.
 PageFaceEdge PageFaceNeighbor(uint8 face, PageFaceSide side);
 
+/// A sample (face, x, z) of one level of an EqualAngleCube store, x and z in [0, samples).
+struct PageFaceSample
+{
+    uint8 Face = 0;
+    uint32 X = 0;
+    uint32 Z = 0;
+};
+
+/// The sample a page stores at (x, z) of `face`, x or z up to one past a side (farther clamps to
+/// one past): past one side it is the neighbor face's sample one in from the shared side
+/// (PageFaceNeighbor); past two sides (a cube corner) it is the corner sample.
+PageFaceSample PageCubeSampleAt(uint8 face, int64 x, int64 z, uint32 samples);
+
 /// The equal-angle coordinate s in [-1, 1] of the gnomonic (straight cube) coordinate a in [-1, 1]:
 /// p(a) = a + a (a^2 - 1) r(a^2), r a cubic fit to (4 / pi) atan(a), odd and exact at -1, 0 and 1.
 /// A format constant, in double precision with contraction off: a new coefficient changes every cooked planet byte.

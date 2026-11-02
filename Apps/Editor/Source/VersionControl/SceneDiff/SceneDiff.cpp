@@ -1,4 +1,5 @@
 #include "VersionControl/SceneDiff/SceneDiff.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -174,10 +175,7 @@ uint32_t SceneDiffStateColorArgb(SceneDiffState state)
 
 std::string SceneSchemaFieldName(std::string_view field)
 {
-    std::string folded(field);
-    for (char& ch : folded)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    return folded;
+    return ToLowerAscii(field);
 }
 
 const char* SceneDiffStateLabel(SceneDiffState state)

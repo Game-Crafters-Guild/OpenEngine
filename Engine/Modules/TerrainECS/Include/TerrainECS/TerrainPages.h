@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/PageResidency.h"
 #include "TerrainECS/PageLevelRule.h"
 #include "TerrainECS/PageTable.h"
@@ -48,7 +48,7 @@ struct TerrainHeightPagesTestAccess;
 /// What a platform spends on height pages (design D5): the height cache's slots; the page table
 /// (PageTable, design page-streaming-planets 3.4): the largest table kept dense, one tier, and the
 /// blocks of the tiered table a larger terrain takes; the largest modifier overlay
-/// (PageStreaming::HeightPageOverlay, in system memory) a terrain may hold; and the CPU height
+/// (PageStreaming::HeightPageLayer, in system memory) a terrain may hold; and the CPU height
 /// pages' bytes (the residency's one CPU budget, design D5) and synchronous window fetches a frame
 /// (design D3, PageResidencyBudget). The page-table ring sizes its slots to the bound terrain's
 /// tables (TerrainPageTableRing), so a large table costs memory only where a terrain
@@ -68,9 +68,10 @@ struct HeightPageProfile
 /// Desktop: 512 slots (33 MiB); a table kept dense up to 2^21 words (8 MiB a ring slot), so every
 /// flat terrain up to the 60 x 15 km terrain at 0.25 m (1,174,877 words) keeps one tier; a larger one
 /// is tiered with 10 mid and 160 leaf blocks, two working sets at a pose (design page-streaming-planets
-/// 3.4): the largest terrain's table is 1,488,355 words (5.7 MiB). An overlay up to 512 MiB, about
-/// 6 km^2 of modifiers on a 0.25 m terrain (about 5.3 B per level-0 sample), a few percent of a
-/// 16 GiB machine's memory: a 1 km^2 stamp at 0.25 m holds about 82 MiB. Decoded pages on the CPU:
+/// 3.4): the largest terrain's table is 1,488,355 words (5.7 MiB). An overlay of up to 512 MiB of
+/// pages (67.6 KB each, about 5.5 B per level-0 sample under a modifier), about 6 km^2 of modifiers
+/// on a 0.25 m terrain wherever they lie, a few percent of a 16 GiB machine's memory: a 1 km^2 stamp
+/// at 0.25 m holds about 95 MiB. Decoded pages on the CPU:
 /// 64 MiB (about 990 pages, the uploads waiting and the CPU readers' pages together; the 512 drawn
 /// pages fit with room for the windows) and up to 4 synchronous window fetches a frame inside the
 /// 0.5 ms deadline: a store page from the file cache takes about 8 us, so 4; a generated page about
@@ -162,7 +163,7 @@ struct PagedTerrainRequest
     /// What the terrain's modifiers add to its source's pages (null: nothing), applied to every page
     /// as it is uploaded. A new version rewrites the resident pages that read OverlayChanged when
     /// the pages hold version OverlayChangedSince, else every page either overlay reaches.
-    std::shared_ptr<const PageStreaming::HeightPageOverlay> Overlay;
+    std::shared_ptr<const PageStreaming::HeightPageLayer> Overlay;
     uint64 OverlayVersion = 0;
     PageStreaming::PageSampleRect OverlayChanged; ///< level-0 samples the version changed from OverlayChangedSince
     uint64 OverlayChangedSince = 0;
@@ -189,11 +190,12 @@ struct PlanetPagedRequest
     PlanetPageRequestTerrain Shape;   ///< CacheSlots and Heights are set by TerrainPages
     /// The narrow arm: a request past the cache's slots is made a level coarser until it fits.
     bool FitToSlots = false;
-    /// What the planet's layers add to one face of its source's pages (null: nothing), with the
-    /// version rule of PagedTerrainRequest::Overlay.
-    std::shared_ptr<const PageStreaming::HeightPageOverlay> Overlay;
+    /// What the planet's layer adds to its source's pages (null: nothing), with the version rule of
+    /// PagedTerrainRequest::Overlay; OverlayChanged lies on face OverlayChangedFace.
+    std::shared_ptr<const PageStreaming::HeightPageLayer> Overlay;
     uint64 OverlayVersion = 0;
-    PageStreaming::PageSampleRect OverlayChanged; ///< level-0 samples of the overlay's face
+    uint8 OverlayChangedFace = 0;
+    PageStreaming::PageSampleRect OverlayChanged; ///< level-0 samples of face OverlayChangedFace
     uint64 OverlayChangedSince = 0;
 };
 
@@ -353,7 +355,7 @@ private:
         PageRequestTerrain Shape; ///< the placement its requester is configured with
         PageRequester Requester;
         PageTable Table;
-        std::shared_ptr<const PageStreaming::HeightPageOverlay> Overlay;
+        std::shared_ptr<const PageStreaming::HeightPageLayer> Overlay;
         uint64 OverlayVersion = 0;
         PageStreaming::PageSampleRect OverlayChanged; ///< what OverlayVersion changed from OverlayChangedSince
         uint64 OverlayChangedSince = 0;
@@ -380,16 +382,18 @@ private:
         bool Published = false;
         std::vector<PageStreaming::PageAddress> WantedPages; ///< this frame's wanted pages
         bool Requested = false;
-        std::shared_ptr<const PageStreaming::HeightPageOverlay> Overlay;
+        std::shared_ptr<const PageStreaming::HeightPageLayer> Overlay;
         uint64 OverlayVersion = 0;
     };
 
     void Configure(PagedTerrain& terrain, const PagedTerrainRequest& request);
-    std::shared_ptr<const PageStreaming::HeightPageOverlay> FittingOverlay(const PagedPlanet& planet,
+    std::shared_ptr<const PageStreaming::HeightPageLayer> FittingOverlay(const PagedPlanet& planet,
                                                                            const PlanetPagedRequest& request) const;
-    void RefreshOverlay(uint32 stream, const PageStreaming::HeightPageOverlay* held, uint64 heldVersion,
-                        const PageStreaming::HeightPageOverlay* requested,
+    void RefreshOverlay(uint32 stream, const PageStreaming::HeightPageLayer* held, uint64 heldVersion,
+                        const PageStreaming::HeightPageLayer* requested, uint8 changedFace,
                         const PageStreaming::PageSampleRect& changed, uint64 changedSince);
+    void RefreshLayerRect(uint32 stream, const PageStreaming::HeightPageLayer& layer, uint8 face,
+                          const PageStreaming::PageSampleRect& rect);
     void AppendPlanetTable(const PagedPlanet& planet, PageStreamCounts& out) const;
     void RequestCpuWindows(const PagedTerrain& terrain, std::span<const Mathematics::Vector3> cameras);
     void AppendBodyWindows(const PagedTerrain& terrain, std::span<const Mathematics::Vector3> cameras);
@@ -433,6 +437,7 @@ private:
     CBTTerrain::SphereEditRegions m_PlanetDirty;
     std::vector<uint32> m_Forgotten; // reused per Update
     std::vector<PageStreaming::PageAddress> m_LateEntries; // reused per Update
+    std::vector<PageStreaming::PageFaceRect> m_FaceRects;   // reused by RefreshLayerRect
     FlatMap<uint32, std::string> m_Refusals; // per terrain, the refusal last logged
     TerrainSurfacePages m_Surface; // after m_Residency and m_NextStream, which it holds
 };

@@ -210,7 +210,7 @@ TEST_F(NavigationSurfaceGatingTest, SceneReloadKeepsTheSurfacesMap)
 
     const auto* schema = Scene::SceneSchemaRegistry::Find("NavigationSurface");
     ASSERT_NE(schema, nullptr);
-    Scene::SceneLoadContext ctx{};
+    Scene::SceneReadContext ctx{};
     std::string error;
     ASSERT_TRUE(schema->ApplyProperty(*world, entity.GetHandle(), ctx, "cellsize", "0.5", &error)) << error;
     world->ProcessCommands();

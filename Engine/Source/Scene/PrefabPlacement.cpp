@@ -26,8 +26,8 @@
 namespace GameEngine::Scene
 {
 
-PrefabPlacement::PrefabPlacement(ECS::World& targetWorld, const LoadOptions& loadOptions,
-                                 SceneLoadDegradation* loadDegradation)
+PrefabPlacement::PrefabPlacement(ECS::World& targetWorld, const SceneReadOptions& loadOptions,
+                                 SceneDegradation* loadDegradation)
     : world(targetWorld), options(loadOptions), degradation(loadDegradation)
 {
 }
@@ -69,7 +69,7 @@ static bool PlacePrefab(PrefabPlacement& placement, ParsedPrefab& prefab, const 
 
 // The prefab the [prefab] section `section` of `ownerFile` places, read and checked once per load.
 // Null, with the failure recorded, when the file cannot be read, does not parse, or is not a prefab.
-static ParsedPrefab* ReadPrefab(PrefabPlacement& placement, const SceneLoadContext& ownerCtx,
+static ParsedPrefab* ReadPrefab(PrefabPlacement& placement, const SceneReadContext& ownerCtx,
                                 const std::filesystem::path& ownerFile, const SceneDoc& ownerDoc,
                                 const SceneDoc::PrefabInstanceSection& section, const LoadFailure& failure)
 {
@@ -110,7 +110,7 @@ static ParsedPrefab* ReadPrefab(PrefabPlacement& placement, const SceneLoadConte
 
 // Places the prefab the section names at `instancePath` from its file's text and marks its root
 // with the source.
-static bool PlaceInstanceFromText(PrefabPlacement& placement, const SceneLoadContext& ownerCtx,
+static bool PlaceInstanceFromText(PrefabPlacement& placement, const SceneReadContext& ownerCtx,
                                   const std::filesystem::path& ownerFile, const SceneDoc& ownerDoc,
                                   const SceneDoc::PrefabInstanceSection& section, const std::string& instancePath,
                                   PlacedPrefab& out, const LoadFailure& failure)
@@ -163,7 +163,7 @@ static PrefabLibrary& LibraryOf(PrefabPlacement& placement)
 // Builds the template of the prefab at `path` (which `section` names) into the library: a new
 // generation when the prefab is resident. `knownSource` is the prefab's asset GUID, or null. On
 // failure: records the failure, leaves nothing of the build in the library world, returns null.
-static const PrefabTemplate* BuildTemplate(PrefabPlacement& placement, const SceneLoadContext& ownerCtx,
+static const PrefabTemplate* BuildTemplate(PrefabPlacement& placement, const SceneReadContext& ownerCtx,
                                            const std::filesystem::path& ownerFile, const SceneDoc& ownerDoc,
                                            const SceneDoc::PrefabInstanceSection& section,
                                            const std::filesystem::path& path, const GUID& knownSource,
@@ -177,7 +177,7 @@ static const PrefabTemplate* BuildTemplate(PrefabPlacement& placement, const Sce
         placement.templateBuild->writesSceneTags = false;
     }
     PrefabPlacement& build = *placement.templateBuild;
-    SceneLoadDegradation rows;
+    SceneDegradation rows;
     TemplateBuildLog log;
     build.degradation = &rows;
     build.buildLog = &log;
@@ -218,7 +218,7 @@ static const PrefabTemplate* BuildTemplate(PrefabPlacement& placement, const Sce
         prefab.Entities.push_back(h);
         prefab.Origins.push_back(log.origins[static_cast<std::size_t>(created - log.entities.begin())]);
     }
-    for (SceneLoadSkip& skip : rows.skips)
+    for (SceneDegradation::Skip& skip : rows.skips)
     {
         const auto it = std::find(prefab.Entities.begin(), prefab.Entities.end(), skip.entityHandle);
         const std::int32_t index =
@@ -233,7 +233,7 @@ static const PrefabTemplate* BuildTemplate(PrefabPlacement& placement, const Sce
 
 // The template of the prefab `section` places: the resident one, or one built from the prefab's
 // text the first time the library meets it.
-static const PrefabTemplate* ResolveTemplate(PrefabPlacement& placement, const SceneLoadContext& ownerCtx,
+static const PrefabTemplate* ResolveTemplate(PrefabPlacement& placement, const SceneReadContext& ownerCtx,
                                              const std::filesystem::path& ownerFile, const SceneDoc& ownerDoc,
                                              const SceneDoc::PrefabInstanceSection& section,
                                              const LoadFailure& failure)
@@ -256,7 +256,7 @@ std::string PathAsSpelledOnDisk(const std::filesystem::path& file, const std::fi
 }
 
 const PrefabTemplate* BuildTemplateFromFile(PrefabLibrary& library, const std::filesystem::path& path,
-                                            const GUID& source, const LoadOptions& options, std::string& error)
+                                            const GUID& source, const SceneReadOptions& options, std::string& error)
 {
     SceneDoc ownerDoc;
     SceneDoc::Resource resource;
@@ -270,7 +270,7 @@ const PrefabTemplate* BuildTemplateFromFile(PrefabLibrary& library, const std::f
     PrefabPlacement placement{library.GetWorld(), options, nullptr};
     placement.usesLibrary = true;
     placement.library = &library;
-    const SceneLoadContext ownerCtx = MakeDocumentLoadContext(library.GetWorld(), path, ownerDoc, options);
+    const SceneReadContext ownerCtx = MakeDocumentLoadContext(library.GetWorld(), path, ownerDoc, options);
     std::string message;
     std::filesystem::path file;
     int line = 0;
@@ -344,7 +344,7 @@ std::unordered_set<std::string> CollectSceneIdentities(ECS::World& world)
     return used;
 }
 
-void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const LoadOptions& options,
+void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const SceneReadOptions& options,
                            std::span<const ECS::EntityHandle> entities)
 {
     const auto fields = CollectPrefabRefFields();
@@ -385,7 +385,7 @@ void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const Load
 // Places the instance `section` at `instancePath` as a batch clone of its prefab's template, with
 // scene identities from the addresses and the root marked with its source (and named after the
 // instance when the prefab gives no name). Records the template's load-report rows again.
-static bool PlaceInstanceFromLibrary(PrefabPlacement& placement, const SceneLoadContext& ownerCtx,
+static bool PlaceInstanceFromLibrary(PrefabPlacement& placement, const SceneReadContext& ownerCtx,
                                      const std::filesystem::path& ownerFile, const SceneDoc& ownerDoc,
                                      const SceneDoc::PrefabInstanceSection& section, const std::string& instancePath,
                                      PlacedPrefab& out, const LoadFailure& failure)
@@ -428,7 +428,7 @@ static bool PlaceInstanceFromLibrary(PrefabPlacement& placement, const SceneLoad
     {
         for (const PrefabTemplate::Row& row : prefab->Rows)
         {
-            SceneLoadSkip skip = row.Skip;
+            SceneDegradation::Skip skip = row.Skip;
             skip.entityId = JoinPath(instancePath, skip.entityId);
             skip.entityHandle = row.EntityIndex >= 0 ? targets[static_cast<std::size_t>(row.EntityIndex)]
                                                      : ECS::EntityHandle{};
@@ -440,7 +440,7 @@ static bool PlaceInstanceFromLibrary(PrefabPlacement& placement, const SceneLoad
 
 // Places the prefab the section names at `instancePath` and marks its root with the source. The
 // section's own override lines are the caller's to apply, against the caller's entity ids.
-bool PlaceInstanceSection(PrefabPlacement& placement, const SceneLoadContext& ownerCtx,
+bool PlaceInstanceSection(PrefabPlacement& placement, const SceneReadContext& ownerCtx,
                           const std::filesystem::path& ownerFile, const SceneDoc& ownerDoc,
                           const SceneDoc::PrefabInstanceSection& section, const std::string& instancePath,
                           PlacedPrefab& out, const LoadFailure& failure)
@@ -460,7 +460,7 @@ static bool IsAtOrUnder(std::string_view memberAddress, std::string_view address
 // The load-report row for an override line whose address names no entity of the instance: an
 // orphaned override, or a line under a child that the section removes (`removedAddresses`). The load
 // goes on; the line is not kept by a save.
-static void RecordOrphanedOverride(SceneLoadDegradation* degradation, const std::string& instancePath,
+static void RecordOrphanedOverride(SceneDegradation* degradation, const std::string& instancePath,
                                    std::string_view address, std::string component, std::string field,
                                    std::string_view line, const std::filesystem::path& ownerFile, int lineNo,
                                    ECS::EntityHandle root, std::span<const std::string> removedAddresses)
@@ -470,13 +470,13 @@ static void RecordOrphanedOverride(SceneLoadDegradation* degradation, const std:
     const bool underRemoved = std::ranges::any_of(
         removedAddresses, [address](const std::string& removed) { return IsAtOrUnder(address, removed); });
     const std::string quoted = "'" + std::string(line) + "' names \"" + std::string(address) + "\"";
-    degradation->skips.push_back(SceneLoadSkip{
+    degradation->skips.push_back(SceneDegradation::Skip{
         JoinPath(instancePath, address), std::move(component), std::move(field),
         underRemoved ? quoted + ", a child that this instance removes. A save does not keep the line."
                      : quoted + ", which the prefab does not have. Delete the line, or put the entity back in the "
                                 "prefab.",
         ownerFile, lineNo, /*preserved=*/false, root, /*componentType=*/0,
-        underRemoved ? SceneLoadSkipKind::UnderRemovedEntity : SceneLoadSkipKind::OrphanedOverride,
+        underRemoved ? SceneDegradation::SkipKind::UnderRemovedEntity : SceneDegradation::SkipKind::OrphanedOverride,
         std::string(address)});
 }
 
@@ -518,12 +518,12 @@ static void RemoveMemberAndItsChildren(ECS::World& world, PlacedPrefab& placed, 
 // line whose address names no entity, a removal of a component no build registers and a removal of a
 // component the entity does not have are load-report rows, never a failure. The entities a "-entity"
 // line removes go to `removed`.
-static bool ApplyInstanceOverrides(ECS::World& world, const SceneLoadContext& ctx,
+static bool ApplyInstanceOverrides(ECS::World& world, const SceneReadContext& ctx,
                                    const std::filesystem::path& ownerFile,
                                    const SceneDoc::PrefabInstanceSection& section, const std::string& instancePath,
                                    PlacedPrefab& placed,
                                    std::vector<std::pair<std::string, ECS::EntityHandle>>& removed,
-                                   SceneLoadDegradation* degradation, const LoadFailure& failure)
+                                   SceneDegradation* degradation, const LoadFailure& failure)
 {
     const std::size_t firstRow = degradation ? degradation->skips.size() : 0;
 
@@ -556,7 +556,7 @@ static bool ApplyInstanceOverrides(ECS::World& world, const SceneLoadContext& ct
         if (!schema)
         {
             if (degradation)
-                degradation->skips.push_back(SceneLoadSkip{
+                degradation->skips.push_back(SceneDegradation::Skip{
                     JoinPath(instancePath, component.address), component.authoredName, {},
                     "'" + text + "' removes a component no loaded module registers. Delete the line, or load the "
                                  "module that registers " + component.authoredName + ".",
@@ -566,7 +566,7 @@ static bool ApplyInstanceOverrides(ECS::World& world, const SceneLoadContext& ct
         if (!schema->IsPresent(world, h))
         {
             if (degradation)
-                degradation->skips.push_back(SceneLoadSkip{
+                degradation->skips.push_back(SceneDegradation::Skip{
                     JoinPath(instancePath, component.address), component.authoredName, {},
                     "'" + text + "' removes a component the entity does not have. Delete the line.", ownerFile,
                     component.line, /*preserved=*/false, h});
@@ -826,7 +826,7 @@ static bool PlacePrefab(PrefabPlacement& placement, ParsedPrefab& prefab, const 
 // Places every [prefab] section of a scene (or of a prefab file loaded on its own) under the ids
 // the scene's own lines use, applies each section's override lines, and links each instance root
 // and each entity that waits on a member to its parent.
-bool PlaceSceneInstances(PrefabPlacement& placement, SceneLoadContext& sceneCtx,
+bool PlaceSceneInstances(PrefabPlacement& placement, SceneReadContext& sceneCtx,
                          const std::filesystem::path& sceneFilePath, const SceneDoc& doc,
                          const std::string& idPrefix, Instantiated& out, const LoadFailure& failure)
 {

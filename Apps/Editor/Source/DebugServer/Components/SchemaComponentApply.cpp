@@ -100,7 +100,7 @@ std::string ApplyComponentViaSchema(ECS::World& world, ECS::EntityHandle entity,
     // heightmap. The request is all or nothing for the entity: a refusal restores it as it was.
     const EntityComponentSnapshot before = CaptureEntity(world, entity);
 
-    Scene::SceneLoadContext loadCtx{};
+    Scene::SceneReadContext loadCtx{};
     std::string err;
     bool anyApplied = false;
     for (auto it = values.begin(); it != values.end(); ++it)

@@ -20,7 +20,8 @@ void BuildSplineDrapedPolylines(ECS::World& world,
                                 std::span<const ECS::EntityHandle> ignore,
                                 bool wantEdges,
                                 Components::SplineConformTarget target,
-                                SplineDrapedPolylines& out)
+                                SplineDrapedPolylines& out,
+                                SplineRecipes::ConformMissTally* tally)
 {
     out.Center.clear();
     out.Left.clear();
@@ -69,7 +70,7 @@ void BuildSplineDrapedPolylines(ECS::World& world,
     {
         CenterSample sample;
         Vector3 hit;
-        sample.SurfaceValid = SplineRecipes::ConformRayDown(world, at, ignore, hit, nullptr, nullptr, target);
+        sample.SurfaceValid = SplineRecipes::ConformRayDown(world, at, ignore, hit, nullptr, tally, target);
         if (sample.SurfaceValid)
             at.y = hit.y;
         sample.Pos = at;

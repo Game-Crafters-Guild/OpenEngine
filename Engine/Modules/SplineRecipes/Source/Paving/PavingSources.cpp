@@ -55,11 +55,32 @@ struct SplineRead
     std::optional<Components::SplineExtrude> Strip;
 };
 
+// The rank keys of spline `entity`, whose sampled curve is `curve`.
+PavingRank RankOf(const ECS::World& world, ECS::EntityHandle entity, const PavingRoadCurve& curve)
+{
+    PavingRank rank;
+    rank.LengthMeters = curve.Length;
+    rank.FirstPoint = Vector2(curve.Points.front().x, curve.Points.front().z);
+    if (const auto* tag = world.GetComponent<Components::SceneEntityTag>(entity))
+        rank.SceneId = std::string(tag->View());
+    rank.Entity = entity.id;
+    return rank;
+}
+
 // Reads splines and observes each once for the rebuild gate.
 class SplineReader
 {
 public:
     SplineReader(ECS::World& world, PavingWorld& out) : m_World(world), m_Out(out) {}
+
+    // Records the rank keys of road `entity` once.
+    void RecordRank(ECS::EntityHandle entity, const PavingRoadCurve& curve)
+    {
+        const bool known = std::any_of(m_Out.RoadRanks.begin(), m_Out.RoadRanks.end(),
+                                       [entity](const PavingRank& rank) { return rank.Entity == entity.id; });
+        if (!known)
+            m_Out.RoadRanks.push_back(RankOf(m_World, entity, curve));
+    }
 
     std::optional<SplineRead> Read(ECS::EntityHandle entity)
     {
@@ -204,6 +225,7 @@ void AddJunctionArms(SplineReader& reader, const SplineECS::SplineNode& node, EC
         if (!read)
             continue;
         const PavingRoadCurve curve = SampleCurve(arm.Member, *read);
+        reader.RecordRank(arm.Member, curve);
         SG::PavedArm built = BuildPavedArm(curve, MemberArcLength(node, arm.Member), arm.Direction, nodeXZ);
         if (built.Stations.size() < 2u)
             continue;
@@ -270,8 +292,6 @@ PavingWorld GatherPavings(ECS::World& world, PavingGatherDepth depth)
         candidate.Recipe = SanitizePavingRecipe(candidate.Authored);
         PavingSource source;
         source.Entity = entity;
-        if (const auto* tag = world.GetComponent<Components::SceneEntityTag>(entity))
-            source.SceneId = std::string(tag->View());
         const std::optional<SplineRead> self = reader.Read(entity);
         if (!self)
         {
@@ -286,8 +306,7 @@ PavingWorld GatherPavings(ECS::World& world, PavingGatherDepth depth)
         if (full)
         {
             const PavingRoadCurve selfCurve = SampleCurve(entity, *self);
-            source.LengthMeters = selfCurve.Length;
-            source.FirstPoint = Vector2(selfCurve.Points.front().x, selfCurve.Points.front().z);
+            source.Rank = RankOf(world, entity, selfCurve);
             if (isArea && selfCurve.Closed)
                 source.Outline = ClosedRing(*self, selfCurve);
         }

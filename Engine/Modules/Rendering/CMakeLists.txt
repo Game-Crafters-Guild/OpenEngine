@@ -380,6 +380,7 @@ if(GLSLC_EXECUTABLE)
         spec_constants.comp
         brdf_lut.comp
         ubo_copy.comp
+        texture_upload_readback.comp
         msm_cascade.comp
         runtime_array_stride.comp
     )
@@ -730,6 +731,7 @@ set_property(GLOBAL PROPERTY GE_SHADER_SPV_OUTPUTS "${GE_ALL_SHADER_SPV_OUTPUTS}
 set(RENDERING_CORE_SOURCES
 	    # Core interfaces
 	    Source/Core/Device.cpp
+	    Source/Core/DescriptorSetCache.cpp
 	    Source/Core/RendererProfile.cpp
 	    Source/Core/CommandList.cpp
 	    # The compat-profile flag the resolved RendererProfile sets. Core rather
@@ -3171,6 +3173,14 @@ if(GTest_FOUND)
         FOLDER "Rendering/Tests")
     add_test(NAME ImageCopyMipReadbackTests COMMAND $<TARGET_FILE:ImageCopyMipReadbackTests>)
 
+    add_executable(TextureUploadSynchronizationTests Tests/TextureUploadSynchronizationTests.cpp)
+    target_link_libraries(TextureUploadSynchronizationTests PRIVATE GameEngineRendering FileSystemObjects GTest::gtest GTest::gtest_main)
+    rendering_test_shader_paths(TextureUploadSynchronizationTests)
+    target_include_directories(TextureUploadSynchronizationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    set_target_properties(TextureUploadSynchronizationTests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON FOLDER "Rendering/Tests")
+    add_test(NAME TextureUploadSynchronizationTests COMMAND $<TARGET_FILE:TextureUploadSynchronizationTests>)
+    set_tests_properties(TextureUploadSynchronizationTests PROPERTIES TIMEOUT 60 LABELS "Headless;Vulkan")
+
     # Named push constant writer tests
     add_executable(NamedPushConstantWriterTests Tests/NamedPushConstantWriterTests.cpp)
     target_link_libraries(NamedPushConstantWriterTests PRIVATE GameEngineRendering FileSystemObjects GTest::gtest GTest::gtest_main)
@@ -3449,6 +3459,21 @@ if(GTest_FOUND)
     add_test(NAME DescriptorSetAllocatorStatsTests COMMAND $<TARGET_FILE:DescriptorSetAllocatorStatsTests>)
 endif()
 
+# Descriptor set cache tests: the cache alone, then GetOrCreateDescriptorSet on each backend in the build
+if(GTest_FOUND)
+    add_executable(DescriptorSetCacheTests Tests/DescriptorSetCacheTests.cpp)
+    target_link_libraries(DescriptorSetCacheTests PRIVATE GameEngineRendering FileSystemObjects GTest::gtest GTest::gtest_main)
+    if(RENDERING_HAS_METAL)
+        target_compile_definitions(DescriptorSetCacheTests PRIVATE RENDERING_HAS_METAL=1)
+    endif()
+    set_target_properties(DescriptorSetCacheTests PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        FOLDER "Rendering/Tests"
+    )
+    add_test(NAME DescriptorSetCacheTests COMMAND $<TARGET_FILE:DescriptorSetCacheTests>)
+endif()
+
 # Descriptor writer array tests
 if(GTest_FOUND)
     add_executable(DescriptorWriterArrayTests Tests/DescriptorWriterArrayTests.cpp)
@@ -3565,9 +3590,12 @@ add_test(NAME BarrierMemoryBatchTests COMMAND $<TARGET_FILE:BarrierMemoryBatchTe
     FOLDER "Rendering/Tests")
   add_test(NAME BarrierBatchBufferDedupeTests COMMAND $<TARGET_FILE:BarrierBatchBufferDedupeTests>)
 
-  # ResourceState -> Vulkan stage/access/layout barrier mapping (no device needed)
+  # ResourceState -> Vulkan stage/access/layout barrier mapping and the present-mode
+  # log field (no device needed)
   if(RENDERING_HAS_VULKAN)
-    add_executable(VulkanResourceStateMappingTests Tests/VulkanResourceStateMappingTests.cpp)
+    add_executable(VulkanResourceStateMappingTests
+      Tests/VulkanResourceStateMappingTests.cpp
+      Tests/VulkanPresentModeLogFieldTests.cpp)
     target_link_libraries(VulkanResourceStateMappingTests PRIVATE GameEngineRendering FileSystemObjects GTest::gtest GTest::gtest_main)
     rendering_test_shader_paths(VulkanResourceStateMappingTests)
     target_include_directories(VulkanResourceStateMappingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)

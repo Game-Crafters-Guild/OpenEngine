@@ -1,8 +1,6 @@
-// AudioOutputTests.cpp: the Silent output keeps every observable voice
-// behaviour of the Device output and opens no device. Both outputs run the same
-// case: a voice starts, plays, reaches its end and is reaped, and the output
-// callback carries the mix on the device clock. Voices play at volume 0 except
-// in the Silent-only case, so nothing here is audible.
+// The Silent output keeps every voice behavior of the Device output and opens no device.
+// Both outputs run one case: a voice starts, plays, ends and is reaped on the device clock.
+// Voices play at volume 0, except in the Silent-only case.
 
 #include <gtest/gtest.h>
 
@@ -179,4 +177,9 @@ TEST_F(SilentAudioOutputTest, MixesOnTheNullBackendAndTheMeterReadsTheSignal)
     EXPECT_TRUE(UpdateUntil([&] { return m_Audio->GetBusMeterLevel(0) > 0.0f; }))
         << "the master meter never saw the mixed signal";
     m_Audio->Stop(voice);
+}
+
+TEST(AudioSystemConfigDefaults, TheDefaultOutputIsSilent)
+{
+    EXPECT_EQ(Audio::AudioSystemConfig{}.output, Audio::AudioOutput::Silent);
 }

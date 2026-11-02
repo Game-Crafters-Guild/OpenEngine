@@ -41,7 +41,7 @@ class DiscardStaleOverrideCommand final : public IEditorCommand
     EditorChangeNotifications* m_Notifications = nullptr;
     ECS::EntityHandle m_Root;
     std::size_t m_SkipIndex = 0;
-    std::optional<Scene::SceneLoadSkip> m_Skip;
+    std::optional<Scene::SceneDegradation::Skip> m_Skip;
 };
 
 } // namespace GameEngine::Editor

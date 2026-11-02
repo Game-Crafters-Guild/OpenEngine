@@ -379,8 +379,7 @@ ResolvedPassResources RenderServices::BuildPassResourcesRG(
 
     if (const auto* pv = m_ViewRegistry.FindPerView(viewId))
     {
-        const uint32_t frameSlot = m_Device->GetFrameIndex();
-        const auto lightBuffer = pv->LightBuffers[frameSlot];
+        const auto lightBuffer = pv->CurrentLightBuffer();
         if (lightBuffer.IsValid())
         {
             add(HashStringId("LightUBO"), lightBuffer);

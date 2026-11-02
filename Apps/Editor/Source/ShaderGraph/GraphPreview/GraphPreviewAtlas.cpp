@@ -574,8 +574,7 @@ void GraphPreviewAtlas::TickRG(uint64_t windowId, UIManager* ui, RG::RGFrame& fr
 
         if (const auto* perView = m_Services->Views().FindPerView(m_ViewId))
         {
-            const uint32_t frameSlot = m_Services->GetDevice()->GetFrameIndex();
-            const auto lightBuffer = perView->LightBuffers[frameSlot];
+            const auto lightBuffer = perView->CurrentLightBuffer();
             if (lightBuffer.IsValid())
             {
                 resources.Buffers.push_back({HashStringId("LightUBO"), lightBuffer, 0, 0});

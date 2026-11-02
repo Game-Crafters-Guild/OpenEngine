@@ -1270,6 +1270,11 @@ public:
         return m_TreeStructureGeneration.load(std::memory_order_relaxed);
     }
 
+    // Monotonic generation bumped when an element enters or leaves the id index: a new
+    // owner, or SetId (a dock tab activation renames its Mount). With the tree structure
+    // generation unchanged too, FindById from the root returns what it returned before.
+    uint64_t GetElementIdGeneration() const { return m_ElementIdIndex.Generation(); }
+
     // Backtrace-on-mark diagnostic behind GE_UI_DIRTY_TRACE_ID (see
     // NotifyElementDirty). Out-of-line in UIManager.cpp.
     void TraceElementDirtySource(UIElement* el, unsigned flags);
@@ -1652,6 +1657,17 @@ public:
     uint64_t m_PointerLockCaptureInstanceId = 0;
     bool m_PointerLocked = false;
     std::string m_FocusId;                            // persistent focus by element id
+    // The element under the root that m_FocusId names. Keeps the last hit and looks up
+    // again only when the focus id or a tree generation changed, or the held element
+    // was destroyed or left the root (an inactive dock tab).
+    UIElement* FindFocusedElement();
+    // The element FindFocusedElement found for m_HeldFocusId, and the two tree
+    // generations of that lookup. While both are unchanged the element is alive:
+    // its destruction unregisters its id, which moves the id generation.
+    UIElement* m_HeldFocus = nullptr;
+    std::string m_HeldFocusId;
+    uint64_t m_HeldFocusStructureGeneration = 0;
+    uint64_t m_HeldFocusIdGeneration = 0;
     std::string m_LastFocusIdNotified;                // to notify BaseField::OnFocusChanged
     // The element last told FocusIn, by instance id, so its FocusOut reaches it even after
     // it has left the tree (an unmounted panel): resolved through m_ElementsByInstanceId,

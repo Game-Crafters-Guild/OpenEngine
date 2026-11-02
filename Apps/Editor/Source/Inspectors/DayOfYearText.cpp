@@ -2,6 +2,7 @@
 
 #include "Rendering/Sky/SolarPath.h"
 #include "UI/Controls/IntField.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -60,10 +61,7 @@ std::optional<int> MonthFromName(std::string_view word)
         const std::string_view name = kCalendarMonthNames[month];
         if (word.size() != kMonthAbbreviationLength && word.size() != name.size())
             continue;
-        const bool matches = std::equal(word.begin(), word.end(), name.begin(), [](char a, char b) {
-            return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
-        });
-        if (matches)
+        if (StartsWithIgnoreCase(name, word))
             return static_cast<int>(month) + 1;
     }
     return std::nullopt;

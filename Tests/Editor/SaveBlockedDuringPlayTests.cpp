@@ -13,7 +13,7 @@
 // and quit prompts, and the MCP save_scene handler.
 //
 // The file-bytes assertions are what give the arms teeth: they fail if the guard
-// is removed, because the refused Save would then reach Scene::SaveSceneToFile
+// is removed, because the refused Save would then reach Scene::WriteSceneFile
 // and rewrite the file with the mutated world.
 
 #include <gtest/gtest.h>
@@ -161,7 +161,7 @@ TEST_F(SaveBlockedDuringPlayTests, SaveRefusedWhilePlaying_AuthoredFileUntouched
 
     EXPECT_FALSE(doc.Save());
     // Remove the guard in SceneDocumentManager::Save and this is what breaks:
-    // the refused save reaches SaveSceneToFile and writes the 5-entity world.
+    // the refused save reaches WriteSceneFile and writes the 5-entity world.
     EXPECT_EQ(ReadAllBytes(scenePath), authored);
 }
 

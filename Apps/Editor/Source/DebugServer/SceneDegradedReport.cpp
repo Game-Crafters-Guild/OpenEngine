@@ -22,7 +22,7 @@ nlohmann::json BuildSceneDegradedReport(const std::optional<SceneLoadDegraded>& 
         const std::size_t last = first + std::min(kSceneDegradedSkipsPerPage, rows.size() - first);
         for (std::size_t index = first; index < last; ++index)
         {
-            const Scene::SceneLoadSkip& skip = rows[index];
+            const Scene::SceneDegradation::Skip& skip = rows[index];
             skips.push_back(nlohmann::json{{"entity", skip.entityId},
                                            {"component", skip.component},
                                            {"field", skip.field},

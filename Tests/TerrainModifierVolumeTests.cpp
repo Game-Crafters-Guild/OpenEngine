@@ -442,7 +442,7 @@ void ApplyLegacyBlock(ECS::World& world, ECS::EntityHandle entity,
     for (const auto& kv : block)
         pairs.emplace_back(kv.first, kv.second);
 
-    Scene::SceneLoadContext ctx{};
+    Scene::SceneReadContext ctx{};
     std::string err;
     std::size_t failed = 0;
     ASSERT_TRUE(schema->ApplyProperties(world, entity, ctx, pairs, &err, &failed))

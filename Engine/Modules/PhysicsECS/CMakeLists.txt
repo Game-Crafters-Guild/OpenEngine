@@ -8,6 +8,7 @@ add_library(PhysicsECS OBJECT
     Source/PhysicsEntityEventCallbacks.cpp
     Source/PhysicsScriptApi.cpp
     Source/PhysicsWorldService.cpp
+    Source/ProceduralMeshColliders.cpp
     Source/HeightFieldDataProvider.cpp
     Source/PhysicsWorldSettingsHelpers.cpp
     Source/Systems/PhysicsWorldBootstrapSystem.cpp
@@ -27,11 +28,14 @@ target_compile_features(PhysicsECS PUBLIC cxx_std_20)
 target_include_directories(PhysicsECS
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/Include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source
 )
 
 target_link_libraries(PhysicsECS
     PUBLIC
         Physics
+        GenerationalVector
         ECS
         ECSComponents
         Types

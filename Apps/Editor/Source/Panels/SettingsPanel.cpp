@@ -22,11 +22,11 @@
 #include "UI/UIAccentStyleHelper.h"
 #include "UI/SyntaxHighlightSettings.h"
 #include "UI/Controls/DockspaceElement.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <cmath>
@@ -1341,8 +1341,7 @@ std::unordered_set<TreeId> SettingsTreeDataProvider::GetAncestorIdsToExpandForSe
     std::unordered_set<TreeId> toExpand;
     if (query.empty())
         return toExpand;
-    std::string lowerQuery = query;
-    for (char& c : lowerQuery) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string lowerQuery = ToLowerAscii(query);
 
     // Build parent map (child id -> parent id)
     std::unordered_map<TreeId, TreeId> parentOf;
@@ -1358,8 +1357,7 @@ std::unordered_set<TreeId> SettingsTreeDataProvider::GetAncestorIdsToExpandForSe
     std::vector<TreeId> matches;
     for (const auto& pair : m_Nodes)
     {
-        std::string lowerLabel = pair.second.Label;
-        for (char& c : lowerLabel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const std::string lowerLabel = ToLowerAscii(pair.second.Label);
         if (lowerLabel.find(lowerQuery) != std::string::npos)
             matches.push_back(pair.first);
     }
@@ -1422,9 +1420,7 @@ void SettingsTreeDataProvider::AppendCategoriesMatchingTreeLabels(const std::str
         auto it = m_Nodes.find(id);
         if (it == m_Nodes.end())
             return;
-        std::string lowerLabel = it->second.Label;
-        for (char& c : lowerLabel)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const std::string lowerLabel = ToLowerAscii(it->second.Label);
         if (lowerLabel.find(lowerQuery) != std::string::npos)
         {
             const auto cat = static_cast<SettingsCategory>(id);
@@ -1627,10 +1623,8 @@ void SettingsPanel::CreateTreeView(UIElement* parent)
                 const char* label = m_TreeDataProvider->GetLabel(id);
                 if (label && label[0] != '\0')
                 {
-                    std::string lowerLabel = label;
-                    std::string lowerQuery = m_CurrentSearchQuery;
-                    for (char& c : lowerLabel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                    for (char& c : lowerQuery) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    const std::string lowerLabel = ToLowerAscii(label);
+                    const std::string lowerQuery = ToLowerAscii(m_CurrentSearchQuery);
                     if (lowerLabel.find(lowerQuery) != std::string::npos)
                         row->AddClass("search-match");
                     else
@@ -11474,11 +11468,7 @@ void SettingsPanel::CreateTagsSettingsContent()
                     panel->PostAction([panel, defaults]() {
                         std::unordered_set<std::string> defaultNamesLower;
                         for (const auto& d : defaults) {
-                            std::string lower;
-                            lower.reserve(d.Name.size());
-                            for (unsigned char c : d.Name)
-                                lower.push_back(static_cast<char>(std::tolower(c)));
-                            defaultNamesLower.insert(std::move(lower));
+                            defaultNamesLower.insert(ToLowerAscii(d.Name));
                         }
                         std::vector<std::filesystem::path> paths =
                             EngineCore::GetInstance().GetAssetManager().GetRegistry().GetRegisteredAssetPaths();
@@ -11507,11 +11497,7 @@ void SettingsPanel::CreateTagsSettingsContent()
                                         part = part.substr(s, (e2 == std::string::npos ? part.size() : e2 + 1) - s);
                                     }
                                     if (!part.empty()) {
-                                        std::string lower;
-                                        lower.reserve(part.size());
-                                        for (unsigned char c : part)
-                                            lower.push_back(static_cast<char>(std::tolower(c)));
-                                        if (defaultNamesLower.count(lower))
+                                        if (defaultNamesLower.count(ToLowerAscii(part)))
                                             kept.push_back(part);
                                     }
                                     j = k + (k < meta.size() ? 1u : 0u);
@@ -12120,8 +12106,7 @@ void SettingsPanel::CreateShortcutsSettingsContent()
     // Shortcuts page is active, filter rows in place. Matches against
     // group label, display name, and the formatted binding (so the user can
     // search by binding text like "ctrl+s").
-    std::string filter = m_CurrentSearchQuery;
-    for (char& c : filter) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string filter = ToLowerAscii(m_CurrentSearchQuery);
 
     auto entryMatchesFilter = [&](const ShortcutCatalogEntry& e) -> bool
     {
@@ -12129,7 +12114,7 @@ void SettingsPanel::CreateShortcutsSettingsContent()
             return true;
         auto contains = [&](std::string s)
         {
-            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            s = ToLowerAscii(s);
             return s.find(filter) != std::string::npos;
         };
         if (contains(e.displayName))
@@ -12710,10 +12695,8 @@ void SettingsPanel::RegisterSearchableItems()
             std::min(providers.size(), static_cast<size_t>(kVcsProviderCategoryMaxCount));
         for (size_t i = 0; i < count; ++i)
         {
-            std::string keywords = providers[i].TypeId + " " + providers[i].DisplayName +
-                                   " settings version control vcs executable status";
-            for (char& c : keywords)
-                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const std::string keywords = ToLowerAscii(providers[i].TypeId + " " + providers[i].DisplayName +
+                                                      " settings version control vcs executable status");
             m_SearchableItems.push_back(
                 {providers[i].DisplayName, keywords,
                  static_cast<SettingsCategory>(kVcsProviderCategoryBase + i), nullptr});
@@ -12791,17 +12774,13 @@ void SettingsPanel::RegisterSearchableItems()
                 category = SettingsCategory::Camera;
             if (!categories[i].SearchKeywords.empty())
             {
-                std::string keywords = categories[i].Title + " " + categories[i].SearchKeywords;
-                for (char& c : keywords)
-                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                const std::string keywords = ToLowerAscii(categories[i].Title + " " + categories[i].SearchKeywords);
                 m_SearchableItems.push_back(
                     {categories[i].Title, keywords, category, nullptr});
             }
             for (const Editor::SettingsFieldDescriptor& field : categories[i].Fields)
             {
-                std::string keywords = categories[i].Title + " " + field.SearchKeywords;
-                for (char& c : keywords)
-                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                const std::string keywords = ToLowerAscii(categories[i].Title + " " + field.SearchKeywords);
                 m_SearchableItems.push_back({field.Label, keywords, category, nullptr});
             }
         }
@@ -12855,8 +12834,7 @@ void SettingsPanel::ApplySearchFilterToContent(const std::string& searchText)
     UIElement* viewport = m_ContentBody->GetViewport();
     if (!viewport)
         return;
-    std::string searchLower = searchText;
-    for (char& c : searchLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string searchLower = ToLowerAscii(searchText);
 
     struct PendingReplacement { Label* label; UIElement* parent; std::string before; std::string match; std::string after; };
     std::vector<PendingReplacement> pending;
@@ -12870,8 +12848,7 @@ void SettingsPanel::ApplySearchFilterToContent(const std::string& searchText)
         if (auto* label = dynamic_cast<Label*>(el))
         {
             std::string text = label->GetText();
-            std::string textLower = text;
-            for (char& c : textLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const std::string textLower = ToLowerAscii(text);
             size_t pos = textLower.find(searchLower);
             if (pos != std::string::npos)
             {
@@ -12891,8 +12868,7 @@ void SettingsPanel::ApplySearchFilterToContent(const std::string& searchText)
         {
             // Collapsed cards show only their preview line, so match against the
             // full text and expand the card the hit is in.
-            std::string cardLower = infoCard->GetFullText();
-            for (char& c : cardLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const std::string cardLower = ToLowerAscii(infoCard->GetFullText());
             if (cardLower.find(searchLower) != std::string::npos)
             {
                 infoCard->SetExpanded(true);
@@ -12905,8 +12881,7 @@ void SettingsPanel::ApplySearchFilterToContent(const std::string& searchText)
         if (auto* foldout = dynamic_cast<Foldout*>(el))
         {
             std::string title = foldout->GetTitle();
-            std::string titleLower = title;
-            for (char& c : titleLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const std::string titleLower = ToLowerAscii(title);
             if (titleLower.find(searchLower) != std::string::npos)
             {
                 foldout->AddClass("search-match");
@@ -13095,16 +13070,13 @@ void SettingsPanel::ApplySearchStateNow()
     }
 
     // Build list of categories that have at least one match, in order of first occurrence in m_SearchableItems.
-    std::string lowerQuery = m_CurrentSearchQuery;
-    for (char& c : lowerQuery) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string lowerQuery = ToLowerAscii(m_CurrentSearchQuery);
     m_SearchMatchCategories.clear();
     std::unordered_set<SettingsCategory> seen;
     for (const auto& item : m_SearchableItems)
     {
-        std::string lowerLabel = item.Label;
-        std::string lowerKeywords = item.Keywords;
-        for (char& c : lowerLabel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        for (char& c : lowerKeywords) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const std::string lowerLabel = ToLowerAscii(item.Label);
+        const std::string lowerKeywords = ToLowerAscii(item.Keywords);
         if (lowerLabel.find(lowerQuery) != std::string::npos || lowerKeywords.find(lowerQuery) != std::string::npos)
         {
             if (seen.insert(item.Category).second)
@@ -13157,17 +13129,14 @@ void SettingsPanel::ShowSearchResults(const std::string& query)
         m_ContentHeader->SetText("Search Results");
     
     // Convert query to lowercase for case-insensitive matching
-    std::string lowerQuery = query;
-    for (char& c : lowerQuery) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string lowerQuery = ToLowerAscii(query);
     
     // Find matching items
     std::vector<const SearchableSettingItem*> matches;
     for (const auto& item : m_SearchableItems)
     {
-        std::string lowerLabel = item.Label;
-        std::string lowerKeywords = item.Keywords;
-        for (char& c : lowerLabel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        for (char& c : lowerKeywords) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const std::string lowerLabel = ToLowerAscii(item.Label);
+        const std::string lowerKeywords = ToLowerAscii(item.Keywords);
 
         if (lowerLabel.find(lowerQuery) != std::string::npos ||
             lowerKeywords.find(lowerQuery) != std::string::npos)
@@ -13276,10 +13245,8 @@ void SettingsPanel::ShowSearchResults(const std::string& query)
         auto label = std::make_unique<Label>();
         label->SetText(labelText);
         label->AddClass("settings-search-result-label");
-        std::string lowerLabel = labelText;
-        std::string lowerQuery = query;
-        for (char& c : lowerLabel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        for (char& c : lowerQuery) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const std::string lowerLabel = ToLowerAscii(labelText);
+        const std::string lowerQuery = ToLowerAscii(query);
         if (lowerLabel.find(lowerQuery) != std::string::npos)
             label->AddClass("search-match");
         row->AddChild(std::move(label));
@@ -13323,15 +13290,8 @@ UIElement* FindSettingsSearchContextTarget(UIElement* root,
                                            const std::string& label,
                                            const std::string& query)
 {
-    auto lower = [](std::string value)
-    {
-        for (char& c : value)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return value;
-    };
-
-    const std::string wantedLabel = lower(label);
-    const std::string wantedQuery = lower(query);
+    const std::string wantedLabel = ToLowerAscii(label);
+    const std::string wantedQuery = ToLowerAscii(query);
     UIElement* labelContains = nullptr;
     UIElement* queryContains = nullptr;
     UIElement* exact = nullptr;
@@ -13341,7 +13301,7 @@ UIElement* FindSettingsSearchContextTarget(UIElement* root,
             return;
         if (auto* candidate = dynamic_cast<Label*>(element))
         {
-            const std::string text = lower(candidate->GetText());
+            const std::string text = ToLowerAscii(candidate->GetText());
             if (!wantedLabel.empty() && text == wantedLabel)
             {
                 exact = candidate;

@@ -1,5 +1,5 @@
 # AssetCore module tests: GUID::Derive golden/stability vectors and
-# GUID::Generate layout and concurrent uniqueness.
+# GUID::Generate layout and concurrent uniqueness, GUID::ToString text forms.
 
 find_package(GTest QUIET)
 if(NOT GTest_FOUND)
@@ -16,6 +16,7 @@ endif()
 add_executable(GUIDTests
     GUIDDeriveTests.cpp
     GUIDGenerateTests.cpp
+    GUIDToStringTests.cpp
 )
 
 # AssetCore is an OBJECT library; linking it directly splices GUID.cpp's

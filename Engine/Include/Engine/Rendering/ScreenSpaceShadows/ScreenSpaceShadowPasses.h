@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include "Rendering/Camera/CameraTypes.h"
 #include "Rendering/Core/Pipeline/PipelineIdentifiers.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
@@ -41,10 +42,21 @@ class ScreenSpaceShadowPasses
         const ScreenSpaceShadowFilter* filter = nullptr);
 
   private:
+    // A pass that writes its set by binding index names each binding here. The load
+    // resolves the names before it makes the pipeline, so a renamed binding fails the load.
+    struct NamedBinding
+    {
+        const char* Name;
+        uint32_t& Binding;
+    };
     Rendering::ComputePipelineId m_MatchPipeline{};
     std::unique_ptr<Rendering::ShaderMeta> m_MatchMeta;
     Rendering::DescriptorSetLayoutDesc m_MatchLayout{};
     bool LoadShader();
+    bool LoadPassPipeline(const char* path, Rendering::ComputePipelineId& pipeline,
+                          std::unique_ptr<Rendering::ShaderMeta>& meta,
+                          Rendering::DescriptorSetLayoutDesc& layout,
+                          std::span<const NamedBinding> bindings);
     Rendering::IDevice* m_Device = nullptr;
     Rendering::ComputePipelineId m_Pipeline{};
     Rendering::ComputePipelineId m_PreparePipeline{};
@@ -53,9 +65,17 @@ class ScreenSpaceShadowPasses
     Rendering::DescriptorSetLayoutDesc m_ResolveLayout{};
     std::unique_ptr<Rendering::ShaderMeta> m_PrepareMeta;
     Rendering::DescriptorSetLayoutDesc m_PrepareLayout{};
+    // Set-0 bindings of the prepare and resolve shaders. LoadShader resolves them by name.
+    uint32_t m_PrepareDepthBinding = 0;
+    uint32_t m_PrepareVisibilityBinding = 0;
+    uint32_t m_ResolveDepthBinding = 0;
+    uint32_t m_ResolveVisibilityBinding = 0;
+    uint32_t m_ResolveMaskBinding = 0;
     std::unique_ptr<Rendering::ShaderMeta> m_Meta;
     Rendering::DescriptorSetLayoutDesc m_Layout{};
     Rendering::SamplerHandle m_Sampler{};
-    bool m_WarnedLoadFailure = false;
+    // Each failure kind logs once, so one kind does not hide the other.
+    bool m_WarnedPackageLoadFailure = false;
+    bool m_LoggedMissingBinding = false;
 };
 } // namespace GameEngine::Engine::Renderer

@@ -136,7 +136,7 @@ bool PageRequester::InWedge(const Footprint& box, const WedgeView& view)
     float32 lowZ = box.MinZ - view.Position.z;
     float32 highX = lowX;
     float32 highZ = lowZ;
-    for (const auto [x, z] :
+    for (const auto& [x, z] :
          {std::pair{box.MaxX, box.MinZ}, std::pair{box.MinX, box.MaxZ}, std::pair{box.MaxX, box.MaxZ}})
     {
         const float32 cornerX = x - view.Position.x;

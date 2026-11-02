@@ -1,7 +1,7 @@
 #include "Thumbnails/ThumbnailService.h"
 
 #include "AssetCore/AssetTypes.h"
-#include "Types/StringUtils.h"
+#include "Types/PathUtils.h"
 #include "Assets/AssetManager.h"
 #include "Assets/AssetPathKey.h"
 #include "Assets/AssetRegistry.h"
@@ -39,7 +39,7 @@ constexpr size_t kMaxBrowserRequestsInspectedPerFrame = 32;
 // that don't yet have a dedicated AssetThumbnailHandler.
 static bool IsImageExtension(const std::filesystem::path& p)
 {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     // .ktx/.ktx2 render through the UI background path, which re-decodes
     // block-compressed containers to RGBA8 (UI::UploadBackgroundImageFromAsset,
     // Engine/Modules/UI/Source/BackgroundImage/BackgroundImageUpload.cpp).
@@ -50,33 +50,33 @@ static bool IsImageExtension(const std::filesystem::path& p)
 
 static bool IsModelExtension(const std::filesystem::path& p)
 {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb" ||
            ext == ".dae" || ext == ".3ds";
 }
 
 static bool IsAudioExtension(const std::filesystem::path& p)
 {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     return ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".flac" || ext == ".aac";
 }
 
 static bool IsVideoExtension(const std::filesystem::path& p)
 {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     return ext == ".mp4" || ext == ".mov" || ext == ".avi" || ext == ".mkv" || ext == ".m4v" ||
            ext == ".webm" || ext == ".wmv";
 }
 
 static bool IsLensFlareDefinitionExtension(const std::filesystem::path& p)
 {
-    const auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    const auto ext = LowerCaseExtension(p);
     return ext == ".lensflare";
 }
 
 static bool IsShaderGraphSurfaceExtension(const std::filesystem::path& p)
 {
-    const auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    const auto ext = LowerCaseExtension(p);
     return ext == ".glsl";
 }
 

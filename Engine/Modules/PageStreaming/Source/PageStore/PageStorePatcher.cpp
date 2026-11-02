@@ -5,6 +5,7 @@
 #include "PageStreaming/PageStore/PageStoreWriter.h"
 
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Types/ByteBuffer.h"
 
 #include <algorithm>
 #include <cstring>
@@ -142,7 +143,7 @@ bool GatherFinerPage(PageStoreWriter& source, const PageCodec& codec, uint32 lev
 {
     const PageAddress address{0, static_cast<uint8>(level), px, pz};
     PageIndexEntry entry;
-    std::vector<uint8> stored;
+    ByteBuffer stored;
     if (!source.ReadPage(address, stored, entry))
         return false;
     const uint32 sourceStride = kPageOwnedSamples + 2u * sourceApron;

@@ -5,9 +5,11 @@
 #include "Scene/PrefabAuthoring.h"
 
 #include "Components/Hierarchy.h"
+#include "Components/HierarchyQueries.h"
 #include "Components/PrefabInstance.h"
 #include "Components/SceneEntityTag.h"
 #include "Core/Engine.h"
+#include "ECS/EntityRemap.h"
 #include "ECS/Query.h"
 #include "ECS/World.h"
 #include "Logger/Logger.h"
@@ -18,6 +20,7 @@
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scripting/AbiMainThread.h"
 #include "Types/FlatMap.h"
+#include "Types/FlatSet.h"
 #include "Types/StringUtils.h"
 
 #include <algorithm>
@@ -27,6 +30,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace GameEngine::Scene
@@ -46,6 +50,13 @@ struct PrefabMember
     std::unordered_map<ECS::EntityId, std::string> InstanceTags;
     std::unordered_map<ECS::EntityId, std::string> TemplateTags;
     std::unordered_map<std::string, ECS::EntityHandle> EntityByTag;
+};
+
+// An entity cloned into an instance for a prefab entity the instance did not have.
+struct GainedMember
+{
+    ECS::EntityHandle Clone;
+    std::size_t TemplateIndex = 0; // the index of its entity in the new generation
 };
 
 // The outermost prefab instance root at or above `entity`, or the invalid handle.
@@ -173,7 +184,7 @@ struct LineContexts
         Save.Resolver = &Resolver;
         Save.Unresolved = world.TryGetUnresolvedComponents();
         Save.WriteEveryField = true;
-        Options.mode = LoadMode::Additive;
+        Options.clearWorldFirst = false;
         Options.assetResolver = &Resolver;
         Options.assetRootOverride = Resolver.GetAssetRoot();
         Load = MakeDocumentLoadContext(world, File, SceneDoc{}, Options);
@@ -182,14 +193,14 @@ struct LineContexts
     EngineCore& Engine;
     AssetManagerSceneResolver Resolver;
     std::filesystem::path File;
-    SceneSaveContext Save;
-    LoadOptions Options;
-    SceneLoadContext Load;
+    SceneWriteContext Save;
+    SceneReadOptions Options;
+    SceneReadContext Load;
 };
 
 // Sets the fields `lines` name on `entity` through the component's schema, as a load reads them; adds
 // the component when the entity does not have it.
-void ApplyLines(ECS::World& world, const SceneLoadContext& context, ECS::EntityHandle entity, std::string_view token,
+void ApplyLines(ECS::World& world, const SceneReadContext& context, ECS::EntityHandle entity, std::string_view token,
                 std::span<const std::string> lines)
 {
     std::string text = "[prefab version=1]\n[entity id=\"edit\"]\n";
@@ -219,11 +230,12 @@ void RemoveComponent(ECS::World& world, ECS::EntityHandle entity, std::string_vi
 
 // Gives the instance entity the new prefab values it does not override: a field changed in the
 // prefab where the instance keeps the old value, a component the prefab added, and a component the
-// prefab removed. A component the instance removed stays removed.
-void PropagateToMember(ECS::World& world, const SceneLoadContext& context, ECS::EntityHandle entity, bool isRoot,
+// prefab removed. A component the instance removed stays removed. Returns true when it changed the entity.
+bool PropagateToMember(ECS::World& world, const SceneReadContext& context, ECS::EntityHandle entity, bool isRoot,
                        const std::vector<ComponentText>& instance, const std::vector<ComponentText>& before,
                        const std::vector<ComponentText>& after)
 {
+    bool changedEntity = false;
     for (const ComponentText& next : after)
     {
         if (next.key == "hierarchyorder" || (isRoot && IsPlacementComponent(next.key)))
@@ -233,7 +245,10 @@ void PropagateToMember(ECS::World& world, const SceneLoadContext& context, ECS::
         if (!previous)
         {
             if (!current)
+            {
                 ApplyLines(world, context, entity, next.token, next.lines);
+                changedEntity = true;
+            }
             continue;
         }
         if (!current)
@@ -250,17 +265,141 @@ void PropagateToMember(ECS::World& world, const SceneLoadContext& context, ECS::
                 changed.push_back(line);
         }
         if (!changed.empty())
+        {
             ApplyLines(world, context, entity, next.token, changed);
+            changedEntity = true;
+        }
     }
     for (const ComponentText& previous : before)
     {
         if (previous.key != "hierarchyorder" && !FindText(after, previous.key) && FindText(instance, previous.key))
+        {
             RemoveComponent(world, entity, previous.token);
+            changedEntity = true;
+        }
+    }
+    return changedEntity;
+}
+
+// Applies to `clone` each line of `after` that the text of the clone does not have. A clone holds the
+// values of its prefab entity, so only its entity fields differ: they name the copy it came from.
+void ApplyClonedEntityFields(ECS::World& world, const SceneReadContext& context, ECS::EntityHandle clone,
+                             const std::vector<ComponentText>& current, const std::vector<ComponentText>& after)
+{
+    for (const ComponentText& next : after)
+    {
+        if (next.key == "hierarchyorder")
+            continue;
+        const ComponentText* held = FindText(current, next.key);
+        std::vector<std::string> differing;
+        for (const std::string& line : next.lines)
+        {
+            if (!held || std::find(held->lines.begin(), held->lines.end(), line) == held->lines.end())
+                differing.push_back(line);
+        }
+        if (!differing.empty())
+            ApplyLines(world, context, clone, next.token, differing);
     }
 }
 
-// Gives the instance at `root` the change from the generation `before` of its prefab to `after`.
-void PropagateToInstance(ECS::World& world, PrefabLibrary& library, ECS::EntityHandle root, std::string_view instanceId,
+// Clones into the instance at `instanceId` every entity `after` has at an address `before` does not
+// have, under the instance entity at its parent's address and with the identity of its address. A clone
+// whose parent the instance removed is not kept. Records the identity of each clone in `entityByTag`.
+// Returns each kept clone.
+std::vector<GainedMember> AddGainedMembers(ECS::World& world, PrefabLibrary& library, std::string_view instanceId,
+                                           const PrefabTemplate& before, const PrefabTemplate& after,
+                                           const std::vector<PrefabInstanceEntity>& described,
+                                           const std::vector<std::string>& addresses,
+                                           std::unordered_map<std::string, ECS::EntityHandle>& entityByTag)
+{
+    std::vector<bool> gained(after.Addresses.size(), false);
+    bool anyGained = false;
+    for (std::size_t index = 0; index < after.Addresses.size(); ++index)
+    {
+        gained[index] = FindAddress(before, after.Addresses[index]) == before.Addresses.size() &&
+                        !entityByTag.contains(SceneTagForPath(JoinPath(instanceId, after.Addresses[index])));
+        anyGained = anyGained || gained[index];
+    }
+    if (!anyGained)
+        return {};
+    FlatMap<std::string, ECS::EntityHandle> memberByAddress;
+    for (std::size_t index = 0; index < described.size(); ++index)
+    {
+        if (!described[index].AddedOnInstance)
+            memberByAddress.InsertOrAssign(addresses[index], described[index].Entity);
+    }
+    ECS::EntityRemap remap;
+    if (!world.CreateBatchFromWorld(library.GetWorld(), after.Plan, remap))
+    {
+        Logger::Log::Error("Prefab {}: the entities it gained could not be added to the instance \"{}\". Reload "
+                           "the scene.",
+                           after.Path.filename().string(), instanceId);
+        return {};
+    }
+    const std::vector<ECS::EntityHandle> copy(remap.GetTargets().begin(), remap.GetTargets().end());
+    for (std::size_t index = 0; index < copy.size(); ++index)
+    {
+        if (!gained[index])
+            continue;
+        const auto* parent = world.GetComponent<Components::Parent>(copy[index]);
+        const auto parentAt = parent ? std::find(copy.begin(), copy.end(), parent->Entity) : copy.end();
+        if (parentAt == copy.end() || gained[static_cast<std::size_t>(parentAt - copy.begin())])
+            continue;
+        const ECS::EntityHandle* member =
+            memberByAddress.Find(after.Addresses[static_cast<std::size_t>(parentAt - copy.begin())]);
+        if (member)
+            world.GetComponentForWrite<Components::Parent>(copy[index])->Entity = *member;
+    }
+    Components::DestroySubtreeImmediate(world, copy.front());
+    std::vector<GainedMember> kept;
+    for (std::size_t index = 0; index < copy.size(); ++index)
+    {
+        if (!gained[index] || !world.IsValid(copy[index]))
+            continue;
+        const std::string tag = SceneTagForPath(JoinPath(instanceId, after.Addresses[index]));
+        world.AddComponentImmediate(copy[index], MakeTag(tag));
+        entityByTag[tag] = copy[index];
+        kept.push_back({copy[index], index});
+    }
+    return kept;
+}
+
+// Destroys every member of the instance whose address `after` does not have, with its subtree. An entity
+// the instance added under a destroyed member first moves to the nearest member that stays and keeps its
+// world pose. Returns true when it destroyed a member.
+bool RemoveLostMembers(ECS::World& world, const PrefabTemplate& after,
+                       const std::vector<PrefabInstanceEntity>& described, const std::vector<std::string>& addresses)
+{
+    FlatSet<ECS::EntityHandle> lost;
+    for (std::size_t index = 0; index < described.size(); ++index)
+    {
+        if (!described[index].AddedOnInstance && FindAddress(after, addresses[index]) == after.Addresses.size())
+            lost.Insert(described[index].Entity);
+    }
+    if (lost.Empty())
+        return false;
+    for (const PrefabInstanceEntity& entry : described)
+    {
+        const auto* parent = entry.AddedOnInstance ? world.GetComponent<Components::Parent>(entry.Entity) : nullptr;
+        if (!parent || !lost.Contains(parent->Entity))
+            continue;
+        ECS::EntityHandle keeper = parent->Entity;
+        while (lost.Contains(keeper))
+            keeper = world.GetComponent<Components::Parent>(keeper)->Entity;
+        Components::ReparentKeepingWorldPose(world, entry.Entity, keeper);
+    }
+    for (const ECS::EntityHandle member : lost)
+    {
+        const auto* parent = world.GetComponent<Components::Parent>(member);
+        if (!parent || !lost.Contains(parent->Entity))
+            Components::DestroySubtreeImmediate(world, member);
+    }
+    return true;
+}
+
+// Gives the instance at `root` the change from the generation `before` of its prefab to `after`. Returns
+// true when the instance changed.
+bool PropagateToInstance(ECS::World& world, PrefabLibrary& library, ECS::EntityHandle root, std::string_view instanceId,
                          const PrefabTemplate& before, const PrefabTemplate& after)
 {
     std::vector<PrefabInstanceEntity> described;
@@ -272,21 +411,32 @@ void PropagateToInstance(ECS::World& world, PrefabLibrary& library, ECS::EntityH
     std::unordered_map<std::string, ECS::EntityHandle> entityByTag;
     CollectTags(world, described, before, instanceId, instanceTags, entityByTag, beforeTags);
     CollectTags(world, described, after, instanceId, instanceTags, entityByTag, afterTags);
+    const std::vector<GainedMember> gained =
+        AddGainedMembers(world, library, instanceId, before, after, described, addresses, entityByTag);
 
     LineContexts contexts(world, before.Path);
     contexts.Load.EntityIdMap = &entityByTag;
-    SceneSaveContext instanceCtx = contexts.Save;
+    SceneWriteContext instanceCtx = contexts.Save;
     instanceCtx.EntityTagById = &instanceTags;
-    SceneSaveContext beforeCtx = contexts.Save;
+    SceneWriteContext beforeCtx = contexts.Save;
     beforeCtx.EntityTagById = &beforeTags;
     beforeCtx.Unresolved = library.GetWorld().TryGetUnresolvedComponents();
-    SceneSaveContext afterCtx = beforeCtx;
+    SceneWriteContext afterCtx = beforeCtx;
     afterCtx.EntityTagById = &afterTags;
 
     const auto schemas = SceneSchemaRegistry::GetAllSorted();
     std::vector<ComponentText> instanceText;
     std::vector<ComponentText> beforeText;
     std::vector<ComponentText> afterText;
+    // A clone's entity fields name the copy it came from: read them again by identity, so that they name
+    // the members of this instance.
+    for (const GainedMember& member : gained)
+    {
+        CollectComponentText(world, member.Clone, instanceCtx, schemas, instanceText);
+        CollectComponentText(library.GetWorld(), after.Entities[member.TemplateIndex], afterCtx, schemas, afterText);
+        ApplyClonedEntityFields(world, contexts.Load, member.Clone, instanceText, afterText);
+    }
+    bool changed = !gained.empty();
     for (std::size_t index = 0; index < described.size(); ++index)
     {
         const PrefabInstanceEntity& entry = described[index];
@@ -300,28 +450,11 @@ void PropagateToInstance(ECS::World& world, PrefabLibrary& library, ECS::EntityH
         CollectComponentText(world, entry.Entity, instanceCtx, schemas, instanceText);
         CollectComponentText(library.GetWorld(), before.Entities[beforeIndex], beforeCtx, schemas, beforeText);
         CollectComponentText(library.GetWorld(), after.Entities[afterIndex], afterCtx, schemas, afterText);
-        PropagateToMember(world, contexts.Load, entry.Entity, address.empty(), instanceText, beforeText,
-                          afterText);
+        changed = PropagateToMember(world, contexts.Load, entry.Entity, address.empty(), instanceText, beforeText,
+                                    afterText) ||
+                  changed;
     }
-}
-
-// Gives every outermost instance of the rebuilt prefab in `world` the change between its generations.
-void PropagateToWorld(ECS::World& world, PrefabLibrary& library, const RebuiltPrefab& rebuilt)
-{
-    if (rebuilt.After->Source.IsNull())
-        return;
-    std::vector<std::pair<ECS::EntityHandle, std::string>> roots;
-    world.Query<ECS::Read<Components::PrefabInstance>, ECS::Read<Components::SceneEntityTag>>()
-        .IncludeDisabled()
-        .Each(
-            [&roots, &rebuilt](ECS::EntityHandle entity, const Components::PrefabInstance& marker,
-                               const Components::SceneEntityTag& tag)
-            {
-                if (marker.Source == rebuilt.After->Source && !IsMemberTag(tag.View()))
-                    roots.emplace_back(entity, std::string(tag.View()));
-            });
-    for (const auto& [root, instanceId] : roots)
-        PropagateToInstance(world, library, root, instanceId, *rebuilt.Before, *rebuilt.After);
+    return RemoveLostMembers(world, after, described, addresses) || changed;
 }
 
 // The id on the section header line `header` ("[entity id=\"lid\" ...]"), or empty.
@@ -433,6 +566,27 @@ std::unordered_map<ECS::EntityId, std::string> CollectFileIds(ECS::World& world,
 
 } // namespace
 
+bool PropagatePrefabGeneration(ECS::World& world, PrefabLibrary& library, const PrefabTemplate& before,
+                               const PrefabTemplate& after)
+{
+    if (after.Source.IsNull())
+        return false;
+    std::vector<std::pair<ECS::EntityHandle, std::string>> roots;
+    world.Query<ECS::Read<Components::PrefabInstance>, ECS::Read<Components::SceneEntityTag>>()
+        .IncludeDisabled()
+        .Each(
+            [&roots, &after](ECS::EntityHandle entity, const Components::PrefabInstance& marker,
+                             const Components::SceneEntityTag& tag)
+            {
+                if (marker.Source == after.Source && !IsMemberTag(tag.View()))
+                    roots.emplace_back(entity, std::string(tag.View()));
+            });
+    bool changed = false;
+    for (const auto& [root, instanceId] : roots)
+        changed = PropagateToInstance(world, library, root, instanceId, before, after) || changed;
+    return changed;
+}
+
 bool RevertPrefabOverride(ECS::World& world, ECS::EntityHandle entity, const PrefabOverride& prefabOverride,
                           std::string& outError)
 {
@@ -457,7 +611,7 @@ bool RevertPrefabOverride(ECS::World& world, ECS::EntityHandle entity, const Pre
 
     LineContexts contexts(world, prefab->Path);
     contexts.Load.EntityIdMap = &member.EntityByTag;
-    SceneSaveContext templateCtx = contexts.Save;
+    SceneWriteContext templateCtx = contexts.Save;
     templateCtx.EntityTagById = &member.TemplateTags;
     templateCtx.Unresolved = library->GetWorld().TryGetUnresolvedComponents();
     std::vector<ComponentText> templateText;
@@ -556,9 +710,9 @@ bool PutOverrideInText(ECS::World& world, PrefabLibrary& library, const PlannedA
     const std::unordered_map<ECS::EntityId, std::string> fileIds = CollectFileIds(
         world, member.Root, library, prefab, prefab.Origins[member.TemplateIndex].File, section.Lines);
     LineContexts contexts(world, planned.File);
-    SceneSaveContext instanceCtx = contexts.Save;
+    SceneWriteContext instanceCtx = contexts.Save;
     instanceCtx.EntityTagById = &fileIds;
-    SceneSaveContext templateCtx = contexts.Save;
+    SceneWriteContext templateCtx = contexts.Save;
     templateCtx.EntityTagById = &member.TemplateTags;
     templateCtx.Unresolved = library.GetWorld().TryGetUnresolvedComponents();
     const auto schemas = SceneSchemaRegistry::GetAllSorted();
@@ -690,13 +844,11 @@ bool ApplyPrefabOverrides(ECS::World& world, std::span<const PrefabOverrideTarge
         outEdits.push_back({std::move(file.File), std::move(file.Before), std::move(file.Text)});
     }
     // One rebuild for all written files, so each instance takes the new prefab values once.
-    for (const RebuiltPrefab& rebuilt : library->RebuildFiles(written))
-        PropagateToWorld(world, *library, rebuilt);
+    library->RebuildFiles(written);
     return wroteAll;
 }
 
-bool WritePrefabFileText(ECS::World& world, const std::filesystem::path& file, const std::string& text,
-                         std::string& outError)
+bool WritePrefabFileText(const std::filesystem::path& file, const std::string& text, std::string& outError)
 {
     EngineCore& engine = EngineCore::GetInstance();
     PrefabLibrary* library = engine.TryGetPrefabLibrary();
@@ -713,10 +865,7 @@ bool WritePrefabFileText(ECS::World& world, const std::filesystem::path& file, c
                                onDisk.filename().string());
         return false;
     }
-    // The rebuild keeps the previous generation alive until the frame boundary, so each instance
-    // compares with the generation it was placed from.
-    for (const RebuiltPrefab& rebuilt : library->RebuildFiles(std::span(&file, 1)))
-        PropagateToWorld(world, *library, rebuilt);
+    library->RebuildFiles(std::span(&file, 1));
     return true;
 }
 

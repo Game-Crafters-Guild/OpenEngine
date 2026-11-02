@@ -131,10 +131,10 @@ class EmbeddedAnimationPersistence : public testing::Test, public Scene::ISceneA
     {
         ECS::World world;
         world.Create<Animator>(animator);
-        Scene::SaveOptions options;
+        Scene::SceneWriteOptions options;
         options.assetRootOverride = Root;
         options.assetResolver = this;
-        EXPECT_TRUE(Scene::SaveSceneToFile(world, ScenePath, options));
+        EXPECT_TRUE(Scene::WriteSceneFile(world, ScenePath, options));
         std::ifstream input(ScenePath);
         return {std::istreambuf_iterator<char>(input), {}};
     }
@@ -146,11 +146,11 @@ class EmbeddedAnimationPersistence : public testing::Test, public Scene::ISceneA
     }
     void Load(ECS::World& world)
     {
-        Scene::LoadOptions options;
+        Scene::SceneReadOptions options;
         options.assetRootOverride = Root;
         options.assetResolver = this;
         options.outDegradation = &Degradation;
-        EXPECT_TRUE(Scene::LoadSceneFromFile(world, ScenePath, options));
+        EXPECT_TRUE(Scene::ReadSceneInto(world, ScenePath, options));
     }
     void Write(std::string_view text)
     {
@@ -196,7 +196,7 @@ class EmbeddedAnimationPersistence : public testing::Test, public Scene::ISceneA
     }
     std::filesystem::path Root, ModelPath, ScenePath;
     GUID ModelGuid = GUID::Generate(), ClipGuid, OldModelGuid, StandaloneGuid;
-    Scene::SceneLoadDegradation Degradation;
+    Scene::SceneDegradation Degradation;
 };
 } // namespace
 
@@ -261,10 +261,10 @@ TEST_F(EmbeddedAnimationPersistence, LegacySceneFileReSavesAsTheDurablePair)
     ASSERT_EQ(animators, 1u);
 
     PublishClip();
-    Scene::SaveOptions options;
+    Scene::SceneWriteOptions options;
     options.assetRootOverride = Root;
     options.assetResolver = this;
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, ScenePath, options));
+    ASSERT_TRUE(Scene::WriteSceneFile(world, ScenePath, options));
     std::ifstream input(ScenePath);
     const std::string text{std::istreambuf_iterator<char>(input), {}};
     EXPECT_NE(text.find("Animator.clipSourceModelGuid ="), std::string::npos);
@@ -300,7 +300,7 @@ TEST_F(EmbeddedAnimationPersistence, InvalidPairsDoNotPartiallyReplaceExistingAn
 {
     const auto* schema = Scene::SceneSchemaRegistry::Find("Animator");
     ASSERT_NE(schema, nullptr);
-    Scene::SceneLoadContext context;
+    Scene::SceneReadContext context;
     context.Resolver = this;
     context.AssetRoot = Root;
     for (const std::string bad : {"-1", "4294967295", "4294967296", "0junk", "embedded:0"})
@@ -384,7 +384,7 @@ TEST_F(EmbeddedAnimationPersistence, ClearingSourceClearsTheWholePairAndRejectsN
 {
     const auto* schema = Scene::SceneSchemaRegistry::Find("Animator");
     ASSERT_NE(schema, nullptr);
-    Scene::SceneLoadContext context;
+    Scene::SceneReadContext context;
     context.Resolver = this;
     context.AssetRoot = Root;
     ECS::World world;

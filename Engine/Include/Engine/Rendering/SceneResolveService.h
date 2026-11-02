@@ -62,6 +62,7 @@
 namespace GameEngine
 {
 class Asset;
+class SceneLoadTracker;
 namespace ECS { class World; }
 
 namespace Engine::Renderer
@@ -147,6 +148,10 @@ class SceneResolveService
     SceneResolveBatchProgress BatchProgress(SceneResolveBatch batch) const;
     SceneResolveCounts Counts() const;
 
+    /// Report the held entities and the pending materials as the scene.resolve gate.
+    /// Every instance reports, the editor's scene-open build included.
+    void ReportLoadingWork(SceneLoadTracker& tracker);
+
     /// Bumped each time the service lets go of a held entity that carries a
     /// SkeletonRef or SkinnedMeshRenderer without writing its MeshRenderer (its
     /// model missed, or another owner resolved it first), so a binder that
@@ -220,6 +225,10 @@ class SceneResolveService
     std::deque<GUID> m_ReadyMaterials;
 
     std::unordered_map<uint32, BatchState> m_Batches;
+
+    // The scene.resolve gate; null until ReportLoadingWork.
+    struct LoadReport;
+    std::shared_ptr<LoadReport> m_LoadReport;
     uint32 m_NextBatch = 1;
 
     // The world the held handles belong to; another world, or this one after a

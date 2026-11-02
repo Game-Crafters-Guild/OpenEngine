@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include "Jobs/IncrementalCompilationTask.h"
-#include "JobSystem/WorkStealingThreadPool.h"
 #include "Scripting/CoreCLRHost.h"
 #include "Logger/Logger.h"
 #include <filesystem>
@@ -26,8 +25,6 @@ protected:
         // Create complex test source files
         createComplexTestSourceFiles();
         
-        // Initialize thread pool
-        threadPool = std::make_unique<JobSystem::WorkStealingThreadPool>(4);
 
         // Initialize CoreCLR host
         clrHost = std::make_unique<CoreCLRHost>();
@@ -40,10 +37,6 @@ protected:
         std::error_code ec;
         std::filesystem::remove_all(testProjectDir, ec);
         
-        // Shutdown thread pool
-        if (threadPool) {
-            threadPool->Shutdown();
-        }
     }
     
     void createTestProject() {
@@ -282,7 +275,6 @@ namespace HybridTestProject {
         
         auto config = createConfig(strategy);
         auto task = CreateIncrementalCompilationTask(
-            threadPool.get(),
             *clrHost,
             config
         );
@@ -305,7 +297,6 @@ namespace HybridTestProject {
 protected:
     std::filesystem::path testProjectDir;
     std::string projectPath;
-    std::unique_ptr<JobSystem::WorkStealingThreadPool> threadPool;
     std::unique_ptr<CoreCLRHost> clrHost;
 };
 
@@ -356,7 +347,6 @@ TEST_F(HybridCompilationIntegrationTest, FullWorkflowIntegration) {
     Logger::Log::Info("Step 4: Cache management test");
     auto config = createConfig();
     auto task = CreateIncrementalCompilationTask(
-        threadPool.get(),
         *clrHost,
         config
     );
@@ -444,7 +434,6 @@ TEST_F(HybridCompilationIntegrationTest, CacheSystemValidation) {
     
     auto config = createConfig();
     auto task = CreateIncrementalCompilationTask(
-        threadPool.get(),
         *clrHost,
         config
     );

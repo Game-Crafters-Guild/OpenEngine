@@ -1021,7 +1021,7 @@ void ComputeShaderNode::DeclareForView(ViewDeclare& d)
                 {
                     if (!bb.Buf.IsValid())
                         continue;
-                    if (Detail::TryGetSet0BindingByName(*m_ShaderMeta, bb.Name, binding, dtype))
+                    if (Rendering::TryGetSet0BindingByName(*m_ShaderMeta, bb.Name, binding, dtype))
                     {
                         overrideTypeFromLayout(binding, dtype);
                         if (dtype == Rendering::DescriptorType::StorageBuffer ||
@@ -1046,7 +1046,7 @@ void ComputeShaderNode::DeclareForView(ViewDeclare& d)
                 {
                     if (!tb.Tex.IsValid())
                         continue;
-                    if (Detail::TryGetSet0BindingByName(*m_ShaderMeta, tb.Name, binding, dtype))
+                    if (Rendering::TryGetSet0BindingByName(*m_ShaderMeta, tb.Name, binding, dtype))
                     {
                         overrideTypeFromLayout(binding, dtype);
                         Rendering::DescriptorSetUpdate u{};
@@ -1061,7 +1061,7 @@ void ComputeShaderNode::DeclareForView(ViewDeclare& d)
                 }
                 for (const auto& kv : m_Samplers)
                 {
-                    if (Detail::TryGetSet0BindingByName(*m_ShaderMeta, kv.first, binding, dtype))
+                    if (Rendering::TryGetSet0BindingByName(*m_ShaderMeta, kv.first, binding, dtype))
                     {
                         overrideTypeFromLayout(binding, dtype);
                         if (dtype == Rendering::DescriptorType::Sampler &&
@@ -1078,8 +1078,8 @@ void ComputeShaderNode::DeclareForView(ViewDeclare& d)
                 if (targetBuf.IsValid())
                 {
                     const std::string leaf = BindingLeafName(m_TargetBufferRef);
-                    if (Detail::TryGetSet0BindingByName(*m_ShaderMeta, leaf, binding, dtype) ||
-                        Detail::TryGetSet0BindingByName(*m_ShaderMeta, "TargetBuffer", binding,
+                    if (Rendering::TryGetSet0BindingByName(*m_ShaderMeta, leaf, binding, dtype) ||
+                        Rendering::TryGetSet0BindingByName(*m_ShaderMeta, "TargetBuffer", binding,
                                                         dtype))
                     {
                         overrideTypeFromLayout(binding, dtype);
@@ -1096,8 +1096,8 @@ void ComputeShaderNode::DeclareForView(ViewDeclare& d)
                 if (targetTex.IsValid())
                 {
                     const std::string leaf = BindingLeafName(m_TargetTextureRef);
-                    if (Detail::TryGetSet0BindingByName(*m_ShaderMeta, leaf, binding, dtype) ||
-                        Detail::TryGetSet0BindingByName(*m_ShaderMeta, "TargetTexture", binding,
+                    if (Rendering::TryGetSet0BindingByName(*m_ShaderMeta, leaf, binding, dtype) ||
+                        Rendering::TryGetSet0BindingByName(*m_ShaderMeta, "TargetTexture", binding,
                                                         dtype))
                     {
                         overrideTypeFromLayout(binding, dtype);

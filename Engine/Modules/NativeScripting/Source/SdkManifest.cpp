@@ -141,6 +141,7 @@ bool LoadSdkManifest(const std::filesystem::path& sdkRoot,
     // Only Debug uses the MSVC debug CRT (/MDd, iterator-debug); DebugFast/Release/
     // RelWithDebInfo all use the release CRT (/MD), so they map to Release.
     outConfig.Config = (get("config") == "Debug") ? "Debug" : "Release";
+    outConfig.MacOSDeploymentTarget = get("macosdeploymenttarget");
 
     // EditorSDK interface — present only in the editor's staged SDK. Optional:
     // a manifest without it simply cannot build Editor-kind native modules

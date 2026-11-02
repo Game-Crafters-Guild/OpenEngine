@@ -550,9 +550,9 @@ class SceneWaterFillGate : public ::testing::Test
         const std::filesystem::path path(scenePath);
         ASSERT_TRUE(std::filesystem::exists(path)) << "no such scene: " << scenePath;
 
-        GameEngine::Scene::LoadOptions options;
-        options.mode = GameEngine::Scene::LoadMode::Replace;
-        ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(m_World, path, options))
+        GameEngine::Scene::SceneReadOptions options;
+        options.clearWorldFirst = true;
+        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(m_World, path, options))
             << "scene failed to load: " << scenePath << " -- "
             << GameEngine::Scene::GetLastSceneIOError().message;
         m_World.ProcessCommands();

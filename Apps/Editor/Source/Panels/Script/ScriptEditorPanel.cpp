@@ -23,6 +23,7 @@
 #include "UI/EditorSearchBars.h"
 #include "UI/Interaction/FocusQueries.h"
 #include "Types/StringId.h"
+#include "Types/StringUtils.h"
 #include "Core/Engine.h"
 #include "Logger/Logger.h"
 #include <fstream>
@@ -36,11 +37,10 @@
 
 namespace GameEngine {
 
-// CRT-safe ctype helpers: std::is* and std::tolower require unsigned-char or EOF.
+// CRT-safe ctype helpers: std::is* require unsigned-char or EOF.
 static inline unsigned char ToUChar(char c) { return static_cast<unsigned char>(c); }
 static inline bool IsSpace(char c) { return std::isspace(ToUChar(c)) != 0; }
 static inline bool IsAlnum(char c) { return std::isalnum(ToUChar(c)) != 0; }
-static inline char ToLowerChar(char c) { return static_cast<char>(std::tolower(ToUChar(c))); }
 
 namespace
 {
@@ -906,10 +906,8 @@ void ScriptEditorPanel::FindAllMatches(const std::string& searchText)
         return;
     
     // Case-insensitive search
-    std::string lowerText = text;
-    std::string lowerSearch = searchText;
-    std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(), [](char c) { return ToLowerChar(c); });
-    std::transform(lowerSearch.begin(), lowerSearch.end(), lowerSearch.begin(), [](char c) { return ToLowerChar(c); });
+    const std::string lowerText = ToLowerAscii(text);
+    const std::string lowerSearch = ToLowerAscii(searchText);
     
     size_t pos = 0;
     while ((pos = lowerText.find(lowerSearch, pos)) != std::string::npos) {
@@ -1516,17 +1514,11 @@ std::vector<std::string> ScriptEditorPanel::BuildSuggestions(const std::string& 
     if (prefix.empty() || std::isdigit(ToUChar(prefix[0])))
         return {};
 
-    std::string lowerPrefix(prefix.size(), '\0');
-    for (size_t i = 0; i < prefix.size(); ++i)
-        lowerPrefix[i] = ToLowerChar(prefix[i]);
-
     std::vector<std::string> result;
 
     auto tryAdd = [&](const std::string& s) {
         if (s.size() <= prefix.size()) return; // nothing to complete
-        // Case-insensitive prefix check
-        for (size_t i = 0; i < prefix.size(); ++i)
-            if (ToLowerChar(s[i]) != lowerPrefix[i]) return;
+        if (!StartsWithIgnoreCase(s, prefix)) return;
         // Deduplicate
         for (const auto& existing : result)
             if (existing == s) return;

@@ -1,0 +1,27 @@
+---
+title: Procedural mesh colliders
+description: Give geometry that native code generates at run time a static triangle mesh collider.
+---
+
+A native generator (a shape, a road or a wall built from authored settings) can give its geometry a static triangle mesh collider. It registers the triangles as CPU data with `PhysicsECS::ProceduralMeshColliders`, then puts a `MeshColliderShape` that holds the handle on the entity. The collider does not depend on GPU mesh data, and it comes back when the physics world restarts.
+
+```cpp title="PhysicsECS/ProceduralMeshColliders.h"
+GenerationalVector::Handle Register(Physics::MeshShapeDef mesh);
+void Release(GenerationalVector::Handle handle);
+```
+
+## Register the triangles
+
+`Register` takes a `Physics::MeshShapeDef` (vertices in the entity's local space, three indices per triangle) and returns a handle. It returns an invalid handle for fewer than three vertices, no indices, an index count that is not a multiple of three, an index out of range or a non-finite vertex: check `IsValid()` before you use the handle.
+
+## Attach the collider
+
+The entity is its own body. It needs a `Transform`, a `PhysicsCollider`, a `PhysicsBody` with `motionType` set to `Static`, and a `MeshColliderShape` with `Mesh` set to the handle. `PhysicsInitSystem` builds the shape on its next update. A body that is not `Static` gets no collider and logs one warning.
+
+To change the geometry, register the new triangles and write the new handle into `MeshColliderShape::Mesh`: the next update builds the body again. `BuiltMesh` belongs to `PhysicsInitSystem`; do not write it.
+
+## Release the triangles
+
+The generator keeps the handle alive while a collider names it. After it removes the last such collider, it calls `Release`. A released handle never resolves to a later mesh. Both functions are safe to call from any thread.
+
+`MeshColliderShape` is not saved with the scene. Mark the generated entities with `RuntimeOnlyEntity`, and register the triangles and attach the colliders again from the generator's authored settings after a scene load.

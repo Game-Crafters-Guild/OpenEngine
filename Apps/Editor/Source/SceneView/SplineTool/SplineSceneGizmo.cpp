@@ -10,6 +10,7 @@
 #include "Mathematics/BezierCurve.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/VectorOps.h"
+#include "Scene/SceneTlas.h"
 #include "SplineRecipes/SplineSurfaceConform.h"
 #include "SceneView/SplineTool/SplineDrapePolylines.h"
 #include "SceneView/SplineTool/SplineOwnerQuery.h"
@@ -93,14 +94,16 @@ void AppendLine(std::vector<Vector3>& vertices, const Vector3& a, const Vector3&
 // Each knot's draped height: the surface under the knot (the drape's own ray, Scene target) plus
 // the drape's lift, NaN where the ray missed.
 void DrapeKnots(ECS::World& world, const Spline::SplineData& data, const Mathematics::Matrix4x4& worldM,
-                std::span<const ECS::EntityHandle> ignore, std::vector<float>& out)
+                std::span<const ECS::EntityHandle> ignore, std::vector<float>& out,
+                SplineRecipes::ConformMissTally& tally)
 {
     out.clear();
     out.reserve(data.Points.size());
     for (const Spline::SplineControlPoint& point : data.Points)
     {
         Vector3 hit;
-        out.push_back(SplineRecipes::ConformRayDown(world, worldM.TransformPoint(point.Position), ignore, hit)
+        out.push_back(SplineRecipes::ConformRayDown(world, worldM.TransformPoint(point.Position), ignore, hit,
+                                                    nullptr, &tally)
                           ? hit.y + kDrapeSurfaceLiftMetres
                           : std::numeric_limits<float>::quiet_NaN());
     }
@@ -180,7 +183,95 @@ void RebuildPassiveLineCache(const Spline::SplineData& data,
     }
 }
 
+// Drops the cache entries whose spline stopped being rendered in that mode (deleted, disabled, or
+// switched between passive and selected drawing). Without this, a map keyed on entity id grows
+// for the session.
+template <typename Cache>
+void EvictStale(FlatMap<uint32_t, Cache>& caches, uint64_t cacheEpoch)
+{
+    caches.EraseIf([cacheEpoch](uint32_t, const Cache& cache)
+                   { return cacheEpoch - cache.LastSeen > kGizmoCacheEvictEpochs; });
+}
+
 } // namespace
+
+struct SplineSceneGizmo::DrapePassState
+{
+    // The ground revision. Read on the first drape, so a scene with no splines pays no terrain scan.
+    std::optional<uint64_t> SurfaceRevision;
+    // The scene TLAS that the mesh term reads, brought current on the first drape. Null while its
+    // work is in flight.
+    std::optional<Scene::SceneTlas*> SceneTlas;
+    // The conform-ray exclusions, gathered on the first drape that rebuilds.
+    std::optional<std::vector<ECS::EntityHandle>> ConformIgnore;
+};
+
+const SplineSceneGizmo::DrapeCache& SplineSceneGizmo::RefreshDrapeCache(ECS::World& world,
+                                                                       const SplineECS::SplineService& splineService,
+                                                                       DrapePassState& pass,
+                                                                       ECS::EntityHandle e,
+                                                                       const Components::SplineComponent& comp,
+                                                                       const Spline::SplineData& data,
+                                                                       const Components::WorldTransform& xf,
+                                                                       const Mathematics::Matrix4x4& worldM,
+                                                                       bool wantEdges)
+{
+    DrapeCache& cache = m_DrapeCache.GetOrInsert(e.id);
+    // The drape measures the ground, so the ground is one of its inputs:
+    // without this the displayed centerline keeps a pre-bake (or pre-sculpt)
+    // altitude while the placed pieces, which observe the same revision,
+    // move off it.
+    if (!pass.SurfaceRevision.has_value())
+        pass.SurfaceRevision = SplineRecipes::ConformSurfaceRevision(world, /*conforms by raycast*/ nullptr);
+    if (!pass.SceneTlas.has_value())
+    {
+        Scene::SceneTlas& tlas = Scene::GetSceneTlas(world);
+        pass.SceneTlas = tlas.RequestCurrent(world) == Scene::SceneTlas::Readiness::Ready ? &tlas : nullptr;
+    }
+    const bool runChanged =
+        cache.DataIndex != comp.SplineDataIndex ||
+        cache.Generation != comp.SplineDataGeneration ||
+        cache.DataVersion != data.Version ||
+        !MatrixEquals(cache.Matrix, xf.matrix);
+    // The rays also land on meshes, so the meshes under the run are inputs too. They are read
+    // again only when the run or the scene TLAS changed.
+    if (runChanged)
+    {
+        cache.RunBounds =
+            SplineRecipes::RunWorldBounds(splineService, comp.SplineDataIndex, comp.SplineDataGeneration, worldM);
+        cache.SceneDigest.TlasVersion = SplineRecipes::SceneConformDigest::kNotRead;
+    }
+    if (*pass.SceneTlas != nullptr && (*pass.SceneTlas)->Version() != cache.SceneDigest.TlasVersion)
+    {
+        ++m_SceneDigestRefreshCount;
+        SplineRecipes::RefreshSceneConformDigest(world, **pass.SceneTlas, cache.RunBounds, cache.SceneDigest);
+    }
+    const bool dirty =
+        runChanged ||
+        cache.HasEdges != wantEdges ||
+        cache.SurfaceRevision != *pass.SurfaceRevision ||
+        cache.SceneRevision != cache.SceneDigest.Value ||
+        cache.OverPendingMesh;
+    if (dirty)
+    {
+        cache.DataIndex = comp.SplineDataIndex;
+        cache.Generation = comp.SplineDataGeneration;
+        cache.DataVersion = data.Version;
+        cache.HasEdges = wantEdges;
+        cache.SurfaceRevision = *pass.SurfaceRevision;
+        cache.SceneRevision = cache.SceneDigest.Value;
+        std::memcpy(cache.Matrix, xf.matrix, sizeof(cache.Matrix));
+        if (!pass.ConformIgnore.has_value())
+            pass.ConformIgnore = SplineRecipes::CollectConformRayIgnoreList(world);
+        SplineRecipes::ConformMissTally tally;
+        BuildSplineDrapedPolylines(world, data, worldM, *pass.ConformIgnore, wantEdges,
+                                   Components::SplineConformTarget::Scene, cache.Polylines, &tally);
+        DrapeKnots(world, data, worldM, *pass.ConformIgnore, cache.KnotDrapedY, tally);
+        cache.OverPendingMesh = tally.PendingBvh > 0u;
+    }
+    cache.LastSeen = m_CacheEpoch;
+    return cache;
+}
 
 void SplineSceneGizmo::Render(GizmoRenderContext& context)
 {
@@ -250,56 +341,8 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
                                   splineColor.a * kEnvelopeFillAlphaScale);
     std::vector<Vector3>& envelopeTriBatch = m_Batches.Envelope;
     std::vector<Vector3>& envelopeFillBatch = m_Batches.EnvelopeFill;
-    // Conform-ray exclusions, gathered once per pass and only if a drape
-    // actually rebuilds this frame.
-    std::optional<std::vector<ECS::EntityHandle>> conformIgnore;
     std::vector<Vector3>& passiveDrapedVerts = m_Batches.PassiveDraped;
-    // The ground revision, read once per pass and only when a spline is
-    // actually draped, so a scene with no splines pays no terrain scan.
-    std::optional<uint64_t> passSurfaceRevision;
-
-    // Refreshes (and rebuilds when dirty) the draped-polyline cache entry for
-    // one spline. wantEdges toggles the ±width envelope edges, so selecting a
-    // spline — or switching the width-envelope setting — rebuilds its entry with
-    // or without them.
-    const auto refreshDrapeCache = [&](ECS::EntityHandle e,
-                                       const Components::SplineComponent& comp,
-                                       const Spline::SplineData& data,
-                                       const Components::WorldTransform& xf,
-                                       const Mathematics::Matrix4x4& worldM,
-                                       bool wantEdges) -> const DrapeCache&
-    {
-        auto& cache = m_DrapeCache[e.id];
-        // The drape measures the ground, so the ground is one of its inputs:
-        // without this the displayed centerline keeps a pre-bake (or pre-sculpt)
-        // altitude while the placed pieces, which observe the same revision,
-        // move off it.
-        if (!passSurfaceRevision.has_value())
-            passSurfaceRevision = SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
-        const bool dirty =
-            cache.DataIndex != comp.SplineDataIndex ||
-            cache.Generation != comp.SplineDataGeneration ||
-            cache.DataVersion != data.Version ||
-            cache.HasEdges != wantEdges ||
-            cache.SurfaceRevision != *passSurfaceRevision ||
-            !MatrixEquals(cache.Matrix, xf.matrix);
-        if (dirty)
-        {
-            cache.DataIndex = comp.SplineDataIndex;
-            cache.Generation = comp.SplineDataGeneration;
-            cache.DataVersion = data.Version;
-            cache.HasEdges = wantEdges;
-            cache.SurfaceRevision = *passSurfaceRevision;
-            std::memcpy(cache.Matrix, xf.matrix, sizeof(cache.Matrix));
-            if (!conformIgnore.has_value())
-                conformIgnore = SplineRecipes::CollectConformRayIgnoreList(*world);
-            BuildSplineDrapedPolylines(*world, data, worldM, *conformIgnore, wantEdges,
-                                       Components::SplineConformTarget::Scene, cache.Polylines);
-            DrapeKnots(*world, data, worldM, *conformIgnore, cache.KnotDrapedY);
-        }
-        cache.LastSeen = cacheEpoch;
-        return cache;
-    };
+    DrapePassState drapePass;
 
     // Spline control points are stored in local space (relative to entity
     // origin). Apply the entity's WorldTransform to render in world space,
@@ -340,7 +383,8 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
                     Mathematics::Matrix4x4 worldM;
                     worldM = Mathematics::Matrix4x4::FromColumnMajor(xf.matrix);
                     const DrapeCache& drape =
-                        refreshDrapeCache(e, comp, *data, xf, worldM, /*wantEdges=*/false);
+                        RefreshDrapeCache(*world, *splineService, drapePass, e, comp, *data, xf, worldM,
+                                          /*wantEdges=*/false);
                     const auto& center = drape.Polylines.Center;
                     if (center.size() >= 2u)
                     {
@@ -355,7 +399,7 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
                     }
                     // Zero-length spline: fall through to the analytic line.
                 }
-                auto& cache = m_PassiveLineCache[e.id];
+                PassiveLineCache& cache = m_PassiveLineCache.GetOrInsert(e.id);
                 const bool cacheDirty =
                     cache.DataIndex != comp.SplineDataIndex ||
                     cache.Generation != comp.SplineDataGeneration ||
@@ -405,7 +449,7 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
             const bool wantEnvelope = isSelectedEntity && showWidthEnvelope;
             const DrapeCache* drape = nullptr;
             if (!claim.Claimed && (drapeToSurface || wantEnvelope))
-                drape = &refreshDrapeCache(e, comp, *data, xf, worldM,
+                drape = &RefreshDrapeCache(*world, *splineService, drapePass, e, comp, *data, xf, worldM,
                                            /*wantEdges=*/wantEnvelope);
             const bool drawDrapedCenterline =
                 drapeToSurface && drape && drape->Polylines.Center.size() >= 2u;
@@ -701,21 +745,8 @@ void SplineSceneGizmo::Render(GizmoRenderContext& context)
     }
     m_JunctionMarkers.Render(context, *world, *m_State);
 
-    // Drop cache entries whose spline stopped being rendered in that mode
-    // (deleted, disabled, or switched between passive and selected drawing);
-    // both maps key on entity id and would otherwise grow for the session.
-    const auto evictStale = [cacheEpoch](auto& cacheMap)
-    {
-        for (auto it = cacheMap.begin(); it != cacheMap.end();)
-        {
-            if (cacheEpoch - it->second.LastSeen > kGizmoCacheEvictEpochs)
-                it = cacheMap.erase(it);
-            else
-                ++it;
-        }
-    };
-    evictStale(m_PassiveLineCache);
-    evictStale(m_DrapeCache);
+    EvictStale(m_PassiveLineCache, cacheEpoch);
+    EvictStale(m_DrapeCache, cacheEpoch);
 }
 
 } // namespace GameEngine::Editor::SceneTools

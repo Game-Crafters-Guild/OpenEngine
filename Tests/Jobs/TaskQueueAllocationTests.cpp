@@ -200,19 +200,11 @@ TEST(TaskQueueAllocation, JobCounterQueueGrowthIsSeenByTheCounter)
 
 // A graph task with no dependency, submitted on a worker, goes to that worker's local
 // queue.
-class CountedGraphTask : public JobSystem::Task
+void SubmitCountedGraphTask(JobSystem::WorkStealingThreadPool& pool, std::atomic<std::size_t>& ran)
 {
-  public:
-    CountedGraphTask(JobSystem::WorkStealingThreadPool* pool, std::atomic<std::size_t>* ran)
-        : Task(pool), m_Ran(ran)
-    {
-    }
-
-    void Execute() override { m_Ran->fetch_add(1, std::memory_order_acq_rel); }
-
-  private:
-    std::atomic<std::size_t>* m_Ran;
-};
+    pool.Submit([&ran] { ran.fetch_add(1, std::memory_order_acq_rel); },
+                std::span<const JobSystem::TaskHandle>());
+}
 
 struct LocalWave
 {
@@ -237,7 +229,7 @@ LocalWave PublishOnTheWorker(JobSystem::WorkStealingThreadPool& pool)
             {
                 for (std::size_t i = 0; i < kLocalTasks; ++i)
                 {
-                    pool.Submit(JobSystem::MakeUnique<CountedGraphTask>(&pool, &ran));
+                    SubmitCountedGraphTask(pool, ran);
                 }
                 published.store(true, std::memory_order_release);
                 YieldUntil(release);

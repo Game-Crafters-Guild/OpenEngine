@@ -24,7 +24,7 @@ namespace GameEngine::Scene
 // The lines the scene saver writes for `entity`, grouped by component: the hand-written schemas',
 // the reflected components', the switch lines of components switched off, the components no build
 // registers, and the authored text of fields the load could not read.
-void CollectComponentText(ECS::World& world, ECS::EntityHandle entity, const SceneSaveContext& context,
+void CollectComponentText(ECS::World& world, ECS::EntityHandle entity, const SceneWriteContext& context,
                           const std::vector<const ISceneComponentSchema*>& schemas, std::vector<ComponentText>& out)
 {
     out.clear();
@@ -103,7 +103,7 @@ static bool AddsAComponent(const std::vector<ComponentText>& instance, const std
 // The override lines of the instance entity at `address` ("" for the root): every line that differs
 // from the template entity's, "+address/Component" and its lines for a component the template does
 // not have, "-address/Component" for one the instance does not have. `instance` and `templateText`
-// hold every field (SceneSaveContext::WriteEveryField), so a field the instance clears differs from
+// hold every field (SceneWriteContext::WriteEveryField), so a field the instance clears differs from
 // the template's line; `added` is the instance's plain text, which an added component writes, and is
 // empty when the instance adds none. Sibling order is the prefab's, so a member's HierarchyOrder is
 // never written.
@@ -174,7 +174,7 @@ static const PrefabTemplates::Template* GetPrefabTemplate(PrefabTemplates& templ
     SceneDoc::PrefabInstanceSection section{};
     section.id = "template_" + std::to_string(templates.byPath.Size());
     section.sourceResourceId = "prefab";
-    const SceneLoadContext ownerCtx =
+    const SceneReadContext ownerCtx =
         MakeDocumentLoadContext(*templates.world, sceneFilePath, owner, templates.loadOptions);
 
     auto made = std::make_unique<PrefabTemplates::Template>();
@@ -210,7 +210,7 @@ void AssignSceneLevelIdIfNeeded(ECS::World& world, ECS::EntityHandle h,
 // took; its tag is then written again from its path. Any other entity is the scene's own (one added
 // on an instance among them) and keeps a scene-level id. Members and roots go to `excluded`.
 bool CollectPrefabInstances(ECS::World& world, const std::vector<ECS::EntityHandle>& entities,
-                            const SaveOptions& options, const SceneSaveContext& saveCtx,
+                            const SceneWriteOptions& options, const SceneWriteContext& saveCtx,
                             const std::filesystem::path& sceneFilePath,
                             std::unordered_map<ECS::EntityId, std::string>& tagByEntity,
                             std::unordered_set<ECS::EntityId>& excluded, PrefabTemplates& templates,
@@ -315,7 +315,7 @@ bool CollectPrefabInstances(ECS::World& world, const std::vector<ECS::EntityHand
 // member's overrides at its address, then "-entity address" for each part of the prefab the
 // instance no longer has.
 void WritePrefabInstanceBody(ECS::World& world, const SavedPrefabInstance& instance,
-                             const PrefabTemplates& templates, const SceneSaveContext& saveCtx,
+                             const PrefabTemplates& templates, const SceneWriteContext& saveCtx,
                              const std::vector<const ISceneComponentSchema*>& schemas, std::string& out)
 {
     // A template's entity references write as the identities the instance's entities have.
@@ -323,11 +323,11 @@ void WritePrefabInstanceBody(ECS::World& world, const SavedPrefabInstance& insta
     templateTags.reserve(instance.templ->placed.members.size());
     for (const auto& [address, h] : instance.templ->placed.members)
         templateTags[h.id] = SceneTagForPath(JoinPath(instance.id, address));
-    SceneSaveContext templateCtx = saveCtx;
+    SceneWriteContext templateCtx = saveCtx;
     templateCtx.EntityTagById = &templateTags;
     templateCtx.Unresolved = templates.world->TryGetUnresolvedComponents();
     templateCtx.WriteEveryField = true;
-    SceneSaveContext instanceCtx = saveCtx;
+    SceneWriteContext instanceCtx = saveCtx;
     instanceCtx.WriteEveryField = true;
 
     std::vector<ComponentText> instanceText;
@@ -493,14 +493,14 @@ void DescribePrefabInstanceAgainst(ECS::World& world, ECS::EntityHandle root, Pr
 
     AssetManagerSceneResolver resolver(engine.GetAssetManager(), engine.GetResolvedAssetRoot(),
                                        AssetManagerSceneResolver::UnknownFile::AssignGuid);
-    SceneSaveContext instanceCtx{};
+    SceneWriteContext instanceCtx{};
     instanceCtx.SceneFile = &prefab->Path;
     instanceCtx.AssetRoot = resolver.GetAssetRoot();
     instanceCtx.Resolver = &resolver;
     instanceCtx.EntityTagById = &instanceTags;
     instanceCtx.Unresolved = world.TryGetUnresolvedComponents();
     instanceCtx.WriteEveryField = true;
-    SceneSaveContext templateCtx = instanceCtx;
+    SceneWriteContext templateCtx = instanceCtx;
     templateCtx.EntityTagById = &templateTags;
     templateCtx.Unresolved = library.GetWorld().TryGetUnresolvedComponents();
 

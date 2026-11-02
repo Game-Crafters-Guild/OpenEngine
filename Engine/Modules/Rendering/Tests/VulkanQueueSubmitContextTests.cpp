@@ -432,6 +432,69 @@ TEST(VulkanQueueSubmitContext, RebindResetsTheCounter)
     EXPECT_EQ(ctx.SubmitAndSignal([](uint64_t) { return true; }).SignalledValue, 1ull);
 }
 
+// Staged uploads publish from many threads in any order. The latest upload must be the highest
+// value published: a lower value that lands last would let a submit skip the wait on a newer copy.
+TEST(VulkanQueueSubmitContext, ConcurrentUploadPublishesKeepTheHighestValue)
+{
+    QueueSubmitContext ctx;
+    BindTestQueue(ctx);
+
+    StartGate gate;
+    std::vector<std::thread> workers;
+    for (int t = 0; t < kThreads; ++t)
+    {
+        workers.emplace_back([&, t] {
+            gate.ArriveAndWait();
+            // Each thread publishes its values high to low, so most publishes arrive below the
+            // current maximum.
+            for (int i = kSubmitsPerThread; i > 0; --i)
+                ctx.PublishUpload(static_cast<uint64_t>(i) * kThreads + static_cast<uint64_t>(t));
+        });
+    }
+    gate.ReleaseWhenAllReady(kThreads);
+    for (std::thread& worker : workers)
+        worker.join();
+
+    EXPECT_EQ(ctx.LatestUpload(), static_cast<uint64_t>(kSubmitsPerThread) * kThreads + (kThreads - 1));
+}
+
+// One wait covers every later submit on the same queue. A queue that already waited on the
+// latest upload adds no wait; a newer upload asks for one more.
+TEST(VulkanQueueSubmitContext, AQueueWaitsOncePerNewUpload)
+{
+    QueueSubmitContext uploadQueue;
+    BindTestQueue(uploadQueue, 3);
+    QueueSubmitContext graphicsQueue;
+    BindTestQueue(graphicsQueue);
+
+    EXPECT_EQ(graphicsQueue.UploadWaitFor(uploadQueue.LatestUpload()), 0ull) << "no upload yet";
+
+    uploadQueue.PublishUpload(4);
+    EXPECT_EQ(graphicsQueue.UploadWaitFor(uploadQueue.LatestUpload()), 4ull);
+    graphicsQueue.NoteUploadWaited(4);
+    EXPECT_EQ(graphicsQueue.UploadWaitFor(uploadQueue.LatestUpload()), 0ull) << "the queue is already past it";
+
+    uploadQueue.PublishUpload(5);
+    EXPECT_EQ(graphicsQueue.UploadWaitFor(uploadQueue.LatestUpload()), 5ull);
+}
+
+// A rebuild restarts every timeline at 0. A latest upload or a waited value carried across it
+// would make the next submit wait on a value the new timeline never reaches, or skip a needed wait.
+TEST(VulkanQueueSubmitContext, RebindResetsTheUploadValues)
+{
+    QueueSubmitContext ctx;
+    BindTestQueue(ctx);
+    ctx.PublishUpload(12);
+    ctx.NoteUploadWaited(12);
+
+    ctx.Unbind();
+    EXPECT_EQ(ctx.LatestUpload(), 0ull);
+
+    BindTestQueue(ctx, 9);
+    EXPECT_EQ(ctx.LatestUpload(), 0ull);
+    EXPECT_EQ(ctx.UploadWaitFor(1), 1ull) << "the waited value must restart with the timeline";
+}
+
 // ---------------------------------------------------------------------------------------------
 // Role space vs context space.
 //

@@ -230,9 +230,9 @@ class PrefabTimingTests : public ::testing::Test
     // Loads `path` into `world` (Replace). With `resolved`, prefab sources resolve through the
     // engine's asset manager, so the templates carry their GUIDs.
     bool Load(ECS::World& world, const std::filesystem::path& path, bool resolved,
-              Scene::SceneLoadDegradation* report = nullptr)
+              Scene::SceneDegradation* report = nullptr)
     {
-        Scene::LoadOptions options{Scene::LoadMode::Replace};
+        Scene::SceneReadOptions options{};
         options.outDegradation = report;
         if (resolved)
         {
@@ -243,7 +243,7 @@ class PrefabTimingTests : public ::testing::Test
             options.assetResolver = &*m_Resolver;
             options.assetRootOverride = m_Resolver->GetAssetRoot();
         }
-        return Scene::LoadSceneFromFile(world, path, options);
+        return Scene::ReadSceneInto(world, path, options);
     }
 
     GUID Register(const std::filesystem::path& path)
@@ -275,7 +275,7 @@ class PrefabTimingTests : public ::testing::Test
         world.Clear();
         EngineCore::GetInstance().TryGetPrefabLibrary()->CollectAtFrameBoundary();
 
-        Scene::SceneLoadDegradation report;
+        Scene::SceneDegradation report;
         const Clock::time_point start = Clock::now();
         const bool loaded = Load(world, scene, false, &report);
         const double ms = ElapsedMs(start);

@@ -109,8 +109,10 @@ CascadeRenderInputs BuildCascadeCacheInputs(RenderServices& rs, ViewId viewId,
     if (const auto* viewDesc = rs.Views().FindViewDesc(viewId))
     {
         in.WorldId = viewDesc->worldId;
-        in.CasterEpoch = cache.TrackCasterChanges(viewId, cacheSlot, in.WorldId,
-            rs.GetShadowCasterChanges(in.WorldId), in.LightVP, resolution);
+        const CascadeShadowCache::CasterEpochs epochs = cache.TrackCasterChanges(viewId,
+            cacheSlot, in.WorldId, rs.GetShadowCasterChanges(in.WorldId), in.LightVP, resolution);
+        in.CasterEpoch = epochs.Content;
+        in.DeformationEpoch = epochs.Deformation;
         in.Layers = viewDesc->ActiveRenderLayerMask();
         if (!fitFreeze && viewDesc->cameraId != 0)
         {
@@ -307,6 +309,8 @@ void ShadowMapRenderFeature::PlanCascadeMotionFrame(Rendering::RenderGraph::RGFr
     std::array<CascadeUpdateClass, CascadeMotionScheduler::kMaxCascades> classes{};
     std::array<uint64_t, CascadeMotionScheduler::kMaxCascades> staleness{};
     staleness.fill(CascadeMotionScheduler::kStalenessUnknown);
+    // CasterDeformation only when no Motion pair carries a camera or fit cause.
+    CascadeMotionSource source = CascadeMotionSource::CasterDeformation;
     for (uint32_t c = 0; c < numCascades; ++c)
     {
         const CascadeRenderInputs depthIn = BuildCascadeCacheInputs(
@@ -332,15 +336,17 @@ void ShadowMapRenderFeature::PlanCascadeMotionFrame(Rendering::RenderGraph::RGFr
                        std::memcmp((*fits)[c].LightVP.Data(), (*tintFits)[c].LightVP.Data(),
                                    16 * sizeof(float)) == 0;
         }
-        classes[c] =
-            ClassifyCascadePair(depthCause, tintDeclares ? &tintCause : nullptr, lockstep);
+        const CascadeCacheDirtyCause* pairTintCause = tintDeclares ? &tintCause : nullptr;
+        classes[c] = ClassifyCascadePair(depthCause, pairTintCause, lockstep);
+        if (IsCameraMotionPair(classes[c], depthCause, pairTintCause))
+            source = CascadeMotionSource::Camera;
         if (fits && (*fits)[c].Valid)
             staleness[c] = frame.FrameIndex() - (*fits)[c].FrameStamp;
     }
 
     plan.DeferMask = m_MotionScheduler
                          .PlanFrame(static_cast<uint32_t>(viewId), numCascades, classes, staleness,
-                                    cap, m_MotionMaxAge)
+                                    cap, m_MotionMaxAge, source)
                          .DeferMask;
     m_MotionPlanByView[viewId] = plan;
 }

@@ -32,12 +32,8 @@ struct CachedPage
     CachedPage Parent() const { return CachedPage{Stream, Address.Parent()}; }
 
     bool operator==(const CachedPage&) const = default;
-};
-
-/// Hash of a cached page for the cache's maps.
-struct CachedPageHash
-{
-    std::size_t operator()(const CachedPage& page) const noexcept;
+    /// Stream, then address: the order of the cache's slot map.
+    auto operator<=>(const CachedPage&) const = default;
 };
 
 /// A resident page whose content changed in place (PageCache::Rewrite), and where it changed.
@@ -150,7 +146,7 @@ public:
     uint32 PageVisitsThisFrame() const { return m_Visits; }
 
 private:
-    using Pool = ResidentSlotPool<CachedPage, CachedPageHash>;
+    using Pool = ResidentSlotPool<CachedPage>;
 
     // What the cache knows of the page in a slot.
     struct SlotPage

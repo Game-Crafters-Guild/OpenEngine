@@ -1039,14 +1039,7 @@ void VulkanDevice::Shutdown()
         m_LiveTextures.clear();
     }
     {
-        // Destroy any buffers created by this device
-        // Use a copy because DestroyBuffer modifies m_LiveBuffers
-        auto liveBuffers = m_LiveBuffers;
-        for (auto h : liveBuffers)
-        {
-            DestroyBuffer(h);
-        }
-        m_LiveBuffers.clear();
+        DestroyLiveBuffers();
         if (m_PipelineCacheIface)
         {
             m_PipelineCacheIface.reset();
@@ -1482,12 +1475,7 @@ void VulkanDevice::TeardownDeviceScopedForRebuild(std::vector<RetainedWindowTarg
         m_LiveTextures.clear();
     }
     {
-        auto liveBuffers = m_LiveBuffers;
-        for (auto h : liveBuffers)
-        {
-            DestroyBuffer(h);
-        }
-        m_LiveBuffers.clear();
+        DestroyLiveBuffers();
         m_PipelineCacheIface.reset();
     }
 
@@ -4243,10 +4231,12 @@ BufferHandle VulkanDevice::CreateBuffer(const BufferDesc& desc)
     BufferHandle h = GameEngine::Rendering::CreateBuffer(vulkanBuffer);
     if (h.IsValid())
     {
+        vulkanBuffer->handle = h;
         std::lock_guard<std::mutex> lock(m_ResourceTrackingMutex);
         if (vulkanBuffer->allocation)
             m_VmaBufferAllocs[vulkanBuffer->allocation] = vulkanBuffer->buffer;
-        m_LiveBuffers.push_back(h);
+        vulkanBuffer->liveSlot = m_LiveBuffers.size();
+        m_LiveBuffers.push_back(vulkanBuffer);
     }
     else
     {
@@ -5523,6 +5513,7 @@ PipelineHandle VulkanDevice::CreatePipelineInternal(const PipelineDesc& desc)
 // Resource destruction
 void VulkanDevice::DestroyBuffer(BufferHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     // Reachable from job threads (upload-worker failure paths, UpdateBuffer's
     // staging retire). Held so the InTeardown() read below is coherent: the
     // rebuild arm only flips under the exclusive lock, so a worker inside this
@@ -5546,6 +5537,7 @@ void VulkanDevice::DestroyBuffer(BufferHandle handle)
 
 void VulkanDevice::DestroyTexture(TextureHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     // Same InTeardown() coherence as DestroyBuffer (see there).
     DeviceRebuildSharedGuard rebuildGuard(*this, DeviceRebuildSharedGuard::Kind::Access);
 
@@ -5676,6 +5668,17 @@ void VulkanDevice::QueueDeferredDescriptorBytesRelease(const PersistentDescripto
         slot->deferredDescriptorBytes.push_back(bytes);
 }
 
+void VulkanDevice::QueueDeferredPoolDescriptorSetFree(VkDescriptorSet set)
+{
+    // No duplicate guard: DestroyDescriptorSet queues a set only when it erases the
+    // set's m_LiveDescriptorSets entry, so a second destroy finds nothing to queue.
+    std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
+    if (HasGraphicsTimelineSemaphore())
+        m_DeferredPoolDescriptorSetsTimeline.push_back({set, NextSubmitTagsLocked()});
+    else if (PerQueueFrame* slot = DeferralFrameSlotLocked())
+        slot->deferredPoolDescriptorSets.push_back(set);
+}
+
 void VulkanDevice::ReleaseDescriptorBytesImmediate(const PersistentDescriptorBytes& bytes)
 {
     if (m_DescriptorBufferPool && m_DescriptorBufferPool->InstanceId() == bytes.PoolInstance)
@@ -5699,13 +5702,20 @@ void VulkanDevice::DestroyBufferImmediate(BufferHandle handle)
     }
     if (VulkanBuffer* buffer = GetVulkanBuffer(handle))
     {
+        {
+            std::lock_guard<std::mutex> lock(m_ResourceTrackingMutex);
+            if (buffer->allocation != nullptr)
+                m_VmaBufferAllocs.erase(buffer->allocation);
+            assert(buffer->liveSlot < m_LiveBuffers.size() && m_LiveBuffers[buffer->liveSlot] == buffer &&
+                   "a destroyed buffer is not at its live slot");
+            VulkanBuffer* moved = m_LiveBuffers.back();
+            moved->liveSlot = buffer->liveSlot;
+            m_LiveBuffers[buffer->liveSlot] = moved;
+            m_LiveBuffers.pop_back();
+        }
 #ifdef RENDERING_HAS_VMA
         if (buffer->allocation != nullptr && m_VmaAllocator != nullptr)
         {
-            {
-                std::lock_guard<std::mutex> lock(m_ResourceTrackingMutex);
-                m_VmaBufferAllocs.erase(buffer->allocation);
-            }
             vmaDestroyBuffer(AsVmaAllocator(m_VmaAllocator), buffer->buffer, buffer->allocation);
         }
         else
@@ -5734,15 +5744,20 @@ void VulkanDevice::DestroyBufferImmediate(BufferHandle handle)
         }
 #endif
         GameEngine::Rendering::DestroyBuffer(handle);
-        if (!m_IsShutdown && !m_BulkDestroyInProgress)
-        {
-            std::lock_guard<std::mutex> lock(m_ResourceTrackingMutex);
-            auto it2 = std::remove(m_LiveBuffers.begin(), m_LiveBuffers.end(), handle);
-            if (it2 != m_LiveBuffers.end())
-                m_LiveBuffers.erase(it2, m_LiveBuffers.end());
-        }
         delete buffer;
     }
+}
+
+void VulkanDevice::DestroyLiveBuffers()
+{
+    // Handles are copied first: each destroy moves an entry of m_LiveBuffers.
+    std::vector<BufferHandle> liveBuffers;
+    liveBuffers.reserve(m_LiveBuffers.size());
+    for (const VulkanBuffer* buffer : m_LiveBuffers)
+        liveBuffers.push_back(buffer->handle);
+    for (BufferHandle handle : liveBuffers)
+        DestroyBuffer(handle);
+    m_LiveBuffers.clear();
 }
 
 void VulkanDevice::DestroyTextureImmediate(TextureHandle handle)
@@ -5923,6 +5938,7 @@ void VulkanDevice::DestroySamplerImmediate(SamplerHandle handle)
 
 void VulkanDevice::DestroySampler(SamplerHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     // Same InTeardown() coherence as DestroyBuffer (see there).
     DeviceRebuildSharedGuard rebuildGuard(*this, DeviceRebuildSharedGuard::Kind::Access);
 
@@ -6567,6 +6583,8 @@ void VulkanDevice::UpdateBuffer(BufferHandle handle, size_t offset, size_t size,
                     ExecuteCommandListsTracked(std::vector<CommandList*>{cmd.get()}).transfer;
                 if (copyToken.value != 0)
                 {
+                    // The next graphics and compute submits wait on this value (PendingUploadWait).
+                    SubmitContextFor(QueueType::Transfer).PublishUpload(copyToken.value);
                     // Store the timeline the token names — the one the copy actually signalled.
                     // It is the graphics timeline when no dedicated transfer queue exists, and
                     // the compute one when compute and transfer share a family, so recording
@@ -6722,6 +6740,12 @@ QueueSubmitContext& VulkanDevice::SubmitContextFor(QueueType queue)
 const QueueSubmitContext& VulkanDevice::SubmitContextFor(QueueType queue) const
 {
     return *m_SubmitContextByRole[QueueOrdinal(queue)];
+}
+
+VulkanDevice::UploadWait VulkanDevice::PendingUploadWait(const QueueSubmitContext& context) const
+{
+    const QueueSubmitContext& uploadContext = SubmitContextFor(QueueType::Transfer);
+    return {uploadContext.TimelineSemaphore(), context.UploadWaitFor(uploadContext.LatestUpload())};
 }
 
 void VulkanDevice::RouteSubmittedCommandList(VulkanCommandList* list, SemaphoreHandle timeline,
@@ -6938,8 +6962,6 @@ bool VulkanDevice::QueueSubmit(QueueType queue,
 
         VkSubmitInfo2 submit{};
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        submit.waitSemaphoreInfoCount = (uint32_t)waitInfos.size();
-        submit.pWaitSemaphoreInfos = waitInfos.data();
         submit.pSignalSemaphoreInfos = signalInfos.data();
         submit.commandBufferInfoCount = (uint32_t)cbInfos.size();
         submit.pCommandBufferInfos = cbInfos.data();
@@ -6956,10 +6978,25 @@ bool VulkanDevice::QueueSubmit(QueueType queue,
             submit.signalSemaphoreInfoCount =
                 (uint32_t)(signalValue != 0 ? signalInfos.size() : ownSignalSlot);
 
+            const UploadWait uploadWait = PendingUploadWait(submitContext);
+            if (uploadWait.Value != 0)
+            {
+                VkSemaphoreSubmitInfo info{};
+                info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+                info.semaphore = uploadWait.Semaphore;
+                info.value = uploadWait.Value;
+                info.stageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                waitInfos.push_back(info);
+            }
+            submit.waitSemaphoreInfoCount = (uint32_t)waitInfos.size();
+            submit.pWaitSemaphoreInfos = waitInfos.data();
+
             submitRes = queueSubmit2(vkQueue, 1, &submit, VK_NULL_HANDLE);
             // Answer taken before classification, which rewrites submitRes to
             // VK_ERROR_DEVICE_LOST under fault injection.
             const bool submitSucceeded = submitRes == VK_SUCCESS;
+            if (submitSucceeded && uploadWait.Value != 0)
+                submitContext.NoteUploadWaited(uploadWait.Value);
             classifyQueueSubmit(submitRes);
             return submitSucceeded;
         });
@@ -7034,16 +7071,11 @@ bool VulkanDevice::QueueSubmit(QueueType queue,
 
         VkTimelineSemaphoreSubmitInfo tsi{};
         tsi.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
-        tsi.waitSemaphoreValueCount = (uint32_t)waitValues.size();
-        tsi.pWaitSemaphoreValues = waitValues.empty() ? nullptr : waitValues.data();
         tsi.pSignalSemaphoreValues = signalValues.data();
 
         VkSubmitInfo submit{};
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit.pNext = &tsi;
-        submit.waitSemaphoreCount = (uint32_t)waitSems.size();
-        submit.pWaitSemaphores = waitSems.empty() ? nullptr : waitSems.data();
-        submit.pWaitDstStageMask = waitStagesLocal.empty() ? nullptr : waitStagesLocal.data();
         submit.commandBufferCount = (uint32_t)cbs.size();
         submit.pCommandBuffers = cbs.data();
         submit.pSignalSemaphores = signalSems.data();
@@ -7059,10 +7091,25 @@ bool VulkanDevice::QueueSubmit(QueueType queue,
             tsi.signalSemaphoreValueCount = signalCount;
             submit.signalSemaphoreCount = signalCount;
 
+            const UploadWait uploadWait = PendingUploadWait(submitContext);
+            if (uploadWait.Value != 0)
+            {
+                waitSems.push_back(uploadWait.Semaphore);
+                waitValues.push_back(uploadWait.Value);
+                waitStagesLocal.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+            }
+            tsi.waitSemaphoreValueCount = (uint32_t)waitValues.size();
+            tsi.pWaitSemaphoreValues = waitValues.empty() ? nullptr : waitValues.data();
+            submit.waitSemaphoreCount = (uint32_t)waitSems.size();
+            submit.pWaitSemaphores = waitSems.empty() ? nullptr : waitSems.data();
+            submit.pWaitDstStageMask = waitStagesLocal.empty() ? nullptr : waitStagesLocal.data();
+
             submitRes = vkQueueSubmit(vkQueue, 1, &submit, VK_NULL_HANDLE);
             // Answer taken before classification, which rewrites submitRes to
             // VK_ERROR_DEVICE_LOST under fault injection.
             const bool submitSucceeded = submitRes == VK_SUCCESS;
+            if (submitSucceeded && uploadWait.Value != 0)
+                submitContext.NoteUploadWaited(uploadWait.Value);
             classifyQueueSubmit(submitRes);
             return submitSucceeded;
         });
@@ -7125,9 +7172,9 @@ IDevice::GpuSyncToken VulkanDevice::SubmitTextureUploads(const TextureUploadRequ
             UpdateBuffer(staging[i], 0, uploadSize, req.Pixels);
     }
 
-    // 2. Record transfer commands using per-thread command pool.
-    // CopyBufferToTextureSubresource handles Undefined → CopyDest internally,
-    // so only the post-copy CopyDest → ShaderResource barrier is needed.
+    // 2. Record the copies on a transfer list. CopyBufferToTextureSubresource moves each
+    // subresource to CopyDest. On this queue the CopyDest → ShaderResource barrier keeps the
+    // layout change and drops the shader stages; the consumer's submission waits on the token.
     auto cl = CreateCommandList(QueueType::Transfer);
     cl->Begin();
     for (uint32_t i = 0; i < count; ++i)
@@ -7660,10 +7707,13 @@ VulkanDevice::ExecuteCommandListsTracked(const std::vector<CommandList*>& comman
 
         VkSemaphore signalSem[1] = {context.TimelineSemaphore()};
         uint64_t signalVal[1] = {};
+        VkSemaphore waitSem[1] = {};
+        uint64_t waitVal[1] = {};
+        const VkPipelineStageFlags waitStage[1] = {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
         VkTimelineSemaphoreSubmitInfo tsInfo{};
         tsInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
-        tsInfo.signalSemaphoreValueCount = 1;
         tsInfo.pSignalSemaphoreValues = signalVal;
+        tsInfo.pWaitSemaphoreValues = waitVal;
 
         const QueueSubmitContext::SubmitResult submitted =
             SubmitBatchToQueue(context, lists, [&](uint64_t signalValue)
@@ -7672,10 +7722,27 @@ VulkanDevice::ExecuteCommandListsTracked(const std::vector<CommandList*>& comman
             {
                 signalVal[0] = signalValue;
                 si.pNext = &tsInfo;
+                tsInfo.signalSemaphoreValueCount = 1;
                 si.signalSemaphoreCount = 1;
                 si.pSignalSemaphores = signalSem;
             }
-            return vkQueueSubmit(context.Queue(), 1, &si, VK_NULL_HANDLE) == VK_SUCCESS;
+            // The staging copies go through the transfer batch: a wait there would hold each
+            // upload behind the one before it.
+            const UploadWait uploadWait = role != QueueType::Transfer ? PendingUploadWait(context) : UploadWait{};
+            if (uploadWait.Value != 0)
+            {
+                waitSem[0] = uploadWait.Semaphore;
+                waitVal[0] = uploadWait.Value;
+                si.pNext = &tsInfo;
+                tsInfo.waitSemaphoreValueCount = 1;
+                si.waitSemaphoreCount = 1;
+                si.pWaitSemaphores = waitSem;
+                si.pWaitDstStageMask = waitStage;
+            }
+            const bool submitSucceeded = vkQueueSubmit(context.Queue(), 1, &si, VK_NULL_HANDLE) == VK_SUCCESS;
+            if (submitSucceeded && uploadWait.Value != 0)
+                context.NoteUploadWaited(uploadWait.Value);
+            return submitSucceeded;
         });
 
         if (!submitted.Submitted)
@@ -7690,11 +7757,13 @@ VulkanDevice::ExecuteCommandListsTracked(const std::vector<CommandList*>& comman
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-        // Arrays used for waiting on the swapchain image-available semaphore when needed.
-        // These must outlive the vkQueueSubmit call, so they are declared in the same
-        // scope as submitInfo (not inside the inner conditional block).
-        VkSemaphore waitSemaphores[1] = {};
-        VkPipelineStageFlags waitStages[1] = {};
+        // Wait arrays: the binary acquire wait first when this submit consumes it, then the
+        // upload wait. A binary entry takes value 0, which the timeline info ignores. They
+        // outlive the vkQueueSubmit call, so they share the scope of submitInfo.
+        VkSemaphore waitSemaphores[2] = {};
+        VkPipelineStageFlags waitStages[2] = {};
+        uint64_t waitValues[2] = {};
+        uint32_t waitCount = 0;
 
         if (m_Swapchain != VK_NULL_HANDLE && m_AcquiredThisFrame && !m_WaitedOnImageAvailableThisFrame &&
             m_CurrentFrame < m_ImageAvailableSemaphores.size())
@@ -7702,16 +7771,13 @@ VulkanDevice::ExecuteCommandListsTracked(const std::vector<CommandList*>& comman
             VkSemaphore waitSemaphore = m_ImageAvailableSemaphores[m_CurrentFrame];
             if (waitSemaphore != VK_NULL_HANDLE && waitSemaphore == m_AcquireSemaphoreThisFrame)
             {
-                waitSemaphores[0] = waitSemaphore;
+                waitSemaphores[waitCount] = waitSemaphore;
                 // IMPORTANT: The first graphics submission in a frame may be a non-render pass
                 // (e.g., texture uploads). If we wait only at COLOR_ATTACHMENT_OUTPUT, that
                 // wait may not block anything in such submissions. Use ALL_COMMANDS so the
                 // acquire wait is effective regardless of the submission contents.
-                waitStages[0] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-
-                submitInfo.waitSemaphoreCount = 1;
-                submitInfo.pWaitSemaphores = waitSemaphores;
-                submitInfo.pWaitDstStageMask = waitStages;
+                waitStages[waitCount] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                ++waitCount;
                 m_WaitedOnImageAvailableThisFrame = true;
                 m_AcquireSemaphoreThisFrame = VK_NULL_HANDLE;
             }
@@ -7728,8 +7794,8 @@ VulkanDevice::ExecuteCommandListsTracked(const std::vector<CommandList*>& comman
         uint64_t signalValues[1] = {};
         VkTimelineSemaphoreSubmitInfo timelineInfo{};
         timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
-        timelineInfo.signalSemaphoreValueCount = 1;
         timelineInfo.pSignalSemaphoreValues = signalValues;
+        timelineInfo.pWaitSemaphoreValues = waitValues;
 
         // Fault injection overrides the result AFTER the chokepoint has published: the real
         // submit succeeded, so the GPU will signal that value, and withholding it would hand
@@ -7742,10 +7808,27 @@ VulkanDevice::ExecuteCommandListsTracked(const std::vector<CommandList*>& comman
             {
                 signalValues[0] = signalValue;
                 submitInfo.pNext = &timelineInfo;
+                timelineInfo.signalSemaphoreValueCount = 1;
                 submitInfo.signalSemaphoreCount = 1;
                 submitInfo.pSignalSemaphores = signalSemaphores;
             }
+            uint32_t submitWaitCount = waitCount;
+            const UploadWait uploadWait = PendingUploadWait(graphicsContext);
+            if (uploadWait.Value != 0)
+            {
+                waitSemaphores[submitWaitCount] = uploadWait.Semaphore;
+                waitValues[submitWaitCount] = uploadWait.Value;
+                waitStages[submitWaitCount] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                ++submitWaitCount;
+                submitInfo.pNext = &timelineInfo;
+                timelineInfo.waitSemaphoreValueCount = submitWaitCount;
+            }
+            submitInfo.waitSemaphoreCount = submitWaitCount;
+            submitInfo.pWaitSemaphores = submitWaitCount != 0 ? waitSemaphores : nullptr;
+            submitInfo.pWaitDstStageMask = submitWaitCount != 0 ? waitStages : nullptr;
             result = vkQueueSubmit(graphicsContext.Queue(), 1, &submitInfo, VK_NULL_HANDLE);
+            if (result == VK_SUCCESS && uploadWait.Value != 0)
+                graphicsContext.NoteUploadWaited(uploadWait.Value);
             return result == VK_SUCCESS;
         });
 
@@ -8280,6 +8363,8 @@ bool VulkanDevice::BeginFrame()
     // an unprovable slot must not report as fenced, or the diagnostic goes silent
     // exactly where it has the least evidence.
     m_CurrentFrameSlotFenced.store(waitedG && waitedC && waitedT, std::memory_order_relaxed);
+    // This slot's previous frame has finished, so the set cache ages one frame here.
+    AgeCachedDescriptorSets();
 
     m_LastFrameSyncTimings.waitedGraphicsFence = waitedG;
     m_LastFrameSyncTimings.waitedComputeFence = waitedC;
@@ -8343,6 +8428,7 @@ bool VulkanDevice::BeginFrame()
             std::vector<TextureHandle> textures;
             std::vector<SamplerHandle> samplers;
             std::vector<PersistentDescriptorBytes> descriptorBytes;
+            std::vector<VkDescriptorSet> poolDescriptorSets;
             {
                 std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
                 buffers.swap(pq.deferredBuffers);
@@ -8350,9 +8436,12 @@ bool VulkanDevice::BeginFrame()
                 textures.swap(pq.deferredTextures);
                 samplers.swap(pq.deferredSamplers);
                 descriptorBytes.swap(pq.deferredDescriptorBytes);
+                poolDescriptorSets.swap(pq.deferredPoolDescriptorSets);
             }
             for (const PersistentDescriptorBytes& bytes : descriptorBytes)
                 ReleaseDescriptorBytesImmediate(bytes);
+            for (VkDescriptorSet set : poolDescriptorSets)
+                m_DsAllocator.FreePersistent(set);
             if (s_DeferLogEnabled && !(buffers.empty() && textures.empty()) && s_DeferLogBudget-- > 0)
             {
                 Logger::Log::Info("[VulkanDefer] drain frame={} buffers={} textures={}",
@@ -8398,6 +8487,7 @@ bool VulkanDevice::BeginFrame()
         std::vector<SamplerHandle> samplers;
         std::vector<BufferHandle> buffers;
         std::vector<PersistentDescriptorBytes> descriptorBytes;
+        std::vector<VkDescriptorSet> poolDescriptorSets;
         {
             std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
             auto partition = [&progress](auto& deferred, auto& retired)
@@ -8424,9 +8514,12 @@ bool VulkanDevice::BeginFrame()
             partition(m_DeferredSamplersTimeline, samplers);
             partition(m_DeferredBuffersTimeline, buffers);
             partition(m_DeferredDescriptorBytesTimeline, descriptorBytes);
+            partition(m_DeferredPoolDescriptorSetsTimeline, poolDescriptorSets);
         }
         for (const PersistentDescriptorBytes& bytes : descriptorBytes)
             ReleaseDescriptorBytesImmediate(bytes);
+        for (VkDescriptorSet set : poolDescriptorSets)
+            m_DsAllocator.FreePersistent(set);
         // Views first: a live view holds a refcount on its owning image.
         for (auto h : views)
             DestroyTextureViewImmediate(h);
@@ -9635,6 +9728,7 @@ void VulkanDevice::FlushPerFrameDeferredResourcesAfterIdle()
             std::vector<SamplerHandle> samplers;
             std::vector<TextureHandle> textures;
             std::vector<PersistentDescriptorBytes> descriptorBytes;
+            std::vector<VkDescriptorSet> poolDescriptorSets;
             {
                 std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
                 buffers.swap(q.deferredBuffers);
@@ -9642,9 +9736,12 @@ void VulkanDevice::FlushPerFrameDeferredResourcesAfterIdle()
                 samplers.swap(q.deferredSamplers);
                 textures.swap(q.deferredTextures);
                 descriptorBytes.swap(q.deferredDescriptorBytes);
+                poolDescriptorSets.swap(q.deferredPoolDescriptorSets);
             }
             for (const PersistentDescriptorBytes& bytes : descriptorBytes)
                 ReleaseDescriptorBytesImmediate(bytes);
+            for (VkDescriptorSet set : poolDescriptorSets)
+                m_DsAllocator.FreePersistent(set);
             for (auto h : views)
                 if (h.IsValid())
                     DestroyTextureViewImmediate(h);
@@ -9673,6 +9770,7 @@ void VulkanDevice::FlushTimelineDeferredResourcesAfterIdle()
     std::vector<DeferredTexture> textures;
     std::vector<DeferredBuffer> buffers;
     std::vector<DeferredDescriptorBytes> descriptorBytes;
+    std::vector<DeferredPoolDescriptorSet> poolDescriptorSets;
     {
         std::lock_guard<std::mutex> lock(m_DeferredDestroyMutex);
         views.swap(m_DeferredTextureViewsTimeline);
@@ -9680,9 +9778,12 @@ void VulkanDevice::FlushTimelineDeferredResourcesAfterIdle()
         textures.swap(m_DeferredTexturesTimeline);
         buffers.swap(m_DeferredBuffersTimeline);
         descriptorBytes.swap(m_DeferredDescriptorBytesTimeline);
+        poolDescriptorSets.swap(m_DeferredPoolDescriptorSetsTimeline);
     }
     for (const DeferredDescriptorBytes& deferred : descriptorBytes)
         ReleaseDescriptorBytesImmediate(deferred.handle);
+    for (const DeferredPoolDescriptorSet& deferred : poolDescriptorSets)
+        m_DsAllocator.FreePersistent(deferred.handle);
     for (const auto& dv : views)
         if (dv.handle.IsValid())
             DestroyTextureViewImmediate(dv.handle);
@@ -9722,12 +9823,6 @@ void VulkanDevice::FlushTimelineDeferredResourcesAfterIdle()
 
 void VulkanDevice::CompactLiveTrackingVectors()
 {
-    if (!m_LiveBuffers.empty())
-    {
-        auto it = std::remove_if(m_LiveBuffers.begin(), m_LiveBuffers.end(), [&](BufferHandle h)
-                                 { return !h.IsValid() || GetVulkanBuffer(h) == nullptr; });
-        m_LiveBuffers.erase(it, m_LiveBuffers.end());
-    }
     if (!m_LiveTextures.empty())
     {
         auto it = std::remove_if(m_LiveTextures.begin(), m_LiveTextures.end(), [&](TextureHandle h)
@@ -10748,29 +10843,28 @@ void VulkanDevice::DebugEnumerateResources(
         return static_cast<uint64_t>(fallback);
     };
 
-    for (BufferHandle h : m_LiveBuffers)
+    for (const VulkanBuffer* buffer : m_LiveBuffers)
     {
-        const VulkanBuffer* b = GetVulkanBuffer(h);
-        if (!b || b->buffer == VK_NULL_HANDLE)
+        if (buffer->buffer == VK_NULL_HANDLE)
             continue;
         DebugResourceInfo info;
         info.Type = DebugResourceInfo::Kind::Buffer;
-        info.Name = b->debugName.empty() ? "(unnamed buffer)" : b->debugName;
-        info.Bytes = allocBytes(b->allocation, b->size);
+        info.Name = buffer->debugName.empty() ? "(unnamed buffer)" : buffer->debugName;
+        info.Bytes = allocBytes(buffer->allocation, buffer->size);
         fn(info);
     }
-    for (TextureHandle h : m_LiveTextures)
+    for (TextureHandle handle : m_LiveTextures)
     {
-        const VulkanTexture* t = GetVulkanTexture(h);
-        if (!t || t->image == VK_NULL_HANDLE)
+        const VulkanTexture* texture = GetVulkanTexture(handle);
+        if (!texture || texture->image == VK_NULL_HANDLE)
             continue;
         DebugResourceInfo info;
         info.Type = DebugResourceInfo::Kind::Texture;
-        info.Name = t->debugName.empty() ? "(unnamed texture)" : t->debugName;
-        info.Bytes = allocBytes(t->allocation, 0);
-        info.Width = t->extent.width;
-        info.Height = t->extent.height;
-        info.Format = FromVkFormat(t->format);
+        info.Name = texture->debugName.empty() ? "(unnamed texture)" : texture->debugName;
+        info.Bytes = allocBytes(texture->allocation, 0);
+        info.Width = texture->extent.width;
+        info.Height = texture->extent.height;
+        info.Format = FromVkFormat(texture->format);
         fn(info);
     }
 }
@@ -10804,6 +10898,8 @@ void VulkanDevice::MaybeLogLiveBufferBreakdown()
     if (!IsResourcePoolDiagnosticsEnabled())
         return;
 
+    // Workers append to m_LiveBuffers in CreateBuffer: the sample reads it under the tracking mutex.
+    std::unique_lock<std::mutex> trackingLock(m_ResourceTrackingMutex);
     const size_t liveCount = m_LiveBuffers.size();
     if (liveCount < m_NextLiveBufferBreakdownThreshold)
         return;
@@ -10815,14 +10911,9 @@ void VulkanDevice::MaybeLogLiveBufferBreakdown()
 
     for (size_t i = 0; i < liveCount; i += step)
     {
-        const BufferHandle h = m_LiveBuffers[i];
-        const VulkanBuffer* buffer = GetVulkanBufferConst(h);
+        const VulkanBuffer* buffer = m_LiveBuffers[i];
         std::string key;
-        if (!buffer)
-        {
-            key = "<invalid>";
-        }
-        else if (!buffer->debugName.empty())
+        if (!buffer->debugName.empty())
         {
             key = buffer->debugName;
         }
@@ -10832,6 +10923,7 @@ void VulkanDevice::MaybeLogLiveBufferBreakdown()
         }
         counts[key] += 1;
     }
+    trackingLock.unlock();
 
     std::vector<std::pair<std::string, size_t>> sorted(counts.begin(), counts.end());
     std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b)
@@ -11287,10 +11379,11 @@ bool VulkanDevice::CreateSwapchain(uint32_t width, uint32_t height)
         m_HdrState.display.outputMaxLinearValue);
 
     Logger::Log::Info(
-        "VulkanDevice: Swapchain images={} (surface min={}, max={})",
+        "VulkanDevice: Swapchain images={} (surface min={}, max={}) {}",
         imageCount,
         surfaceCapabilities.minImageCount,
-        surfaceCapabilities.maxImageCount);
+        surfaceCapabilities.maxImageCount,
+        VulkanMappings::PresentModeLogField(presentMode));
 
     // Get swapchain images
     vkGetSwapchainImagesKHR(m_Device, m_Swapchain, &imageCount, nullptr);
@@ -13918,7 +14011,7 @@ DescriptorSetHandle VulkanDevice::CreateDescriptorSet(const DescriptorSetDesc& d
         m_TransientDescriptorSetLayoutDescs[m_CurrentFrame][descriptorSet] = desc.layout;
     }
 
-    // Return descriptor set as handle (pool frees sets; we clean up layouts we created)
+    // Return descriptor set as handle (DestroyDescriptorSet frees a persistent set and its layout)
     DescriptorSetHandle outHandle(reinterpret_cast<uint64_t>(descriptorSet));
     // Transient sets are pool-reset in bulk and not individually destroyed.
     // Do not owner-track them, otherwise the global owner map grows unbounded.
@@ -13960,13 +14053,16 @@ void VulkanDevice::DestroyDescriptorSet(DescriptorSetHandle descriptorSet)
     VkDescriptorSet vkSet = reinterpret_cast<VkDescriptorSet>(descriptorSet.id);
     if (vkSet == VK_NULL_HANDLE)
         return;
-    // Pool-allocated sets are freed by their owning DescriptorSetAllocator pools
-    // (persistent pools at device teardown, transient pools by the per-frame bulk
-    // reset) — only the live-set bookkeeping happens here.
+    // A persistent pool set goes back to its pool once every queue is past the work
+    // that could read it. Transient sets are not live-tracked: their pools reset per frame.
+    bool persistent = false;
     {
         std::lock_guard<std::mutex> lock(m_LiveDescriptorSetsMutex);
-        m_LiveDescriptorSets.erase(vkSet);
+        persistent = m_LiveDescriptorSets.erase(vkSet) != 0;
     }
+    // At teardown the pools go with everything they hold.
+    if (persistent && !InTeardown())
+        QueueDeferredPoolDescriptorSetFree(vkSet);
     // Destroy the associated layout if we created one for this set
     {
         std::lock_guard<std::mutex> lock(m_DescriptorSetLayoutsMutex);
@@ -14183,6 +14279,7 @@ VulkanDevice::ResolveTextureViewForDescriptor(TextureViewHandle view) const
 
 void VulkanDevice::DestroyTextureView(TextureViewHandle h)
 {
+    EvictCachedDescriptorSetsUsing(h);
     // Deliberately NOT guarded by DeviceRebuildSharedGuard: this entry runs
     // under a queue's submit mutex on every submit path (RouteSubmittedCommandList
     // -> OnSubmitted -> ReleaseAttachmentViews), and the rebuild mutex is

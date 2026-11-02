@@ -290,22 +290,6 @@ TEST_F(HotReloadStressTest, ThreadPoolTaskStressTest) {
 
     std::vector<std::thread> threads;
 
-    // Simple task for stress testing
-    class StressTask : public JobSystem::Task {
-    public:
-        StressTask(JobSystem::WorkStealingThreadPool* jobSystem, std::atomic<int>* counter)
-            : JobSystem::Task(jobSystem), m_Counter(counter) {}
-
-        void Execute() override {
-            // Simulate some work
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-            m_Counter->fetch_add(1);
-        }
-
-    private:
-        std::atomic<int>* m_Counter;
-    };
-
     // Launch threads that concurrently submit tasks to the thread pool
     for (int t = 0; t < numThreads; ++t) {
         threads.emplace_back([this, &tasksProcessed, &errors]() {
@@ -315,8 +299,13 @@ TEST_F(HotReloadStressTest, ThreadPoolTaskStressTest) {
             for (int i = 0; i < numTasks / numThreads; ++i) {
                 try {
                     // Submit tasks to the thread pool
-                    auto task = std::make_unique<StressTask>(threadPool.get(), &tasksProcessed);
-                    auto handle = threadPool->Submit(std::move(task));
+                    // A graph task with no dependency that simulates 100 us of work.
+                    auto handle = threadPool->Submit(
+                        [&tasksProcessed] {
+                            std::this_thread::sleep_for(std::chrono::microseconds(100));
+                            tasksProcessed.fetch_add(1);
+                        },
+                        std::span<const JobSystem::TaskHandle>());
 
                     // Occasionally wait for task completion to test status queries
                     if (gen() % 10 == 0) {

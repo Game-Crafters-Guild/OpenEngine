@@ -6,6 +6,7 @@
 // a diagnostic) on the next engine touch; out-of-SDK layouts keep absolute paths.
 
 #include "NativeScripting/NativeBuildConfig.h"
+#include "NativeScripting/SdkManifest.h"
 #include "NativeScripting/UserProjectGenerator.h"
 
 #include <gtest/gtest.h>
@@ -46,6 +47,26 @@ std::string ReadFile(const fs::path& path)
 {
     std::ifstream in(path, std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+// The project the editor generates from a staged SDK: a minimal manifest plus `extraLines`,
+// loaded the way the editor loads it.
+std::string GenerateFromSdkManifest(const fs::path& sdkRoot, const std::string& extraLines)
+{
+    std::error_code ec;
+    fs::remove_all(sdkRoot, ec);
+    fs::create_directories(sdkRoot / "nativescripting", ec);
+    {
+        std::ofstream manifest(sdkRoot / "nativescripting" / "manifest.txt");
+        manifest << "includedir=include\nimportlib=lib/Engine.lib\nenginebinary=lib/Engine.bin\n" << extraLines;
+    }
+    ns::NativeBuildConfig config;
+    std::string error;
+    EXPECT_TRUE(ns::LoadSdkManifest(sdkRoot, config, error)) << error;
+    config.SourceDir = sdkRoot.parent_path() / "Project" / "Assets";
+    config.BuildDir = sdkRoot.parent_path() / "Project" / ".Cache" / "NativeScripts" / "build";
+    fs::remove_all(sdkRoot, ec);
+    return ns::UserProjectGenerator::BuildCMakeListsContent(config);
 }
 } // namespace
 
@@ -404,4 +425,28 @@ TEST(UserProjectGenerator, DeadBakedSdkDirIsRefreshedOnNextGenerate)
     EXPECT_FALSE(changed);
 
     fs::remove_all(root, ec);
+}
+
+// A module built for a newer macOS than the engine does not load where the engine runs, so
+// the project takes the SDK's minimum. CMake reads it only before project().
+TEST(UserProjectGenerator, SdkMacOSDeploymentTargetIsSetBeforeProject)
+{
+    const std::string content = GenerateFromSdkManifest(fs::temp_directory_path() / "ge_userprojgen_macos" / "SDK",
+                                                        "macosdeploymenttarget=14.2\n");
+
+    const std::size_t target = content.find("set(CMAKE_OSX_DEPLOYMENT_TARGET \"14.2\" CACHE STRING");
+    ASSERT_NE(target, std::string::npos) << content;
+    EXPECT_LT(content.find("FORCE)", target), content.find('\n', target));
+    EXPECT_LT(target, content.find("project("));
+    EXPECT_EQ(CountOccurrences(content, "CMAKE_OSX_DEPLOYMENT_TARGET"), 1u);
+}
+
+// An SDK without a minimum (Windows, Linux) leaves the deployment target to CMake.
+TEST(UserProjectGenerator, NoSdkMacOSDeploymentTargetLeavesCMakeDefault)
+{
+    const std::string content =
+        GenerateFromSdkManifest(fs::temp_directory_path() / "ge_userprojgen_no_macos" / "SDK", "");
+
+    EXPECT_NE(content.find("project("), std::string::npos);
+    EXPECT_EQ(content.find("CMAKE_OSX_DEPLOYMENT_TARGET"), std::string::npos);
 }

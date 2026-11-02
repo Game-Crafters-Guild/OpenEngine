@@ -141,6 +141,7 @@ SceneTlas::Readiness SceneTlas::RequestCurrent(GameEngine::ECS::World& world)
 {
     GE_CPU_PROFILE_SCOPE("SceneTlas.RequestCurrent");
     Internal::SceneTlasImpl& impl = *m_Impl;
+    ++impl.RequestCount;
     if (impl.IsWorkInFlight())
         return Readiness::Updating;
 

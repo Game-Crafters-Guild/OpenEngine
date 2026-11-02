@@ -104,7 +104,7 @@ TEST(SceneExportStrip, ExportKeepsAPropAndItsChildWithoutTheMeasureOnIt)
         authoredWorld.AddComponentImmediate(lake, Components::Name{"Lake Shore"});
         authoredWorld.AddComponentImmediate(lake, Components::Markup{});
         authoredWorld.AddComponentImmediate(lake, Components::MarkupVolume{});
-        ASSERT_TRUE(Scene::SaveSceneToFile(authoredWorld, root / relative));
+        ASSERT_TRUE(Scene::WriteSceneFile(authoredWorld, root / relative));
     }
     const std::string authored = ReadText(root / relative);
     ASSERT_NE(authored.find("\nMeasure."), std::string::npos) << authored;
@@ -132,7 +132,7 @@ TEST(SceneExportStrip, ExportKeepsAPropAndItsChildWithoutTheMeasureOnIt)
               WithoutLines(authored, {"Measure.", "Markup.", "MarkupVolume.", "Name.value = \"Lake Shore\""}));
 
     ECS::World world;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(world, root / relative, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(world, root / relative, Scene::SceneReadOptions{}));
     const ECS::EntityHandle crate = FindByTag(world, "crate");
     const ECS::EntityHandle lid = FindByTag(world, "lid");
     ASSERT_TRUE(crate.IsValid());
@@ -247,7 +247,7 @@ TEST(SceneExportStrip, ARegionLeavesOnlyItsEntityAndTransform)
         region.MemberCount = 1;
         region.Members[0] = {lake, Components::MarkupMemberMode::Exclude};
         authoredWorld.AddComponentImmediate(forest, region);
-        ASSERT_TRUE(Scene::SaveSceneToFile(authoredWorld, root / relative));
+        ASSERT_TRUE(Scene::WriteSceneFile(authoredWorld, root / relative));
     }
     const std::string authored = ReadText(root / relative);
     ASSERT_NE(authored.find("\nMarkupRegion.member0 = exclude \"lake\""), std::string::npos) << authored;

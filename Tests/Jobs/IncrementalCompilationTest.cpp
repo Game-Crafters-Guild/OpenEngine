@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include "Jobs/IncrementalCompilationTask.h"
-#include "JobSystem/WorkStealingThreadPool.h"
 #include "Scripting/CoreCLRHost.h"
 #include "Logger/Logger.h"
 #include <filesystem>
@@ -25,8 +24,6 @@ protected:
         // Create test source files
         createTestSourceFiles();
         
-        // Initialize thread pool
-        threadPool = std::make_unique<JobSystem::WorkStealingThreadPool>(4);
         
         // Initialize CoreCLR host
         clrHost = std::make_unique<CoreCLRHost>();
@@ -41,10 +38,6 @@ protected:
         std::error_code ec;
         std::filesystem::remove_all(testProjectDir, ec);
         
-        // Shutdown thread pool
-        if (threadPool) {
-            threadPool->Shutdown();
-        }
     }
     
     void createTestProject() {
@@ -101,7 +94,6 @@ protected:
 protected:
     std::filesystem::path testProjectDir;
     std::string projectPath;
-    std::unique_ptr<JobSystem::WorkStealingThreadPool> threadPool;
     std::unique_ptr<CoreCLRHost> clrHost;
     // TODO: Add CancellationToken when implemented
     // std::shared_ptr<CancellationToken> cancellationToken;
@@ -124,7 +116,6 @@ TEST_F(IncrementalCompilationTest, BasicIncrementalCompilation) {
     
     // Create incremental compilation task
     auto task = CreateIncrementalCompilationTask(
-        threadPool.get(),
         *clrHost,
         config
     );
@@ -156,7 +147,6 @@ TEST_F(IncrementalCompilationTest, BasicIncrementalCompilation) {
     
     // Create new task for incremental compilation
     auto incrementalTask = CreateIncrementalCompilationTask(
-        threadPool.get(),
         *clrHost,
         config
     );
@@ -225,7 +215,6 @@ TEST_F(IncrementalCompilationTest, FallbackToFullCompilation) {
     
     // Create task
     auto task = CreateIncrementalCompilationTask(
-        threadPool.get(),
         *clrHost,
         config
     );
@@ -259,7 +248,6 @@ TEST_F(IncrementalCompilationTest, CacheManagement) {
     
     // Create task
     auto task = CreateIncrementalCompilationTask(
-        threadPool.get(),
         *clrHost,
         config
     );

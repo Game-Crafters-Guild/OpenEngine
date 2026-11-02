@@ -4,6 +4,8 @@
 #include "FileSystem/FileSystem.h"
 #include "Logger/Logger.h"
 #include "Platform/HttpClient.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -74,9 +76,7 @@ bool IsCompleteDownloadedFile(const std::filesystem::path& mainFile)
         std::filesystem::file_size(mainFile, ec) == 0)
         return false;
 
-    std::string ext = mainFile.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string ext = GameEngine::LowerCaseExtension(mainFile);
     if (ext != ".gltf")
         return true;
 
@@ -121,8 +121,7 @@ bool IsCompleteDownloadedFile(const std::filesystem::path& mainFile)
 
 std::string NormalizeHDRIResolution(std::string resolution)
 {
-    std::transform(resolution.begin(), resolution.end(), resolution.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    resolution = GameEngine::ToLowerAscii(resolution);
     if (resolution.empty())
         return "1k";
     return resolution;
@@ -729,10 +728,7 @@ bool PolyhavenService::DownloadTextureMaps(const std::string& slug,
                 continue;
 
             // Construct filename: slug_maptype_res.ext
-            std::string mapName = key;
-            // Convert map key to lowercase for filename
-            std::transform(mapName.begin(), mapName.end(), mapName.begin(),
-                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const std::string mapName = ToLowerAscii(key);
             
             std::string filename = slug + "_" + mapName + "_" + res + "." + fmt;
             std::filesystem::path outFile = destDir / filename;

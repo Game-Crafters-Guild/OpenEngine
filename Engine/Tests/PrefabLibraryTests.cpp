@@ -10,6 +10,7 @@
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
 #include "Components/PrefabInstance.h"
+#include "Components/Rendering/MeshRenderer.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/Transform.h"
 #include "Core/Application.h"
@@ -22,6 +23,8 @@
 #include "ECS/Query.h"
 #include "ECS/Reflection.h"
 #include "ECS/World.h"
+#include "ECSModules/Rendering/Systems/TransformHierarchySystem.h"
+#include "Engine/Rendering/PrimitiveGenerator.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Scene/AssetManagerSceneResolver.h"
 #include "Scene/PrefabAuthoring.h"
@@ -156,10 +159,10 @@ class PrefabLibraryTests : public ::testing::Test
 
     bool Load(ECS::World& world, const std::string& file, std::string_view text)
     {
-        Scene::LoadOptions options{Scene::LoadMode::Replace};
+        Scene::SceneReadOptions options{};
         options.assetResolver = &*m_Resolver;
         options.assetRootOverride = m_Resolver->GetAssetRoot();
-        return Scene::LoadSceneFromFile(world, Write(file, text), options);
+        return Scene::ReadSceneInto(world, Write(file, text), options);
     }
 
     std::size_t CountLines(std::string_view needle)
@@ -247,10 +250,10 @@ TEST_F(PrefabLibraryTests, PlaceReadsAnUnreferencedPrefabAndTheSaveWritesTheInst
     EXPECT_EQ(childTags.size(), 2u);
     EXPECT_NE(std::find(childTags.begin(), childTags.end(), "soldier.rifle"), childTags.end());
 
-    Scene::SaveOptions options;
+    Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Placed.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
     std::ifstream file(scenePath, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     EXPECT_NE(text.find("[prefab id=\"soldier\""), std::string::npos) << text;
@@ -465,7 +468,7 @@ TEST_F(PrefabLibraryTests, AnApplyWritesTheFieldIntoThePrefabAndTheOtherInstance
     EXPECT_TRUE(OverridesOf(world, first, firstLid).empty());
     EXPECT_TRUE(OverridesOf(world, second, secondLid).empty());
 
-    ASSERT_TRUE(Scene::WritePrefabFileText(world, edits.at(0).File, edits.at(0).Before, error)) << error;
+    ASSERT_TRUE(Scene::WritePrefabFileText(edits.at(0).File, edits.at(0).Before, error)) << error;
     EXPECT_EQ(ReadText(file), std::string(kCratePrefab));
     EXPECT_EQ(NameOnDisk(file), "Crate.prefab");
     EXPECT_EQ(NameOf(world, secondLid), "Lid");
@@ -671,10 +674,10 @@ TEST_F(PrefabLibraryTests, CreatePrefabWritesTheSubtreeAndMakesItAnInstanceInPla
     EXPECT_TRUE(Scene::CreatePrefab(world, lid, props / "Lid.prefab", refused).Prefab.IsNull());
     EXPECT_NE(refused.find("inside the prefab instance \"Crate\""), std::string::npos) << refused;
 
-    Scene::SaveOptions options;
+    Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Yard.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
     const std::string sceneText = ReadText(scenePath);
     EXPECT_NE(sceneText.find("[prefab id=\"crate\""), std::string::npos) << sceneText;
     EXPECT_EQ(sceneText.find("[entity id=\"lid"), std::string::npos) << "a member is not an entity\n" << sceneText;
@@ -682,9 +685,9 @@ TEST_F(PrefabLibraryTests, CreatePrefabWritesTheSubtreeAndMakesItAnInstanceInPla
                                                                             << sceneText;
 
     ECS::World reloaded;
-    Scene::LoadOptions loadOptions{Scene::LoadMode::Replace};
+    Scene::SceneReadOptions loadOptions{};
     loadOptions.assetResolver = &*m_Resolver;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
     EXPECT_EQ(reloaded.GetEntityCount(), entityCount);
 }
 
@@ -774,10 +777,10 @@ TEST_F(PrefabLibraryTests, UnpackGivesEveryMemberANewIdentityAndKeepsTheValues)
     EXPECT_EQ(world.GetComponent<Components::Name>(handle)->View(), "Handle");
     EXPECT_EQ(world.GetComponent<Components::Parent>(handle)->Entity, lid);
 
-    Scene::SaveOptions options;
+    Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Unpacked.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
     const std::string sceneText = ReadText(scenePath);
     EXPECT_EQ(sceneText.find("[prefab id="), std::string::npos) << sceneText;
     EXPECT_NE(sceneText.find("[entity id=\"handle\" parent=\"lid\""), std::string::npos) << sceneText;
@@ -829,10 +832,10 @@ TEST_F(PrefabLibraryTests, UnpackKeepsANestedInstanceAndUnpackCompletelyMakesItP
     for (const Scene::PrefabInstanceEntity& entity : described)
         EXPECT_FALSE(entity.HasOverrides() || entity.AddedOnInstance);
 
-    Scene::SaveOptions options;
+    Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Cart.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
     const std::string sceneText = ReadText(scenePath);
     EXPECT_NE(sceneText.find("[prefab id=\"crate\""), std::string::npos) << sceneText;
     EXPECT_NE(sceneText.find("[entity id=\"axle\""), std::string::npos) << sceneText;
@@ -889,18 +892,18 @@ TEST_F(PrefabLibraryTests, ACopyOfAnInstanceIsAnInstanceWithItsOverridesAndIdent
     EXPECT_TRUE(FindDescribed(described, copyHandle).HasOverrides()) << "the copy keeps the override";
     EXPECT_FALSE(FindDescribed(described, copyHandle).AddedOnInstance);
 
-    Scene::SaveOptions options;
+    Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Copies.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
     const std::string sceneText = ReadText(scenePath);
     EXPECT_NE(sceneText.find("[prefab id=\"" + copyId + "\""), std::string::npos) << sceneText;
     EXPECT_EQ(sceneText.find("[entity"), std::string::npos) << "no member is written as an entity\n" << sceneText;
 
     ECS::World reloaded;
-    Scene::LoadOptions loadOptions{Scene::LoadMode::Replace};
+    Scene::SceneReadOptions loadOptions{};
     loadOptions.assetResolver = &*m_Resolver;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
     EXPECT_EQ(reloaded.GetEntityCount(), 2 * entityCount);
 }
 
@@ -947,14 +950,14 @@ TEST_F(PrefabLibraryTests, AReplaceOfAPlacedFileKeepsOneTemplateAndTheReloadPlac
     ASSERT_EQ(Scene::CreatePrefab(world, barrel, cratePath, error).Prefab, crate) << error;
     EXPECT_EQ(m_Library->GetResidentCount(), 1u);
 
-    Scene::SaveOptions options;
+    Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Replaced.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
     ECS::World reloaded;
-    Scene::LoadOptions loadOptions{Scene::LoadMode::Replace};
+    Scene::SceneReadOptions loadOptions{};
     loadOptions.assetResolver = &*m_Resolver;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
     EXPECT_EQ(reloaded.GetEntityCount(), world.GetEntityCount());
     std::size_t hoops = 0;
     reloaded.Query<ECS::Read<Components::Name>>().Each(
@@ -1185,6 +1188,245 @@ TEST_F(PrefabLibraryTests, ASpawnInAJobBodyThatTheMainThreadRunsAsserts)
         "main thread");
 }
 #endif
+
+// Writes `text` to the prefab `file` and reports the change as the file watcher does.
+void ChangeOnDisk(Scene::PrefabLibrary& library, const std::filesystem::path& file, const GUID& prefab,
+                  std::string_view text)
+{
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << text;
+    const GUID changed[] = {prefab};
+    library.RebuildChanged(changed);
+}
+
+constexpr std::string_view kCrateTopPrefab = "[prefab version=1]\n"
+                                             "[entity id=\"root\"]\n"
+                                             "Name.value = \"Crate\"\n"
+                                             "[entity id=\"lid\" parent=\"root\"]\n"
+                                             "Name.value = \"Top\"\n"
+                                             "Transform.position = (0, 2, 0)\n"
+                                             "[entity id=\"handle\" parent=\"lid\"]\n"
+                                             "Name.value = \"Handle\"\n";
+
+// Design 2.5 and 2.6: a prefab file changed on disk reaches the instances of every world that holds the
+// prefab. A field the instance does not override takes the new value; an override stays; no entity is
+// made again, so every handle stays valid.
+TEST_F(PrefabLibraryTests, AFileChangeReachesTheInstancesOfEveryWorldAndKeepsTheirOverrides)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World scene;
+    ECS::World preview;
+    const ECS::EntityHandle first = Scene::PlacePrefab(scene, crate, Components::Transform{}, {});
+    const ECS::EntityHandle second = Scene::PlacePrefab(scene, crate, Components::Transform{}, {});
+    const ECS::EntityHandle other = Scene::PlacePrefab(preview, crate, Components::Transform{}, {});
+    ASSERT_TRUE(first.IsValid() && second.IsValid() && other.IsValid()) << Log();
+    const ECS::EntityHandle firstLid = FindChild(scene, first);
+    const ECS::EntityHandle secondLid = FindChild(scene, second);
+    const ECS::EntityHandle otherLid = FindChild(preview, other);
+    Rename(scene, secondLid, "Mine");
+
+    ChangeOnDisk(*m_Library, file, crate, kCrateTopPrefab);
+
+    EXPECT_EQ(NameOf(scene, firstLid), "Top");
+    EXPECT_EQ(NameOf(preview, otherLid), "Top");
+    EXPECT_EQ(NameOf(scene, secondLid), "Mine");
+    const auto* moved = scene.GetComponent<Components::Transform>(firstLid);
+    ASSERT_NE(moved, nullptr);
+    EXPECT_FLOAT_EQ(moved->GetPosition().y, 2.0f);
+    EXPECT_TRUE(OverridesOf(scene, first, firstLid).empty()) << "the old value is no override";
+    EXPECT_EQ(OverridesOf(scene, second, secondLid).size(), 1u);
+    EXPECT_TRUE(OverridesOf(preview, other, otherLid).empty());
+    EXPECT_TRUE(scene.IsValid(first) && scene.IsValid(firstLid) && preview.IsValid(otherLid));
+}
+
+// Design 2.5: a child the prefab gains appears in each instance under its parent, as a member; a child the
+// prefab loses leaves each instance. An entity the instance added under the lost child moves to the nearest
+// entity that stays, and keeps its values.
+TEST_F(PrefabLibraryTests, AChildThePrefabGainsOrLosesIsAddedToOrRemovedFromEachInstance)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World world;
+    const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, Components::Transform{}, {});
+    ASSERT_TRUE(root.IsValid()) << Log();
+    const ECS::EntityHandle lid = FindChild(world, root);
+    const ECS::EntityHandle handle = FindChild(world, lid);
+    ASSERT_TRUE(handle.IsValid());
+    const ECS::EntityHandle sticker = world.CreateEntity();
+    Components::Name stickerName{};
+    std::string_view("Sticker").copy(stickerName.value, sizeof(stickerName.value) - 1);
+    world.AddComponentImmediate(sticker, stickerName);
+    world.AddComponentImmediate(sticker, Components::Parent{handle});
+
+    ChangeOnDisk(*m_Library, file, crate,
+                 "[prefab version=1]\n[entity id=\"root\"]\nName.value = \"Crate\"\n"
+                 "[entity id=\"lid\" parent=\"root\"]\nName.value = \"Lid\"\nTransform.position = (0, 1, 0)\n"
+                 "[entity id=\"hinge\" parent=\"lid\"]\nName.value = \"Hinge\"\n");
+
+    EXPECT_FALSE(world.IsValid(handle)) << "the prefab lost the handle";
+    ASSERT_TRUE(world.IsValid(lid));
+    const ECS::EntityHandle hinge = FindChildNamed(world, lid, "Hinge");
+    ASSERT_TRUE(hinge.IsValid()) << "the prefab gained the hinge";
+    ASSERT_TRUE(world.IsValid(sticker));
+    const auto* stickerParent = world.GetComponent<Components::Parent>(sticker);
+    ASSERT_NE(stickerParent, nullptr);
+    EXPECT_EQ(stickerParent->Entity, lid);
+
+    std::vector<Scene::PrefabInstanceEntity> entities;
+    ASSERT_TRUE(Scene::DescribePrefabInstance(world, root, entities));
+    for (const Scene::PrefabInstanceEntity& entity : entities)
+    {
+        EXPECT_FALSE(entity.HasOverrides()) << NameOf(world, entity.Entity) << " has an override";
+        EXPECT_EQ(entity.AddedOnInstance, entity.Entity == sticker) << NameOf(world, entity.Entity);
+    }
+    EXPECT_EQ(entities.size(), 4u) << "the root, the lid, the hinge and the sticker";
+}
+
+// Design 2.5: an entity the instance added under a lost child keeps its world position when it moves to
+// the nearest entity that stays.
+TEST_F(PrefabLibraryTests, AnEntityAddedUnderALostChildKeepsItsWorldPosition)
+{
+    const std::filesystem::path file = Write("Crate.prefab", "[prefab version=1]\n[entity id=\"root\"]\n"
+                                                             "[entity id=\"lid\" parent=\"root\"]\nTransform.position = (0, 1, 0)\n"
+                                                             "[entity id=\"handle\" parent=\"lid\"]\nTransform.position = (2, 0, 0)\n");
+    const GUID crate = Register(file);
+    ECS::World world;
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, Components::Transform{}, {});
+    ASSERT_TRUE(root.IsValid()) << Log();
+    const ECS::EntityHandle handle = FindChild(world, FindChild(world, root));
+    ASSERT_TRUE(handle.IsValid());
+    const ECS::EntityHandle sticker = world.CreateEntity();
+    world.AddComponentImmediate(sticker, Components::Transform::FromTRS(Vector3(0.0f, 0.0f, 3.0f), Quaternion::Identity(),
+                                                                        Vector3(1.0f, 1.0f, 1.0f)));
+    world.AddComponentImmediate(sticker, Components::Parent{handle});
+    hierarchy.Update(world, 0.0f);
+    ASSERT_FLOAT_EQ(world.GetComponent<Components::WorldTransform>(sticker)->GetPosition().x, 2.0f);
+
+    ChangeOnDisk(*m_Library, file, crate,
+                 "[prefab version=1]\n[entity id=\"root\"]\n[entity id=\"lid\" parent=\"root\"]\nTransform.position = (0, 1, 0)\n");
+    hierarchy.Update(world, 0.0f);
+
+    ASSERT_FALSE(world.IsValid(handle)) << "the prefab lost the handle";
+    const Vector3 position = world.GetComponent<Components::WorldTransform>(sticker)->GetPosition();
+    EXPECT_NEAR(position.x, 2.0f, 1e-5f);
+    EXPECT_NEAR(position.y, 1.0f, 1e-5f);
+    EXPECT_NEAR(position.z, 3.0f, 1e-5f);
+}
+
+// Design 2.5: a deferred world takes no prefab file change until it resumes, then takes every change made
+// in the meantime. The generation its instances show stays alive while it is deferred.
+TEST_F(PrefabLibraryTests, ADeferredWorldTakesEveryChangeWhenItResumes)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World world;
+    const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, Components::Transform{}, {});
+    ASSERT_TRUE(root.IsValid()) << Log();
+    const ECS::EntityHandle lid = FindChild(world, root);
+    m_Library->SetPropagationDeferred(world, true);
+
+    ChangeOnDisk(*m_Library, file, crate, kCrateTopPrefab);
+    m_Library->CollectAtFrameBoundary();
+    std::string three(kCrateTopPrefab);
+    three.replace(three.find("\"Top\""), 5, "\"Three\"");
+    ChangeOnDisk(*m_Library, file, crate, three);
+    m_Library->CollectAtFrameBoundary();
+
+    EXPECT_EQ(NameOf(world, lid), "Lid") << "a deferred world took a change";
+    EXPECT_EQ(m_Library->GetRetiredCount(), 1u) << "only the generation the deferred world shows stays";
+
+    m_Library->SetPropagationDeferred(world, false);
+    EXPECT_EQ(NameOf(world, lid), "Three");
+    EXPECT_TRUE(OverridesOf(world, root, lid).empty());
+    m_Library->CollectAtFrameBoundary();
+    EXPECT_EQ(m_Library->GetRetiredCount(), 0u);
+}
+
+// Design 2.6: a rewrite of a prefab file that changes no instance, such as the file watcher's report of the
+// editor's own Apply, reports no change.
+TEST_F(PrefabLibraryTests, ARewriteThatChangesNoInstanceReportsNoChange)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World world;
+    ASSERT_TRUE(Scene::PlacePrefab(world, crate, Components::Transform{}, {}).IsValid()) << Log();
+    int changes = 0;
+    const EventSubscription subscription =
+        m_Library->InstancesChanged.Subscribe([&changes](ECS::World&) { ++changes; });
+
+    ChangeOnDisk(*m_Library, file, crate, kCratePrefab);
+    EXPECT_EQ(changes, 0) << "a rewrite with the same text reported a change";
+
+    ChangeOnDisk(*m_Library, file, crate, kCrateTopPrefab);
+    EXPECT_EQ(changes, 1);
+}
+
+// Design 2.5: a child the prefab gains keeps the values of its prefab entity as a placed instance does.
+// The built-in material of a primitive has no registry record, so a read of it as text logs a degraded
+// reference.
+TEST_F(PrefabLibraryTests, AGainedPrimitiveKeepsTheBuiltInMaterialAndLogsNoDegradedReference)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World world;
+    const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, Components::Transform{}, {});
+    ASSERT_TRUE(root.IsValid()) << Log();
+
+    std::string gained(kCratePrefab);
+    gained += "[entity id=\"hinge\" parent=\"root\"]\nName.value = \"Hinge\"\nMeshRenderer.meshPrimitive = Cube\n";
+    ChangeOnDisk(*m_Library, file, crate, gained);
+
+    const ECS::EntityHandle hinge = FindChildNamed(world, root, "Hinge");
+    ASSERT_TRUE(hinge.IsValid()) << "the prefab gained the hinge";
+    const auto* renderer = world.GetComponent<Components::MeshRenderer>(hinge);
+    ASSERT_NE(renderer, nullptr);
+    EXPECT_EQ(renderer->materialAssetGuid.ToGuid(), Engine::Renderer::PrimitiveGenerator::DefaultMaterialGuid());
+    EXPECT_EQ(CountLines("loading as degraded reference"), 0u) << Log();
+}
+
+// Design 2.5: an entity field of a child the prefab gains names the member of the same instance.
+TEST_F(PrefabLibraryTests, AnEntityFieldOfAGainedChildNamesTheMemberOfItsInstance)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World world;
+    const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, Components::Transform{}, {});
+    ASSERT_TRUE(root.IsValid()) << Log();
+    const ECS::EntityHandle lid = FindChild(world, root);
+
+    std::string gained(kCratePrefab);
+    gained += "[entity id=\"hinge\" parent=\"root\"]\nName.value = \"Hinge\"\nPrefabLinkProbe.Target = \"lid\"\n";
+    ChangeOnDisk(*m_Library, file, crate, gained);
+
+    const ECS::EntityHandle hinge = FindChildNamed(world, root, "Hinge");
+    ASSERT_TRUE(hinge.IsValid()) << "the prefab gained the hinge";
+    const auto* link = world.GetComponent<PrefabLinkProbe>(hinge);
+    ASSERT_NE(link, nullptr);
+    EXPECT_EQ(link->Target, lid) << "the field does not name the lid of the instance";
+}
+
+// Design 2.5: a world stays deferred when it is cleared, so a scene that loads into it during Play takes no
+// change until the world resumes.
+TEST_F(PrefabLibraryTests, ADeferredWorldStaysDeferredWhenItIsCleared)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World world;
+    ASSERT_TRUE(Scene::PlacePrefab(world, crate, Components::Transform{}, {}).IsValid()) << Log();
+    m_Library->SetPropagationDeferred(world, true);
+    world.Clear();
+    m_Library->CollectAtFrameBoundary();
+    const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, Components::Transform{}, {});
+    ASSERT_TRUE(root.IsValid()) << Log();
+    const ECS::EntityHandle lid = FindChild(world, root);
+
+    ChangeOnDisk(*m_Library, file, crate, kCrateTopPrefab);
+    EXPECT_EQ(NameOf(world, lid), "Lid") << "the cleared world took a change";
+
+    m_Library->SetPropagationDeferred(world, false);
+    EXPECT_EQ(NameOf(world, lid), "Top");
+}
 
 } // namespace
 } // namespace GameEngine

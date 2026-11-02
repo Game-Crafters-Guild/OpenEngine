@@ -94,6 +94,9 @@ class FullscreenShaderNode : public IRenderPipelineNode
     // replacement for the old skip-pass output aliasing). Never resolves the
     // output (no dead pool alloc).
     void StitchThrough(ViewDeclare& d);
+    // True when the stage has an input to publish under its output name: its passthroughInput, or
+    // its only input. A skipWhen skip without one publishes nothing and logs nothing.
+    bool HasPassthroughSource() const;
 
     std::string m_Id;
     std::string m_Json;

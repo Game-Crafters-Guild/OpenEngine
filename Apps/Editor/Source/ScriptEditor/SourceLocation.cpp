@@ -1,6 +1,6 @@
 #include "ScriptEditor/SourceLocation.h"
 
-#include "Types/StringUtils.h"
+#include "Types/PathUtils.h"
 
 #include <cctype>
 #include <string>
@@ -87,7 +87,7 @@ std::optional<SourceLocation> FindSourceLocationInLogLine(std::string_view text)
 
 bool IsCSharpSource(const std::filesystem::path& path)
 {
-    return ToLowerAscii(path.extension().string()) == kCSharpExtension;
+    return LowerCaseExtension(path) == kCSharpExtension;
 }
 
 } // namespace GameEngine::Editor

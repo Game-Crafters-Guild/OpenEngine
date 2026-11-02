@@ -32,7 +32,7 @@ Tests and tools construct their own: `JobSystem::WorkStealingThreadPool pool(4);
 | N units claimed one at a time, an index range to split into chunks, or a range to sort | `ParallelFor` (units, or chunks with a `minBatchSize`) / `ParallelSort` | One slab run block + at most one batch of helper envelopes (min(workers, units − 1, 64)); 0 heap allocations per call | Blocks until done; legal on **any thread**, a worker included; the first exception a chunk threw is rethrown on the caller |
 | Per-task result, status, cancellation, or completion callbacks | `Submit(lambda)` → `TaskHandle` | under 1 µs in Release, exactly 1 heap alloc | `TryGetResult<T>`, `Wait`, `Cancel`, `OnComplete`/`OnFailure`, dependency-graph attachable |
 | Work whose thread waits on another process, the OS or a driver for most of its run (a compiler, cmake, a compile server) | `JobChannel::Submit(fn)`, or `JobChannel::Enqueue(fn)` for work that must never be dropped, on the owning service's channel (§12) | Runs on a blocking thread, never a compute worker; at most the channel's cap run at once, the rest wait in its FIFO and hold no thread | A `TaskHandle`, as `Submit(lambda)`: cancellable while queued, a `Submit(fn, deps)` dependency |
-| Execution ordering between tasks (B runs after A) | `Submit(fn, deps)`: lambda + a span of dependency handles. `Task` subclass + `AddDependency` for stateful task types | Graph node + TaskData; node erased eagerly at terminal | Dependents run only after every dependency is terminal; failure cascades to parked dependents; cancel cascades too |
+| Execution ordering between tasks (B runs after A) | `Submit(fn, deps)`: a callable and a span of dependency handles. A stateful job is a function object that holds its state as members | Graph node + TaskData; node erased eagerly at terminal | Dependents run only after every dependency is terminal; failure cascades to parked dependents; cancel cascades too |
 
 The timings in this table are the rounded measurements of [9. Performance reference](#9-performance-reference).
 
@@ -47,7 +47,7 @@ flowchart TD
     G -->|Yes| H["ParallelFor<br/>(any thread)"]
     G -->|No| I["Run(fn, counter) + pool.Wait(counter)<br/>worker-legal join"]
     F -->|"Per-task result / cancel /<br/>callbacks / wait on ONE task"| J["Submit(lambda) → TaskHandle"]
-    F -->|"Ordering between tasks<br/>(B after A)"| K["Submit(fn, deps)<br/>(or Task subclass + AddDependency)"]
+    F -->|"Ordering between tasks<br/>(B after A)"| K["Submit(fn, deps)"]
     style D fill:#14532d,color:#86efac
     style E fill:#14532d,color:#86efac
     style H fill:#1e3a5f,color:#93c5fd
@@ -326,7 +326,7 @@ handle.Wait();
 - **Cost:** under a microsecond in Release ([9. Performance reference](#9-performance-reference)), exactly one heap allocation, one registry mutex hit. Cheap enough for asset-grade work; still ~30× an EnqueueWork. Do not pay it for work nobody observes.
 - **Handles are values:** copy freely. All copies share the task's state. Canceling/waiting through any copy works.
 - **Result typing:** the result rides in a `std::any`. `TryGetResult<T>` returns false both when the task is not `Completed` yet *and* on a type mismatch. Debug builds **assert on the mismatch** (task completed, a result exists, T does not match). Release returns false.
-- **No public mutators:** `SetResult`/`SetException`/`Mark*` are private: force-completing a handle from outside the pool races the worker's F12 arbitration CAS. A *running* `Task` subclass publishes its own payload via the protected `Task::PublishResult(value)` / `PublishException(ptr)` (safe: the executing task already won the arbitration).
+- **No public mutators:** `SetResult`/`SetException`/`Mark*` are private: force-completing a handle from outside the pool races the worker's F12 arbitration CAS. A job publishes its result when its callable returns a value, and its failure when the callable throws.
 - **Already-available results:** if the value already exists (asset already loaded), do *not* submit a dummy task and force-complete it. That races the worker's status arbitration and is a contract violation. Use `CreateCompletedHandle(payload)`: born terminal with the payload bound at creation, waiters never block, `TryGetResult<T>` yields it immediately (T = the decayed argument type: match it to the polling side).
 - **Failure:** a throwing body flips the handle to `Failed` with the exception message in `GetErrorMessage()`. `OnFailure` callbacks fire. `HasFailed()` is true for both `Failed` and `Cancelled`.
 - **Result lifetime:** a finished task's result and callbacks live until its last handle is gone and the pool releases its own reference. An idle worker can keep up to 31 finished tasks until it next submits a task or its cleanup batch fills; the engine releases them when a native module unloads at hot reload (`ReleaseFinishedTasks`). A task that fails or is cancelled drops its `OnComplete` callbacks at that moment, unrun, and drops any `OnComplete` callback registered later. A job in a hot-reloadable native module can therefore return a value whose type the module defines. Release the module's handles before it unloads.
@@ -377,20 +377,11 @@ Because a running task always completes, **Cancel alone is an optimization, not 
 
 ## 6. Dependencies (the graph path)
 
-Execution ordering between tasks: the lambda overload `Submit(fn, deps)` covers the common case. The dependency-aware `Task` base remains for stateful task types (cancellation flags, member results, multi-stage pipelines). Both ride the *same* graph machinery: registration, F8, failure cascade, cancel cascade, shutdown coverage.
+`Submit(fn, deps)` orders execution between tasks: it takes a callable and a span of dependency handles. A stateful job (a cancellation flag, a multi-stage pipeline) is a function object that holds its state as members. Every graph job uses the same machinery: registration, F8, failure cascade, cancel cascade, and shutdown coverage.
 
-```cpp title="JobSystem/WorkStealingThreadPool.h and JobSystem/Task.h"
-// WorkStealingThreadPool.h
+```cpp title="JobSystem/WorkStealingThreadPool.h"
 template <typename F, typename = std::enable_if_t<std::is_invocable_v<F&>>>
 TaskHandle Submit(F&& task, std::span<const TaskHandle> dependencies);
-
-TaskHandle Submit(UniquePtr<Task> task);     // registers declared deps in the graph
-
-// Task.h — the Task base class; declare during creation, BEFORE Submit:
-void AddDependency(TaskId dependencyId);
-void AddDependency(const TaskHandle& dependency);
-void AddDependency(const Vector<TaskId>& dependencies);
-void AddDependency(const Vector<TaskHandle>& dependencies);
 ```
 
 ```cpp title="Dependencies with the lambda form"
@@ -407,41 +398,48 @@ auto join = pool.Submit([=] { Merge(); },
                         std::span<const JobSystem::TaskHandle>(deps.data(), deps.size()));
 ```
 
-```cpp title="Dependencies with a Task subclass"
-// Subclass form — for stateful task types:
-class CompressTask : public JobSystem::Task
+```cpp title="Dependencies with a stateful function object"
+// The pool moves the function object into the job. Its members live until the job ends.
+class CompressJob
 {
   public:
-    CompressTask(JobSystem::WorkStealingThreadPool* pool,
-                 const JobSystem::TaskHandle& decode)
-        : Task(pool)
+    CompressJob(JobSystem::TaskHandle decode, std::shared_ptr<std::atomic<bool>> cancelRequested)
+        : m_Decode(std::move(decode)), m_CancelRequested(std::move(cancelRequested))
     {
-        AddDependency(decode);               // creation-time, before Submit
     }
 
-    void Execute() override
+    void operator()() const
     {
-        // Runs only after decode is terminal. Its handle is guaranteed
-        // observable-terminal here — read the outcome through the handle.
-        // Publish a payload with PublishResult(value) (protected on Task).
+        // Runs only after decode is terminal: read its outcome through its handle.
+        // A throw marks this job's handle Failed.
+        if (m_CancelRequested->load() || m_Decode.HasFailed())
+        {
+            throw std::runtime_error("compress skipped");
+        }
+        CompressDecoded();
     }
+
+  private:
+    JobSystem::TaskHandle m_Decode;
+    std::shared_ptr<std::atomic<bool>> m_CancelRequested;
 };
 
 auto decode = pool.Submit([=] { return DecodeTexture(path); });  // deps FIRST
-auto compress = pool.Submit(std::make_unique<CompressTask>(&pool, decode));
+auto compress = pool.Submit(CompressJob(decode, cancelRequested),
+                            std::span<const JobSystem::TaskHandle>(&decode, 1));
 ```
 
 :::tip[Lambda handles are real dependencies]
 
-Plain `Submit(lambda)` tasks do not register in the graph (that keeps them at 1 alloc / 1 mutex). `Submit(fn, deps)` bridges them: a live lambda dependency gets a payload-less graph node whose completion/failure/cancellation is driven off the task's own terminal flip. Ordering, failure cascade, and cancel cascade all behave exactly as for subclass dependencies. The plain-Submit fast path is unchanged (one flag check at completion; the alloc/lock pins still hold). Passing a lambda handle to `Task::AddDependency` directly is *still* exempt. Route lambda dependencies through `Submit(fn, deps)`.
+Plain `Submit(lambda)` tasks do not register in the graph (that keeps them at 1 alloc / 1 mutex). `Submit(fn, deps)` bridges them: a live lambda dependency gets a payload-less graph node whose completion/failure/cancellation is driven off the task's own terminal flip. Ordering, failure cascade, and cancel cascade all behave exactly as for graph dependencies. The plain-Submit fast path is unchanged (one flag check at completion; the alloc/lock pins still hold).
 
 :::
 
-- **Submit order matters:** submit dependencies before dependents. Ids are pool-generated. A dependent naming a never-submitted id would silently run early (see the tombstone diagnostic below).
+- **Submit order:** a dependency is a `TaskHandle`, and a handle exists only after its submit. Submit dependencies before dependents.
 - **Absent dependency = terminal (F8):** the graph erases terminal nodes eagerly, so a dependency that already completed/failed/canceled is simply absent at registration: the dependent **runs**, and observes the dependency's actual outcome through its `TaskHandle`. This is the designed behavior for "dependency finished before I registered", not an error.
 - **Failure propagation:** a failing dependency cascades `Failed` to its *parked* dependents (and on down the chain). A dependent submitted *after* the dependency already failed runs independently (F8 again). Check the dependency handle in the body if its outcome matters.
 - **Callbacks are safe:** completion callbacks fire outside the graph lock. Submitting new tasks from inside a callback does not deadlock (F10, test-pinned). They also run outside the handle's own callback lock, so a callback may register another callback on the same handle. One for the outcome that fired runs at once, on that thread (test-pinned).
-- **Tombstone diagnostic (Debug, F7):** registering a dependency id that is neither live nor *recently* terminal prints a loud stderr warning: usually a submit-order violation, or a plain `Submit(lambda)` id passed to `AddDependency` directly (plain lambda submits never graph-register; route lambda dependencies through `Submit(fn, deps)`, which bridges them). Set `GE_JOB_TOMBSTONE_STRICT=1` to turn the warning into an abort during bring-up. It can false-positive on handles legitimately held long past terminal (the tombstone ring is bounded), which is why it is non-fatal by default.
+- **Tombstone diagnostic (Debug, F7):** registering a dependency id that is neither live nor *recently* terminal prints a loud stderr warning. `Submit(fn, deps)` links only submitted dependencies, so the warning marks a defect in the pool's own linking. Set `GE_JOB_TOMBSTONE_STRICT=1` to turn the warning into an abort during bring-up. It can false-positive on handles legitimately held long past terminal (the tombstone ring is bounded), which is why it is non-fatal by default.
 
 ## 7. Shutdown contract
 
@@ -458,7 +456,7 @@ Plain `Submit(lambda)` tasks do not register in the graph (that keeps them at 1 
 
 | Path | Racing `Shutdown()` | After `Shutdown()` returned |
 |---|---|---|
-| `Submit` (lambda or Task) | F13a gate: returns an **invalid handle**, callable never runs. If the submit passed the gate concurrently, it re-checks after publish (F13e) and cancels its own task: the handle is valid but terminal (`Cancelled`); `Wait()` always returns. | Invalid handle; callable never runs. Check `IsValid()` if you submit near teardown. |
+| `Submit` (with or without dependencies) | F13a gate: returns an **invalid handle**, callable never runs. If the submit passed the gate concurrently, it re-checks after publish (F13e) and cancels its own task: the handle is valid but terminal (`Cancelled`); `Wait()` always returns. | Invalid handle; callable never runs. Check `IsValid()` if you submit near teardown. |
 | `EnqueueWork` / `EnqueueWorkBatch` | F13c: **never drops work.** If shutdown is detected after the publish, the caller self-drains the queues (bare tasks execute inline, handle/graph tasks are canceled). | Runs **synchronously on the calling thread**. Every callable runs exactly once: on a worker, in the drain, or on the caller. |
 | `JobChannel::Submit` / `JobChannel::Enqueue` | `Submit`: gated like `Submit`; a channel submit that passed the gate concurrently returns a handle that reads `Cancelled`. `Enqueue`: never dropped; handed back to the caller and run there. | `Submit`: invalid handle, the job never runs. `Enqueue`: runs synchronously on the calling thread. |
 | `Run(fn, counter)` | Inherits F13c via its visit: never dropped, the counter always drains, `Wait(counter)` always returns. | `fn` runs synchronously on the calling thread; counter drains. |
@@ -550,8 +548,8 @@ pool.EnqueueWorkBatch(funcs, count, JobSystem::JobPriority::Background);
 // Run(fn, counter) and the ParallelFor family have NO priority parameter: a fork
 // publishes at the class of the pool body that forks (Background inside a
 // Background body, Normal everywhere else). ParallelForOptions::HelperPriority
-// asks for a class, clamped the same way. Graph tasks (Submit with deps /
-// UniquePtr<Task>) are always Normal.
+// asks for a class, clamped the same way. Graph tasks (Submit with deps) are
+// always Normal.
 ```
 
 ### 11.1. When Background is right

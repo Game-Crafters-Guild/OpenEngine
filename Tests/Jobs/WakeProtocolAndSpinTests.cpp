@@ -446,27 +446,18 @@ TEST(SpinnerTokenTest, ShutdownDuringSpin)
 
 namespace {
 
-// Minimal dependency-managed task for the cross-pool routing test below —
-// the point is the Submit(UniquePtr<Task>) graph path, not the closure.
-class CountingGraphTask final : public JobSystem::Task
+// Submits a graph task with no dependency for the cross-pool routing test
+// below. The test checks the graph publish path, not the closure.
+void SubmitCountingGraphTask(JobSystem::WorkStealingThreadPool& pool, std::atomic<int>& ran)
 {
-  public:
-    CountingGraphTask(JobSystem::WorkStealingThreadPool* pool, std::atomic<int>* ran)
-        : Task(pool), m_Ran(ran)
-    {
-    }
-
-    void Execute() override { m_Ran->fetch_add(1); }
-
-  private:
-    std::atomic<int>* m_Ran;
-};
+    pool.Submit([&ran] { ran.fetch_add(1); }, std::span<const JobSystem::TaskHandle>());
+}
 
 } // namespace
 
 // Pins the s_CurrentPool guard on the local-queue fast path: a worker of pool
 // A submitting into pool B must publish into B's queues, not into its own
-// pool-A local queue. Without the guard the Submit(UniquePtr<Task>) path
+// pool-A local queue. Without the guard the graph Submit(fn, dependencies) path
 // below misroutes — B's counters are incremented for tasks A drains (or
 // leaves stranded), corrupting conservation in both pools; with it, both
 // pools drain fully and both Shutdown conservation tripwires stay silent.
@@ -491,7 +482,7 @@ TEST(CrossPoolSubmitTest, WorkerSubmitsIntoOtherPool)
         }
         for (int i = 0; i < kTasks; ++i)
         {
-            poolB.Submit(JobSystem::MakeUnique<CountingGraphTask>(&poolB, &handleTasksRan));
+            SubmitCountingGraphTask(poolB, handleTasksRan);
         }
         submitted.store(true);
     });

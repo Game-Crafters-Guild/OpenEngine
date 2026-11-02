@@ -4,14 +4,10 @@
 
 #include "Platform/Environment.h"
 
-#include <algorithm>
-
 namespace GameEngine::Rendering::RenderGraph
 {
 namespace
 {
-
-constexpr uint32_t kMinUploadRingSlots = 2;
 
 // Async compute is on unless GE_ASYNC_COMPUTE is set to an off value. Read once
 // per process: the queue map of a live frame stream never changes.
@@ -29,7 +25,7 @@ RGWindowFrame MakeWindowRGFrame(IDevice& device)
     out.PersistentPool = std::make_unique<RGResourcePool>(&device);
     out.TransientPool = std::make_unique<RGTransientPool>(&device);
     out.UploadRing = std::make_unique<RGUploadRing>(
-        &device, std::max(kMinUploadRingSlots, device.GetFramesInFlight()),
+        &device, device.GetFrameRingDepth(),
         kWindowUploadRingInitialSlotBytes);
     out.Frame = std::make_unique<RGFrame>(&device, out.PersistentPool.get(),
                                           out.TransientPool.get(), out.UploadRing.get());

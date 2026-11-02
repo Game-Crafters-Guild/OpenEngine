@@ -10,7 +10,7 @@
 // which instantiate these envelopes; the include below makes this header
 // self-contained when it is included first.
 
-#include "JobSystem/Task.h"
+#include "JobSystem/TaskBase.h"
 #include "JobSystem/TaskHandle.h"
 #include "JobSystem/Types.h"
 #include "JobSystem/WorkStealingThreadPool.h"
@@ -157,17 +157,18 @@ class ChannelEnqueueTask : public TaskBase
 };
 
 /**
- * @brief The Submit(F&&, dependencies) payload: a Task subclass, so graph
- * registration, the failure and cancel cascades and shutdown treat it like
- * any dependency-aware task. F is the decayed closure type.
+ * @brief The Submit(F&&, dependencies) payload: the dependency graph's only
+ * envelope type, so graph registration, the failure and cancel cascades and
+ * shutdown all act on it. F is the decayed closure type.
  */
 template <typename F>
-class SubmitGraphTask : public Task
+class SubmitGraphTask : public TaskBase
 {
   public:
     template <typename Fn>
-    SubmitGraphTask(WorkStealingThreadPool* jobSystem, Fn&& fn)
-        : Task(jobSystem), m_Fn(std::forward<Fn>(fn))
+    SubmitGraphTask(WorkStealingThreadPool* jobSystem, TaskId taskId, Fn&& fn)
+        : TaskBase(taskId, kFlagNeedsTaskData | kFlagDependencyManaged), m_JobSystem(jobSystem),
+          m_Fn(std::forward<Fn>(fn))
     {
     }
 
@@ -186,6 +187,7 @@ class SubmitGraphTask : public Task
     }
 
   private:
+    WorkStealingThreadPool* m_JobSystem;
     F m_Fn;
 };
 

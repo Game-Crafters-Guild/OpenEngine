@@ -30,8 +30,9 @@ GridSettings Square()
 void SolveCornerToCorner(AStarSolver& solver, const GridMap& grid)
 {
     std::vector<uint32> cells;
+    uint32 expansions = 0;
     grid.OpenPathSolveWindow();
-    ASSERT_TRUE(solver.Solve(grid.View(), 0, kSize * kSize - 1, 0, 0.0f, 0, cells));
+    ASSERT_EQ(solver.Solve(grid.View(), 0, kSize * kSize - 1, 0, 0.0f, 0, cells, expansions), GridSolveEnd::Reached);
     grid.ClosePathSolveWindow();
 }
 

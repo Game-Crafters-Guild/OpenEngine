@@ -6,7 +6,6 @@
 
 #include "Logger/Logger.h"
 #include "Rendering/Core/Device.h"
-#include "Rendering/Core/NamedDescriptorWriter.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
@@ -156,20 +155,20 @@ void DepthResolveNode::RecordResolve(RenderGraph::RGContext& ctx, RenderGraph::R
     if (!pipelineId.IsValid())
         return;
 
-    DescriptorSetDesc dsDesc{};
-    dsDesc.layout = set0Layout;
-    dsDesc.transient = true;
-    dsDesc.debugName = "DepthResolve.Set0";
-    auto ds = dev->CreateDescriptorSet(dsDesc);
-
-    if (meta)
-    {
-        NamedDescriptorWriter wdesc(dev, ds, *meta, 0);
-        if (wdesc.Has(depthBindingName) && m_Sampler.IsValid())
-            wdesc.AddCombinedImageSampler(depthBindingName, depthTex, m_Sampler);
-        wdesc.Flush();
-        Detail::BindStorageImageByName(dev, ds, *meta, "uDepthResolved", resolvedTex);
-    }
+    // A binding name the reflected shader does not have is not written.
+    DescriptorWrite writes[2];
+    uint32_t writeCount = 0;
+    uint32_t binding = 0;
+    DescriptorType reflectedType{};
+    if (meta && m_Sampler.IsValid() && Rendering::TryGetSet0BindingByName(*meta, depthBindingName, binding, reflectedType))
+        writes[writeCount++] = {
+            .Binding = binding, .Type = DescriptorType::CombinedImageSampler, .Texture = depthTex, .Sampler = m_Sampler};
+    if (meta && Rendering::TryGetSet0BindingByName(*meta, "uDepthResolved", binding, reflectedType))
+        writes[writeCount++] = {.Binding = binding, .Type = DescriptorType::StorageImage, .Texture = resolvedTex};
+    const DescriptorSetHandle ds =
+        dev->GetOrCreateDescriptorSet(set0Layout, std::span(writes, writeCount), "DepthResolve.Set0");
+    if (!ds.IsValid())
+        return;
 
     PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(pipelineId);
     if (!pipe.IsValid())

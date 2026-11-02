@@ -136,14 +136,15 @@ class ScriptingAbiPrefabSpawnTest : public ::testing::Test
         const GUID squad = registered.Value();
         const std::string relative =
             std::filesystem::relative(m_Folder / "Squad.prefab", m_Resolver->GetAssetRoot()).generic_string();
-        Scene::LoadOptions options{Scene::LoadMode::Replace};
+        Scene::SceneReadOptions options{};
         options.assetResolver = &*m_Resolver;
         options.assetRootOverride = m_Resolver->GetAssetRoot();
-        const bool loaded = Scene::LoadSceneFromFile(
+        const bool loaded = Scene::ReadSceneInto(
             world,
             Write("Barracks.scene", "[scene name=\"Barracks\" version=1]\n"
                                     "[entity id=\"spawner\"]\n"
-                                    "AbiPrefabSpawnerProbe.Prefab = [path=\"" + relative + "\" guid=\"" +
+                                    "AbiPrefabSpawnerProbe.Prefab = [path=\"" +
+                                        relative + "\" guid=\"" +
                                         squad.ToString() + "\"]\n"),
             options);
         EXPECT_TRUE(loaded) << Scene::GetLastSceneIOError().message;

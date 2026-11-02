@@ -233,9 +233,9 @@ bool IsMemberTag(std::string_view tag);
 std::string Addressed(std::string_view address, std::string_view text);
 
 // Loading a document's entities.
-SceneLoadContext MakeDocumentLoadContext(ECS::World& world, const std::filesystem::path& file, const SceneDoc& doc,
-                                         const LoadOptions& options);
-std::filesystem::path ResolveResourcePath(const SceneLoadContext& ctx, const std::filesystem::path& ownerFile,
+SceneReadContext MakeDocumentLoadContext(ECS::World& world, const std::filesystem::path& file, const SceneDoc& doc,
+                                         const SceneReadOptions& options);
+std::filesystem::path ResolveResourcePath(const SceneReadContext& ctx, const std::filesystem::path& ownerFile,
                                           const SceneDoc::Resource& r);
 void ReportUnreadableResource(std::string_view kind, const SceneDoc::Resource& r,
                               const std::filesystem::path& resolvedPath, const std::filesystem::path& projectRoot,
@@ -243,20 +243,20 @@ void ReportUnreadableResource(std::string_view kind, const SceneDoc::Resource& r
                               std::filesystem::path* outErrorFile, int* outErrorLine);
 void RecordUnreadLines(const SceneDoc::UnreadLines& unreadLines, const std::string& entityId,
                        const std::filesystem::path& ownerFile, ECS::EntityHandle h, std::size_t firstRow,
-                       SceneLoadDegradation* degradation);
+                       SceneDegradation* degradation);
 void PreserveOrDropUnhandledComponent(ECS::World& world, ECS::EntityHandle h, const SceneDoc::ComponentProps& comp,
                                       const std::string& entityId, const std::filesystem::path& ownerFile);
-void ApplyComponentBlock(ECS::World& world, const SceneLoadContext& ctx, const ISceneComponentSchema& schema,
+void ApplyComponentBlock(ECS::World& world, const SceneReadContext& ctx, const ISceneComponentSchema& schema,
                          ECS::EntityHandle h, const SceneDoc::ComponentProps& authored, const std::string& entityId,
-                         const std::filesystem::path& ownerFile, int headerLine, SceneLoadDegradation* degradation);
-void ApplyFallbackName(ECS::World& world, const SceneLoadContext& ctx, ECS::EntityHandle h,
+                         const std::filesystem::path& ownerFile, int headerLine, SceneDegradation* degradation);
+void ApplyFallbackName(ECS::World& world, const SceneReadContext& ctx, ECS::EntityHandle h,
                        std::string_view fallbackName, const std::string& entityId);
-void ApplyEntityComponents(ECS::World& world, const SceneLoadContext& ctx, const std::filesystem::path& ownerFile,
+void ApplyEntityComponents(ECS::World& world, const SceneReadContext& ctx, const std::filesystem::path& ownerFile,
                            ECS::EntityHandle h, const SceneDoc::Entity& e, const std::string& entityId,
-                           std::string_view fallbackName, SceneLoadDegradation* degradation);
+                           std::string_view fallbackName, SceneDegradation* degradation);
 
 // Saving: the authored text of fields the load could not read, and a prefab instance's source path.
 void ApplyPreservedFieldOverrides(ECS::World& world, ECS::EntityHandle entity, std::vector<std::string>& lines);
-bool ResolvePrefabSourceForSave(const SceneSaveContext& ctx, const GUID& source, std::string& outPath);
+bool ResolvePrefabSourceForSave(const SceneWriteContext& ctx, const GUID& source, std::string& outPath);
 
 } // namespace GameEngine::Scene

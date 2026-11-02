@@ -1,9 +1,3 @@
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-
 // A TEST DOUBLE for the game-UI element ABI, not a UI implementation.
 //
 // The managed binding (GameEngine.Scripting.Ui) has bookkeeping of its own worth testing
@@ -278,6 +272,28 @@ GE_API GE_Result GE_CDECL GE_UIElement_SetClass(uint64_t instanceId, const char*
     if (!className || *className == '\0')
         return GE_Result_InvalidArg;
     return Resolve(instanceId) ? GE_Result_Ok : GE_Result_NotFound;
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_SetMarkdownText(uint64_t instanceId, const char* text)
+{
+    ShimElement* element = Resolve(instanceId);
+    if (!element)
+        return GE_Result_NotFound;
+    if (!IsTag(*element, "markdowntext"))
+        return GE_Result_InvalidArg;
+    element->TextValue = text ? text : "";
+    return GE_Result_Ok;
+}
+
+GE_API GE_Result GE_CDECL GE_TestUI_GetMarkdownText(uint64_t instanceId, char* buffer, int32_t bufferLen,
+                                                    int32_t* outLen)
+{
+    ShimElement* element = Resolve(instanceId);
+    if (!element)
+        return GE_Result_NotFound;
+    if (!IsTag(*element, "markdowntext"))
+        return GE_Result_InvalidArg;
+    return CopyOut(element->TextValue, buffer, bufferLen, outLen);
 }
 
 GE_API GE_Result GE_CDECL GE_UIElement_IsAlive(uint64_t instanceId, int32_t* outAlive)
@@ -922,4 +938,3 @@ GE_API GE_Result GE_CDECL GE_UIElement_GetRect(uint64_t instanceId, float* x, fl
 }
 
 } // extern "C"
-#endif

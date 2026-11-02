@@ -385,10 +385,10 @@ TEST_F(PrefabPlaceTests, AnUndoOfCreateAfterASavedSceneUsesThePrefabKeepsTheFile
     EngineCore& engine = EngineCore::GetInstance();
     Scene::AssetManagerSceneResolver resolver(engine.GetAssetManager(), engine.GetAssetManager().GetAssetRoot(),
                                               Scene::AssetManagerSceneResolver::UnknownFile::Register);
-    Scene::SaveOptions options;
+    Scene::SceneWriteOptions options;
     options.assetResolver = &resolver;
     const std::filesystem::path scene = m_Folder / "Yard.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, scene, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::WriteSceneFile(world, scene, options)) << Scene::GetLastSceneIOError().message;
     ASSERT_TRUE(engine.GetAssetManager().GetRegistry().RegisterAssetByPath(scene).IsOk());
 
     undo.Undo();
@@ -2197,7 +2197,7 @@ TEST_F(PrefabPlaceTests, TheRowMenuRevertsAFieldAndAStaleOverrideIsRefusedWithAN
                                             "[entity id=\"lid\" parent=\"root\"]\n"
                                             "Name.value = \"Lid\"\n";
     std::string error;
-    ASSERT_TRUE(Scene::WritePrefabFileText(world, file, std::string(kProbeless), error)) << error;
+    ASSERT_TRUE(Scene::WritePrefabFileText(file, std::string(kProbeless), error)) << error;
     Editor::TestStubs::LastSceneViewNotice().clear();
     const std::size_t steps = undo.GetUndoCount();
     menu[1].Run();
@@ -2514,9 +2514,9 @@ TEST_F(PrefabPlaceTests, OnlyTheLoadersOrphanedOverridesAreStaleRows)
     const ECS::EntityHandle root = OpenSceneWithOneInstance(document, world, scene);
     ASSERT_TRUE(root.IsValid());
     ASSERT_TRUE(document.GetLastLoadDegraded().has_value());
-    const std::vector<Scene::SceneLoadSkip>& skips = document.GetLastLoadDegraded()->Census.skips;
-    const auto isUnappliedOnRoot = [root](const Scene::SceneLoadSkip& skip)
-    { return skip.kind == Scene::SceneLoadSkipKind::Unapplied && !skip.preserved && skip.entityHandle == root; };
+    const std::vector<Scene::SceneDegradation::Skip>& skips = document.GetLastLoadDegraded()->Census.skips;
+    const auto isUnappliedOnRoot = [root](const Scene::SceneDegradation::Skip& skip)
+    { return skip.kind == Scene::SceneDegradation::SkipKind::Unapplied && !skip.preserved && skip.entityHandle == root; };
     ASSERT_GE(std::count_if(skips.begin(), skips.end(), isUnappliedOnRoot), 1) << "the faults are no load rows";
 
     const Editor::PrefabOverridesListModel model = Editor::PrefabOverridesListModel::Describe(world, root, skips);

@@ -973,7 +973,7 @@ void AssemblySwapTask::ScheduleOldContextCleanup(void* oldContext)
 
     // FIXED: Use WorkStealingThreadPool instead of detached thread to prevent test hanging
     // Submit cleanup task to the thread pool for proper lifecycle management
-    if (GetJobSystem())
+    if (m_JobSystem)
     {
         // Capture a by-value string to avoid any shared lifetime issues
         auto cleanupTask = [oldContext, pathString = m_AssemblyPath]()
@@ -996,7 +996,7 @@ void AssemblySwapTask::ScheduleOldContextCleanup(void* oldContext)
         };
 
         // Submit to thread pool instead of creating detached thread
-        GetJobSystem()->Submit(std::move(cleanupTask));
+        m_JobSystem->Submit(std::move(cleanupTask));
     }
     else
     {

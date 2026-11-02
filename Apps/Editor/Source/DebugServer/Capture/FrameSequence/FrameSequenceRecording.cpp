@@ -103,6 +103,11 @@ bool FrameSequenceRecording::TakeDropNoticeDue(double msNow)
     return true;
 }
 
+double FrameSequenceRecording::PresentCapFps() const
+{
+    return IsCapturing() && m_FrameIntervalMs > 0.0 ? kFrameRecordingPresentsPerTick * 1000.0 / m_FrameIntervalMs : 0.0;
+}
+
 FrameSequenceRecording::Summary FrameSequenceRecording::GetSummary() const
 {
     Summary summary;

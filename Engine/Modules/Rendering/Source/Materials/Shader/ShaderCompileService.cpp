@@ -3,6 +3,7 @@
 #include "Logger/Logger.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Common/Utils.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 #include "Rendering/Materials/Shader/ShaderMetaValidation.h"
 #include "Rendering/Materials/Shader/ShaderReflection.h"
@@ -130,22 +131,23 @@ static std::string Hex64(uint64_t v)
 
 static bool IsHlslPath(const std::filesystem::path& p)
 {
-    std::string ext = ToLowerAscii(p.extension().string());
-    return ext == ".hlsl";
+    const std::string extension = LowerCaseExtension(p);
+    return extension == ".hlsl";
 }
 
 static bool IsGlslPath(const std::filesystem::path& p)
 {
-    std::string ext = ToLowerAscii(p.extension().string());
-    return ext == ".glsl" || ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".geom";
+    const std::string extension = LowerCaseExtension(p);
+    return extension == ".glsl" || extension == ".vert" || extension == ".frag" || extension == ".comp" ||
+           extension == ".geom";
 }
 
 // Dev-flag Slang lane (see SlangCompileLane.h): .slang stages compile via an
 // external slangc and are rejected loudly unless GE_SHADER_SLANG_LANE is set.
 static bool IsSlangPath(const std::filesystem::path& p)
 {
-    std::string ext = ToLowerAscii(p.extension().string());
-    return ext == ".slang";
+    const std::string extension = LowerCaseExtension(p);
+    return extension == ".slang";
 }
 
 static bool MapStage(const std::string& stageLower, ShaderStageKind& outStage, std::string& outErr)

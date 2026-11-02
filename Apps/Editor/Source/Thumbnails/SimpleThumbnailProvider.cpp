@@ -2,14 +2,14 @@
 
 #include "Logger/Logger.h"
 #include "Thumbnails/AssetThumbnailHandler.h"
-#include "Types/StringUtils.h"
+#include "Types/PathUtils.h"
 
 #include <cctype>
 
 namespace GameEngine {
 
 bool SimpleThumbnailProvider::IsImageExtension(const std::filesystem::path& p) {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga" || ext == ".gif" || ext == ".webp" || ext == ".svg" || ext == ".hdr";
 }
 
@@ -18,19 +18,19 @@ bool SimpleThumbnailProvider::IsImageExtension(const std::filesystem::path& p) {
 // provider.
 static bool IsModelExtension(const std::filesystem::path& p)
 {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     return ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".dae" || ext == ".3ds";
 }
 
 static bool IsAudioExtension(const std::filesystem::path& p)
 {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     return ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".flac" || ext == ".aac";
 }
 
 static bool IsVideoExtension(const std::filesystem::path& p)
 {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     return ext == ".mp4" || ext == ".mov" || ext == ".avi" || ext == ".mkv" || ext == ".m4v";
 }
 

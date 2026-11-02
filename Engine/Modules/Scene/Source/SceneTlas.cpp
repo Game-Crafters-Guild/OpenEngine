@@ -670,6 +670,11 @@ bool SceneTlas::IsWorkInFlightForTesting() const
     return m_Impl->IsWorkInFlight();
 }
 
+uint64 SceneTlas::GetRequestCountForTesting() const
+{
+    return m_Impl->RequestCount;
+}
+
 uint64 SceneTlas::GetReconcileCountForTesting() const
 {
     std::shared_lock lock(m_Impl->Mutex);

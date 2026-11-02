@@ -233,14 +233,38 @@ struct CellReservation
     bool IsActive(float32 currentTime) const { return AgentId != 0 && ExpirationTime > currentTime; }
 };
 
+// How a grid A* solve ended.
+enum class GridSolveEnd : uint8
+{
+    Reached,     ///< A path reaches the goal cell.
+    Refused,     ///< The start or the goal is off the grid or on a blocked cell; no search.
+    OtherRegion, ///< The goal is outside the start's region; no search.
+    Unreachable  ///< The search closed every cell it could reach from the start and did not reach the goal.
+};
+inline constexpr uint32 kGridSolveEndCount = 4;
+
+// What one grid A* solve did. Cells are grid coordinates; a solve refused
+// before its ends map to cells leaves them 0.
+struct GridSolveRecord
+{
+    uint32 StartX = 0, StartZ = 0;
+    uint32 GoalX = 0, GoalZ = 0;
+    uint32 Expansions = 0;      ///< Cells the search closed.
+    uint32 Microseconds = 0;    ///< Wall time of the solve, path smoothing included.
+    uint32 AgentCellRadius = 0; ///< The footprint radius the search tested, in cells; 0 tests the cell only.
+    GridSolveEnd End = GridSolveEnd::Refused;
+};
+
 // One grid path solve for SolveGridPaths: the map and request it reads, and the
-// result it writes, its status and, for a Complete path, its points.
+// result it writes: its status, for a Complete path its points, and the record
+// of the search.
 struct GridPathSolve
 {
     NavMapHandle Map;
     PathRequest Request;
     PathStatus Status = PathStatus::Invalid;
     std::vector<PathPoint> Points;
+    GridSolveRecord Record;
 };
 
 } // namespace GameEngine::Pathfinding

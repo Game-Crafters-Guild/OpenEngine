@@ -219,13 +219,19 @@ TEST(RenderingRecordCacheThreaded, PerPassDescriptorCacheConcurrentInsertsConver
     Material mat = Material::TestFactory::Create(GUID::Generate(), "CamOnly", 16u);
     Material::TestFactory::SetShaderMeta(mat, meta);
 
-    auto camBuf = MakeUniformBuffer(*device, 256);
-    ASSERT_TRUE(camBuf.IsValid());
+    // One buffer per view: the device's set cache serves equal content as one set, so
+    // distinct views need distinct content to get distinct sets.
+    const uint32_t kViews = 16;
+    std::vector<BufferHandle> camBufs;
+    for (uint32_t v = 0; v < kViews; ++v)
+    {
+        camBufs.push_back(MakeUniformBuffer(*device, 256));
+        ASSERT_TRUE(camBufs.back().IsValid());
+    }
 
     auto& binder = rs.Materials().Binder();
     binder.OnBeginFrame(); // fresh frame => cold per-pass cache + fresh L1 epoch
 
-    const uint32_t kViews   = 16;
     const unsigned kWorkers = WorkerCount();
     const int      kRepeat  = 64;
     std::vector<std::vector<DescriptorSetHandle>> results(kWorkers);
@@ -242,7 +248,7 @@ TEST(RenderingRecordCacheThreaded, PerPassDescriptorCacheConcurrentInsertsConver
                 pass.View      = v;
                 pass.FrameSlot = 0;
                 pass.Samples   = 1;
-                pass.PassResources.Buffers.push_back({HashStringId("Cam"), camBuf, 0, 0});
+                pass.PassResources.Buffers.push_back({HashStringId("Cam"), camBufs[v], 0, 0});
                 results[t][v] = binder.BuildSetForBinding(pass, mat, 3, draw);
             }
     });
@@ -264,7 +270,8 @@ TEST(RenderingRecordCacheThreaded, PerPassDescriptorCacheConcurrentInsertsConver
         handles.insert(results[0][v].id);
     EXPECT_EQ(handles.size(), kViews) << "per-pass cache merged distinct views";
 
-    device->DestroyBuffer(camBuf);
+    for (const BufferHandle camBuf : camBufs)
+        device->DestroyBuffer(camBuf);
     rs.Shutdown();
     device->Shutdown();
 }

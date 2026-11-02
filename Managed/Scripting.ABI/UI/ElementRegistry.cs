@@ -141,6 +141,7 @@ namespace GameEngine.Scripting
             {
                 ("button", static id => new Button(id)),
                 ("label", static id => new Label(id)),
+                ("markdowntext", static id => new MarkdownText(id)),
                 ("toggle", static id => new Toggle(id)),
                 // A native Checkbox IS a ToggleBase — the same bool value surface and the same
                 // events — so it mints the Toggle wrapper rather than a wrapper of its own,

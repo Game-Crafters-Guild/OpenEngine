@@ -243,6 +243,13 @@ namespace Rendering {
         VkShaderStageFlags ResolvePushConstantStageFlags(const VulkanPipeline* pipeline,
                                                          VkShaderStageFlags metadataStages) const;
 
+        // The part of `stages` this list's queue family can execute. The graphics
+        // (universal) queue keeps every stage. A stage another queue owns names work on
+        // that queue, which a semaphore wait in the submission orders, not a barrier here.
+        VkPipelineStageFlags QueueExpressibleStages(VkPipelineStageFlags stages) const;
+        // Applies QueueExpressibleStages to one side of a barrier (see the definition).
+        void ApplyQueueFloor(const ResourceBarrier& barrier, VkPipelineStageFlags& stage, VkAccessFlags& access) const;
+
         VulkanDevice* m_Device;
         VkCommandBuffer m_CommandBuffer = VK_NULL_HANDLE;
         IDevice::QueueType m_QueueType = IDevice::QueueType::Graphics;

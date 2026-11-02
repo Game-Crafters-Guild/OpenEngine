@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Types/StringUtils.h"
+
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -45,6 +47,14 @@ inline std::string PathToUtf8(const std::filesystem::path& path)
 {
     const std::u8string utf8 = path.generic_u8string();
     return std::string(utf8.begin(), utf8.end());
+}
+
+/// The extension of `path` with its dot, in ASCII lower case (".png" for "Photo.PNG"), for a
+/// compare with a lower-case literal. Only the last extension counts (".gz" for "a.tar.gz"); a
+/// name with no extension, such as "Makefile" or ".gitignore", gives an empty string.
+inline std::string LowerCaseExtension(const std::filesystem::path& path)
+{
+    return ToLowerAscii(PathToUtf8(path.extension()));
 }
 
 } // namespace GameEngine

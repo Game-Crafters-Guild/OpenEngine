@@ -2147,13 +2147,14 @@ PipelineBufferBindingRG RenderPipelineInstance::MaterializeBufferCopies(Renderin
                                                                         const std::string& poolName,
                                                                         Rendering::BufferDesc desc)
 {
-    // The copy this frame writes was last used kBufferCopies frames of this view ago. The device
+    // The copy this frame writes was last used CopyCount frames of this view ago. The device
     // has finished that frame before this one records (IDevice::BeginFrame waits for it), so the
     // render graph's cross-frame ordering finds that work complete and adds no wait.
     BufferCopiesState& state = m_BufferCopies.GetOrInsert(poolName);
     if (state.CarryPassName.empty())
     {
-        for (uint32_t copy = 0; copy < kBufferCopies; ++copy)
+        state.CopyCount = frame.Device()->GetFrameRingDepth();
+        for (uint32_t copy = 0; copy < state.CopyCount; ++copy)
             state.CopyNames[copy] = poolName + ".Copy" + std::to_string(copy);
         state.CarryPassName = "Carry." + name;
         state.ZeroInitPassName = "ZeroInit." + name;
@@ -2163,7 +2164,7 @@ PipelineBufferBindingRG RenderPipelineInstance::MaterializeBufferCopies(Renderin
         // Rotate once per frame; a frame declared again keeps its copies.
         state.Previous = state.Current;
         state.HasPrevious = state.HasFrame;
-        state.Current = state.HasFrame ? (state.Current + 1u) % kBufferCopies : 0u;
+        state.Current = state.HasFrame ? (state.Current + 1u) % state.CopyCount : 0u;
         state.Frame = frame.FrameIndex();
         state.HasFrame = true;
     }

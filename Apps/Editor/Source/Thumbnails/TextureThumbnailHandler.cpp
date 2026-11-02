@@ -8,7 +8,7 @@
 #include "Image/Resample.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
-#include "Types/StringUtils.h"
+#include "Types/PathUtils.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -79,8 +79,7 @@ std::string TextureThumbnailHandler::MakeCacheFileName(const std::filesystem::pa
 
 bool TextureThumbnailHandler::IsDecodableSourceExtension(const std::filesystem::path& assetPath)
 {
-    const auto ext = ToLowerAscii(assetPath.has_extension() ? assetPath.extension().string()
-                                                            : std::string());
+    const auto ext = LowerCaseExtension(assetPath);
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
            ext == ".tga" || ext == ".hdr";
 }

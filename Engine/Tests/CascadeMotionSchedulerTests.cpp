@@ -2,10 +2,11 @@
 // (GE_SHADOW_MOTION_CAP lane). Pure CPU: no device, no RenderServices.
 // Covers cap-off, correctness-class bypass (every dirty cause), nearest-first
 // budget selection, the staleness bound (defer allowed only while content
-// drift <= maxAge; forced renders displace nearer cascades and may exceed the
-// budget), unknown-content protection, and the steady-state cycle the design
-// promises for cap 2 / maxAge 2: {0,1},{0,1},{2,3} — 2 renders per frame with
-// near cascades at most 1 frame stale and far cascades at most 2.
+// drift <= maxAge), unknown-content protection, and the steady-state cycles
+// for cap 2 / maxAge 2. Camera motion: forced renders take the budget,
+// {0,1},{0,1},{2,3}, 2.00 renders per frame. Caster deformation: forced
+// renders go on top of the budget and never evict a nearer cascade,
+// {0,1},{0,1},{0,1,2,3}, 2.67 renders per frame.
 #include "Engine/Rendering/CascadeMotionScheduler.h"
 #include "Engine/Rendering/CascadeShadowCache.h"
 
@@ -18,9 +19,11 @@
 
 using GameEngine::Engine::Renderer::CascadeCacheDirtyCause;
 using GameEngine::Engine::Renderer::CascadeMotionScheduler;
+using GameEngine::Engine::Renderer::CascadeMotionSource;
 using GameEngine::Engine::Renderer::CascadeUpdateClass;
 using GameEngine::Engine::Renderer::ClassifyCascadeDirtyCause;
 using GameEngine::Engine::Renderer::ClassifyCascadePair;
+using GameEngine::Engine::Renderer::IsCameraMotionPair;
 
 namespace
 {
@@ -53,14 +56,15 @@ struct SchedulerDriver
     }
 
     uint32_t Plan(const Classes& classes, uint32_t cap, uint32_t maxAge,
-                  uint32_t numCascades = kN)
+                  uint32_t numCascades = kN,
+                  CascadeMotionSource source = CascadeMotionSource::Camera)
     {
         ++Frame;
         Staleness s{};
         for (uint32_t c = 0; c < kN; ++c)
             s[c] = Frame - ContentStamp[c];
         const uint32_t mask =
-            Scheduler.PlanFrame(kView, numCascades, classes, s, cap, maxAge).DeferMask;
+            Scheduler.PlanFrame(kView, numCascades, classes, s, cap, maxAge, source).DeferMask;
         for (uint32_t c = 0; c < numCascades; ++c)
         {
             // Rendered or cache-skipped (Cached == byte-identical content)
@@ -97,6 +101,8 @@ TEST(CascadeMotionScheduler, CorrectnessClassesNeverDefer)
               CascadeUpdateClass::Motion);
     EXPECT_EQ(ClassifyCascadeDirtyCause(CascadeCacheDirtyCause::CascadeFitChanged),
               CascadeUpdateClass::Motion);
+    EXPECT_EQ(ClassifyCascadeDirtyCause(CascadeCacheDirtyCause::CasterDeformed),
+              CascadeUpdateClass::Motion);
 
     SchedulerDriver drv;
     Classes c{};
@@ -125,8 +131,8 @@ TEST(CascadeMotionScheduler, NearestFirstWithinBudget)
 TEST(CascadeMotionScheduler, SteadyStateCycleCap2MaxAge2)
 {
     SchedulerDriver drv;
-    // Documented steady state: {0,1},{0,1},{2,3} repeating — 2 renders per
-    // frame, far cascades at most 2 frames stale, near at most 1.
+    // Camera motion: {0,1},{0,1},{2,3} repeating, 2 renders per frame, far
+    // cascades at most 2 frames stale, near at most 1.
     const uint32_t expected[] = {0b1100u, 0b1100u, 0b0011u,
                                  0b1100u, 0b1100u, 0b0011u,
                                  0b1100u, 0b1100u, 0b0011u};
@@ -136,36 +142,81 @@ TEST(CascadeMotionScheduler, SteadyStateCycleCap2MaxAge2)
 
 TEST(CascadeMotionScheduler, StalenessBoundHolds)
 {
-    SchedulerDriver drv;
-    constexpr uint32_t kMaxAge = 2;
-    for (int i = 0; i < 60; ++i)
+    for (const CascadeMotionSource source :
+         {CascadeMotionSource::Camera, CascadeMotionSource::CasterDeformation})
     {
-        const uint32_t mask = drv.Plan(AllMotion(), /*cap=*/2, kMaxAge);
-        for (uint32_t c = 0; c < kN; ++c)
+        SchedulerDriver drv;
+        constexpr uint32_t kMaxAge = 2;
+        for (int i = 0; i < 60; ++i)
         {
-            if (mask & (1u << c))
+            const uint32_t mask = drv.Plan(AllMotion(), /*cap=*/2, kMaxAge, kN, source);
+            for (uint32_t c = 0; c < kN; ++c)
             {
-                // A deferred slot's sampled content drift never exceeds maxAge.
-                EXPECT_LE(drv.Frame - drv.ContentStamp[c], kMaxAge)
-                    << "cascade " << c << " frame " << i;
+                if (mask & (1u << c))
+                {
+                    // A deferred slot's sampled content drift never exceeds maxAge.
+                    EXPECT_LE(drv.Frame - drv.ContentStamp[c], kMaxAge)
+                        << "cascade " << c << " frame " << i;
+                }
             }
+            const uint32_t renders = kN - std::popcount(mask);
+            EXPECT_LE(renders, kN);
         }
-        // The budget bounds motion renders on every non-forced frame; forced
-        // frames may displace but never exceed the slot count.
-        const uint32_t renders = kN - std::popcount(mask);
-        EXPECT_LE(renders, kN);
     }
 }
 
-TEST(CascadeMotionScheduler, ForcedRendersDisplaceNearCascades)
+TEST(CascadeMotionScheduler, ForcedRendersNeverEvictNearCascades)
 {
     SchedulerDriver drv;
-    // Reach the forced frame of the cap-2 cycle: frames 1-2 defer {2,3};
-    // frame 3 forces them and displaces {0,1}.
-    drv.Plan(AllMotion(), 2, 2);
-    drv.Plan(AllMotion(), 2, 2);
-    const uint32_t mask = drv.Plan(AllMotion(), 2, 2);
-    EXPECT_EQ(mask, 0b0011u); // 0 and 1 deferred; 2 and 3 render (forced)
+    // Caster deformation, the forced frame of the cap-2 cycle: frames 1-2
+    // defer {2,3}; frame 3 forces them on top of the budget, and {0,1} still
+    // render.
+    constexpr CascadeMotionSource kDeformation = CascadeMotionSource::CasterDeformation;
+    drv.Plan(AllMotion(), 2, 2, kN, kDeformation);
+    drv.Plan(AllMotion(), 2, 2, kN, kDeformation);
+    const uint32_t mask = drv.Plan(AllMotion(), 2, 2, kN, kDeformation);
+    EXPECT_EQ(mask, 0u);
+    EXPECT_EQ(drv.Scheduler.GetStats(kView).ForcedBeyondCap, 2u);
+}
+
+// Vegetation sway is a CasterDeformed cause on every cascade every frame at a
+// still camera. The highest-density cascades show a held frame most, so the
+// round-robin never defers cascades 0 and 1 for it; 2 and 3 share the rest.
+TEST(CascadeMotionScheduler, DeformationNeverDefersTheNearCascades)
+{
+    SchedulerDriver drv;
+    Classes deformed{};
+    deformed.fill(ClassifyCascadeDirtyCause(CascadeCacheDirtyCause::CasterDeformed));
+    constexpr int kFrames = 30;
+    uint32_t renders = 0;
+    for (int i = 0; i < kFrames; ++i)
+    {
+        const uint32_t mask = drv.Plan(deformed, /*cap=*/2, /*maxAge=*/2, kN,
+                                       CascadeMotionSource::CasterDeformation);
+        EXPECT_EQ(mask & 0b0011u, 0u) << "a near cascade deferred at frame " << i;
+        renders += kN - std::popcount(mask);
+    }
+    EXPECT_EQ(renders, 80u) << "{0,1},{0,1},{0,1,2,3}: 8 renders in every 3 frames";
+}
+
+// Under camera motion a held cascade stays world-correct through its own fit,
+// so the cap holds: the far cascades' forced frame holds cascades 0 and 1.
+TEST(CascadeMotionScheduler, CameraMotionKeepsTheBudget)
+{
+    SchedulerDriver drv;
+    constexpr int kFrames = 30;
+    uint32_t renders = 0;
+    uint32_t nearHeld = 0;
+    for (int i = 0; i < kFrames; ++i)
+    {
+        const uint32_t mask = drv.Plan(AllMotion(), /*cap=*/2, /*maxAge=*/2, kN,
+                                       CascadeMotionSource::Camera);
+        renders += kN - std::popcount(mask);
+        if ((mask & 0b0011u) == 0b0011u)
+            ++nearHeld;
+    }
+    EXPECT_EQ(renders, 60u) << "{0,1},{0,1},{2,3}: 2 renders per frame";
+    EXPECT_EQ(nearHeld, 10u) << "cascades 0 and 1 held one frame in three";
 }
 
 TEST(CascadeMotionScheduler, ForcedBurstMayExceedCap)
@@ -190,7 +241,8 @@ TEST(CascadeMotionScheduler, UnknownContentNeverDefers)
     s.fill(CascadeMotionScheduler::kStalenessUnknown);
     // No committed content (cold start, post-invalidate, hidden-view regrow):
     // everything renders regardless of the cap.
-    const auto plan = sched.PlanFrame(kView, kN, AllMotion(), s, /*cap=*/1, /*maxAge=*/2);
+    const auto plan = sched.PlanFrame(kView, kN, AllMotion(), s, /*cap=*/1, /*maxAge=*/2,
+                                      CascadeMotionSource::Camera);
     EXPECT_EQ(plan.DeferMask, 0u);
 }
 
@@ -259,6 +311,23 @@ TEST(CascadeMotionScheduler, TintPairLockstepGate)
     EXPECT_EQ(ClassifyCascadePair(camera, nullptr, false), CascadeUpdateClass::Motion);
     EXPECT_EQ(ClassifyCascadePair(cached, nullptr, false), CascadeUpdateClass::Cached);
     EXPECT_EQ(ClassifyCascadePair(under, nullptr, false), CascadeUpdateClass::Correctness);
+}
+
+TEST(CascadeMotionScheduler, CameraMotionPairChoosesTheSource)
+{
+    // A Motion pair with a camera or fit cause on either family makes the
+    // source Camera; caster deformation alone and Correctness pairs do not.
+    const auto motion = CascadeUpdateClass::Motion;
+    const auto camera = CascadeCacheDirtyCause::CameraChanged;
+    const auto fit = CascadeCacheDirtyCause::CascadeFitChanged;
+    const auto deformed = CascadeCacheDirtyCause::CasterDeformed;
+
+    EXPECT_TRUE(IsCameraMotionPair(motion, camera, nullptr));
+    EXPECT_TRUE(IsCameraMotionPair(motion, camera, &deformed));
+    EXPECT_TRUE(IsCameraMotionPair(motion, deformed, &fit));
+    EXPECT_FALSE(IsCameraMotionPair(motion, deformed, &deformed));
+    EXPECT_FALSE(IsCameraMotionPair(motion, deformed, nullptr));
+    EXPECT_FALSE(IsCameraMotionPair(CascadeUpdateClass::Correctness, camera, &camera));
 }
 
 } // namespace

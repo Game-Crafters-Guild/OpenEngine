@@ -1,10 +1,10 @@
 #include "Platform/Display.h"
 #include "Platform/Window.h"
 #include "Logger/Logger.h"
+#include "Types/FlatMap.h"
+#include "Types/StringUtils.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
-#include <cctype>
-#include <chrono>
 #include <cstdlib>
 #include <limits>
 #include <string>
@@ -21,7 +21,6 @@
 #include <wrl/client.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
-#include <map>
 #elif defined(__APPLE__)
 #include <cstdint>
 // GE_MacOS_ScreenInfo + the GE_MacOS_* prototypes (implemented in Display_mac.mm).
@@ -95,9 +94,9 @@ void AddSessionDiagnostics(MonitorInfo& info)
 // active display path, keyed by the GDI device name (e.g. "\\.\DISPLAY1"). The
 // map is empty when the driver/OS does not report it (older Win10, query
 // failure) -> MonitorInfo.sdrWhiteLevelNits stays 0 (unknown).
-std::map<std::string, float> QuerySdrWhiteLevelsByDeviceName()
+FlatMap<std::string, float> QuerySdrWhiteLevelsByDeviceName()
 {
-    std::map<std::string, float> out;
+    FlatMap<std::string, float> out;
     UINT32 pathCount = 0;
     UINT32 modeCount = 0;
     if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS)
@@ -129,7 +128,7 @@ std::map<std::string, float> QuerySdrWhiteLevelsByDeviceName()
         char gdiName[CCHDEVICENAME] = {};
         WideCharToMultiByte(CP_ACP, 0, source.viewGdiDeviceName, -1, gdiName, sizeof(gdiName), nullptr, nullptr);
         // SDRWhiteLevel is encoded as (nits / 80) * 1000.
-        out[gdiName] = static_cast<float>(white.SDRWhiteLevel) / 1000.0f * 80.0f;
+        out.InsertOrAssign(gdiName, static_cast<float>(white.SDRWhiteLevel) / 1000.0f * 80.0f);
     }
     return out;
 }
@@ -146,23 +145,10 @@ struct DxgiLuminance
 // HDR (PQ) colour space report meaningful values; SDR outputs are skipped so
 // MonitorInfo luminance stays 0 (unknown) and consumers keep the device-default
 // 1000/400 fallbacks. The map is empty when DXGI is unavailable or no output is HDR.
-std::map<std::string, DxgiLuminance> QueryDxgiLuminanceByDeviceName()
+FlatMap<std::string, DxgiLuminance> QueryDxgiLuminanceByDeviceName()
 {
     using Microsoft::WRL::ComPtr;
-    // This runs inside the per-frame monitor poll (and once per OS window), but display luminance only
-    // changes on HDR-mode / hotplug events. Cache the result and refresh at a low rate rather than
-    // recreating a DXGI factory and re-enumerating every adapter/output every frame.
-    static std::map<std::string, DxgiLuminance> cached;
-    static std::chrono::steady_clock::time_point lastQuery{};
-    static bool haveCached = false;
-    constexpr auto kRefreshInterval = std::chrono::milliseconds(500);
-    const auto nowTime = std::chrono::steady_clock::now();
-    if (haveCached && (nowTime - lastQuery) < kRefreshInterval)
-        return cached;
-    lastQuery = nowTime;
-    haveCached = true;
-
-    std::map<std::string, DxgiLuminance> out;
+    FlatMap<std::string, DxgiLuminance> out;
     ComPtr<IDXGIFactory1> factory;
     if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
     {
@@ -198,12 +184,11 @@ std::map<std::string, DxgiLuminance> QueryDxgiLuminanceByDeviceName()
                 lum.maxLuminance = desc.MaxLuminance;
                 lum.minLuminance = desc.MinLuminance;
                 lum.maxFullFrameLuminance = desc.MaxFullFrameLuminance;
-                out[gdiName] = lum;
+                out.InsertOrAssign(gdiName, lum);
             }
         }
     }
-    cached = out;
-    return cached;
+    return out;
 }
 #endif
 
@@ -251,11 +236,10 @@ void ApplyForcedHdrAndDiagnostics(MonitorInfo& info)
 // reconfiguration, so a bad initial poll can leave it empty).
 std::vector<MonitorInfo> EnumerateMonitorsFromGlfw()
 {
-    // Logged once per empty-streak (not per call — this runs ~per frame) so the rare
-    // "GLFW reports no monitors" condition is directly attributable to glfwGetMonitors
-    // (not Window::Initialize()), and we can see when it recovers. Plain static bool:
-    // this path is main-thread-only (see EnumerateMonitors).
-    static bool loggedEmpty = false;
+    // Logged once per empty streak, so the rare "GLFW reports no monitors" condition is
+    // attributable to glfwGetMonitors (not Window::Initialize()) and its recovery shows.
+    // Plain static bool: this path is main-thread-only (see EnumerateMonitors).
+    static bool s_LoggedEmpty = false;
 
     std::vector<MonitorInfo> result;
     int count = 0;
@@ -263,9 +247,9 @@ std::vector<MonitorInfo> EnumerateMonitorsFromGlfw()
     GLFWmonitor* primary = glfwGetPrimaryMonitor();
     if (!monitors || count <= 0)
     {
-        if (!loggedEmpty)
+        if (!s_LoggedEmpty)
         {
-            loggedEmpty = true;
+            s_LoggedEmpty = true;
             Logger::Log::Warning(
                 "Platform: glfwGetMonitors() returned count={} (ptr {}); GLFW display enumeration empty — falling back",
                 count,
@@ -273,9 +257,9 @@ std::vector<MonitorInfo> EnumerateMonitorsFromGlfw()
         }
         return result;
     }
-    if (loggedEmpty)
+    if (s_LoggedEmpty)
     {
-        loggedEmpty = false;
+        s_LoggedEmpty = false;
         Logger::Log::Info("Platform: glfwGetMonitors() recovered ({} monitor(s))", count);
     }
 
@@ -315,15 +299,13 @@ std::vector<MonitorInfo> EnumerateMonitorsFromGlfw()
         // SDR-white map queried above.
         if (const char* adapterName = glfwGetWin32Adapter(monitor))
         {
-            const auto it = sdrWhiteByDevice.find(adapterName);
-            if (it != sdrWhiteByDevice.end())
-                info.sdrWhiteLevelNits = it->second;
-            const auto lumIt = dxgiLumByDevice.find(adapterName);
-            if (lumIt != dxgiLumByDevice.end())
+            if (const float* sdrWhite = sdrWhiteByDevice.Find(adapterName))
+                info.sdrWhiteLevelNits = *sdrWhite;
+            if (const DxgiLuminance* luminance = dxgiLumByDevice.Find(adapterName))
             {
-                info.maxLuminance = lumIt->second.maxLuminance;
-                info.minLuminance = lumIt->second.minLuminance;
-                info.maxFullFrameLuminance = lumIt->second.maxFullFrameLuminance;
+                info.maxLuminance = luminance->maxLuminance;
+                info.minLuminance = luminance->minLuminance;
+                info.maxFullFrameLuminance = luminance->maxFullFrameLuminance;
             }
         }
 #endif
@@ -384,12 +366,31 @@ std::vector<MonitorInfo> EnumerateMonitorsFromNSScreen()
 }
 #endif
 
-// Last non-empty monitor enumeration. A transient empty result (display sleep/wake,
-// fast swapchain recreation) would otherwise collapse active-monitor resolution to -1
-// and disable HDR; returning the last-good set rides over the gap. Plain file-static:
-// every caller runs on the main thread (the frame loop and GLFW window callbacks), so
-// no synchronization is needed.
-std::vector<MonitorInfo> g_LastGoodMonitors;
+// The kept monitor list. An empty read (display sleep) keeps the previous list and
+// leaves it stale, so the next query reads again. Main thread only (the frame loop,
+// the GLFW callbacks, the display-change listener), so there is no lock.
+std::vector<MonitorInfo> s_Monitors;
+bool s_MonitorsCurrent = false;
+
+const std::vector<MonitorInfo>& CurrentMonitors()
+{
+    if (s_MonitorsCurrent || !Window::Initialize())
+        return s_Monitors;
+
+    std::vector<MonitorInfo> result = EnumerateMonitorsFromGlfw();
+#if defined(__APPLE__)
+    // GLFW's monitor list can come back empty for the whole session; fall back to a
+    // direct NSScreen query so HDR can still resolve a target display.
+    if (result.empty())
+        result = EnumerateMonitorsFromNSScreen();
+#endif
+    if (!result.empty())
+    {
+        s_Monitors = std::move(result);
+        s_MonitorsCurrent = true;
+    }
+    return s_Monitors;
+}
 
 } // namespace
 
@@ -412,26 +413,12 @@ void GetPrimaryMonitorWorkArea(int& outX, int& outY, int& outWidth, int& outHeig
 
 std::vector<MonitorInfo> EnumerateMonitors()
 {
-    std::vector<MonitorInfo> result;
-    if (!Window::Initialize())
-        return result;
+    return CurrentMonitors();
+}
 
-    result = EnumerateMonitorsFromGlfw();
-#if defined(__APPLE__)
-    // GLFW's monitor list can come back empty for the whole session; fall back to a
-    // direct NSScreen query so HDR can still resolve a target display.
-    if (result.empty())
-        result = EnumerateMonitorsFromNSScreen();
-#endif
-
-    if (!result.empty())
-    {
-        g_LastGoodMonitors = result;
-        return result;
-    }
-    // Nothing enumerated this call — hand back the last known-good set rather than
-    // collapsing every caller (window->monitor resolution, HDR gating) to "no displays".
-    return g_LastGoodMonitors;
+void InvalidateMonitors()
+{
+    s_MonitorsCurrent = false;
 }
 
 bool GetActiveDisplayLiveEdr(GLFWwindow* window, float& outCurrentEdr, float& outPotentialEdr)
@@ -457,7 +444,7 @@ int GetActiveMonitorIndexForWindow(GLFWwindow* window)
     int wx = 0, wy = 0, ww = 0, wh = 0;
     glfwGetWindowPos(window, &wx, &wy);
     glfwGetWindowSize(window, &ww, &wh);
-    const auto monitors = EnumerateMonitors();
+    const std::vector<MonitorInfo>& monitors = CurrentMonitors();
     int bestIndex = -1;
     long long bestArea = -1;
     long long bestDistance = std::numeric_limits<long long>::max();
@@ -478,8 +465,7 @@ int GetActiveMonitorIndexForWindow(GLFWwindow* window)
 MonitorInfo GetMonitorInfoForWindow(GLFWwindow* window)
 {
     const int monitorIndex = GetActiveMonitorIndexForWindow(window);
-    auto monitors = EnumerateMonitors();
-    for (const MonitorInfo& monitor : monitors)
+    for (const MonitorInfo& monitor : CurrentMonitors())
     {
         if (monitor.index == monitorIndex)
             return monitor;
@@ -489,7 +475,7 @@ MonitorInfo GetMonitorInfoForWindow(GLFWwindow* window)
 
 MonitorInfo GetPrimaryMonitorInfo()
 {
-    auto monitors = EnumerateMonitors();
+    const std::vector<MonitorInfo>& monitors = CurrentMonitors();
     for (const MonitorInfo& monitor : monitors)
     {
         if (monitor.primary)
@@ -515,9 +501,7 @@ bool IsSteamDeckSession()
 
 bool LooksLikeLGOledC7(const std::string& displayName)
 {
-    std::string name = displayName;
-    std::transform(name.begin(), name.end(), name.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string name = ToLowerAscii(displayName);
     return name.find("lg oled") != std::string::npos ||
            name == "lg tv" ||
            name.find("lg electronics tv") != std::string::npos ||

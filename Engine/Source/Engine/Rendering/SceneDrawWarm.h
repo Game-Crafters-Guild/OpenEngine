@@ -5,9 +5,11 @@
 #include "Engine/Rendering/MeshGPURegistry.h"
 #include "Rendering/Core/Pipeline/PipelineIdentifiers.h"
 #include "Rendering/Materials/Shader/ShaderVariantKey.h"
+#include "Types/FlatSet.h"
+#include "Types/Types.h"
 
+#include <chrono>
 #include <cstdint>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -48,7 +50,10 @@ std::vector<SceneColorDrawKey> EnumerateSceneColorDrawKeys(const Material& mater
 /// known once it has declared a world pass, so a draw noted before the first frame is requested at
 /// the next frame begin. The camera prepass and the shadow passes are not warmed here: their opaque
 /// draws share one depth pipeline per layout, and a material that needs its own resolves it at its
-/// first draw.
+/// first draw. A warm episode runs from the first draw noted while the warm is idle until every
+/// requested draw's material has no pipeline build in flight. The end of an episode that waited at
+/// least one frame logs one line ("Scene draw warm: ... ready"), the time from that frame to the first
+/// frame that draws every noted mesh in colour.
 class SceneDrawWarm
 {
 public:
@@ -90,8 +95,18 @@ private:
         size_t operator()(const std::pair<uint64_t, GUID>& draw) const noexcept;
     };
 
+    // Forgets the materials whose pipelines are built, and ends the episode once nothing is noted or
+    // awaited, logging it when it waited at least one frame.
+    void SettleEpisode(RenderServices& renderServices);
+
     std::vector<NotedDraw> m_Pending;
+    // Materials of requested draws whose pipelines still build (PipelineVariantCache::HasPipelineBuildsInFlight).
+    FlatSet<GUID> m_Awaiting;
+    std::chrono::steady_clock::time_point m_EpisodeStart{};
+    uint32_t m_EpisodeFrames = 0;
+    uint32_t m_EpisodeDraws = 0;
+    bool m_EpisodeOpen = false;
     // The pairs in m_Pending, so a pair noted again while it waits is not queued twice.
-    std::unordered_set<std::pair<uint64_t, GUID>, NotedDrawHash> m_Noted;
+    FastHashSet<std::pair<uint64_t, GUID>, NotedDrawHash> m_Noted;
 };
 } // namespace GameEngine::Engine::Renderer

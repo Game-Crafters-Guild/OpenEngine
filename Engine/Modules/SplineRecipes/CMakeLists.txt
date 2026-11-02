@@ -18,6 +18,7 @@ add_library(SplineRecipes OBJECT
     Source/Paving/PavingPlan.cpp
     Source/Paving/PavingSources.cpp
     Source/Paving/PavingRoadTrim.cpp
+    Source/Paving/PavingRoadUV.cpp
     Source/Paving/SplinePavingController.cpp
     Source/Paving/SplinePavingSanitize.cpp
     Source/PlacementGroundGap.cpp
@@ -193,6 +194,8 @@ if(BUILD_TESTING)
         # A road's strip around the paved regions on it: the skipped arc length, the Open-edge cap,
         # a closed road's seam.
         Tests/Paving/PavingRoadTrimTests.cpp
+        # A ground point read against a road's strip mapping inside a paved region.
+        Tests/Paving/PavingRoadUVTests.cpp
         # A road's verge where the road leaves a paving: the curb and the verge as one sweep on the
         # Open edge, at a Flared and a Straight mouth, and the verge's vertex cost.
         Tests/RoadVergeTests.cpp

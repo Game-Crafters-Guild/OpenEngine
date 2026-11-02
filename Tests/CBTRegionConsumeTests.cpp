@@ -18,7 +18,7 @@
 #include "CBTTerrainECS/Systems/CBTUpdateSystem.h"
 #include "CBTTerrainECS/Systems/RegisterCBTSystems.h"
 #include "Components/Terrain/Terrain.h"
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/SystemScheduling.h"
 #include "ECS/World.h"
@@ -796,8 +796,9 @@ TEST(CBTRegionConsume, APagedTerrainEditReachesTheClassifyAsTheRectItsPagesPubli
     pages.DirtyRects().clear();
 
     const PageStreaming::PageSampleRect edit{100, 100, 110, 110};
-    request.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
-        uint8{0}, PageStreaming::BuildPageStoreLevels(257, 257), edit, std::vector<float32>(edit.Width() * edit.Height(), 5.0f));
+    auto layer = std::make_shared<PageStreaming::HeightPageLayer>(1u, PageStreaming::BuildPageStoreLevels(257, 257));
+    layer->WriteLevel0(0, edit, std::vector<float32>(edit.Width() * edit.Height(), 5.0f));
+    request.Overlay = layer;
     request.OverlayVersion = 1;
     request.OverlayChangedSince = 0;
     request.OverlayChanged = edit;

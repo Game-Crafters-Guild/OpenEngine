@@ -17,12 +17,14 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1643,6 +1645,37 @@ TEST(TextureCookParallel, SpreadCookMatchesOneThreadCook)
         << "no helper took a gate slot: the encode never left the calling thread";
 }
 
+// A cancel on the cooking thread's third poll. Each helper waits in the gate's release
+// callback after its band until the cancel is sent, so bands are left at the third
+// poll however the threads are scheduled.
+struct CancelOnThirdPoll
+{
+    static constexpr int kPollsBeforeCancel = 3;
+    int Polls = 0; // only the cooking thread polls
+    std::mutex Mutex;
+    std::condition_variable Sent;
+    bool Cancelled = false;
+
+    bool Poll()
+    {
+        if (++Polls < kPollsBeforeCancel)
+            return false;
+        {
+            const std::lock_guard<std::mutex> lock(Mutex);
+            Cancelled = true;
+        }
+        Sent.notify_all();
+        return true;
+    }
+
+    // The bound makes a cancel that is never sent a failure, not a hang.
+    void HoldHelper()
+    {
+        std::unique_lock<std::mutex> lock(Mutex);
+        Sent.wait_for(lock, std::chrono::seconds(10), [this] { return Cancelled; });
+    }
+};
+
 // A cancel seen by the cooking thread mid-level ends the spread encode with the
 // cancel error and no bytes, after the bands already started have finished.
 TEST(TextureCookParallel, CancelStopsSpreadEncode)
@@ -1651,18 +1684,18 @@ TEST(TextureCookParallel, CancelStopsSpreadEncode)
         GTEST_SKIP() << "no BC encoder compiled in";
 
     const TextureCookMipLevel src = MakeLevel(256, 256, /*isFloat=*/false);
-    constexpr int kPollsBeforeCancel = 3;
-    int polls = 0;
-    const auto cancelOnThirdPoll = [&polls] { return ++polls >= kPollsBeforeCancel; };
-
-    SpreadPool spread;
+    CancelOnThirdPoll cancel;
+    JobSystem::WorkStealingThreadPool pool{SpreadPool::kPoolWorkers};
+    TextureCookWorkers workers{pool, std::make_shared<AssetDecodeGate>(SpreadPool::kPoolWorkers, 0,
+                                                                       [&cancel] { cancel.HoldHelper(); })};
     std::vector<uint8> payload;
     std::string error;
     EXPECT_FALSE(CompressTextureCookLevel(src, /*isFloat=*/false, TextureCookOutput::BC7, /*bandBlocks=*/1, payload,
-                                          error, cancelOnThirdPoll, &spread.Workers));
+                                          error, [&cancel] { return cancel.Poll(); }, &workers));
     EXPECT_EQ(error, std::string(kTextureCookCancelledError));
     EXPECT_TRUE(payload.empty());
-    EXPECT_EQ(polls, kPollsBeforeCancel) << "the encode must stop polling once it has been cancelled";
+    EXPECT_EQ(cancel.Polls, CancelOnThirdPoll::kPollsBeforeCancel)
+        << "the encode must stop polling once it has been cancelled";
 }
 
 #endif // GE_HAVE_KTX

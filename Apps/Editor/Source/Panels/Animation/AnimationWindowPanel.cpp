@@ -60,6 +60,8 @@
 #include "UI/ToolbarDragDrop.h"
 #include "UI/UIManager.h"
 #include "UI/InspectorSection.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -657,8 +659,6 @@ struct SourceHierarchyData
     std::unordered_map<int, std::string> ChannelParentKeys;
 };
 
-std::string NormalizeExtension(std::string extension);
-
 bool BuildHierarchyFromGltf(const std::filesystem::path& path,
                             const AnimationClip& clip,
                             SourceHierarchyData& outData)
@@ -770,20 +770,12 @@ bool BuildSourceHierarchy(const std::filesystem::path& path,
     if (path.empty())
         return false;
 
-    const std::string extension = NormalizeExtension(path.extension().string());
+    const std::string extension = LowerCaseExtension(path);
     if (extension == ".gltf" || extension == ".glb")
         return BuildHierarchyFromGltf(path, clip, outData);
     if (extension == ".fbx")
         return BuildHierarchyFromFbx(path, clip, outData);
     return false;
-}
-
-std::string NormalizeExtension(std::string extension)
-{
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](unsigned char c)
-                   { return static_cast<char>(std::tolower(c)); });
-    return extension;
 }
 
 // Standard multi-select model — supports Shift+click range, Cmd/Ctrl+click toggle,
@@ -9487,7 +9479,7 @@ bool AnimationWindowPanel::OpenAnimationAssetPath(const std::filesystem::path& p
     if (path.empty())
         return false;
 
-    const std::string extension = NormalizeExtension(path.extension().string());
+    const std::string extension = LowerCaseExtension(path);
     bool opened = false;
     if (extension == ".timeline")
     {
@@ -9606,7 +9598,7 @@ void AnimationWindowPanel::RenameCurrentAnimationAsset()
             return;
 
         const std::string extension = source.extension().string();
-        if (NormalizeExtension(typed.extension().string()) == NormalizeExtension(extension))
+        if (LowerCaseExtension(typed) == LowerCaseExtension(source))
             name = typed.stem().string();
 
         std::filesystem::path destination = source.parent_path() / (name + extension);
@@ -9944,7 +9936,7 @@ bool AnimationWindowPanel::DoOpenAnimation(const std::filesystem::path& path, ui
     if (!clip->Load())
         return false;
 
-    const std::string clipExtension = NormalizeExtension(clipPath.extension().string());
+    const std::string clipExtension = LowerCaseExtension(clipPath);
     if (clipExtension != ".anim" && clipExtension != ".animation")
     {
         clip->SetSourceInfo(clipPath, selectedAnimationIndex);
@@ -10570,17 +10562,10 @@ void AnimationWindowPanel::RefreshPropertyTree()
 
     if (!m_PropertiesSearchQuery.empty() && !nodes.empty())
     {
-        std::string needle;
-        needle.reserve(m_PropertiesSearchQuery.size());
-        for (char c : m_PropertiesSearchQuery) needle.push_back(static_cast<char>(std::tolower(c)));
+        const std::string needle = ToLowerAscii(m_PropertiesSearchQuery);
 
         auto labelMatches = [&](const std::string& label) -> bool
-        {
-            std::string hay;
-            hay.reserve(label.size());
-            for (char c : label) hay.push_back(static_cast<char>(std::tolower(c)));
-            return hay.find(needle) != std::string::npos;
-        };
+        { return ToLowerAscii(label).find(needle) != std::string::npos; };
 
         std::unordered_map<TreeId, size_t> indexById;
         for (size_t i = 0; i < nodes.size(); ++i) indexById[nodes[i].Id] = i;
@@ -12214,7 +12199,7 @@ std::filesystem::path AnimationWindowPanel::GetSuggestedEditablePath() const
 {
     if (!m_CurrentClipPath.empty())
     {
-        if (NormalizeExtension(m_CurrentClipPath.extension().string()) == ".anim")
+        if (LowerCaseExtension(m_CurrentClipPath) == ".anim")
             return m_CurrentClipPath;
 
         const uint32 animationIndex = m_CurrentClipAsset ? m_CurrentClipAsset->GetSelectedAnimationIndex() : 0u;

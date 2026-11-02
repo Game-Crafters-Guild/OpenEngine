@@ -1917,12 +1917,27 @@ uint32 TerrainService::SphereSculptEscalatedPages() const
     return m_SphereSculpt.EscalatedPageCount();
 }
 
-void TerrainService::SetPlanetPageOverlay(uint32 planet,
-                                          std::shared_ptr<const PageStreaming::HeightPageOverlay> overlay)
+void TerrainService::WritePlanetPageLayer(uint32 planet, std::span<const PageStreaming::PageStoreLevel> levels,
+                                          uint8 face, const PageStreaming::PageSampleRect& rect,
+                                          std::span<const float32> deltas)
 {
-    if (!overlay && !m_PlanetPageOverlays.Contains(planet))
+    PlanetPageOverlay& overlay = m_PlanetPageOverlays.GetOrInsert(planet);
+    const bool derived = overlay.Layer && overlay.Layer->FitsLevels(levels);
+    if (!derived)
+        overlay.Layer = std::make_shared<PageStreaming::HeightPageLayer>(PageStreaming::kPageStoreMaxFaces, levels);
+    overlay.Layer->WriteLevel0(face, rect, deltas);
+    overlay.ChangedSince = derived ? overlay.Version : 0;
+    overlay.Version = ++m_PlanetPageOverlayVersion;
+    overlay.ChangedFace = face;
+    overlay.Changed = rect;
+}
+
+void TerrainService::ClearPlanetPageLayer(uint32 planet)
+{
+    PlanetPageOverlay* overlay = m_PlanetPageOverlays.Find(planet);
+    if (!overlay || !overlay->Layer)
         return;
-    m_PlanetPageOverlays.InsertOrAssign(planet, PlanetPageOverlay{std::move(overlay), ++m_PlanetPageOverlayVersion});
+    *overlay = PlanetPageOverlay{nullptr, ++m_PlanetPageOverlayVersion};
 }
 
 const TerrainService::PlanetPageOverlay* TerrainService::FindPlanetPageOverlay(uint32 planet) const

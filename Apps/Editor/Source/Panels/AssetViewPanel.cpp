@@ -23,7 +23,7 @@
 #include "Input/InputSystem.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/CommandList.h"
-#include "Types/StringUtils.h"
+#include "Types/PathUtils.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -130,7 +130,7 @@ bool VideoPreviewPathsEqual(const std::filesystem::path& a, const std::filesyste
 
 bool IsHdrImageExtension(const std::filesystem::path& p)
 {
-    const auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    const auto ext = LowerCaseExtension(p);
     return ext == ".hdr";
 }
 
@@ -831,7 +831,7 @@ void AssetViewPanel::EnsureUi()
 
 /*static*/ bool AssetViewPanel::IsVideoPath(const std::filesystem::path& p)
 {
-    auto ext = ToLowerAscii(p.has_extension() ? p.extension().string() : std::string());
+    auto ext = LowerCaseExtension(p);
     return ext == ".mp4" || ext == ".mov" || ext == ".avi" || ext == ".mkv" || ext == ".m4v";
 }
 

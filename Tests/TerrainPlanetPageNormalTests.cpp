@@ -8,7 +8,7 @@
 #include "CBTTerrain/CBTPlanetShading.h"
 #include "Mathematics/CubeFaces.h"
 #include "PageStreaming/GeneratedHeightPageProvider.h"
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "PageStreaming/PageTableEntry.h"
 #include "TerrainECS/PageTable.h"
@@ -50,7 +50,7 @@ struct PlanetPageField
     GameEngine::TerrainECS::PageTable Table;
     std::vector<float> Texels;
     std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> Slots; // (face, level, x, z) -> slot
-    const GameEngine::PageStreaming::HeightPageOverlay* Overlay = nullptr; // added to each page as it is filled
+    const GameEngine::PageStreaming::HeightPageLayer* Overlay = nullptr; // added to each page as it is filled
 
     PlanetPageField()
         : Provider(MakeLattice())
@@ -425,8 +425,11 @@ TEST(PlanetPageNormal, TheFragmentNormalFollowsAnOverlayBumpOnItsFace)
     constexpr uint32_t kFace = 2u;
     constexpr uint32_t kTexel = 4u * kOwned + kOwned / 2u;
     const GameEngine::PageStreaming::PageSampleRect bump{kTexel + 1u, kTexel, kTexel + 1u, kTexel};
-    const GameEngine::PageStreaming::HeightPageOverlay overlay(
-        kFace, GameEngine::PageStreaming::BuildPageStoreLevels(kFaceSamples, kFaceSamples), bump, {5.0f});
+    GameEngine::PageStreaming::HeightPageLayer overlay(
+        GameEngine::PageStreaming::kPageStoreMaxFaces,
+        GameEngine::PageStreaming::BuildPageStoreLevels(kFaceSamples, kFaceSamples));
+    const float raise = 5.0f;
+    overlay.WriteLevel0(kFace, bump, std::span(&raise, 1));
     PlanetPageField formula;
     PlanetPageField overlaid;
     overlaid.Overlay = &overlay;

@@ -14,6 +14,7 @@ namespace GameEngine { namespace Rendering {
 // Forward declarations
 struct TypeDesc;
 struct Member;
+enum class DescriptorType;
 
 // Type system
 enum class TypeKind : uint32_t { Scalar = 0, Vector = 1, Matrix = 2, Struct = 3 };
@@ -226,5 +227,28 @@ struct ShaderMeta {
     // declared surface (compute, post-process, packaged shaders).
     std::vector<ShaderProperty> DeclaredProperties;
 };
+
+// The index and the reflected type of the set 0 binding that has this name. False when set 0
+// does not declare it.
+inline bool TryGetSet0BindingByName(const ShaderMeta& meta, const std::string& name, uint32_t& outBinding,
+                                    DescriptorType& outType)
+{
+    for (const DescriptorSetMeta& set : meta.Sets)
+    {
+        if (set.Set != 0)
+            continue;
+        for (const DescriptorBindingMeta& binding : set.Bindings)
+        {
+            if (binding.Name == name)
+            {
+                outBinding = binding.Binding;
+                outType = static_cast<DescriptorType>(binding.Type);
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
 
 }} // namespace GameEngine::Rendering

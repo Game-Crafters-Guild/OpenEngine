@@ -78,11 +78,11 @@ class NameSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "Name"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -96,11 +96,11 @@ class TransformSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "Transform"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -109,7 +109,7 @@ class TransformSchema final : public ISceneComponentSchema
     // one at a time re-decomposes the matrix per line, and each decomposition moves the values.
     bool ApplyProperties(ECS::World& world,
                          ECS::EntityHandle entity,
-                         const SceneLoadContext& ctx,
+                         const SceneReadContext& ctx,
                          std::span<const std::pair<std::string_view, std::string_view>> props,
                          std::string* outError,
                          std::size_t* outFailedIndex) const override;
@@ -123,7 +123,7 @@ class HierarchyOrderSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "HierarchyOrder"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* o = world.GetComponent<Components::HierarchyOrder>(entity);
         if (!o)
@@ -133,7 +133,7 @@ class HierarchyOrderSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -181,11 +181,11 @@ class MeshRendererSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "MeshRenderer"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -203,11 +203,11 @@ class MorphTargetWeightsSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "MorphTargetWeights"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -221,11 +221,11 @@ class PhysicsWorldSettingsSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "PhysicsWorldSettingsComponent"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -239,11 +239,11 @@ class PhysicsBodySchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "PhysicsBody"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -257,11 +257,11 @@ class CharacterControllerSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "CharacterController"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -275,11 +275,11 @@ class PhysicsColliderSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "PhysicsCollider"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -293,11 +293,11 @@ class PhysicsColliderOwnerSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "PhysicsColliderOwner"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -311,11 +311,11 @@ class BoxColliderShapeSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "BoxColliderShape"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -329,11 +329,11 @@ class SphereColliderShapeSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "SphereColliderShape"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -347,11 +347,11 @@ class CapsuleColliderShapeSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "CapsuleColliderShape"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -365,11 +365,11 @@ class PlaneColliderShapeSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "PlaneColliderShape"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override;
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override;
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override;
@@ -378,7 +378,7 @@ class PlaneColliderShapeSchema final : public ISceneComponentSchema
     bool Remove(ECS::World& world, ECS::EntityHandle entity) const override;
 };
 
-void NameSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void NameSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* n = world.GetComponent<Components::Name>(entity);
     // Skip empty values: an empty Name is equivalent to no Name as far as the
@@ -393,7 +393,7 @@ void NameSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[
 
 bool NameSchema::ApplyProperty(ECS::World& world,
                                ECS::EntityHandle entity,
-                               const SceneLoadContext& ctx,
+                               const SceneReadContext& ctx,
                                std::string_view property,
                                std::string_view value,
                                std::string* outError) const
@@ -437,7 +437,7 @@ bool NameSchema::Remove(ECS::World& world, ECS::EntityHandle entity) const
     return true;
 }
 
-void TransformSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void TransformSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* t = world.GetComponent<Components::Transform>(entity);
     if (!t)
@@ -475,7 +475,7 @@ static TransformFields ReadTransformFields(const ECS::World& world, ECS::EntityH
     return fields;
 }
 
-static bool ParseTransformField(const SceneLoadContext& ctx, TransformFields& fields, std::string_view property,
+static bool ParseTransformField(const SceneReadContext& ctx, TransformFields& fields, std::string_view property,
                                 std::string_view value, std::string* outError)
 {
     if (property == "position")
@@ -516,7 +516,7 @@ static void WriteTransformFields(ECS::World& world, ECS::EntityHandle entity, co
 
 bool TransformSchema::ApplyProperty(ECS::World& world,
                                     ECS::EntityHandle entity,
-                                    const SceneLoadContext& ctx,
+                                    const SceneReadContext& ctx,
                                     std::string_view property,
                                     std::string_view value,
                                     std::string* outError) const
@@ -530,7 +530,7 @@ bool TransformSchema::ApplyProperty(ECS::World& world,
 
 bool TransformSchema::ApplyProperties(ECS::World& world,
                                       ECS::EntityHandle entity,
-                                      const SceneLoadContext& ctx,
+                                      const SceneReadContext& ctx,
                                       std::span<const std::pair<std::string_view, std::string_view>> props,
                                       std::string* outError,
                                       std::size_t* outFailedIndex) const
@@ -572,7 +572,7 @@ bool TransformSchema::Remove(ECS::World& world, ECS::EntityHandle entity) const
     return world.RemoveComponentByTypeIdImmediate(entity, ECS::GetComponentTypeId<Components::Transform>());
 }
 
-void MeshRendererSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void MeshRendererSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     using namespace Engine::Renderer;
     const auto* mr = world.GetComponent<Components::MeshRenderer>(entity);
@@ -857,7 +857,7 @@ static bool ParseShadowCasting(std::string_view value, Components::ShadowCasting
 
 bool MeshRendererSchema::ApplyProperty(ECS::World& world,
                                        ECS::EntityHandle entity,
-                                       const SceneLoadContext& ctx,
+                                       const SceneReadContext& ctx,
                                        std::string_view property,
                                        std::string_view value,
                                        std::string* outError) const
@@ -1075,7 +1075,7 @@ bool MeshRendererSchema::Remove(ECS::World& world, ECS::EntityHandle entity) con
     return true;
 }
 
-void MorphTargetWeightsSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void MorphTargetWeightsSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* morph = world.GetComponent<Components::MorphTargetWeights>(entity);
     if (!morph)
@@ -1092,7 +1092,7 @@ void MorphTargetWeightsSchema::Serialize(const ECS::World& world, ECS::EntityHan
 
 bool MorphTargetWeightsSchema::ApplyProperty(ECS::World& world,
                                              ECS::EntityHandle entity,
-                                             const SceneLoadContext& ctx,
+                                             const SceneReadContext& ctx,
                                              std::string_view property,
                                              std::string_view value,
                                              std::string* outError) const
@@ -1150,7 +1150,7 @@ bool MorphTargetWeightsSchema::Remove(ECS::World& world, ECS::EntityHandle entit
     return true;
 }
 
-void PhysicsWorldSettingsSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void PhysicsWorldSettingsSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* c = world.GetComponent<Components::PhysicsWorldSettingsComponent>(entity);
     if (!c)
@@ -1170,7 +1170,7 @@ void PhysicsWorldSettingsSchema::Serialize(const ECS::World& world, ECS::EntityH
 
 bool PhysicsWorldSettingsSchema::ApplyProperty(ECS::World& world,
                                                ECS::EntityHandle entity,
-                                               const SceneLoadContext& ctx,
+                                               const SceneReadContext& ctx,
                                                std::string_view property,
                                                std::string_view value,
                                                std::string* outError) const
@@ -1271,7 +1271,7 @@ bool PhysicsWorldSettingsSchema::Remove(ECS::World& world, ECS::EntityHandle ent
     return true;
 }
 
-void PhysicsBodySchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void PhysicsBodySchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* b = world.GetComponent<Components::PhysicsBody>(entity);
     if (!b)
@@ -1295,7 +1295,7 @@ void PhysicsBodySchema::Serialize(const ECS::World& world, ECS::EntityHandle ent
 
 bool PhysicsBodySchema::ApplyProperty(ECS::World& world,
                                       ECS::EntityHandle entity,
-                                      const SceneLoadContext& ctx,
+                                      const SceneReadContext& ctx,
                                       std::string_view property,
                                       std::string_view value,
                                       std::string* outError) const
@@ -1438,7 +1438,7 @@ bool PhysicsBodySchema::Remove(ECS::World& world, ECS::EntityHandle entity) cons
     return true;
 }
 
-void CharacterControllerSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void CharacterControllerSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* c = world.GetComponent<Components::CharacterController>(entity);
     if (!c)
@@ -1456,7 +1456,7 @@ void CharacterControllerSchema::Serialize(const ECS::World& world, ECS::EntityHa
 
 bool CharacterControllerSchema::ApplyProperty(ECS::World& world,
                                               ECS::EntityHandle entity,
-                                              const SceneLoadContext& ctx,
+                                              const SceneReadContext& ctx,
                                               std::string_view property,
                                               std::string_view value,
                                               std::string* outError) const
@@ -1552,7 +1552,7 @@ bool CharacterControllerSchema::Remove(ECS::World& world, ECS::EntityHandle enti
     return true;
 }
 
-void PhysicsColliderSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void PhysicsColliderSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* c = world.GetComponent<Components::PhysicsCollider>(entity);
     if (!c)
@@ -1571,7 +1571,7 @@ void PhysicsColliderSchema::Serialize(const ECS::World& world, ECS::EntityHandle
 
 bool PhysicsColliderSchema::ApplyProperty(ECS::World& world,
                                           ECS::EntityHandle entity,
-                                          const SceneLoadContext& ctx,
+                                          const SceneReadContext& ctx,
                                           std::string_view property,
                                           std::string_view value,
                                           std::string* outError) const
@@ -1662,7 +1662,7 @@ bool PhysicsColliderSchema::Remove(ECS::World& world, ECS::EntityHandle entity) 
     return world.RemoveComponentByTypeIdImmediate(entity, ECS::GetComponentTypeId<Components::PhysicsCollider>());
 }
 
-void PhysicsColliderOwnerSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void PhysicsColliderOwnerSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* c = world.GetComponent<Components::PhysicsColliderOwner>(entity);
     if (!c)
@@ -1674,7 +1674,7 @@ void PhysicsColliderOwnerSchema::Serialize(const ECS::World& world, ECS::EntityH
 
 bool PhysicsColliderOwnerSchema::ApplyProperty([[maybe_unused]] ECS::World& world,
                                                [[maybe_unused]] ECS::EntityHandle entity,
-                                               const SceneLoadContext& ctx,
+                                               const SceneReadContext& ctx,
                                                std::string_view property,
                                                std::string_view /*value*/,
                                                std::string* outError) const
@@ -1700,7 +1700,7 @@ bool PhysicsColliderOwnerSchema::Remove(ECS::World& world, ECS::EntityHandle ent
     return true;
 }
 
-void BoxColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void BoxColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* c = world.GetComponent<Components::BoxColliderShape>(entity);
     if (!c)
@@ -1710,7 +1710,7 @@ void BoxColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandl
 
 bool BoxColliderShapeSchema::ApplyProperty(ECS::World& world,
                                            ECS::EntityHandle entity,
-                                           const SceneLoadContext& ctx,
+                                           const SceneReadContext& ctx,
                                            std::string_view property,
                                            std::string_view value,
                                            std::string* outError) const
@@ -1772,7 +1772,7 @@ bool BoxColliderShapeSchema::Remove(ECS::World& world, ECS::EntityHandle entity)
     return true;
 }
 
-void SphereColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void SphereColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* c = world.GetComponent<Components::SphereColliderShape>(entity);
     if (!c)
@@ -1782,7 +1782,7 @@ void SphereColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHa
 
 bool SphereColliderShapeSchema::ApplyProperty(ECS::World& world,
                                               ECS::EntityHandle entity,
-                                              const SceneLoadContext& ctx,
+                                              const SceneReadContext& ctx,
                                               std::string_view property,
                                               std::string_view value,
                                               std::string* outError) const
@@ -1821,7 +1821,7 @@ bool SphereColliderShapeSchema::Remove(ECS::World& world, ECS::EntityHandle enti
     return true;
 }
 
-void CapsuleColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void CapsuleColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* c = world.GetComponent<Components::CapsuleColliderShape>(entity);
     if (!c)
@@ -1833,7 +1833,7 @@ void CapsuleColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityH
 
 bool CapsuleColliderShapeSchema::ApplyProperty(ECS::World& world,
                                                ECS::EntityHandle entity,
-                                               const SceneLoadContext& ctx,
+                                               const SceneReadContext& ctx,
                                                std::string_view property,
                                                std::string_view value,
                                                std::string* outError) const
@@ -1884,7 +1884,7 @@ bool CapsuleColliderShapeSchema::Remove(ECS::World& world, ECS::EntityHandle ent
     return true;
 }
 
-void PlaneColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+void PlaneColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     const auto* c = world.GetComponent<Components::PlaneColliderShape>(entity);
     if (!c)
@@ -1896,7 +1896,7 @@ void PlaneColliderShapeSchema::Serialize(const ECS::World& world, ECS::EntityHan
 
 bool PlaneColliderShapeSchema::ApplyProperty(ECS::World& world,
                                              ECS::EntityHandle entity,
-                                             const SceneLoadContext& ctx,
+                                             const SceneReadContext& ctx,
                                              std::string_view property,
                                              std::string_view value,
                                              std::string* outError) const
@@ -1959,7 +1959,7 @@ class DisabledSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "Disabled"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         if (!world.GetComponent<ECS::Disabled>(entity))
             return;
@@ -1973,7 +1973,7 @@ class DisabledSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -2478,7 +2478,7 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "SkyEnvironment"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::SkyEnvironment>(entity);
         if (!c)
@@ -2620,7 +2620,7 @@ class SkyEnvironmentSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -3675,7 +3675,7 @@ class AmbientLightSchema final : public ISceneComponentSchema
 
     void Serialize(const ECS::World& world,
                    ECS::EntityHandle entity,
-                   const SceneSaveContext& /*ctx*/,
+                   const SceneWriteContext& /*ctx*/,
                    std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::AmbientLight>(entity);
@@ -3692,7 +3692,7 @@ class AmbientLightSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -3808,7 +3808,7 @@ class SkyboxSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "Skybox"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::Skybox>(entity);
         if (!c)
@@ -3847,7 +3847,7 @@ class SkyboxSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -4040,7 +4040,7 @@ class CameraSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "Camera"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::Camera>(entity);
         if (!c)
@@ -4091,7 +4091,7 @@ class CameraSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -4389,7 +4389,7 @@ class LightSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "Light"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::Light>(entity);
         if (!c)
@@ -4424,7 +4424,7 @@ class LightSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("Light.colorTemperature = ") + FormatFloat(c->ColorTemperature));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -4674,7 +4674,7 @@ static bool CompleteAnimatorClipSource(Components::Animator& c, std::string* err
 
 // Parse into staged bytes so grouped source assignments commit together.
 static bool ParseAnimatorProperty(Components::Animator& c,
-                                  const SceneLoadContext& ctx,
+                                  const SceneReadContext& ctx,
                                   std::string_view component,
                                   std::string_view property,
                                   std::string_view value,
@@ -4962,7 +4962,7 @@ static bool ParseAnimatorProperty(Components::Animator& c,
 }
 
 static bool ApplyAnimatorProperty(ECS::World& world, ECS::EntityHandle entity,
-                                  const SceneLoadContext& ctx, std::string_view component,
+                                  const SceneReadContext& ctx, std::string_view component,
                                   std::string_view property, std::string_view value, std::string* outError)
 {
     Components::Animator c{};
@@ -4987,7 +4987,7 @@ class AnimatorSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "Animator"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::Animator>(entity);
         if (!c)
@@ -5082,7 +5082,7 @@ class AnimatorSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -5091,7 +5091,7 @@ class AnimatorSchema final : public ISceneComponentSchema
     }
 
     bool ApplyProperties(ECS::World& world, ECS::EntityHandle entity,
-                         const SceneLoadContext& ctx,
+                         const SceneReadContext& ctx,
                          std::span<const std::pair<std::string_view, std::string_view>> props,
                          std::string* outError, std::size_t* outFailedIndex) const override
     {
@@ -5171,7 +5171,7 @@ class GameLogicGraphRefSchema final : public ISceneComponentSchema
 
     void Serialize(const ECS::World& world,
                    ECS::EntityHandle entity,
-                   const SceneSaveContext& ctx,
+                   const SceneWriteContext& ctx,
                    std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::GameLogicGraphRef>(entity);
@@ -5190,7 +5190,7 @@ class GameLogicGraphRefSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -5272,9 +5272,9 @@ class ModelAnimationPlaybackLegacySchema final : public ISceneComponentSchema
 {
   public:
     std::string_view GetComponentName() const override { return "ModelAnimationPlayback"; }
-    void Serialize(const ECS::World&, ECS::EntityHandle, const SceneSaveContext&, std::vector<std::string>&) const override {}
+    void Serialize(const ECS::World&, ECS::EntityHandle, const SceneWriteContext&, std::vector<std::string>&) const override {}
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -5463,7 +5463,7 @@ class ValueCurveSchema final : public ISceneComponentSchema
 
     std::string_view GetComponentName() const override { return "ValueCurve"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::ValueCurve>(entity);
         if (!c)
@@ -5496,7 +5496,7 @@ class ValueCurveSchema final : public ISceneComponentSchema
         outLines.push_back((prefix + "shape = ") + FormatCurveKeys(c->Shape));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -5510,7 +5510,7 @@ class ValueCurveSchema final : public ISceneComponentSchema
         return true;
     }
 
-    static bool ApplyValueProperty(Components::ValueCurve& c, const SceneLoadContext& ctx,
+    static bool ApplyValueProperty(Components::ValueCurve& c, const SceneReadContext& ctx,
                                    std::string_view property, std::string_view value, std::string* outError)
     {
 
@@ -5736,7 +5736,7 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "PostProcessVolume"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::PostProcessVolume>(entity);
         if (!c)
@@ -5753,7 +5753,7 @@ class PostProcessVolumeSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("PostProcessVolume.blendDistance = ") + FormatFloat(c->BlendDistance));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -6108,7 +6108,7 @@ class WindVolumeSchema final : public ISceneComponentSchema
 
     void Serialize(const ECS::World& world,
                    ECS::EntityHandle entity,
-                   [[maybe_unused]] const SceneSaveContext& ctx,
+                   [[maybe_unused]] const SceneWriteContext& ctx,
                    std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::WindVolume>(entity);
@@ -6133,7 +6133,7 @@ class WindVolumeSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -6280,7 +6280,7 @@ class BloomEffectSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "BloomEffect"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::BloomEffect>(entity);
         if (!c)
@@ -6320,7 +6320,7 @@ class BloomEffectSchema final : public ISceneComponentSchema
                                FormatAssetReferenceForSave(ctx, c->LensDirtTexture.ToGuid(), ""));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -6573,7 +6573,7 @@ class CubeLutEffectSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "CubeLutEffect"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::CubeLutEffect>(entity);
         if (!c)
@@ -6588,7 +6588,7 @@ class CubeLutEffectSchema final : public ISceneComponentSchema
                                FormatAssetReferenceForSave(ctx, c->LutAssetGuid.ToGuid(), ""));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -6658,7 +6658,7 @@ class HeightFogEffectSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "HeightFogEffect"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::HeightFogEffect>(entity);
         if (!c)
@@ -6725,7 +6725,7 @@ class HeightFogEffectSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("HeightFogEffect.fogGlowAntiFlicker = ") + (c->FogGlowAntiFlicker ? "true" : "false"));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -7133,7 +7133,7 @@ class AtmosphericCloudLayerSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "AtmosphericCloudLayer"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::AtmosphericCloudLayer>(entity);
         if (!c)
@@ -7158,7 +7158,7 @@ class AtmosphericCloudLayerSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("AtmosphericCloudLayer.pixelScale = ") + FormatFloat(c->PixelScale));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -7293,7 +7293,7 @@ class VolumetricCloudsSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "VolumetricClouds"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::VolumetricClouds>(entity);
         if (!c)
@@ -7328,7 +7328,7 @@ class VolumetricCloudsSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("VolumetricClouds.historyWeight = ") + FormatFloat(c->HistoryWeight));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -7531,7 +7531,7 @@ class VolumetricFogEffectSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "VolumetricFogEffect"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::VolumetricFogEffect>(entity);
         if (!c)
@@ -7586,7 +7586,7 @@ class VolumetricFogEffectSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("VolumetricFogEffect.fogGlowAntiFlicker = ") + (c->FogGlowAntiFlicker ? "true" : "false"));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -7983,7 +7983,7 @@ class SkinnedMeshRendererSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "SkinnedMeshRenderer"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::SkinnedMeshRenderer>(entity);
         if (!c)
@@ -7993,7 +7993,7 @@ class SkinnedMeshRendererSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("SkinnedMeshRenderer.receiveShadows = ") + (c->receiveShadows ? "true" : "false"));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8059,7 +8059,7 @@ class AudioListenerSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "AudioListener"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::AudioListener>(entity);
         if (!c)
@@ -8068,7 +8068,7 @@ class AudioListenerSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("AudioListener.worldId = ") + std::to_string(c->worldId));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8123,7 +8123,7 @@ class LODGroupSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "LODGroup"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::LODGroup>(entity);
         if (!c)
@@ -8131,7 +8131,7 @@ class LODGroupSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("LODGroup.bias = ") + FormatFloat(c->Bias));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8173,7 +8173,7 @@ class VideoTextureSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "VideoTextureComponent"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::VideoTextureComponent>(entity);
         if (!c)
@@ -8185,7 +8185,7 @@ class VideoTextureSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("VideoTextureComponent.playbackSpeed = ") + FormatFloat(c->playbackSpeed));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8281,7 +8281,7 @@ class SplineComponentSchema final : public ISceneComponentSchema
         return ECS::GetComponentTypeId<Components::SplineComponent>();
     }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::SplineComponent>(entity);
         if (!c)
@@ -8318,7 +8318,7 @@ class SplineComponentSchema final : public ISceneComponentSchema
         }
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {
@@ -8537,7 +8537,7 @@ class MeasureComponentSchema final : public ISceneComponentSchema
         return ECS::GetComponentTypeId<Components::MeasureComponent>();
     }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx,
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx,
                    std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::MeasureComponent>(entity);
@@ -8553,7 +8553,7 @@ class MeasureComponentSchema final : public ISceneComponentSchema
                            FormatFloat4(c->Color[0], c->Color[1], c->Color[2], c->Color[3]));
     }
 
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value,
                        std::string* outError) const override
     {

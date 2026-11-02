@@ -5,13 +5,9 @@
 // covers the distance falloff of a spatialized voice, read back from its sound
 // through AudioSystem::GetFalloff.
 //
-// Harness shape: a REAL AudioSystem initialized headlessly (miniaudio's
-// default backend priority ends at the null backend, so device-less CI still
-// initializes), fed a clip synthesized in memory — no disk, no asset
-// registry, immune to the per-GUID failed-load caching. The observable is the alive-voice count
-// (AudioSystem::GetAliveVoiceCount); emitters are shaped so voices persist
-// deterministically: loop=true (never reaped), spatialized=false (2D lane,
-// no WorldTransform dependency), volume=0 (tests stay silent).
+// Harness: a real AudioSystem on the default Silent output (no audio device opens), fed a clip
+// synthesized in memory. Voices loop, play 2D at volume 0 and persist, so the alive-voice count
+// (AudioSystem::GetAliveVoiceCount) is the observable.
 
 #include <gtest/gtest.h>
 

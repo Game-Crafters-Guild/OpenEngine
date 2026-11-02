@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -42,6 +43,8 @@
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Rendering/Materials/Shader/ShaderCompileService.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
+#include "SceneLoadTrackerTestAccess.h"
 
 using namespace GameEngine;
 using namespace GameEngine::Engine::Renderer;
@@ -2958,6 +2961,52 @@ TEST_F(MaterialPipelineCompilationTest, SceneWarm_CompilesTheDrawsVariantAndRequ
     held.RunAll();
     EXPECT_TRUE(m_device->TryGetWarmGraphicsPipeline(id, fk).IsValid())
         << "the warmed pipeline is not the one the pass draws with";
+}
+
+namespace
+{
+// Ticks `tracker`; true while its shader.variant row has a waiting gate.
+bool VariantGateWaits(SceneLoadTracker& tracker)
+{
+    SceneLoadTrackerTestAccess::Tick(tracker,std::chrono::steady_clock::now());
+    for (const SceneLoadTracker::CategoryStatus& row : tracker.GetStatus().Categories)
+        if (row.Id == "shader.variant")
+            return row.WaitingGates != 0;
+    ADD_FAILURE() << "the material system reports no shader.variant row";
+    return false;
+}
+} // namespace
+
+// The shader.variant gate waits while a draw's variant waits for its compile to be submitted,
+// and again while the compiled variant waits to be published.
+TEST_F(MaterialPipelineCompilationTest, ADrawVariantHoldsTheShaderVariantGateUntilItIsPublished)
+{
+    MaterialDocument doc{};
+    doc.materialName = "VariantGatePBR";
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+    Material* mat = m_rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+    ASSERT_NE(mat, nullptr);
+    SceneLoadTracker tracker;
+    m_rs->Materials().ReportLoadingWork(tracker);
+    EXPECT_FALSE(VariantGateWaits(tracker));
+
+    auto& variants = m_rs->Materials().Variants();
+    PipelineFormatKey fk{};
+    fk.ColorCount = 1;
+    fk.ColorFormats[0] = TextureFormat::R16G16B16A16_FLOAT;
+    fk.DepthFormat = TextureFormat::D32_FLOAT;
+    const VertexAttributeFlags vf = VertexAttributeFlags::StandardMesh | VertexAttributeFlags::HasColor;
+    const MaterialKeyword passKw = MaterialKeyword::ForwardPlus | MaterialKeyword::Instanced | MaterialKeyword::Shadows;
+    variants.WarmColorVariant(*mat, vf, PrimitiveTopology::TriangleList, passKw, FrontFace::CounterClockwise, fk);
+    ASSERT_EQ(variants.PendingVariantCompileCount(), 1u);
+    EXPECT_TRUE(VariantGateWaits(tracker)) << "a request that is not submitted does not hold";
+
+    variants.SubmitPendingVariantCompiles();
+    EXPECT_TRUE(VariantGateWaits(tracker)) << "a compiled variant that is not published does not hold";
+
+    variants.ApplyPendingVariantPublishes();
+    EXPECT_FALSE(VariantGateWaits(tracker));
 }
 
 // The scene's colour keys for a material: one head per mesh layout it draws on, and the crossfading

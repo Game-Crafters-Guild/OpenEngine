@@ -29,6 +29,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -65,6 +66,47 @@ json SurfaceTileCounts()
     return surfaces;
 }
 
+// Grid solve counts by GridSolveEnd, keyed by the end's name.
+template <class Count>
+json GridSolvesByEnd(const std::array<Count, Pathfinding::kGridSolveEndCount>& counts)
+{
+    using Pathfinding::GridSolveEnd;
+    return json{{"reached", counts[static_cast<std::size_t>(GridSolveEnd::Reached)]},
+                {"refused", counts[static_cast<std::size_t>(GridSolveEnd::Refused)]},
+                {"otherRegion", counts[static_cast<std::size_t>(GridSolveEnd::OtherRegion)]},
+                {"unreachable", counts[static_cast<std::size_t>(GridSolveEnd::Unreachable)]}};
+}
+
+const char* GridSolveEndName(Pathfinding::GridSolveEnd end)
+{
+    switch (end)
+    {
+    case Pathfinding::GridSolveEnd::Reached: return "Reached";
+    case Pathfinding::GridSolveEnd::Refused: return "Refused";
+    case Pathfinding::GridSolveEnd::OtherRegion: return "OtherRegion";
+    case Pathfinding::GridSolveEnd::Unreachable: return "Unreachable";
+    }
+    return "Refused";
+}
+
+json WorstGridSolves(const PathfindingECS::NavigationPathfindingStatistics& stats)
+{
+    json solves = json::array();
+    for (uint32 i = 0; i < stats.WorstGridSolveCount; ++i)
+    {
+        const auto& ranked = stats.WorstGridSolves[i];
+        const Pathfinding::GridSolveRecord& record = ranked.Record;
+        solves.push_back({{"frame", ranked.Frame},
+                          {"end", GridSolveEndName(record.End)},
+                          {"expansions", record.Expansions},
+                          {"microseconds", record.Microseconds},
+                          {"start", {record.StartX, record.StartZ}},
+                          {"goal", {record.GoalX, record.GoalZ}},
+                          {"agentCellRadius", record.AgentCellRadius}});
+    }
+    return solves;
+}
+
 json HandleNavigationStats(const EditorDebugServer::RequestContext&)
 {
     auto* loop = EngineCore::GetInstance().GetRenderingLoop();
@@ -90,8 +132,18 @@ json HandleNavigationStats(const EditorDebugServer::RequestContext&)
           {"oldestWaitFrames", stats.OldestWaitFrames},
           {"oldestWaitSeconds", stats.OldestWaitSeconds},
           {"longestSolvedWaitFrames", stats.LongestSolvedWaitFrames},
-          {"longestSolvedWaitSeconds", stats.LongestSolvedWaitSeconds}}},
-        {"totals", {{"newRequests", stats.TotalNewRequests}, {"solved", stats.TotalSolved}}},
+          {"longestSolvedWaitSeconds", stats.LongestSolvedWaitSeconds},
+          {"gridSolves", stats.GridSolves},
+          {"expansions", stats.GridSolveExpansions},
+          {"mostExpansions", stats.MostGridSolveExpansions},
+          {"slowestSolveMicroseconds", stats.SlowestGridSolveMicroseconds},
+          {"solvesByEnd", GridSolvesByEnd(stats.GridSolvesByEnd)}}},
+        {"totals",
+         {{"newRequests", stats.TotalNewRequests},
+          {"solved", stats.TotalSolved},
+          {"expansions", stats.TotalGridSolveExpansions},
+          {"gridSolvesByEnd", GridSolvesByEnd(stats.TotalGridSolvesByEnd)}}},
+        {"worstSolves", WorstGridSolves(stats)},
         {"solverScratch",
          {{"solvers", scratch.Solvers},
           {"solversHoldingScratch", scratch.SolversHoldingScratch},
@@ -327,7 +379,13 @@ void RegisterNavigationDebugHandlers(EditorDebugServer& server)
     //     (requests left queued), oldestWaitFrames / oldestWaitSeconds (the oldest request still
     //     queued; 0 when none is) and longestSolvedWaitFrames / longestSolvedWaitSeconds (the longest
     //     wait among the requests it solved). A request solved in the frame it joined waited 0.
-    //   totals: newRequests and solved since the system was created; read twice and subtract for a rate.
+    //     The newest Update's grid solves: gridSolves, expansions (cells closed, summed), mostExpansions,
+    //     slowestSolveMicroseconds and solvesByEnd (reached, refused, otherRegion, unreachable).
+    //   totals: newRequests, solved, expansions and gridSolvesByEnd since the system was created; read
+    //     twice and subtract for a rate.
+    //   worstSolves: the grid solves that closed the most cells, kept 8 s of system time after their
+    //     Update, most first: frame, end, expansions, microseconds, start and goal cells as [x, z] and
+    //     agentCellRadius.
     //   surfaces: every NavigationSurface of the primary world: entityId, bakeStatus (the inspector's
     //     line), version (BakeVersion) and tiles: declared (the mesh's tiles), resident (in the map),
     //     dirty (waiting to rebake), baking (rebaking now), stale (loaded tiles whose ground changed)

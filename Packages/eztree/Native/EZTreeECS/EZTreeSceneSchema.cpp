@@ -126,7 +126,7 @@ GUID ReadGuid(const std::array<uint8, 16>& bytes)
     return GUID(data);
 }
 
-bool ParseAssetRef(const Scene::SceneLoadContext& ctx,
+bool ParseAssetRef(const Scene::SceneReadContext& ctx,
                    std::string_view value,
                    AssetType type,
                    std::array<uint8, 16>& out,
@@ -152,7 +152,7 @@ bool ParseAssetRef(const Scene::SceneLoadContext& ctx,
     return true;
 }
 
-bool ParseMaterialRef(const Scene::SceneLoadContext& ctx,
+bool ParseMaterialRef(const Scene::SceneReadContext& ctx,
                       std::string_view value,
                       std::array<uint8, 16>& out,
                       std::string* outError)
@@ -160,7 +160,7 @@ bool ParseMaterialRef(const Scene::SceneLoadContext& ctx,
     return ParseAssetRef(ctx, value, AssetType::Material, out, outError);
 }
 
-bool ParseTextureRef(const Scene::SceneLoadContext& ctx,
+bool ParseTextureRef(const Scene::SceneReadContext& ctx,
                      std::string_view value,
                      std::array<uint8, 16>& out,
                      std::string* outError)
@@ -170,7 +170,7 @@ bool ParseTextureRef(const Scene::SceneLoadContext& ctx,
 
 void AddAssetLine(std::vector<std::string>& out,
                   std::string_view property,
-                  const Scene::SceneSaveContext& ctx,
+                  const Scene::SceneWriteContext& ctx,
                   const std::array<uint8, 16>& bytes)
 {
     const GUID guid = ReadGuid(bytes);
@@ -202,7 +202,7 @@ public:
 
     void Serialize(const ECS::World& world,
                    ECS::EntityHandle entity,
-                   const Scene::SceneSaveContext& ctx,
+                   const Scene::SceneWriteContext& ctx,
                    std::vector<std::string>& outLines) const override
     {
         const auto* tree = world.GetComponent<Components::EZTree>(entity);
@@ -288,7 +288,7 @@ public:
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const Scene::SceneLoadContext& ctx,
+                       const Scene::SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override

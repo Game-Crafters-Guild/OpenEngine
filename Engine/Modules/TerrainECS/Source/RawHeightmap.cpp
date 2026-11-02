@@ -2,6 +2,7 @@
 
 #include "Assets/AssetRegistry.h"
 #include "Terrain/Heightfield.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 #include <charconv>
@@ -113,10 +114,10 @@ std::string ResolveRawHeightmapFileLayout(const std::filesystem::path& path, uin
                                           uint32 declaredHeight, RawHeightmapLayout& out)
 {
     out = {};
-    const std::string ext = ToLowerAscii(path.extension().string());
-    if (ext != ".r16" && ext != ".r32")
+    const std::string extension = LowerCaseExtension(path);
+    if (extension != ".r16" && extension != ".r32")
         return "a raw heightmap is a .r16 or .r32 file";
-    const std::size_t bytesPerSample = ext == ".r16" ? sizeof(uint16) : sizeof(float32);
+    const std::size_t bytesPerSample = extension == ".r16" ? sizeof(uint16) : sizeof(float32);
 
     std::error_code ec;
     const uint64 fileSize = std::filesystem::file_size(path, ec);
@@ -180,7 +181,7 @@ std::string DecodeRawHeightmap(const std::filesystem::path& path, uint32 declare
         !reason.empty())
         return reason;
 
-    const bool loaded = ToLowerAscii(path.extension().string()) == ".r16"
+    const bool loaded = LowerCaseExtension(path) == ".r16"
                             ? out.LoadFromRawUInt16(path, layout.Width, layout.Height)
                             : out.LoadFromRawFloat(path, layout.Width, layout.Height);
     if (!loaded)

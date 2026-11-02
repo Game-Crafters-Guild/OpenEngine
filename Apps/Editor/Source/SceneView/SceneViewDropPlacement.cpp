@@ -12,6 +12,7 @@
 #include "PhysicsECS/PhysicsWorldService.h"
 #include "Picking/ScenePick.h"
 #include "AssetCore/AssetTypes.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 #include <cmath>
@@ -140,7 +141,7 @@ SceneViewDropMesh PickSceneViewDropMesh(const Mathematics::Ray3D& cameraRay,
 
 bool IsPlacedModelFile(const std::filesystem::path& file)
 {
-    const std::string extension = ToLowerAscii(file.extension().string());
+    const std::string extension = LowerCaseExtension(file);
     return extension == ".glb" || extension == ".gltf" || extension == ".obj" || extension == ".fbx";
 }
 

@@ -31,7 +31,6 @@
 
 #include <array>
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -1015,10 +1014,7 @@ BuildSettings BuildPanel::GatherBuildSettings()
                             cfg.hdrSwapchainBitDepth = Rendering::HdrSwapchainBitDepth::Float16;
                         else if (hdr["swapchainBitDepth"].is_string())
                         {
-                            std::string bitDepth = hdr["swapchainBitDepth"].get<std::string>();
-                            std::transform(bitDepth.begin(), bitDepth.end(), bitDepth.begin(), [](unsigned char c) {
-                                return static_cast<char>(std::tolower(c));
-                            });
+                            std::string bitDepth = ToLowerAscii(hdr["swapchainBitDepth"].get<std::string>());
                             bitDepth.erase(std::remove_if(bitDepth.begin(), bitDepth.end(), [](char c) {
                                 return c == '-' || c == '_' || c == ' ';
                             }), bitDepth.end());

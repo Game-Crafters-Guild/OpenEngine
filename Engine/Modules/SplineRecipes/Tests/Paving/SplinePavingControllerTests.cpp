@@ -44,6 +44,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace GameEngine::SplineRecipes
@@ -57,6 +58,12 @@ constexpr float32 kFrameSeconds = 0.3f;
 constexpr uint32 kMaxUpdates = 8;
 // Vertices this close along a road's axis, in meters, lie on one ring.
 constexpr float32 kRingToleranceMeters = 1.0e-3f;
+// Two vertices this close on the ground plane, in meters, stand on one point.
+constexpr float32 kSamePointMeters = 1.0e-2f;
+// UVs this close, in tiles, read as one grid.
+constexpr float32 kSameUVTiles = 5.0e-3f;
+// Inside the top of any road the tests build, in meters from its centerline.
+constexpr float32 kNearCenterlineMeters = 0.5f;
 
 // A material reference no asset holds, told apart by `tag`.
 Components::MaterialRef TestMaterial(uint8 tag)
@@ -302,10 +309,10 @@ protected:
 
     // The top vertices (y at or above 0) of `road`'s strip on its ring nearest the node at the origin,
     // measured along world axis `axis` (0 = x, 2 = z). The paving's lid and border under it are skipped.
-    std::vector<Vector3> StripTopNearestNode(ECS::EntityHandle road, uint32 axis)
+    std::vector<Vertex> StripTopVerticesNearestNode(ECS::EntityHandle road, uint32 axis)
     {
         float32 nearest = std::numeric_limits<float32>::max();
-        std::vector<Vector3> ring;
+        std::vector<Vertex> ring;
         for (const Mesh* mesh : ChunkMeshesUnder(road, ""))
         {
             if (mesh->Name.find("_Lid") != std::string::npos || mesh->Name.find("_Border") != std::string::npos)
@@ -321,9 +328,17 @@ protected:
                     ring.clear();
                 }
                 if (std::abs(along - nearest) <= kRingToleranceMeters)
-                    ring.emplace_back(vertex.Position[0], vertex.Position[1], vertex.Position[2]);
+                    ring.push_back(vertex);
             }
         }
+        return ring;
+    }
+
+    std::vector<Vector3> StripTopNearestNode(ECS::EntityHandle road, uint32 axis)
+    {
+        std::vector<Vector3> ring;
+        for (const Vertex& vertex : StripTopVerticesNearestNode(road, axis))
+            ring.emplace_back(vertex.Position[0], vertex.Position[1], vertex.Position[2]);
         return ring;
     }
 
@@ -561,6 +576,153 @@ TEST_F(SplinePavingControllerTests, ACrownedRoadMeetsTheJunctionLidFlushAcrossIt
         ASSERT_GE(ring.size(), 3u) << "the crown's edges and its apex";
         for (const Vector3& point : ring)
             EXPECT_NEAR(point.y, lidY, 2.0e-3f) << "road " << road.id << " at (" << point.x << ", " << point.z << ")";
+    }
+}
+
+// Road B ends on road A, which paves the junction. Every strip cap vertex has a lid vertex on it with
+// the strip's UV, and within half a meter of road A's centerline the lid's U is road A's arc length.
+TEST_F(SplinePavingControllerTests, TheJunctionLidContinuesEachRoadsGridFromItsStrip)
+{
+    CreateFlatTerrain();
+    const ECS::EntityHandle roadA = CreateMember({Vector3(-18.0f, 0.0f, 0.0f), Vector3(18.0f, 0.0f, 0.0f)}, false,
+                                                 Components::SplineNetworkMemberKind::Road);
+    const ECS::EntityHandle roadB = CreateMember({Vector3(0.0f, 0.0f, 18.0f), Vector3(0.0f, 0.0f, 0.0f)}, false,
+                                                 Components::SplineNetworkMemberKind::Road);
+    Components::SplineExtrude crown{};
+    crown.Profile = Components::SplineExtrudeProfile::Crown;
+    crown.TilesPerMetreU = 0.5f;
+    crown.TilesPerMetreV = 0.5f;
+    m_World.AddComponentImmediate(roadA, crown);
+    m_World.AddComponentImmediate(roadB, crown);
+    m_World.AddComponentImmediate(roadA, Components::SplinePaving{});
+
+    UpdateFrames();
+
+    ASSERT_EQ(Status(roadA).State, BuildState::Built);
+    ASSERT_EQ(Status(roadB).State, BuildState::Built);
+    const std::vector<const Mesh*> lids = ChunkMeshesUnder(roadA, "_Lid");
+    ASSERT_EQ(lids.size(), 1u);
+    const std::vector<Vertex>& lid = lids[0]->Vertices;
+
+    // Road A rises from x = -18, road B from z = 18.
+    for (const auto& [road, axis, startAt, rises] :
+         {std::tuple(roadA, 0u, -18.0f, 1.0f), std::tuple(roadB, 2u, 18.0f, -1.0f)})
+    {
+        const std::vector<Vertex> cap = StripTopVerticesNearestNode(road, axis);
+        ASSERT_GE(cap.size(), 3u) << "the crown's edges and its apex";
+        for (const Vertex& strip : cap)
+        {
+            const float32 arcLength = (strip.Position[axis] - startAt) * rises;
+            EXPECT_NEAR(strip.TexCoords[0], arcLength * crown.TilesPerMetreU, kSameUVTiles)
+                << "road " << road.id << ": the strip's U is its arc length up to the cap";
+            float32 closest = std::numeric_limits<float32>::max();
+            for (const Vertex& vertex : lid)
+            {
+                if (std::hypot(vertex.Position[0] - strip.Position[0], vertex.Position[2] - strip.Position[2]) >
+                    kSamePointMeters)
+                    continue;
+                closest = std::min(closest, std::hypot(vertex.TexCoords[0] - strip.TexCoords[0],
+                                                       vertex.TexCoords[1] - strip.TexCoords[1]));
+            }
+            EXPECT_LE(closest, kSameUVTiles) << "road " << road.id << " cap vertex at (" << strip.Position[0] << ", "
+                                             << strip.Position[2] << ")";
+        }
+    }
+
+    uint32 nearCenterline = 0;
+    for (const Vertex& vertex : lid)
+    {
+        if (std::abs(vertex.Position[2]) > kNearCenterlineMeters)
+            continue;
+        ++nearCenterline;
+        EXPECT_NEAR(vertex.TexCoords[0], (vertex.Position[0] + 18.0f) * crown.TilesPerMetreU, kSameUVTiles)
+            << "lid vertex at x " << vertex.Position[0];
+    }
+    EXPECT_GT(nearCenterline, 0u);
+}
+
+// A road ends inside a square, which paves the mouth. The road's grid fills the mouth's arcs and is cut
+// on the square's rim; inside the rim the lid keeps the square's own grid.
+TEST_F(SplinePavingControllerTests, TheRoadsGridFillsTheSquaresMouthAndStopsOnItsRim)
+{
+    constexpr float32 kRimX = -10.0f;
+    // Past the top of the road's strip (4/3 m from its centerline) and inside the mouth's arcs.
+    constexpr float32 kBesideTopMeters = 1.5f;
+    const ECS::EntityHandle square = CreateSquare();
+    m_World.AddComponentImmediate(square, Components::SplinePaving{});
+    const ECS::EntityHandle road = CreateMember({Vector3(-30.0f, 0.0f, 0.0f), Vector3(-4.0f, 0.0f, 0.0f)}, false,
+                                                Components::SplineNetworkMemberKind::Road);
+    Components::SplineExtrude crown{};
+    crown.Profile = Components::SplineExtrudeProfile::Crown;
+    crown.ConformMode = Components::SplinePlacementConform::None;
+    crown.TilesPerMetreU = 0.5f;
+    crown.TilesPerMetreV = 0.5f;
+    m_World.AddComponentImmediate(road, crown);
+
+    UpdateFrames();
+
+    ASSERT_EQ(Status(square).State, BuildState::Built);
+    const std::vector<const Mesh*> lids = ChunkMeshesUnder(square, "_Lid");
+    ASSERT_EQ(lids.size(), 1u);
+    uint32 onRim = 0;
+    uint32 inMouthArcs = 0;
+    for (const Vertex& vertex : lids[0]->Vertices)
+    {
+        // The road rises from x = -30; the square's own U is x.
+        const float32 x = vertex.Position[0];
+        if (std::abs(vertex.TexCoords[0] - (x + 30.0f) * crown.TilesPerMetreU) > kSameUVTiles)
+            continue;
+        EXPECT_LE(x, kRimX + kSamePointMeters) << "the road's grid at (" << x << ", " << vertex.Position[2] << ")";
+        onRim += std::abs(x - kRimX) <= kSamePointMeters ? 1u : 0u;
+        inMouthArcs += x < kRimX - kSamePointMeters && std::abs(vertex.Position[2]) > kBesideTopMeters ? 1u : 0u;
+    }
+    EXPECT_GT(onRim, 0u) << "the cut lies on the rim";
+    EXPECT_GT(inMouthArcs, 0u) << "the road's grid fills the arcs beside its top";
+}
+
+// Two roads of equal width cross. Where their tops overlap, the lid takes the longer road's grid, in
+// either creation order.
+TEST_F(SplinePavingControllerTests, TheLongerOfTwoEqualRoadsGivesTheLidItsGridInEitherCreationOrder)
+{
+    constexpr float32 kSecondCrossingZ = 100.0f;
+    const ECS::EntityHandle longerFirst = CreateMember({Vector3(-30.0f, 0.0f, 0.0f), Vector3(30.0f, 0.0f, 0.0f)},
+                                                       false, Components::SplineNetworkMemberKind::Road);
+    const ECS::EntityHandle shorterAfter = CreateMember({Vector3(0.0f, 0.0f, -20.0f), Vector3(0.0f, 0.0f, 20.0f)},
+                                                        false, Components::SplineNetworkMemberKind::Road);
+    const ECS::EntityHandle shorterFirst =
+        CreateMember({Vector3(0.0f, 0.0f, kSecondCrossingZ - 20.0f), Vector3(0.0f, 0.0f, kSecondCrossingZ + 20.0f)},
+                     false, Components::SplineNetworkMemberKind::Road);
+    const ECS::EntityHandle longerAfter =
+        CreateMember({Vector3(-30.0f, 0.0f, kSecondCrossingZ), Vector3(30.0f, 0.0f, kSecondCrossingZ)}, false,
+                     Components::SplineNetworkMemberKind::Road);
+    Components::SplineExtrude crown{};
+    crown.Profile = Components::SplineExtrudeProfile::Crown;
+    crown.ConformMode = Components::SplinePlacementConform::None;
+    crown.TilesPerMetreU = 0.5f;
+    crown.TilesPerMetreV = 0.5f;
+    for (const ECS::EntityHandle road : {longerFirst, shorterAfter, shorterFirst, longerAfter})
+        m_World.AddComponentImmediate(road, crown);
+    m_World.AddComponentImmediate(longerFirst, Components::SplinePaving{});
+    m_World.AddComponentImmediate(longerAfter, Components::SplinePaving{});
+
+    UpdateFrames();
+
+    // Each longer road rises from x = -30 along its crossing's z.
+    for (const auto& [longer, z] : {std::tuple(longerFirst, 0.0f), std::tuple(longerAfter, kSecondCrossingZ)})
+    {
+        ASSERT_EQ(Status(longer).State, BuildState::Built);
+        const std::vector<const Mesh*> lids = ChunkMeshesUnder(longer, "_Lid");
+        ASSERT_EQ(lids.size(), 1u);
+        uint32 nearCenterline = 0;
+        for (const Vertex& vertex : lids[0]->Vertices)
+        {
+            if (std::abs(vertex.Position[2] - z) > kNearCenterlineMeters)
+                continue;
+            ++nearCenterline;
+            EXPECT_NEAR(vertex.TexCoords[0], (vertex.Position[0] + 30.0f) * crown.TilesPerMetreU, kSameUVTiles)
+                << "road " << longer.id << ": lid vertex at x " << vertex.Position[0];
+        }
+        EXPECT_GT(nearCenterline, 0u) << "road " << longer.id;
     }
 }
 
@@ -836,9 +998,9 @@ TEST_F(SplinePavingControllerTests, ARoadWithNoVergeBuildsACappedCurbAndNoVerge)
     // The float math of the square's meshes rounds differently on arm64, so each architecture pins
     // its own bytes. The road's meshes are the same bytes on both.
 #if defined(__aarch64__) || defined(_M_ARM64)
-    constexpr uint64 kSquareDigest = 0x9ec213fb1fef11a7ull;
+    constexpr uint64 kSquareDigest = 0xb094b6de04451142ull;
 #else
-    constexpr uint64 kSquareDigest = 0xae850fca744ed817ull;
+    constexpr uint64 kSquareDigest = 0xfce75b03317ec4ffull;
 #endif
     const ECS::EntityHandle square = CreateSquare();
     m_World.AddComponentImmediate(square, Components::SplinePaving{});

@@ -313,6 +313,7 @@ TEST(PackagesLockFile, IntegrityHashIsStableAndContentSensitive)
     EXPECT_NE(a, HashPackageManifestIntegrity("{\"name\":\"b\"}"));
     EXPECT_EQ(a.rfind("fnv1a64-", 0), 0u);
     EXPECT_EQ(a.size(), std::string("fnv1a64-").size() + 16);
+    EXPECT_EQ(HashPackageManifestIntegrity("a"), "fnv1a64-af63dc4c8601ec8c");
 }
 
 // ---------------------------------------------------------------------------

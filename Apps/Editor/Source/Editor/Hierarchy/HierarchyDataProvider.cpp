@@ -12,10 +12,10 @@
 #include "ECS/World.h"
 #include "Logger/Logger.h"
 #include "PhysicsECS/Components/PhysicsWorldSettingsComponent.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <cassert>
-#include <cctype>
 
 namespace GameEngine
 {
@@ -499,8 +499,7 @@ std::string HierarchyDataProvider::LowerNameOf(const EntityHandle& h) const
         name = n->View();
     else
         name = std::string("Entity ") + std::to_string(h.id);
-    for (char& c : name)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    name = ToLowerAscii(name);
     return name;
 }
 

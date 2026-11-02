@@ -10,7 +10,7 @@
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/Height/HeightPageCooker.h"
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/Height/HeightStoreCache.h"
 #include "PageStreaming/Height/HeightStoreKey.h"
 #include "PageStreaming/PageLoader.h"
@@ -36,11 +36,13 @@
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Mathematics/CubeFaces.h"
 #include "Mathematics/VectorOps.h"
+#include "Memory/AllocationCountScope.h"
 #include "Terrain/Heightfield.h"
 #include "TerrainECS/PageLevelRule.h"
 #include "TerrainECS/TerrainService.h"
 #include "PageResidency/UploadedPages.h"
 #include "TestTempDir.h"
+#include "Types/ByteBuffer.h"
 #include "Types/Color.h"
 #include "Types/Fnv1a.h"
 
@@ -60,6 +62,8 @@
 #include <map>
 #include <memory>
 #include <numbers>
+#include <random>
+#include <span>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -253,7 +257,7 @@ std::vector<uint8> SurfaceLevelGrid(const PageStoreReader& reader, uint8 level)
 }
 
 // The 16 bytes of block (bx, by) of a Bc5 page's stored bytes.
-std::vector<uint8> Bc5Block(const std::vector<uint8>& bytes, uint32 bx, uint32 by)
+std::vector<uint8> Bc5Block(const ByteBuffer& bytes, uint32 bx, uint32 by)
 {
     const uint32 blocks = PageStrideTexels(PageFieldFormat::Bc5) / kPageBlockTexels;
     const auto first = bytes.begin() + static_cast<std::ptrdiff_t>((by * blocks + bx) * kBc5BlockBytes);
@@ -731,12 +735,80 @@ TEST_F(PageStoreTest, AbsentPagesResolveToTheirNearestPresentAncestor)
 
     PageStoreReader reader;
     ASSERT_EQ(reader.Open(file, PageFieldKind::Height), "");
-    std::vector<uint8> out;
+    ByteBuffer out;
     EXPECT_FALSE(reader.ReadPageBytes(PageAddress{0, 0, 1, 1}, out));
     EXPECT_EQ(reader.Layout().ResolvePresent(PageAddress{0, 0, 1, 1}), (PageAddress{0, 2, 0, 0}));
     // Absent pages take no bytes: 9 + 4 + 1 pages less the two absent ones.
     EXPECT_EQ(reader.Layout().TotalBytes(),
               reader.Layout().DataOffset() + 12u * PageStoredBytes(PageFieldFormat::HeightSteps, false));
+}
+
+TEST_F(PageStoreTest, APageReadHoldsThePageBytesOfTheFileAndAFailedReadHoldsNone)
+{
+    PageStoreHeader header;
+    header.SamplesX = 300;
+    header.SamplesZ = 300;
+    header.StepPerLevel.fill(1.0f);
+    const PageStoreLayout layout = MakePageStoreLayout(header);
+    const std::filesystem::path file = m_Dir / "pages.gepage";
+    PageStoreWriter writer;
+    ASSERT_EQ(writer.Create(file, layout), "");
+    std::vector<float32> samples(kPageSampleCount);
+    EncodedPage page;
+    uint32 pageIndex = 0;
+    for (uint8 level = 0; level < layout.Levels.size(); ++level)
+        for (uint32 pz = 0; pz < layout.Levels[level].PagesZ; ++pz)
+            for (uint32 px = 0; px < layout.Levels[level].PagesX; ++px, ++pageIndex)
+            {
+                for (std::size_t i = 0; i < samples.size(); ++i)
+                    samples[i] = static_cast<float32>((i * 7u + pageIndex) % 50u);
+                EncodeHeightPage(header, level, samples, 0.0f, 49.0f, page);
+                if (pageIndex == 0)
+                    continue;
+                ASSERT_TRUE(writer.WritePage(PageAddress{0, level, px, pz}, page));
+            }
+    ByteBuffer written;
+    PageIndexEntry writtenEntry;
+    ASSERT_TRUE(writer.ReadPage(PageAddress{0, 0, 1, 0}, written, writtenEntry));
+    EXPECT_FALSE(writer.ReadPage(PageAddress{0, 0, 0, 0}, written, writtenEntry));
+    EXPECT_EQ(written.Size(), 0u) << "a page not written yet hands over no bytes";
+    for (std::size_t i = 0; i < samples.size(); ++i)
+        samples[i] = static_cast<float32>((i * 7u) % 50u);
+    EncodeHeightPage(header, 0, samples, 0.0f, 49.0f, page);
+    ASSERT_TRUE(writer.WritePage(PageAddress{0, 0, 0, 0}, page));
+    ASSERT_EQ(writer.Finish(), "");
+    EXPECT_FALSE(writer.ReadPage(PageAddress{0, 0, 1, 0}, written, writtenEntry));
+    EXPECT_EQ(written.Size(), 0u) << "a read from the closed file hands over no bytes";
+
+    PageStoreReader reader;
+    ASSERT_EQ(reader.Open(file, PageFieldKind::Height), "");
+    const std::vector<uint8> fileBytes = FileBytes(file);
+    PageAddress last{};
+    uint64 lastOffset = 0;
+    ByteBuffer bytes;
+    for (uint8 level = 0; level < layout.Levels.size(); ++level)
+        for (uint32 pz = 0; pz < layout.Levels[level].PagesZ; ++pz)
+            for (uint32 px = 0; px < layout.Levels[level].PagesX; ++px)
+            {
+                const PageAddress address{0, level, px, pz};
+                const PageIndexEntry& entry = *reader.Layout().FindPresent(address);
+                const uint64 offset = reader.BaseOffset() + entry.Offset;
+                ASSERT_TRUE(reader.ReadPageBytes(address, bytes));
+                ASSERT_EQ(bytes.Size(), reader.Layout().StoredBytes(entry));
+                EXPECT_TRUE(std::ranges::equal(bytes, std::span(fileBytes).subspan(offset, bytes.Size())))
+                    << "page (" << int(level) << ", " << px << ", " << pz << ")";
+                if (offset >= lastOffset)
+                {
+                    last = address;
+                    lastOffset = offset;
+                }
+            }
+
+    // The file now ends half way into its last page.
+    ASSERT_TRUE(reader.ReadPageBytes(last, bytes));
+    std::filesystem::resize_file(file, lastOffset + bytes.Size() / 2u);
+    EXPECT_FALSE(reader.ReadPageBytes(last, bytes));
+    EXPECT_EQ(bytes.Size(), 0u) << "a short read hands over no bytes";
 }
 
 // ---- Cooking ---------------------------------------------------------------------------------------
@@ -1528,12 +1600,12 @@ TEST_F(PageStoreTest, AStoreHeldOpenGrowsItsPresentPagesBetweenWritesAndItsFinis
             for (uint32 px = 0; px < levels[0].PagesX; ++px)
                 ASSERT_TRUE(patcher.WritePage(PageAddress{0, 0, px, pz}, SurfacePage(expected, PageAddress{0, 0, px, pz})))
                     << "half " << half << " page (" << px << ", " << pz << ")";
-        std::vector<uint8> stored;
-        std::vector<uint8> wanted;
+        ByteBuffer stored;
+        ByteBuffer wanted;
         PageIndexEntry entry;
         ASSERT_TRUE(writer.ReadPage(PageAddress{0, 1, 0, 0}, stored, entry));
         ASSERT_TRUE(expected.ReadPageBytes(PageAddress{0, 1, 0, 0}, wanted));
-        EXPECT_EQ(stored, wanted) << "a page the longer index moved lost its bytes, half " << half;
+        EXPECT_TRUE(std::ranges::equal(stored, wanted)) << "a page the longer index moved lost its bytes, half " << half;
     }
     EXPECT_EQ(writer.Layout().Entries.size(), expected.Layout().Entries.size());
     EXPECT_FALSE(std::filesystem::exists(held)) << "the store is at its target before Finish";
@@ -1568,9 +1640,9 @@ TEST_F(PageStoreTest, ABc5PagesApronBlockIsItsNeighborsEdgeBlockBitForBit)
     const uint32 sharedBlock = shared / kPageBlockTexels;
     for (uint8 level = 0; level < 2u; ++level)
     {
-        std::vector<uint8> page;
-        std::vector<uint8> right;
-        std::vector<uint8> below;
+        ByteBuffer page;
+        ByteBuffer right;
+        ByteBuffer below;
         ASSERT_TRUE(reader.ReadPageBytes(PageAddress{0, level, 0, 0}, page));
         ASSERT_TRUE(reader.ReadPageBytes(PageAddress{0, level, 1, 0}, right));
         ASSERT_TRUE(reader.ReadPageBytes(PageAddress{0, level, 0, 1}, below));
@@ -2278,6 +2350,29 @@ TEST_F(PageStoreTest, TerrainContainerReadsItsHeightFieldAtItsOffsetUnchanged)
         << refusal;
 }
 
+namespace
+{
+
+// Waits for the one fetch in flight of `fetcher` and returns its outcome; an error when none ends in time.
+PageFetchOutcome WaitForFetch(PageFetcher& fetcher)
+{
+    std::vector<FinishedPageFetch> finished;
+    const auto deadline = std::chrono::steady_clock::now() + kLoadTimeout;
+    do
+    {
+        fetcher.Finished(finished);
+        if (!finished.empty())
+        {
+            EXPECT_EQ(finished.size(), 1u) << "a fetch ends once";
+            return std::move(finished.front().Outcome);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return PageFetchOutcome{{}, nullptr, "no fetch ended in time", false};
+}
+
+} // namespace
+
 TEST_F(PageStoreTest, PagesLoadThroughTheAssetReaderThreadsAndDecodeOffThem)
 {
     const std::filesystem::path source = m_Dir / "load.r32";
@@ -2291,36 +2386,37 @@ TEST_F(PageStoreTest, PagesLoadThroughTheAssetReaderThreadsAndDecodeOffThem)
     AssetIOService io;
     io.Start(pool, 1);
 
+    PageFetcher fetcher(&pool, &io, 1);
     const auto load = [&](const PageAddress& address, std::shared_ptr<std::atomic<bool>> cancel) {
-        auto loaded = std::make_shared<std::promise<std::vector<uint8>>>();
-        auto failed = std::make_shared<std::promise<std::string>>();
-        PageLoadRequest request;
-        request.Store = reader;
-        request.StoreAsset = GUID::Generate();
-        request.Address = address;
-        request.Priority = AssetLoadPriority::High;
-        request.Cancel = std::move(cancel);
-        request.OnLoaded = [loaded](const PageAddress&, std::vector<uint8> bytes) { loaded->set_value(std::move(bytes)); };
-        request.OnFailed = [failed](const PageAddress&, const std::string& error) { failed->set_value(error); };
-        SubmitPageLoad(io, std::move(request));
-        return std::make_pair(loaded->get_future(), failed->get_future());
+        fetcher.Fetch(PageSource{reader, nullptr}, address, std::move(cancel), PageFetchTag{});
+        return WaitForFetch(fetcher);
     };
 
     for (const PageAddress address : {PageAddress{0, 0, 0, 0}, PageAddress{0, 0, 3, 2}, PageAddress{0, 1, 1, 1}})
     {
-        auto [samples, failure] = load(address, std::make_shared<std::atomic<bool>>(false));
-        ASSERT_EQ(samples.wait_for(kLoadTimeout), std::future_status::ready);
-        EXPECT_EQ(Heights(samples.get()), PageSamples(*reader, address));
+        const PageFetchOutcome loaded = load(address, std::make_shared<std::atomic<bool>>(false));
+        ASSERT_NE(loaded.Bytes, nullptr) << loaded.Error;
+        EXPECT_EQ(loaded.Address, address);
+        EXPECT_EQ(Heights(*loaded.Bytes), PageSamples(*reader, address));
     }
 
-    auto [absentSamples, absent] = load(PageAddress{0, 0, 9, 9}, nullptr);
-    ASSERT_EQ(absent.wait_for(std::chrono::seconds(0)), std::future_status::ready); // inline
-    EXPECT_NE(absent.get().find("not in the store"), std::string::npos);
+    const PageFetchOutcome absent = load(PageAddress{0, 0, 9, 9}, nullptr);
+    EXPECT_TRUE(absent.Absent);
+    EXPECT_NE(absent.Error.find("not in the store"), std::string::npos);
 
-    auto [cancelledSamples, cancelled] = load(PageAddress{0, 0, 1, 1}, std::make_shared<std::atomic<bool>>(true));
-    ASSERT_EQ(cancelled.wait_for(kLoadTimeout), std::future_status::ready);
-    // OnLoaded never ran: its promise was dropped with the request, unfulfilled.
-    EXPECT_THROW(cancelledSamples.get(), std::future_error);
+    const PageFetchOutcome cancelled = load(PageAddress{0, 0, 1, 1}, std::make_shared<std::atomic<bool>>(true));
+    EXPECT_EQ(cancelled.Bytes, nullptr);
+    EXPECT_FALSE(cancelled.Absent);
+    EXPECT_FALSE(cancelled.Error.empty());
+
+    // Reuse keeps out a buffer that another owner holds: the next page does not decode into it.
+    const PageFetchOutcome held = load(PageAddress{0, 0, 0, 0}, nullptr);
+    ASSERT_NE(held.Bytes, nullptr) << held.Error;
+    fetcher.Reuse(held.Bytes);
+    const PageFetchOutcome next = load(PageAddress{0, 0, 3, 2}, nullptr);
+    ASSERT_NE(next.Bytes, nullptr) << next.Error;
+    EXPECT_NE(next.Bytes.get(), held.Bytes.get()) << "the decode wrote into bytes another owner holds";
+    EXPECT_EQ(Heights(*held.Bytes), PageSamples(*reader, PageAddress{0, 0, 0, 0}));
 
     io.Stop();
     pool.Shutdown();
@@ -2346,15 +2442,8 @@ TEST_F(PageStoreTest, APageLoadWhoseDecodeNeverRunsStillResolvesOnce)
     AssetIOService io;
     io.Start(pool, 1);
 
-    std::atomic<int> loaded{0};
-    std::atomic<int> failed{0};
-    PageLoadRequest request;
-    request.Store = reader;
-    request.StoreAsset = GUID::Generate();
-    request.Address = PageAddress{0, 0, 0, 0};
-    request.OnLoaded = [&loaded](const PageAddress&, std::vector<uint8>) { ++loaded; };
-    request.OnFailed = [&failed](const PageAddress&, const std::string&) { ++failed; };
-    SubmitPageLoad(io, std::move(request));
+    PageFetcher fetcher(&pool, &io, 1);
+    fetcher.Fetch(PageSource{reader, nullptr}, PageAddress{0, 0, 0, 0}, nullptr, PageFetchTag{});
 
     const auto deadline = std::chrono::steady_clock::now() + kLoadTimeout;
     while (io.GetQueuedReadCount() != 0 && std::chrono::steady_clock::now() < deadline)
@@ -2367,8 +2456,13 @@ TEST_F(PageStoreTest, APageLoadWhoseDecodeNeverRunsStillResolvesOnce)
     pool.Shutdown();
     releaser.join();
 
-    EXPECT_EQ(loaded.load(), 0);
-    EXPECT_EQ(failed.load(), 1) << "exactly one of OnLoaded and OnFailed runs";
+    std::vector<FinishedPageFetch> finished;
+    fetcher.Finished(finished);
+    ASSERT_EQ(finished.size(), 1u) << "the fetch ends exactly once";
+    EXPECT_EQ(finished.front().Outcome.Bytes, nullptr);
+    EXPECT_FALSE(finished.front().Outcome.Error.empty());
+    fetcher.Finished(finished);
+    EXPECT_TRUE(finished.empty());
 }
 
 // A page of any field loads through the one loader at the bytes its format holds: a splat page its
@@ -2394,7 +2488,7 @@ TEST_F(PageStoreTest, APageOfEveryFormatLoadsAtTheBytesItsFormatHolds)
     AssetIOService io;
     io.Start(pool, 1);
     const PageAddress address{0, 0, 1, 1};
-    std::vector<uint8> stored;
+    ByteBuffer stored;
     ASSERT_TRUE(normal->ReadPageBytes(address, stored));
     struct Case
     {
@@ -2402,17 +2496,14 @@ TEST_F(PageStoreTest, APageOfEveryFormatLoadsAtTheBytesItsFormatHolds)
         uint32 Bytes = 0;
         std::vector<uint8> Payload; // what the page holds once loaded
     };
-    const Case cases[] = {{splat, 67600u, SurfacePage(*splat, address)}, {normal, 18496u, stored}};
+    const Case cases[] = {{splat, 67600u, SurfacePage(*splat, address)}, {normal, 18496u, std::vector<uint8>(stored.begin(), stored.end())}};
     for (const Case& page : cases)
     {
         const PageSource source{page.Reader, nullptr};
         EXPECT_EQ(source.PayloadBytes(), page.Bytes);
-        auto done = std::make_shared<std::promise<PageFetchOutcome>>();
-        SubmitPageFetch(&pool, &io, source, address, nullptr,
-                        [done](PageFetchOutcome outcome) { done->set_value(std::move(outcome)); });
-        std::future<PageFetchOutcome> loaded = done->get_future();
-        ASSERT_EQ(loaded.wait_for(kLoadTimeout), std::future_status::ready);
-        const PageFetchOutcome outcome = loaded.get();
+        PageFetcher fetcher(&pool, &io, 1);
+        fetcher.Fetch(source, address, nullptr, PageFetchTag{});
+        const PageFetchOutcome outcome = WaitForFetch(fetcher);
         ASSERT_NE(outcome.Bytes, nullptr) << outcome.Error;
         EXPECT_EQ(outcome.Bytes->size(), page.Bytes);
         EXPECT_EQ(*outcome.Bytes, page.Payload);
@@ -2515,6 +2606,84 @@ uint64 RunFramesUntil(PageResidencyManager& residency, uint64 frame, Done done)
 }
 
 } // namespace
+
+// A camera that pans between two halves of a store streams the level-0 pages of each half in and out
+// through the asset reader threads. Once each half streamed twice, a page that streams in again
+// allocates only in its asset read: its fetch, its decode and its landing reuse what the first pages left.
+TEST_F(PageStoreTest, AStorePageThatStreamsInAgainAllocatesOnlyInItsAssetRead)
+{
+    const std::filesystem::path source = m_Dir / "steady.r32";
+    WriteR32(source, 1024, 512, Relief);
+    const std::filesystem::path store = m_Dir / "steady.gepage";
+    ASSERT_EQ(Cook(source, 1024, 512, store).Error, "");
+    auto reader = std::make_shared<PageStoreReader>();
+    ASSERT_EQ(reader->Open(store, PageFieldKind::Height), "");
+    const std::vector<PageStoreLevel>& levels = reader->Layout().Levels;
+    std::vector<PageWant> halves[2]; // each half's level-0 pages and every coarser page
+    for (const PageWant& want : EveryPage(levels))
+        if (want.Address.Level != 0)
+        {
+            halves[0].push_back(want);
+            halves[1].push_back(want);
+        }
+        else
+        {
+            halves[want.Address.X < levels[0].PagesX / 2u ? 0 : 1].push_back(want);
+        }
+    ASSERT_EQ(halves[0].size(), halves[1].size());
+
+    JobSystem::WorkStealingThreadPool pool(2);
+    AssetIOService io;
+    io.Start(pool, 1);
+    PageResidencyBudget budget;
+    budget.CpuBytes = uint64(halves[0].size()) * PagePayloadBytes(PageFieldFormat::HeightSteps); // one half
+    budget.UploadsPerFrame = 1024;
+    PageResidencyManager residency(&pool, &io, budget);
+    residency.ConfigureField(1, static_cast<uint32>(halves[0].size()), 2, 0.0f);
+    residency.Configure(1, 1, PageSource{reader, nullptr});
+
+    uint64 frame = 0;
+    uint32 loads = 0;
+    const auto pan = [&](const std::vector<PageWant>& half) {
+        residency.Request(1, half);
+        const auto resident = [&] {
+            const PageCache& cache = residency.FieldCache(1);
+            return std::all_of(half.begin(), half.end(), [&](const PageWant& want) {
+                return cache.SlotOf(CachedPage{1, want.Address}) != kNoResidentSlot;
+            });
+        };
+        const auto deadline = std::chrono::steady_clock::now() + kLoadTimeout;
+        do
+        {
+            residency.Update(++frame, 1.0f / 60.0f, false);
+            loads += residency.LoadsStartedThisFrame();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (!resident() && std::chrono::steady_clock::now() < deadline);
+        return resident();
+    };
+    for (int round = 0; round < 2; ++round)
+        for (const std::vector<PageWant>& half : halves)
+            ASSERT_TRUE(pan(half));
+
+    // The least of three pans: a list that reaches a new largest size (more pages land in one frame
+    // than before) grows in one of them only.
+    uint64 allocations = ~0ull;
+    for (int round = 0; round < 3; ++round)
+    {
+        loads = 0;
+        Memory::AllocationCountScope scope(Memory::CountWindow::Process);
+        for (const std::vector<PageWant>& half : halves)
+            if (!pan(half))
+                break;
+        allocations = std::min(allocations, scope.Count());
+        ASSERT_EQ(loads, uint32(levels[0].PagesX * levels[0].PagesZ)) << "each level-0 page streams in once";
+    }
+    // The asset read's five a page: the file path that ReadStorePage copies, the ReadFileRange buffer,
+    // the GUID string of the ExecuteRead Debug log line, the read job and the job's task data.
+    EXPECT_LE(allocations, 5u * loads) << "over " << loads << " pages";
+    io.Stop();
+    pool.Shutdown();
+}
 
 TEST(PageResidencyTest, WantedPagesLoadAssignAndThenAParkedCameraDoesNoWork)
 {
@@ -2953,7 +3122,7 @@ std::filesystem::path BuildLiveReadSource(const std::filesystem::path& directory
 // The loaded bytes of page `address` of `reader`.
 std::vector<uint8> StoredPayload(const PageStoreReader& reader, const PageAddress& address)
 {
-    std::vector<uint8> stored;
+    ByteBuffer stored;
     std::vector<uint8> payload;
     EXPECT_TRUE(reader.ReadPageBytes(address, stored) && reader.DecodePayload(address, stored, payload));
     return payload;
@@ -3778,110 +3947,175 @@ std::vector<float32> RectDelta(const PageSampleRect& rect, float32 seed)
     return delta;
 }
 
-std::vector<float32> Dense(const PageSampleRect& rect, const std::vector<float32>& delta, const PageStoreLevel& level0)
+} // namespace
+
+// ---- Height page layer (the sparse delta the modifiers and the sculpt write) ---------------------------
+
+namespace
 {
-    std::vector<float32> dense(static_cast<std::size_t>(level0.SamplesX) * level0.SamplesZ, 0.0f);
-    for (uint32 z = rect.MinZ; z <= rect.MaxZ; ++z)
-        for (uint32 x = rect.MinX; x <= rect.MaxX; ++x)
-            dense[static_cast<std::size_t>(z) * level0.SamplesX + x] =
-                delta[static_cast<std::size_t>(z - rect.MinZ) * rect.Width() + (x - rect.MinX)];
-    return dense;
+
+// The pyramid sample a page of a one-face layer stores at stride (i, j): the clamped sample of its level.
+float32 StoredPyramidSample(const std::vector<std::vector<float32>>& pyramid, const std::vector<PageStoreLevel>& levels,
+                            const PageAddress& page, uint32 i, uint32 j)
+{
+    const PageStoreLevel& level = levels[page.Level];
+    const int64 x = std::clamp<int64>(int64{page.X} * kPageOwnedSamples - kPageApronSamples + i, 0, level.SamplesX - 1);
+    const int64 z = std::clamp<int64>(int64{page.Z} * kPageOwnedSamples - kPageApronSamples + j, 0, level.SamplesZ - 1);
+    return pyramid[page.Level][static_cast<std::size_t>(z) * level.SamplesX + static_cast<std::size_t>(x)];
 }
 
-void ExpectOverlayIsThePyramidOf(const HeightPageOverlay& overlay, const std::vector<std::vector<float32>>& pyramid,
+// Every page of every level of `layer` holds the tent pyramid of `level0`, bit for bit, apron included; a
+// page it does not hold is zero there. Returns the pages that hold a non-zero sample.
+uint32 ExpectLayerIsThePyramidOf(const HeightPageLayer& layer, const std::vector<float32>& level0,
                                  const std::vector<PageStoreLevel>& levels)
 {
+    const std::vector<std::vector<float32>> pyramid = TentPyramid(level0, levels);
+    uint32 nonZero = 0;
     for (uint32 level = 0; level < levels.size(); ++level)
-        for (uint32 z = 0; z < levels[level].SamplesZ; ++z)
-            for (uint32 x = 0; x < levels[level].SamplesX; ++x)
-                ASSERT_NEAR(overlay.Delta(level, x, z),
-                            pyramid[level][static_cast<std::size_t>(z) * levels[level].SamplesX + x], 1.0e-6f)
-                    << "level " << level << " sample (" << x << ", " << z << ")";
+        for (uint32 z = 0; z < levels[level].PagesZ; ++z)
+            for (uint32 x = 0; x < levels[level].PagesX; ++x)
+            {
+                const PageAddress page{0, uint8(level), x, z};
+                const std::span<const float32> deltas = layer.PageDeltas(page);
+                bool any = false;
+                for (uint32 j = 0; j < kPageStrideSamples; ++j)
+                    for (uint32 i = 0; i < kPageStrideSamples; ++i)
+                    {
+                        const float32 expected = StoredPyramidSample(pyramid, levels, page, i, j);
+                        any = any || expected != 0.0f;
+                        const float32 held = deltas.empty() ? 0.0f : deltas[j * kPageStrideSamples + i];
+                        if (held != expected)
+                        {
+                            ADD_FAILURE() << "level " << level << " page (" << x << ", " << z << ") stride (" << i
+                                          << ", " << j << "): " << held << " held, " << expected << " expected";
+                            return nonZero;
+                        }
+                    }
+                nonZero += any ? 1u : 0u;
+            }
+    return nonZero;
+}
+
+void WriteDense(std::vector<float32>& level0, const PageStoreLevel& shape, const PageSampleRect& rect,
+                std::span<const float32> deltas)
+{
+    for (uint32 z = rect.MinZ; z <= rect.MaxZ; ++z)
+        for (uint32 x = rect.MinX; x <= rect.MaxX; ++x)
+            level0[static_cast<std::size_t>(z) * shape.SamplesX + x] =
+                deltas[static_cast<std::size_t>(z - rect.MinZ) * rect.Width() + (x - rect.MinX)];
 }
 
 } // namespace
 
-TEST(HeightPageOverlayTest, EachLevelIsTheStoresTentOfTheBakedMinusTheBase)
+// A random sequence of writes, some of zeros: after each, every level is the tent pyramid of the written
+// level 0 (the closed form), and the layer holds only the pages with a non-zero sample.
+TEST(HeightPageLayerTest, EveryLevelIsTheTentPyramidOfTheWritesAndOnlyNonZeroPagesAreHeld)
 {
     const std::vector<PageStoreLevel> levels = BuildPageStoreLevels(601, 300);
+    const PageSampleRect whole{0, 0, levels[0].SamplesX - 1u, levels[0].SamplesZ - 1u};
+    std::vector<float32> level0(static_cast<std::size_t>(levels[0].SamplesX) * levels[0].SamplesZ, 0.0f);
+    HeightPageLayer layer(1, levels);
+    std::mt19937 random(5);
+    for (int write = 0; write < 24; ++write)
+    {
+        const uint32 x0 = random() % levels[0].SamplesX;
+        const uint32 z0 = random() % levels[0].SamplesZ;
+        const PageSampleRect rect{x0, z0, std::min(x0 + static_cast<uint32>(random() % 200u), whole.MaxX),
+                                  std::min(z0 + static_cast<uint32>(random() % 150u), whole.MaxZ)};
+        std::vector<float32> deltas = RectDelta(rect, static_cast<float32>(write));
+        if (write % 4 == 3)
+            std::fill(deltas.begin(), deltas.end(), 0.0f);
+        layer.WriteLevel0(0, rect, deltas);
+        WriteDense(level0, levels[0], rect, deltas);
+        const uint32 nonZero = ExpectLayerIsThePyramidOf(layer, level0, levels);
+        EXPECT_EQ(layer.Bytes(), uint64{nonZero} * kPageSampleCount * sizeof(float32))
+            << "write " << write << ": a page of zeros is held";
+    }
+}
+
+TEST(HeightPageLayerTest, AWriteOfZerosOverEveryWrittenSampleLeavesNoPage)
+{
+    const std::vector<PageStoreLevel> levels = BuildPageStoreLevels(601, 300);
+    HeightPageLayer layer(1, levels);
     const PageSampleRect rect{100, 40, 250, 170};
-    const std::vector<float32> delta = RectDelta(rect, 0.5f);
-    const HeightPageOverlay overlay(0, levels, rect, delta);
-    ExpectOverlayIsThePyramidOf(overlay, TentPyramid(Dense(rect, delta, levels.front()), levels), levels);
+    layer.WriteLevel0(0, rect, RectDelta(rect, 0.5f));
+    EXPECT_GT(layer.Bytes(), 0u);
+    EXPECT_LE(layer.Bytes(), HeightPageLayerBytesOver(levels, std::span(&rect, 1))) << "the estimate bounds the pages";
+    layer.WriteLevel0(0, rect, std::vector<float32>(rect.Width() * rect.Height(), 0.0f));
+    EXPECT_EQ(layer.Bytes(), 0u);
 }
 
-TEST(HeightPageOverlayTest, AnEditRebakesOnlyItsRectAndEqualsAFreshOverlay)
+// Two small writes at opposite corners of a large terrain hold the pages under them, not the rect between.
+TEST(HeightPageLayerTest, TwoFarWritesHoldOnlyThePagesUnderThem)
 {
-    const std::vector<PageStoreLevel> levels = BuildPageStoreLevels(601, 300);
-    const PageSampleRect rect{100, 40, 250, 170};
-    std::vector<float32> delta = RectDelta(rect, 0.5f);
-    HeightPageOverlay after(0, levels, rect, delta);
-    const PageSampleRect edit{180, 90, 210, 140};
-    const std::vector<float32> edited = RectDelta(edit, 2.0f);
-    after.Rebake(edit, edited);
-    for (uint32 z = edit.MinZ; z <= edit.MaxZ; ++z)
-        for (uint32 x = edit.MinX; x <= edit.MaxX; ++x)
-            delta[static_cast<std::size_t>(z - rect.MinZ) * rect.Width() + (x - rect.MinX)] =
-                edited[static_cast<std::size_t>(z - edit.MinZ) * edit.Width() + (x - edit.MinX)];
-    ExpectOverlayIsThePyramidOf(after, TentPyramid(Dense(rect, delta, levels.front()), levels), levels);
+    const std::vector<PageStoreLevel> levels = BuildPageStoreLevels(32769, 32769);
+    const std::array<PageSampleRect, 2> rects{PageSampleRect{10, 10, 200, 200}, PageSampleRect{32500, 32500, 32700, 32700}};
+    HeightPageLayer layer(1, levels);
+    for (const PageSampleRect& rect : rects)
+        layer.WriteLevel0(0, rect, std::vector<float32>(rect.Width() * rect.Height(), 1.0f));
+    const uint64 estimate = HeightPageLayerBytesOver(levels, rects);
+    EXPECT_LE(layer.Bytes(), estimate);
+    EXPECT_LT(estimate, 64ull << 20) << "under an eighth of the 512 MiB desktop cap";
+    EXPECT_GT(layer.Bytes(), 0u);
 }
 
-TEST(HeightPageOverlayTest, APageGainsItsLevelsDeltaUnderEveryStoredSampleApronIncluded)
-{
-    const std::vector<PageStoreLevel> levels = BuildPageStoreLevels(601, 300);
-    // Level-0 samples 120 to 140 on both axes: across the edge between pages (1, 0) and (0, 0) and
-    // the edge between (1, 0) and (1, 1), so page (1, 0)'s first apron column (x 127) and last apron
-    // row (z 128) lie inside the overlay.
-    const PageSampleRect rect{120, 120, 140, 140};
-    const HeightPageOverlay overlay(0, levels, rect, RectDelta(rect, 0.5f));
-    const uint32 pageX = 1u;
-    const PageAddress page{0, 0, pageX, 0};
-    std::vector<float32> samples(kPageSampleCount, 1.0f);
-    ASSERT_TRUE(overlay.ApplyToPage(page, samples));
-    const auto sampleAt = [&](uint32 stored, uint32 origin, uint32 count) {
-        return std::min<uint32>(origin + stored > 0u ? origin + stored - 1u : 0u, count - 1u);
-    };
-    for (uint32 row = 0; row < kPageStrideSamples; ++row)
-        for (uint32 i = 0; i < kPageStrideSamples; ++i)
-        {
-            const uint32 x = sampleAt(i, pageX * kPageOwnedSamples, levels[0].SamplesX);
-            const uint32 z = sampleAt(row, 0u, levels[0].SamplesZ);
-            ASSERT_FLOAT_EQ(samples[row * kPageStrideSamples + i], 1.0f + overlay.Delta(0, x, z));
-        }
-    const uint32 lastRow = kPageStrideSamples - 1u;
-    // Stored row r holds level-0 row r - 1 on this page (z 124 is row 125); stored column i holds
-    // x = 127 + i.
-    EXPECT_NE(overlay.Delta(0, pageX * kPageOwnedSamples - 1u, 124u), 0.0f) << "the first apron column is reached";
-    EXPECT_NE(samples[125u * kPageStrideSamples + 0u], 1.0f) << "the first apron column gains its delta";
-    EXPECT_NE(overlay.Delta(0, 130u, kPageOwnedSamples), 0.0f) << "the last apron row is reached";
-    EXPECT_NE(samples[lastRow * kPageStrideSamples + (130u - pageX * kPageOwnedSamples + 1u)], 1.0f)
-        << "the last apron row gains its delta";
-    std::vector<float32> far(kPageSampleCount, 1.0f);
-    EXPECT_FALSE(overlay.ApplyToPage(PageAddress{0, 0, 4, 2}, far)) << "a page no modifier reaches is untouched";
-    EXPECT_EQ(far, std::vector<float32>(kPageSampleCount, 1.0f));
-}
-
-TEST(HeightPageOverlayTest, AnOverlayAddsToThePagesOfItsOwnFaceOnly)
+// A write one sample in from face 0's side changes the pages of the neighbor face past that side: their
+// apron holds face 0's samples one in (PageCubeSampleAt), their own samples stay zero, and no other face
+// holds a page. RefreshRects names the neighbor's edge band.
+TEST(HeightPageLayerTest, AWriteNearAFaceSideChangesTheNeighborFacesApronOnly)
 {
     const std::vector<PageStoreLevel> levels = BuildPageStoreLevels(257, 257);
-    const PageSampleRect rect{60, 60, 70, 70};
-    const HeightPageOverlay overlay(3, levels, rect, std::vector<float32>(rect.Width() * rect.Height(), 5.0f));
-    EXPECT_EQ(overlay.Face(), 3u);
-    std::vector<float32> own(kPageSampleCount, 1.0f);
-    ASSERT_TRUE(overlay.ApplyToPage(PageAddress{3, 0, 0, 0}, own));
-    EXPECT_FLOAT_EQ(own[66u * kPageStrideSamples + 66u], 6.0f) << "level-0 sample (65, 65) is stored at (66, 66)";
-    std::vector<float32> other(kPageSampleCount, 1.0f);
-    EXPECT_FALSE(overlay.ApplyToPage(PageAddress{0, 0, 0, 0}, other)) << "face 0's page at the same place";
-    EXPECT_EQ(other, std::vector<float32>(kPageSampleCount, 1.0f));
-}
-
-TEST(HeightPageOverlayTest, ARectStaysInsideItsFaceOnlyWhileNoLevelReadsAnEdgeSample)
-{
-    const std::vector<PageStoreLevel> levels = BuildPageStoreLevels(257, 257);
-    EXPECT_TRUE(Level0RectStaysInsideFace(levels, PageSampleRect{100, 100, 150, 150}));
-    EXPECT_FALSE(Level0RectStaysInsideFace(levels, PageSampleRect{0, 100, 20, 150})) << "on the edge at level 0";
-    EXPECT_FALSE(Level0RectStaysInsideFace(levels, PageSampleRect{100, 240, 150, 255}))
-        << "inside at level 0, on the edge at a coarser level";
+    HeightPageLayer layer(kPageStoreMaxFaces, levels);
+    const PageSampleRect rect{0, 100, 6, 140};
+    layer.WriteLevel0(0, rect, std::vector<float32>(rect.Width() * rect.Height(), 2.0f));
+    const PageFaceEdge edge = PageFaceNeighbor(0, PageFaceSide::MinX);
+    uint32 neighborPages = 0;
+    for (uint8 face = 1; face < kPageStoreMaxFaces; ++face)
+        for (uint32 level = 0; level < levels.size(); ++level)
+            for (uint32 z = 0; z < levels[level].PagesZ; ++z)
+                for (uint32 x = 0; x < levels[level].PagesX; ++x)
+                {
+                    const PageAddress page{face, uint8(level), x, z};
+                    const std::span<const float32> deltas = layer.PageDeltas(page);
+                    if (deltas.empty())
+                        continue;
+                    ASSERT_EQ(face, edge.Face) << "a face that shares no side with the write holds a page";
+                    ++neighborPages;
+                    const uint32 samples = levels[level].SamplesX;
+                    for (uint32 j = 0; j < kPageStrideSamples; ++j)
+                        for (uint32 i = 0; i < kPageStrideSamples; ++i)
+                        {
+                            const int64 sx = int64{x} * kPageOwnedSamples - 1 + i;
+                            const int64 sz = int64{z} * kPageOwnedSamples - 1 + j;
+                            const PageFaceSample source = PageCubeSampleAt(face, sx, sz, samples);
+                            float32 expected = 0.0f;
+                            if (source.Face == 0)
+                            {
+                                const std::span<const float32> own = layer.PageDeltas(PageAddress{
+                                    0, uint8(level), source.X / kPageOwnedSamples, source.Z / kPageOwnedSamples});
+                                if (!own.empty())
+                                    expected = own[(source.Z % kPageOwnedSamples + 1u) * kPageStrideSamples +
+                                                   source.X % kPageOwnedSamples + 1u];
+                            }
+                            ASSERT_EQ(deltas[j * kPageStrideSamples + i], expected)
+                                << "face " << int(face) << " level " << level << " page (" << x << ", " << z
+                                << ") stride (" << i << ", " << j << ")";
+                        }
+                }
+    EXPECT_GT(neighborPages, 0u) << "the neighbor's apron past the shared side reads the write";
+    std::vector<PageFaceRect> rects;
+    layer.RefreshRects(0, rect, rects);
+    ASSERT_EQ(rects.size(), 2u);
+    EXPECT_EQ(rects[1].Face, edge.Face);
+    const uint32 last0 = levels.front().SamplesX - 1u;
+    const uint32 across = edge.Side == PageFaceSide::MinX || edge.Side == PageFaceSide::MinZ ? 0u : last0;
+    const bool column = edge.Side == PageFaceSide::MinX || edge.Side == PageFaceSide::MaxX;
+    const PageSampleRect& band = rects[1].Level0Rect;
+    const auto [acrossMin, acrossMax, alongMin, alongMax] =
+        column ? std::tie(band.MinX, band.MaxX, band.MinZ, band.MaxZ) : std::tie(band.MinZ, band.MaxZ, band.MinX, band.MaxX);
+    EXPECT_EQ(std::tie(acrossMin, acrossMax), std::tie(across, across)) << "the band is not the neighbor's edge sample";
+    EXPECT_LE(alongMin, edge.Reversed ? last0 - rect.MaxZ : rect.MinZ) << "the band misses rows the write reaches";
+    EXPECT_GE(alongMax, edge.Reversed ? last0 - rect.MinZ : rect.MaxZ) << "the band misses rows the write reaches";
 }
 
 TEST(PageResidencyTest, ARefreshedResidentPageIsRewrittenInItsSlotWithTheRectsRefreshedUnderIt)
@@ -3934,6 +4168,92 @@ TEST(PageResidencyTest, ARefreshedResidentPageIsRewrittenInItsSlotWithTheRectsRe
             << "level " << int(page.Address.Level) << " page (" << page.Address.X << ", " << page.Address.Z
             << ") was rewritten though the edit is not under it";
     EXPECT_EQ(rewritten.size(), provider->Levels().size()) << "one page per level reads the edit";
+    pool.Shutdown();
+}
+
+// A refreshed page keeps the bytes it was fetched with: its rewrite uploads them again, and no fetch starts.
+TEST(PageResidencyTest, ARefreshedResidentPageIsRewrittenFromItsKeptBytesWithoutAFetch)
+{
+    JobSystem::WorkStealingThreadPool pool(2);
+    const auto provider = std::make_shared<GeneratedHeightPageProvider>(NoiseLattice(0.0f, 0.0f, 1024.0f, 1, 1));
+    const PageSource source{nullptr, provider};
+    PageResidencyManager residency(&pool, nullptr, PageResidencyBudget{});
+    residency.ConfigureField(7, 128, 2, 0.4f);
+    residency.Configure(7, 7, source);
+    const std::vector<PageWant> wanted = EveryPage(*provider);
+    residency.Request(7, wanted);
+    uint64 frame = RunFramesUntil(residency, 0, [&] { return residency.FieldCache(7).ResidentCount() == wanted.size(); });
+    ASSERT_EQ(residency.FieldCache(7).ResidentCount(), wanted.size());
+    for (int i = 0; i < 40; ++i)
+    {
+        residency.Request(7, wanted);
+        residency.Update(++frame, 1.0f / 60.0f, false);
+    }
+
+    const PageSampleRect edit{10, 10, 20, 20};
+    residency.Refresh(7, 0, edit);
+    uint32 fetches = 0;
+    uint32 rewrites = 0;
+    for (int i = 0; i < 30; ++i)
+    {
+        residency.Request(7, wanted);
+        residency.Update(++frame, 1.0f / 60.0f, false);
+        fetches += residency.LoadsStartedThisFrame();
+        for (const PageRewrite& rewrite : residency.FieldCache(7).Rewrites())
+        {
+            ++rewrites;
+            const std::vector<uint8>* kept = residency.Bytes(7, rewrite.Page.Address);
+            ASSERT_NE(kept, nullptr);
+            EXPECT_EQ(*kept, *FetchPage(source, rewrite.Page.Address).Bytes) << "the kept bytes are a fresh fetch's";
+        }
+    }
+    EXPECT_EQ(rewrites, provider->Levels().size()) << "one page a level reads the edit";
+    EXPECT_EQ(fetches, 0u) << "a refresh fetched a page whose bytes the residency keeps";
+    pool.Shutdown();
+}
+
+// A resident, unwanted page whose bytes the trim dropped is fetched again for each refresh, and only until
+// the cache releases it, kPageReleaseHysteresisFrames after its last want.
+TEST(PageResidencyTest, ARefreshedPageNoLongerWantedIsFetchedOnlyUntilItsRelease)
+{
+    JobSystem::WorkStealingThreadPool pool(2);
+    const auto provider = std::make_shared<GeneratedHeightPageProvider>(NoiseLattice(0.0f, 0.0f, 1024.0f, 1, 1));
+    constexpr uint64 kHeightPage = 67600u;
+    PageResidencyBudget budget;
+    budget.CpuBytes = 5u * kHeightPage;
+    PageResidencyManager residency(&pool, nullptr, budget);
+    residency.ConfigureField(1, 128, 2, 0.0f);
+    residency.Configure(1, 1, PageSource{nullptr, provider});
+    const std::vector<PageWant> heights = EveryPage(*provider);
+    const std::vector<PageWant> few(heights.end() - 5, heights.end()); // the top two levels, closed under parents
+    uint64 frame = RunFramesUntil(residency, 0, [&] {
+        residency.Request(1, heights);
+        return residency.FieldCache(1).ResidentCount() == heights.size();
+    });
+    ASSERT_EQ(residency.FieldCache(1).ResidentCount(), heights.size());
+    residency.Request(1, few);
+    residency.Update(++frame, 1.0f / 60.0f, false);
+    const CachedPage dropped{1, PageAddress{0, 0, 0, 0}};
+    ASSERT_NE(residency.FieldCache(1).SlotOf(dropped), kNoResidentSlot);
+    ASSERT_EQ(residency.Bytes(1, dropped.Address), nullptr) << "the trim kept the bytes of a page no longer wanted";
+
+    const PageSampleRect edit{10, 10, 20, 20};
+    uint32 fetches = 0;
+    uint32 framesResident = 0;
+    for (uint32 i = 0; i < 2u * kPageReleaseHysteresisFrames; ++i)
+    {
+        const bool resident = residency.FieldCache(1).SlotOf(dropped) != kNoResidentSlot;
+        framesResident += resident ? 1u : 0u;
+        residency.Refresh(1, 0, edit);
+        residency.Request(1, few);
+        residency.Update(++frame, 1.0f / 60.0f, false);
+        if (!resident)
+            EXPECT_EQ(residency.LoadsStartedThisFrame(), 0u) << "a refresh fetched a released page";
+        fetches += residency.LoadsStartedThisFrame();
+    }
+    EXPECT_GT(fetches, 0u) << "a refresh rewrites the resident page from a fetch";
+    EXPECT_EQ(residency.FieldCache(1).SlotOf(dropped), kNoResidentSlot);
+    EXPECT_LE(framesResident, kPageReleaseHysteresisFrames + 1u) << "the page stayed past its release";
     pool.Shutdown();
 }
 

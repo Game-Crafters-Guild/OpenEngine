@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "Video/AsyncVideoRecorder.h"
+#include "Video/VideoWriter.h"
 
 #include <chrono>
 #include <thread>
@@ -455,4 +456,11 @@ TEST(AsyncVideoRecorderTest, WriterFailureStillFinalizesWithErrorText)
     EXPECT_EQ(finishMessage.find("unused success message"), std::string::npos)
         << "a failed recording reported the caller's success message";
     EXPECT_TRUE(recorder.GetStats().Failed);
+}
+
+TEST(VideoCodecNames, TheCaseOfAnExtensionOrACodecNameDoesNotChangeTheCodec)
+{
+    EXPECT_EQ(GuessCodecForMoviePath("C:/Captures/Take.MOV"), VideoCodec::ProRes422);
+    EXPECT_EQ(GuessCodecForMoviePath("C:/Captures/Take.H265"), VideoCodec::HEVC);
+    EXPECT_EQ(ParseVideoCodecName("ProRes4444"), VideoCodec::ProRes4444);
 }

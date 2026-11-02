@@ -71,7 +71,7 @@ class NavigationObstacleSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "NavigationObstacle"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::NavigationObstacle>(entity);
         if (!c)
@@ -84,7 +84,7 @@ class NavigationObstacleSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override
@@ -141,7 +141,7 @@ class NavigationDebugSettingsSchema final : public ISceneComponentSchema
   public:
     std::string_view GetComponentName() const override { return "NavigationDebugSettings"; }
 
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneSaveContext& ctx, std::vector<std::string>& outLines) const override
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, [[maybe_unused]] const SceneWriteContext& ctx, std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::NavigationDebugSettings>(entity);
         if (!c)
@@ -159,7 +159,7 @@ class NavigationDebugSettingsSchema final : public ISceneComponentSchema
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override

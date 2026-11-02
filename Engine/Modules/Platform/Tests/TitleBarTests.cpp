@@ -370,6 +370,28 @@ TEST_F(TitleBarTests, CustomFrameKeepsTheOuterRectOfAMaximizedWindow)
     EXPECT_EQ(after.bottom, before.bottom);
 }
 
+TEST_F(TitleBarTests, InstallGivesAMaximizedWindowItsFinalClientBeforeTheFirstLayout)
+{
+    // The renderer reads the client size after Install and before the first title bar layout.
+    m_Toolbar->Uninstall();
+    SetWindowLongPtrW(m_Handle, GWL_STYLE, GetWindowLongPtrW(m_Handle, GWL_STYLE) | WS_MAXIMIZE);
+    SetWindowPos(m_Handle, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    ASSERT_NE(IsZoomed(m_Handle), FALSE);
+    RECT systemFrame{};
+    GetClientRect(m_Handle, &systemFrame);
+    ASSERT_TRUE(m_Toolbar->Install(&m_Window));
+    RECT installed{};
+    GetClientRect(m_Handle, &installed);
+    EXPECT_GT(installed.bottom, systemFrame.bottom);
+    m_ClientSizeChanges = 0;
+    Customize();
+    RECT laidOut{};
+    GetClientRect(m_Handle, &laidOut);
+    EXPECT_EQ(m_ClientSizeChanges, 0);
+    EXPECT_EQ(laidOut.right, installed.right);
+    EXPECT_EQ(laidOut.bottom, installed.bottom);
+}
+
 TEST_F(TitleBarTests, SuspendingTheCustomFrameKeepsTheFullscreenRect)
 {
     // GLFW's fullscreen gives the window WS_POPUP and the monitor rect.

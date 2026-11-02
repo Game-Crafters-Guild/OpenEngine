@@ -10,11 +10,15 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -472,5 +476,80 @@ TEST(DeferredDestructionTimeline, UpdateBufferStagingSizeIsPayloadNotOffset)
 
     dev->DestroyBuffer(readback);
     dev->DestroyBuffer(dst);
+    dev->WaitForIdle();
+}
+
+namespace
+{
+// Creates `count` buffers, destroys all of them in one frame and returns the
+// wall time of the frames that retire them. Returns no value when a create
+// fails or the retire does not finish in kMaxRetireFrames.
+std::optional<std::chrono::duration<double>> TimeBufferDestroyDrain(IDevice& dev, size_t count)
+{
+    constexpr int kMaxRetireFrames = 16;
+    const size_t deferredBefore = dev.GetResourcePoolStats().deferredBuffers;
+    std::vector<BufferHandle> buffers;
+    buffers.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const BufferHandle buffer = MakeBuffer(dev);
+        if (!buffer.IsValid())
+            return std::nullopt;
+        buffers.push_back(buffer);
+    }
+    for (BufferHandle buffer : buffers)
+        dev.DestroyBuffer(buffer);
+
+    const auto start = std::chrono::steady_clock::now();
+    for (int frame = 0; frame < kMaxRetireFrames; ++frame)
+    {
+        RunOneFrame(dev);
+        if (dev.GetResourcePoolStats().deferredBuffers <= deferredBefore)
+            return std::chrono::steady_clock::now() - start;
+    }
+    return std::nullopt;
+}
+} // namespace
+
+// The deferred destroy drain is linear in the number of retired buffers. Each retire
+// holds the resource tracking mutex that CreateBuffer also takes, so a quadratic
+// drain stalls every thread that creates a buffer.
+TEST(DeferredDestructionTimeline, BufferDestroyDrainIsLinearInBatchSize)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+    {
+        GTEST_SKIP() << "no Vulkan device available";
+    }
+    RunOneFrame(*dev);
+    dev->WaitForIdle();
+
+    // A linear drain grows 4x from the small batch to the large one; a quadratic
+    // drain grows 16x. The bound sits between them, far from both.
+    constexpr size_t kSmallBatch = 8000;
+    constexpr size_t kLargeBatch = 4 * kSmallBatch;
+    constexpr double kMaxGrowth = 8.0;
+    constexpr int kRunsPerBatch = 2;
+
+    // Best of interleaved runs per batch size absorbs scheduling noise.
+    double smallSeconds = std::numeric_limits<double>::max();
+    double largeSeconds = std::numeric_limits<double>::max();
+    for (int run = 0; run < kRunsPerBatch; ++run)
+    {
+        const auto small = TimeBufferDestroyDrain(*dev, kSmallBatch);
+        ASSERT_TRUE(small.has_value()) << "the small batch did not create or retire";
+        const auto large = TimeBufferDestroyDrain(*dev, kLargeBatch);
+        ASSERT_TRUE(large.has_value()) << "the large batch did not create or retire";
+        smallSeconds = std::min(smallSeconds, small->count());
+        largeSeconds = std::min(largeSeconds, large->count());
+    }
+
+    constexpr double kMicrosecondsPerSecond = 1.0e6;
+    RecordProperty("smallBatchDrainMicroseconds", static_cast<int>(smallSeconds * kMicrosecondsPerSecond));
+    RecordProperty("largeBatchDrainMicroseconds", static_cast<int>(largeSeconds * kMicrosecondsPerSecond));
+    const double growth = largeSeconds / smallSeconds;
+    EXPECT_LT(growth, kMaxGrowth) << "a 4x larger destroy batch drained " << growth << "x slower ("
+                                  << smallSeconds << " s for " << kSmallBatch << " buffers, " << largeSeconds
+                                  << " s for " << kLargeBatch << ")";
     dev->WaitForIdle();
 }

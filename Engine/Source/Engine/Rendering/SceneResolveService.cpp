@@ -1,4 +1,5 @@
 #include "Engine/Rendering/SceneResolveService.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
 
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
@@ -736,6 +737,32 @@ SceneResolveCounts SceneResolveService::Counts() const
     counts.PendingMaterials = m_Materials.size();
     counts.KeptModels = m_Kept.size();
     return counts;
+}
+
+struct SceneResolveService::LoadReport
+{
+    static SceneLoadTracker::GateReport Evaluate(const SceneResolveService& service);
+
+    SceneLoadTracker::Category Category;
+    SceneLoadTracker::Gate Gate;
+};
+
+void SceneResolveService::ReportLoadingWork(SceneLoadTracker& tracker)
+{
+    auto report = std::make_shared<LoadReport>();
+    report->Category = tracker.RegisterCategory(
+        {.Id = "scene.resolve", .Label = "Preparing the scene", .Unit = SceneLoadTracker::CostUnit::Entities});
+    report->Gate = report->Category.RegisterGate([this] { return LoadReport::Evaluate(*this); });
+    m_LoadReport = std::move(report);
+}
+
+SceneLoadTracker::GateReport SceneResolveService::LoadReport::Evaluate(const SceneResolveService& service)
+{
+    if (service.m_Held.empty() && service.m_Materials.empty())
+        return {};
+    return {.State = SceneLoadTracker::GateState::Waiting,
+            .Reason = "entities wait for their model or materials for registration",
+            .Pending = service.m_Held.size() + service.m_Materials.size()};
 }
 
 } // namespace GameEngine::Engine::Renderer

@@ -7404,7 +7404,7 @@ TEST(RenderPipelineDeclareTests, ExposureHistoryResourceMaterializesAndZeroInits
     f.Down();
 }
 
-// A "perFrameCopies" history is one buffer per frame in flight: each frame binds the next copy, and
+// A "perFrameCopies" history is one buffer per slot of the frame ring depth: each frame binds the next copy, and
 // that copy starts as the previous frame's contents through a carry on the compute queue, where the
 // pre-exposure snapshot writes the history. The pre-exposure snapshot of a frame then never writes the
 // buffer the previous frame's tonemap reads, so the render graph orders no wait between them. The
@@ -7498,8 +7498,10 @@ TEST(RenderPipelineDeclareTests, ExposureHistoryPerFrameCopiesRotateAndCarryTheP
         EXPECT_EQ(f0.ZeroInitPasses, 1u) << "the first frame starts from zero";
         EXPECT_EQ(f0.CarryPasses, 0u) << "the first frame has no previous contents to carry";
 
+        const uint32_t copies = f.Device->GetFrameRingDepth();
+        ASSERT_GT(copies, f.Device->GetFramesInFlight()) << "a copy is reused only after its frame finished";
         std::vector<Rendering::BufferHandle> buffers = {f0.Buffer};
-        for (uint64_t frameIndex = 1; frameIndex <= Rendering::IDevice::kMaxSupportedFramesInFlight; ++frameIndex)
+        for (uint64_t frameIndex = 1; frameIndex <= copies; ++frameIndex)
         {
             const CopiesFrameResult r = declareFrame(frameIndex);
             EXPECT_EQ(r.CarryPasses, 1u) << "frame " << frameIndex << " starts from the previous frame";
@@ -7510,7 +7512,7 @@ TEST(RenderPipelineDeclareTests, ExposureHistoryPerFrameCopiesRotateAndCarryTheP
             buffers.push_back(r.Buffer);
         }
         EXPECT_EQ(buffers.back(), buffers.front())
-            << "the copies rotate: one per frame the device can keep in flight";
+            << "the copies rotate: one per slot of the device's frame ring depth";
     }
     f.Down();
 }
@@ -8665,6 +8667,69 @@ TEST(RenderPipelineDeclareTests, RequiredPackageUnavailableStitchesFullscreenSta
         EXPECT_EQ(instance.GetOutputRG(f.View, "FinalColor").Id, sceneColor.Id);
         EXPECT_EQ(pools.Persistent.Size(), 3u)
             << "the unavailable package output must not materialize";
+        frame.MarkOutput(sceneColor);
+        frame.Execute();
+        f.Device->WaitForIdle();
+    }
+    f.Down();
+}
+
+// A stage that skipWhen skips publishes its input under its output name only when it has one to
+// publish: its passthroughInput, or its only input. A stage with several inputs and neither publishes
+// nothing and logs nothing. A skip the blueprint did not plan (here, a missing package) still warns.
+TEST(RenderPipelineDeclareTests, SkipWhenWithoutPassthroughInputPublishesNothingAndLogsNothing)
+{
+    FxChainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        f.Rs->SetPackageAvailabilityQuery([](std::string_view name) { return name != "optional-fx"; });
+
+        RenderPipelineBlueprint bp;
+        bp.pipelineName = "SkipWithoutPassthroughTest";
+        bp.passes.push_back(FxChainFixture::WorldPass());
+        bp.passes.push_back(FxChainFixture::FxPass(
+            "SideFx",
+            R"({"id":"SideFx","type":"FullscreenShader","inputs":{"uTex":"SceneColor","uMask":"SceneColor"},"output":"SideOut","shaderPkg":"Shaders/copy.shaderpkg","skipWhen":{"crtIntensity":0.0}})"));
+        bp.passes.push_back(FxChainFixture::FxPass(
+            "OptionalFx",
+            R"({"id":"OptionalFx","type":"FullscreenShader","inputs":{"uTex":"SceneColor","uMask":"SceneColor"},"output":"OptionalOut","shaderPkg":"Shaders/copy.shaderpkg","requiresPackage":"optional-fx"})"));
+        bp.worldColorResolveTargetRef = "SceneColor";
+        FxChainFixture::AddTexResource(bp, "SceneColor");
+        FxChainFixture::AddTexResource(bp, "SideOut");
+        FxChainFixture::AddTexResource(bp, "OptionalOut");
+        bp.outputs.push_back({"FinalColor", "SceneColor"});
+
+        RenderPipelineInstance instance(*f.Rs, f.Registry);
+        instance.SetBlueprint(bp);
+        FramePools pools(f.Device);
+        RenderGraph::RGFrame frame(f.Device, &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(0);
+        const RenderGraph::RGTexture color = frame.ImportPersistentTexture("SP.Color", ColorTargetDesc());
+        const RenderGraph::RGTexture depth = frame.ImportPersistentTexture("SP.Depth", DepthTargetDesc());
+        f.Rs->BeginWorldDrawFrame();
+        f.Rs->BuildWorldBatchKeys();
+        const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{f.View, color, depth, {}}};
+        const std::vector<Rendering::ViewDesc> views(f.Rs->Views().GetViews().begin(),
+                                                     f.Rs->Views().GetViews().end());
+        std::vector<std::string> log;
+        {
+            GameEngine::TestLog::ScopedEngineLogCapture capture(&log, Logger::LogLevel::Warning);
+            instance.Declare(frame, targets, views);
+            Logger::Log::Flush();
+        }
+        std::string logText;
+        for (const auto& line : log)
+            logText += line + "\n";
+
+        EXPECT_EQ(frame.Graph().PassCount(), 1u) << "only the world declares\n" << logText;
+        EXPECT_EQ(logText.find("'SideFx': skipped"), std::string::npos) << "a planned skip warned:\n" << logText;
+        EXPECT_NE(logText.find("'OptionalFx': skipped with 2 inputs and no passthroughInput"), std::string::npos)
+            << "an unplanned skip must still warn:\n" << logText;
+        EXPECT_EQ(pools.Persistent.Size(), 3u) << "a skipped stage's output must not materialize";
+        const auto* fr = instance.FrameResourcesFor(&frame);
+        ASSERT_NE(fr, nullptr);
+        const RenderGraph::RGTexture sceneColor = fr->Textures.at({f.View, "View.EffectiveColor"});
         frame.MarkOutput(sceneColor);
         frame.Execute();
         f.Device->WaitForIdle();
@@ -10686,6 +10751,105 @@ TEST(RenderPipelineDeclareTests, GrassRegistersItsMaterialOffTheMainThread)
         }
         const auto cmds = PumpGrassForwardCommands(f, instance, v, 8u, frameIndex);
         EXPECT_EQ(cmds.size(), 2u) << "grass draws once its blade pipeline has been built";
+    }
+    f.Down();
+}
+
+// #5714: the variant compiles a frame's draws wait on all reach the compile gate in the frame that
+// requests them. The gate alone bounds how many run, so a burst of requests (most of them cache
+// hits on a cold start) is never metered out a few per frame while the workers idle.
+TEST(RenderPipelineDeclareTests, OneFrameSubmitsEveryRequestedVariantCompile)
+{
+    namespace fs = std::filesystem;
+    const fs::path tempRoot =
+        fs::temp_directory_path() /
+        ("ge_variant_submit_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code ec;
+    fs::create_directories(tempRoot / "Assets", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    ScriptsConfig scriptsConfig{};
+    scriptsConfig.disableClr = true;
+    scriptsConfig.enableHotReload = false;
+    scriptsConfig.enableAsyncHotReload = false;
+    scriptsConfig.enableAutoProjectGeneration = false;
+    GameEngine::EngineCore::GetInstance().SetScriptsConfig(scriptsConfig);
+    ApplicationConfig cfg{};
+    cfg.Name = "VariantSubmitTest";
+    cfg.WorkspaceDirectory = tempRoot.string();
+    cfg.AssetDirectory = "Assets";
+    const fs::path callerWorkingDirectory = fs::current_path(ec);
+    const bool engineUp = GameEngine::EngineCore::GetInstance().Initialize(cfg);
+    struct EngineGuard
+    {
+        bool Up;
+        fs::path Temp;
+        fs::path CallerWorkingDirectory;
+        ~EngineGuard()
+        {
+            if (Up)
+                GameEngine::EngineCore::GetInstance().Shutdown();
+            std::error_code ignored;
+            fs::current_path(CallerWorkingDirectory, ignored);
+            fs::remove_all(Temp, ignored);
+        }
+    } engineGuard{engineUp, tempRoot, callerWorkingDirectory};
+    ASSERT_TRUE(engineUp) << "EngineCore failed to initialize (scripting-free config)";
+
+    TerrainFixture f;
+    if (!f.Up())
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        const fs::path adapterDir = GameEngine::TestPaths::StagedRenderingShadersDir();
+        if (!fs::exists(adapterDir / "Adapters"))
+        {
+            f.Down();
+            GTEST_SKIP() << "staged shader sources not found";
+        }
+        Rendering::MaterialBuildContext mbc{};
+        mbc.AdapterShaderDir = adapterDir;
+        mbc.CacheRoot = tempRoot / "ShaderCache";
+        mbc.IncludeDirs = {adapterDir};
+        f.Rs->Materials().SetMaterialBuildContext(mbc);
+
+        MaterialDocument doc{};
+        doc.materialName = "VariantSubmitPBR";
+        doc.lightingModel = "StandardPBR";
+        doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+        Material* material = f.Rs->Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+        ASSERT_NE(material, nullptr);
+        ASSERT_TRUE(material->GetGraphicsPipelineId().IsValid()) << "a colour variant copies the base pipeline";
+
+        // More requests than half the workers, so a per-frame cap of workers / 2 leaves some pending.
+        const size_t requestCount = GameEngine::EngineCore::GetInstance().GetJobSystem().GetWorkerCount() / 2u + 4u;
+        const MaterialKeyword passKeywords =
+            MaterialKeyword::ForwardPlus | MaterialKeyword::Instanced | MaterialKeyword::Shadows;
+        constexpr uint32_t kSampleCounts[] = {1u, 2u, 4u, 8u};
+        constexpr FrontFace kFrontFaces[] = {FrontFace::CounterClockwise, FrontFace::Clockwise};
+        constexpr PrimitiveTopology kTopologies[] = {PrimitiveTopology::TriangleList, PrimitiveTopology::TriangleStrip};
+        constexpr size_t kDistinctKeys = std::size(kSampleCounts) * std::size(kFrontFaces) * std::size(kTopologies);
+        if (requestCount > kDistinctKeys)
+        {
+            f.Down();
+            GTEST_SKIP() << "the pool has more workers than the test has distinct variant keys (" << kDistinctKeys
+                         << " keys for " << requestCount << " requests)";
+        }
+        PipelineVariantCache& variants = f.Rs->Materials().Variants();
+        std::vector<PipelineVariantCache::InstancedVariantKey> keys;
+        for (size_t i = 0; i < requestCount; ++i)
+            keys.push_back(variants.EnqueueColorVariantCompileForTesting(
+                *material, VertexAttributeFlags::StandardMesh | VertexAttributeFlags::HasColor,
+                kTopologies[i % std::size(kTopologies)], passKeywords,
+                kSampleCounts[(i / std::size(kTopologies)) % std::size(kSampleCounts)],
+                kFrontFaces[i / (std::size(kTopologies) * std::size(kSampleCounts))]));
+        ASSERT_EQ(variants.PendingVariantCompileCount(), requestCount) << "every request is a distinct variant key";
+
+        variants.SubmitPendingVariantCompiles();
+        EXPECT_EQ(variants.PendingVariantCompileCount(), 0u)
+            << "one frame's submit hands every requested variant compile to the compile gate";
+
+        f.Rs->Materials().FlushAsyncMaterialCompiles();
+        for (const PipelineVariantCache::InstancedVariantKey& key : keys)
+            EXPECT_TRUE(variants.HasColorVariantForTesting(key)) << "a submitted variant compile did not land";
     }
     f.Down();
 }
@@ -18647,8 +18811,8 @@ TEST(RenderPipelineDeclareTests, HzbMipViewsOfAResizedViewOutliveTheFrameThatRep
     {
         HzbTwoViewRig rig;
         ASSERT_TRUE(rig.Init(device));
-        const uint32_t framesInFlight = rig.Pools->Ring.FramesInFlight();
-        ASSERT_EQ(framesInFlight, 2u)
+        const uint32_t slotCount = rig.Pools->Ring.SlotCount();
+        ASSERT_EQ(slotCount, 2u)
             << "the retire arithmetic below is written for a 2-frame window";
 
         constexpr uint32_t kSmall = 64u;  // 7 mips
@@ -20092,6 +20256,170 @@ TEST(RenderPipelineDeclareTests, SceneWarmRequestsANotedDrawsPipelineOnceTheView
             << "the warmed pipeline is not the one the world pass draws with";
         frame.Execute();
         device->WaitForIdle();
+        rs.Shutdown();
+    }
+}
+
+namespace
+{
+// One frame of `viewId`'s world pass, with `forwardDraw` emitted into its colour pass when it is set:
+// the frame begin steps the scene warm, and the pass declares the view's world-pass keywords and
+// formats for the next step.
+void RecordWorldFrame(IDevice& device, RenderServices& rs, RenderGraph::RGFrame& frame, ViewId viewId,
+                      uint64_t frameIndex, const DrawCommand* forwardDraw)
+{
+    frame.BeginFrame(frameIndex);
+    RenderServices::WorldPassTargetsRG targets{};
+    targets.Color = frame.ImportPersistentTexture("Warm.Color", ColorTargetDesc());
+    targets.Depth = frame.ImportPersistentTexture("Warm.Depth", DepthTargetDesc());
+    rs.BeginWorldDrawFrame();
+    rs.BuildWorldBatchKeys();
+    if (forwardDraw)
+        rs.EmitForwardCommand(viewId, *forwardDraw, ForwardDrawDepth::ColourPass);
+    ASSERT_TRUE(rs.AddWorldPassForView(frame, viewId, targets, MaterialKeyword::ForwardPlus).Pass.IsValid());
+    frame.Execute();
+    device.WaitForIdle();
+}
+
+size_t CountSceneWarmLines(const std::vector<std::string>& log)
+{
+    Logger::Log::Flush();
+    return static_cast<size_t>(std::count_if(log.begin(), log.end(), [](const std::string& line) {
+        return line.find("Scene draw warm") != std::string::npos;
+    }));
+}
+
+// A line the colour-variant cache logs when a draw finds its pipeline cold.
+bool IsColdServeLine(const Logger::LogMessage& line)
+{
+    return line.Message.find("GetOrCompileColorVariant") != std::string::npos;
+}
+} // namespace
+
+// The scene warm logs a warm episode only when a draw waited at least one frame for its pipelines. A
+// draw whose pipelines are already warm (a unit spawned with a material the scene draws) settles in
+// the frame that requests it and logs nothing.
+TEST(RenderPipelineDeclareTests, SceneWarmLogsOnlyAnEpisodeThatWaited)
+{
+    namespace fs = std::filesystem;
+    auto* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    const fs::path adapterDir = GameEngine::TestPaths::StagedRenderingShadersDir();
+    if (!fs::exists(adapterDir / "Adapters"))
+        GTEST_SKIP() << "staged shader sources not found: " << adapterDir.string();
+    {
+        RenderServices rs;
+        ASSERT_TRUE(rs.Initialize(device));
+        const CameraId camId = rs.Views().AllocateCamera("WarmLogCam");
+        const ViewId viewId = rs.Views().AllocateView("WarmLogView", camId);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
+        Rendering::ViewClearConfig clear{};
+        clear.clearColor = true;
+        clear.clearDepth = true;
+        clear.clearDepthValue = 0.0f;
+        rs.Views().SetViewTargets(viewId, 0, 0, 0, clear);
+        Rendering::MaterialBuildContext mbc{};
+        mbc.AdapterShaderDir = adapterDir;
+        mbc.CacheRoot = fs::temp_directory_path() / "ge_scene_warm_log_cache";
+        mbc.IncludeDirs = {adapterDir};
+        rs.Materials().SetMaterialBuildContext(mbc);
+
+        MaterialDocument doc{};
+        doc.materialName = "SceneWarmLogProbe";
+        doc.lightingModel = "StandardPBR";
+        doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+        const GUID guid = GUID::Generate();
+        ASSERT_NE(rs.Materials().RegisterMaterialFromDocument(guid, doc), nullptr);
+        const MeshGPUHandle mesh = RegisterTestTriangle(rs, /*retainCpuMesh=*/false);
+        SceneDrawWarm& warm = rs.Materials().SceneWarm();
+
+        std::vector<std::string> log;
+        GameEngine::TestLog::ScopedEngineLogCapture capture(&log, Logger::LogLevel::Info);
+        FramePools pools(device);
+        RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
+        // Noted before the view declares its world pass: the draw waits at least one frame.
+        warm.Note(mesh, guid);
+        constexpr uint64_t kMaxWarmFrames = 8;
+        uint64_t frameIndex = 0;
+        while (frameIndex < kMaxWarmFrames && CountSceneWarmLines(log) == 0)
+            RecordWorldFrame(*device, rs, frame, viewId, frameIndex++, nullptr);
+        ASSERT_EQ(CountSceneWarmLines(log), 1u) << "an episode that waited did not log its line";
+
+        warm.Note(mesh, guid);
+        RecordWorldFrame(*device, rs, frame, viewId, frameIndex++, nullptr);
+        RecordWorldFrame(*device, rs, frame, viewId, frameIndex++, nullptr);
+        EXPECT_EQ(warm.PendingCount(), 0u) << "the frame begin did not request the draw noted again";
+        EXPECT_EQ(CountSceneWarmLines(log), 1u) << "a draw whose pipelines were warm logged a warm episode";
+        rs.Shutdown();
+    }
+}
+
+// A colour draw whose pipeline is still building on a worker is skipped, and its line says so at Info
+// level. A build that fails logs its warning in the device; the cold serve itself never warns.
+TEST(RenderPipelineDeclareTests, ColdServeOfAPendingPipelineLogsStillBuildingAndNoWarning)
+{
+    namespace fs = std::filesystem;
+    auto* device = SharedHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    const fs::path adapterDir = GameEngine::TestPaths::StagedRenderingShadersDir();
+    if (!fs::exists(adapterDir / "Adapters"))
+        GTEST_SKIP() << "staged shader sources not found: " << adapterDir.string();
+    {
+        RenderServices rs;
+        ASSERT_TRUE(rs.Initialize(device));
+        const CameraId camId = rs.Views().AllocateCamera("ColdServeCam");
+        const ViewId viewId = rs.Views().AllocateView("ColdServeView", camId);
+        rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
+        Rendering::ViewClearConfig clear{};
+        clear.clearColor = true;
+        clear.clearDepth = true;
+        clear.clearDepthValue = 0.0f;
+        rs.Views().SetViewTargets(viewId, 0, 0, 0, clear);
+        Rendering::MaterialBuildContext mbc{};
+        mbc.AdapterShaderDir = adapterDir;
+        mbc.CacheRoot = fs::temp_directory_path() / "ge_cold_serve_log_cache";
+        mbc.IncludeDirs = {adapterDir};
+        rs.Materials().SetMaterialBuildContext(mbc);
+
+        MaterialDocument doc{};
+        doc.materialName = "ColdServeLogProbe";
+        doc.lightingModel = "StandardPBR";
+        doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+        const Material* material = rs.Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+        ASSERT_NE(material, nullptr);
+        DrawCommand draw{};
+        draw.Material = material;
+        draw.Geometry.Mesh = RegisterTestTriangle(rs, /*retainCpuMesh=*/false);
+        draw.IndexCount = 3;
+
+        GameEngine::Testing::HeldPipelineBuilds held(*device);
+        std::vector<Logger::LogMessage> log;
+        GameEngine::TestLog::ScopedEngineLogCapture capture(&log, Logger::LogLevel::Info);
+        FramePools pools(device);
+        RenderGraph::RGFrame frame(device, &pools.Persistent, &pools.Transient, &pools.Ring);
+        // The first frames compile and publish the draw's variant; its pipeline build then waits in `held`.
+        constexpr uint64_t kMaxColdFrames = 8;
+        uint64_t frameIndex = 0;
+        while (frameIndex < kMaxColdFrames && std::none_of(log.begin(), log.end(), IsColdServeLine))
+        {
+            RecordWorldFrame(*device, rs, frame, viewId, frameIndex++, &draw);
+            Logger::Log::Flush();
+        }
+        const auto coldServe = std::find_if(log.begin(), log.end(), IsColdServeLine);
+        ASSERT_NE(coldServe, log.end()) << "no draw was served while its pipeline was building";
+        EXPECT_EQ(coldServe->Level, Logger::LogLevel::Info) << coldServe->Message;
+        EXPECT_NE(coldServe->Message.find("is still building for the current pass"), std::string::npos)
+            << coldServe->Message;
+        EXPECT_FALSE(held.Jobs.empty()) << "the pipeline was not pending when its draw was served";
+
+        held.RunAll();
+        RecordWorldFrame(*device, rs, frame, viewId, frameIndex++, &draw);
+        Logger::Log::Flush();
+        EXPECT_TRUE(std::none_of(log.begin(), log.end(), [](const Logger::LogMessage& line) {
+            return line.Level >= Logger::LogLevel::Warning && IsColdServeLine(line);
+        })) << "a cold serve warned";
         rs.Shutdown();
     }
 }

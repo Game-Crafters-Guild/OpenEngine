@@ -1,15 +1,16 @@
 #include "Picking/PickRootResolver.h"
 
-#include <algorithm>
-#include <unordered_map>
-#include <vector>
-
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Components/RuntimeOnlyEntity.h"
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "Editor/Entities/EditorComponentTraits.h"
 #include "Scene/SceneRaycast.h"
+
+#include <algorithm>
+#include <unordered_map>
+#include <vector>
 
 namespace GameEngine::Editor::Picking
 {
@@ -179,8 +180,15 @@ void BuildPickCandidates(ECS::World& world,
     }
     for (const Scene::PickHit& hit : sortedHits)
     {
-        if (std::find(outCandidates.begin(), outCandidates.end(), hit.Entity) == outCandidates.end())
-            outCandidates.push_back(hit.Entity);
+        ECS::EntityHandle candidate = hit.Entity;
+        if (!exactPick && world.HasComponent<Components::RuntimeOnlyEntity>(hit.Entity))
+        {
+            const ECS::EntityHandle climbRoot = FindOutermostClimbRoot(world, hit.Entity);
+            if (climbRoot.IsValid())
+                candidate = climbRoot;
+        }
+        if (std::find(outCandidates.begin(), outCandidates.end(), candidate) == outCandidates.end())
+            outCandidates.push_back(candidate);
     }
 }
 

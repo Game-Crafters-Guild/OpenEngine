@@ -20,7 +20,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <initializer_list>
 #include <random>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -34,28 +36,27 @@ namespace {
 
 using SteadyClock = std::chrono::steady_clock;
 
-/** Graph-unit helper: pool-less task with an explicit id. */
-class GraphOnlyTask : public Task {
+/** Graph-unit helper: pool-less payload with an explicit id and raw dependency ids. */
+class GraphOnlyTask : public TaskBase {
 public:
-    explicit GraphOnlyTask(TaskId id) : Task(nullptr, id) {}
+    explicit GraphOnlyTask(TaskId id) : TaskBase(id, kFlagNeedsTaskData | kFlagDependencyManaged) {}
     void Execute() override {}
+    void AddDependency(TaskId dependencyId) { Dependencies.push_back(dependencyId); }
+
+    Vector<TaskId> Dependencies;
 };
 
-/** Pool-level task whose body is supplied by the test. */
-class ScriptedTask : public Task {
-public:
-    ScriptedTask(WorkStealingThreadPool* pool, std::function<void()> body)
-        : Task(pool), m_Body(std::move(body)) {}
+/** Registers `task` with the dependency ids it declares. */
+UniquePtr<TaskBase> RegisterInGraph(TaskDependencyGraph& graph, UniquePtr<GraphOnlyTask> task) {
+    const Vector<TaskId> dependencies = task->Dependencies;
+    return graph.Register(std::move(task), dependencies);
+}
 
-    void Execute() override {
-        if (m_Body) {
-            m_Body();
-        }
-    }
-
-private:
-    std::function<void()> m_Body;
-};
+/** Submits `body` as a graph task that runs after `dependencies` (none: a graph root). */
+TaskHandle SubmitInGraph(WorkStealingThreadPool& pool, std::function<void()> body,
+                         std::initializer_list<TaskHandle> dependencies = {}) {
+    return pool.Submit(std::move(body), std::span<const TaskHandle>(dependencies.begin(), dependencies.size()));
+}
 
 bool WaitUntil(const std::function<bool()>& pred, std::chrono::milliseconds timeout) {
     const auto deadline = SteadyClock::now() + timeout;
@@ -96,14 +97,14 @@ protected:
 };
 
 TEST_F(TaskDependencyGraphTest, RegisterWithoutDependenciesIsImmediatelyReady) {
-    auto ready = graph.Register(MakeUnique<GraphOnlyTask>(1));
+    auto ready = RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1));
     ASSERT_NE(ready, nullptr);
     EXPECT_TRUE(graph.TaskExists(1));
     EXPECT_EQ(graph.GetTrackedTaskCountForTests(), 1u);
 }
 
 TEST_F(TaskDependencyGraphTest, CompletedNodeIsErased) {
-    auto ready = graph.Register(MakeUnique<GraphOnlyTask>(1));
+    auto ready = RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1));
     ASSERT_NE(ready, nullptr);
 
     auto actions = graph.MarkCompleted(1, true);
@@ -119,11 +120,11 @@ TEST_F(TaskDependencyGraphTest, CompletedNodeIsErased) {
 }
 
 TEST_F(TaskDependencyGraphTest, DependentParksUntilDependencyCompletes) {
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(1)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1)), nullptr);
 
     auto dependent = MakeUnique<GraphOnlyTask>(2);
     dependent->AddDependency(TaskId{1});
-    EXPECT_EQ(graph.Register(std::move(dependent)), nullptr); // parked
+    EXPECT_EQ(RegisterInGraph(graph, std::move(dependent)), nullptr); // parked
     EXPECT_EQ(graph.GetTrackedTaskCountForTests(), 2u);
 
     auto actions = graph.MarkCompleted(1, true);
@@ -138,13 +139,13 @@ TEST_F(TaskDependencyGraphTest, DependentParksUntilDependencyCompletes) {
 }
 
 TEST_F(TaskDependencyGraphTest, FanInReleasesAfterLastDependency) {
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(1)), nullptr);
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(2)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(2)), nullptr);
 
     auto dependent = MakeUnique<GraphOnlyTask>(3);
     dependent->AddDependency(TaskId{1});
     dependent->AddDependency(TaskId{2});
-    EXPECT_EQ(graph.Register(std::move(dependent)), nullptr);
+    EXPECT_EQ(RegisterInGraph(graph, std::move(dependent)), nullptr);
 
     auto actions = graph.MarkCompleted(1, true);
     EXPECT_TRUE(actions.ReadyTasks.empty()); // one dependency still pending
@@ -155,12 +156,12 @@ TEST_F(TaskDependencyGraphTest, FanInReleasesAfterLastDependency) {
 }
 
 TEST_F(TaskDependencyGraphTest, FanOutReleasesAllDependents) {
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(1)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1)), nullptr);
 
     for (TaskId id : {TaskId{2}, TaskId{3}}) {
         auto dependent = MakeUnique<GraphOnlyTask>(id);
         dependent->AddDependency(TaskId{1});
-        EXPECT_EQ(graph.Register(std::move(dependent)), nullptr);
+        EXPECT_EQ(RegisterInGraph(graph, std::move(dependent)), nullptr);
     }
 
     auto actions = graph.MarkCompleted(1, true);
@@ -170,26 +171,26 @@ TEST_F(TaskDependencyGraphTest, FanOutReleasesAllDependents) {
 TEST_F(TaskDependencyGraphTest, AbsentDependencyIsTreatedAsTerminal) {
     // F8: complete-and-erase the dependency first; the late dependent must
     // run instead of parking forever.
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(1)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1)), nullptr);
     graph.MarkCompleted(1, true);
 
     auto dependent = MakeUnique<GraphOnlyTask>(2);
     dependent->AddDependency(TaskId{1});
-    auto ready = graph.Register(std::move(dependent));
+    auto ready = RegisterInGraph(graph, std::move(dependent));
     ASSERT_NE(ready, nullptr);
     EXPECT_EQ(ready->GetTaskId(), 2u);
 }
 
 TEST_F(TaskDependencyGraphTest, FailurePropagatesToParkedDependentsAndErases) {
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(1)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1)), nullptr);
 
     auto mid = MakeUnique<GraphOnlyTask>(2);
     mid->AddDependency(TaskId{1});
-    ASSERT_EQ(graph.Register(std::move(mid)), nullptr);
+    ASSERT_EQ(RegisterInGraph(graph, std::move(mid)), nullptr);
 
     auto leaf = MakeUnique<GraphOnlyTask>(3);
     leaf->AddDependency(TaskId{2});
-    ASSERT_EQ(graph.Register(std::move(leaf)), nullptr);
+    ASSERT_EQ(RegisterInGraph(graph, std::move(leaf)), nullptr);
 
     auto actions = graph.MarkCompleted(1, false);
     ASSERT_EQ(actions.Events.size(), 3u);
@@ -203,15 +204,15 @@ TEST_F(TaskDependencyGraphTest, FailurePropagatesToParkedDependentsAndErases) {
 }
 
 TEST_F(TaskDependencyGraphTest, CancelPendingRetiresPayloadAndCascades) {
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(1)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1)), nullptr);
 
     auto mid = MakeUnique<GraphOnlyTask>(2);
     mid->AddDependency(TaskId{1});
-    ASSERT_EQ(graph.Register(std::move(mid)), nullptr);
+    ASSERT_EQ(RegisterInGraph(graph, std::move(mid)), nullptr);
 
     auto leaf = MakeUnique<GraphOnlyTask>(3);
     leaf->AddDependency(TaskId{2});
-    ASSERT_EQ(graph.Register(std::move(leaf)), nullptr);
+    ASSERT_EQ(RegisterInGraph(graph, std::move(leaf)), nullptr);
 
     TaskGraphActions actions;
     ASSERT_TRUE(graph.CancelPending(2, actions));
@@ -230,7 +231,7 @@ TEST_F(TaskDependencyGraphTest, CancelPendingRetiresPayloadAndCascades) {
 }
 
 TEST_F(TaskDependencyGraphTest, CancelIsRefusedForRunningAndUnknownTasks) {
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(1)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1)), nullptr);
     EXPECT_TRUE(graph.MarkRunning(1));
 
     TaskGraphActions actions;
@@ -240,7 +241,7 @@ TEST_F(TaskDependencyGraphTest, CancelIsRefusedForRunningAndUnknownTasks) {
 }
 
 TEST_F(TaskDependencyGraphTest, MarkRunningReportsMembership) {
-    ASSERT_NE(graph.Register(MakeUnique<GraphOnlyTask>(1)), nullptr);
+    ASSERT_NE(RegisterInGraph(graph, MakeUnique<GraphOnlyTask>(1)), nullptr);
     EXPECT_TRUE(graph.MarkRunning(1));
 
     graph.MarkCompleted(1, true);
@@ -250,8 +251,8 @@ TEST_F(TaskDependencyGraphTest, MarkRunningReportsMembership) {
 
 #if GTEST_HAS_DEATH_TEST && !defined(NDEBUG)
 // F7: an absent dependency id must be RECENTLY-TERMINAL. A never-submitted id
-// is a submit-order violation that would silently run the dependent early —
-// the debug tombstone ring turns it into a loud abort.
+// would silently run the dependent early, so the debug tombstone ring turns it
+// into a loud abort.
 TEST(TaskGraphDeathTest, NeverSubmittedDependencyTripsTombstoneAssert) {
     ASSERT_DEATH(
         {
@@ -265,10 +266,10 @@ TEST(TaskGraphDeathTest, NeverSubmittedDependencyTripsTombstoneAssert) {
             TaskDependencyGraph graph;
             auto dependent = MakeUnique<GraphOnlyTask>(2);
             dependent->AddDependency(TaskId{999});
-            auto ready = graph.Register(std::move(dependent));
+            auto ready = RegisterInGraph(graph, std::move(dependent));
             (void)ready;
         },
-        "submit-order violation");
+        "was never submitted");
 }
 #endif
 
@@ -298,16 +299,12 @@ TEST_F(TaskGraphPoolTest, GraphNodeCountReturnsToZeroAfterTenThousandChains) {
     tails.reserve(kChains);
 
     for (int i = 0; i < kChains; ++i) {
-        auto dep = MakeUnique<ScriptedTask>(&pool, [&executed] {
+        TaskHandle dep = SubmitInGraph(pool, [&executed] {
             executed.fetch_add(1, std::memory_order_relaxed);
         });
-        auto dependent = MakeUnique<ScriptedTask>(&pool, [&executed] {
+        tails.push_back(SubmitInGraph(pool, [&executed] {
             executed.fetch_add(1, std::memory_order_relaxed);
-        });
-        dependent->AddDependency(dep->GetTaskId());
-
-        pool.Submit(std::move(dep));
-        tails.push_back(pool.Submit(std::move(dependent)));
+        }, {dep}));
     }
 
     for (auto& handle : tails) {
@@ -327,7 +324,7 @@ TEST_F(TaskGraphPoolTest, GraphNodeCountReturnsToZeroAfterTenThousandChains) {
  * The release decision (absent-dep at Register) is made under the graph
  * mutex, potentially by a different thread than the one that later flips the
  * dependency's TaskData in ProcessGraphActions — the guarded-TryGetResult /
- * IsCompleted contract at every production AddDependency site broke in that
+ * IsCompleted contract at every production dependency site broke in that
  * gap. CompleteGraphTask's terminal-status pre-store closes it; this is the
  * probabilistic pin (back-to-back submits against 4 racing workers).
  */
@@ -340,17 +337,12 @@ TEST_F(TaskGraphPoolTest, DependencyHandleIsTerminalWhenReleasedDependentRuns) {
     tails.reserve(kIterations);
 
     for (int i = 0; i < kIterations; ++i) {
-        auto dep = MakeUnique<ScriptedTask>(&pool, [] {});
-        const TaskId depId = dep->GetTaskId();
-        TaskHandle depHandle = pool.Submit(std::move(dep));
-
-        auto dependent = MakeUnique<ScriptedTask>(&pool, [depHandle, &violations] {
+        TaskHandle depHandle = SubmitInGraph(pool, [] {});
+        tails.push_back(SubmitInGraph(pool, [depHandle, &violations] {
             if (!depHandle.IsCompleted()) {
                 violations.fetch_add(1, std::memory_order_relaxed);
             }
-        });
-        dependent->AddDependency(depId);
-        tails.push_back(pool.Submit(std::move(dependent)));
+        }, {depHandle}));
     }
 
     for (auto& handle : tails) {
@@ -374,21 +366,13 @@ TEST_F(TaskGraphPoolTest, FanInDependencyHandlesAreTerminalWhenDependentRuns) {
     tails.reserve(kIterations);
 
     for (int i = 0; i < kIterations; ++i) {
-        auto a = MakeUnique<ScriptedTask>(&pool, [] {});
-        auto b = MakeUnique<ScriptedTask>(&pool, [] {});
-        const TaskId aId = a->GetTaskId();
-        const TaskId bId = b->GetTaskId();
-        TaskHandle aHandle = pool.Submit(std::move(a));
-        TaskHandle bHandle = pool.Submit(std::move(b));
-
-        auto dependent = MakeUnique<ScriptedTask>(&pool, [aHandle, bHandle, &violations] {
+        TaskHandle aHandle = SubmitInGraph(pool, [] {});
+        TaskHandle bHandle = SubmitInGraph(pool, [] {});
+        tails.push_back(SubmitInGraph(pool, [aHandle, bHandle, &violations] {
             if (!aHandle.IsCompleted() || !bHandle.IsCompleted()) {
                 violations.fetch_add(1, std::memory_order_relaxed);
             }
-        });
-        dependent->AddDependency(aId);
-        dependent->AddDependency(bId);
-        tails.push_back(pool.Submit(std::move(dependent)));
+        }, {aHandle, bHandle}));
     }
 
     for (auto& handle : tails) {
@@ -415,20 +399,14 @@ TEST_F(TaskGraphPoolTest, SubmitDependentWhileDependencyCompletesStress) {
     for (int i = 0; i < kIterations; ++i) {
         std::atomic<bool> dependentRan{false};
 
-        auto dep = MakeUnique<ScriptedTask>(&pool, [] {});
-        const TaskId depId = dep->GetTaskId();
-
-        auto dependent = MakeUnique<ScriptedTask>(&pool, [&dependentRan] {
-            dependentRan.store(true, std::memory_order_release);
-        });
-        dependent->AddDependency(depId);
-
         // The dependency starts executing on a worker immediately; the jitter
         // straddles its completion so the dependent's Register races the
         // dependency's MarkCompleted from both sides.
-        pool.Submit(std::move(dep));
+        TaskHandle depHandle = SubmitInGraph(pool, [] {});
         BusyWaitUs(jitterUs(rng));
-        TaskHandle handle = pool.Submit(std::move(dependent));
+        TaskHandle handle = SubmitInGraph(pool, [&dependentRan] {
+            dependentRan.store(true, std::memory_order_release);
+        }, {depHandle});
 
         ASSERT_TRUE(WaitUntilDone(handle, std::chrono::seconds(10)))
             << "dependent stranded at iteration " << i;
@@ -461,24 +439,20 @@ TEST_F(TaskGraphPoolTest, SubmitFromCompletionCallbackDoesNotDeadlock) {
     std::atomic<bool> innerSubmitted{false};
     TaskHandle innerHandle;
 
-    auto outer = MakeUnique<ScriptedTask>(&pool, [&gate] {
+    TaskHandle outerHandle = SubmitInGraph(pool, [&gate] {
         while (!gate.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
     });
-    const TaskId outerId = outer->GetTaskId();
-    TaskHandle outerHandle = pool.Submit(std::move(outer));
 
     // Registered before the gate opens, so the callback fires from the
     // worker's completion path.
-    outerHandle.OnComplete([&, outerId] {
-        auto inner = MakeUnique<ScriptedTask>(&pool, [&innerRan] {
+    outerHandle.OnComplete([&] {
+        // The outer task is terminal when its callbacks fire, so the inner
+        // task names a dependency that adds no edge.
+        innerHandle = SubmitInGraph(pool, [&innerRan] {
             innerRan.store(true, std::memory_order_release);
-        });
-        // The outer task's node is erased by the time its callbacks fire —
-        // this also exercises the absent-dependency path from a callback.
-        inner->AddDependency(outerId);
-        innerHandle = pool.Submit(std::move(inner));
+        }, {outerHandle});
         innerSubmitted.store(true, std::memory_order_release);
     });
 
@@ -499,18 +473,14 @@ TEST_F(TaskGraphPoolTest, SubmitFromCompletionCallbackDoesNotDeadlock) {
 TEST_F(TaskGraphPoolTest, DependentSubmittedAfterDependencyCompletedRunsImmediately) {
     WorkStealingThreadPool pool(2);
 
-    auto dep = MakeUnique<ScriptedTask>(&pool, [] {});
-    const TaskId depId = dep->GetTaskId();
-    TaskHandle depHandle = pool.Submit(std::move(dep));
+    TaskHandle depHandle = SubmitInGraph(pool, [] {});
     depHandle.Wait();
     EXPECT_EQ(pool.GetGraphTaskCountForTests(), 0u);
 
     std::atomic<bool> ran{false};
-    auto dependent = MakeUnique<ScriptedTask>(&pool, [&ran] {
+    TaskHandle handle = SubmitInGraph(pool, [&ran] {
         ran.store(true, std::memory_order_release);
-    });
-    dependent->AddDependency(depId);
-    TaskHandle handle = pool.Submit(std::move(dependent));
+    }, {depHandle});
 
     ASSERT_TRUE(WaitUntilDone(handle, std::chrono::seconds(10)));
     EXPECT_TRUE(ran.load(std::memory_order_acquire));
@@ -525,21 +495,17 @@ TEST_F(TaskGraphPoolTest, DependentRegisteredBeforeDependencyFailureObservesFail
     WorkStealingThreadPool pool(2);
 
     std::atomic<bool> gate{false};
-    auto dep = MakeUnique<ScriptedTask>(&pool, [&gate] {
+    TaskHandle depHandle = SubmitInGraph(pool, [&gate] {
         while (!gate.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
         throw std::runtime_error("dependency exploded");
     });
-    const TaskId depId = dep->GetTaskId();
-    TaskHandle depHandle = pool.Submit(std::move(dep));
 
     std::atomic<bool> ran{false};
-    auto dependent = MakeUnique<ScriptedTask>(&pool, [&ran] {
+    TaskHandle dependentHandle = SubmitInGraph(pool, [&ran] {
         ran.store(true, std::memory_order_release);
-    });
-    dependent->AddDependency(depId);
-    TaskHandle dependentHandle = pool.Submit(std::move(dependent)); // parked
+    }, {depHandle}); // parked
 
     gate.store(true, std::memory_order_release);
 
@@ -559,11 +525,9 @@ TEST_F(TaskGraphPoolTest, DependentRegisteredBeforeDependencyFailureObservesFail
 TEST_F(TaskGraphPoolTest, DependentSubmittedAfterDependencyFailedRunsIndependently) {
     WorkStealingThreadPool pool(2);
 
-    auto dep = MakeUnique<ScriptedTask>(&pool, [] {
+    TaskHandle depHandle = SubmitInGraph(pool, [] {
         throw std::runtime_error("dependency exploded");
     });
-    const TaskId depId = dep->GetTaskId();
-    TaskHandle depHandle = pool.Submit(std::move(dep));
     ASSERT_TRUE(WaitUntilDone(depHandle, std::chrono::seconds(10)));
     EXPECT_TRUE(depHandle.HasFailed());
     // Poll, don't snapshot: the handle reads terminal via the status
@@ -576,11 +540,9 @@ TEST_F(TaskGraphPoolTest, DependentSubmittedAfterDependencyFailedRunsIndependent
         << "failed dependency's graph node never erased";
 
     std::atomic<bool> ran{false};
-    auto dependent = MakeUnique<ScriptedTask>(&pool, [&ran] {
+    TaskHandle handle = SubmitInGraph(pool, [&ran] {
         ran.store(true, std::memory_order_release);
-    });
-    dependent->AddDependency(depId);
-    TaskHandle handle = pool.Submit(std::move(dependent));
+    }, {depHandle});
 
     ASSERT_TRUE(WaitUntilDone(handle, std::chrono::seconds(10)));
     EXPECT_TRUE(ran.load(std::memory_order_acquire));
@@ -596,23 +558,18 @@ TEST_F(TaskGraphPoolTest, CancelParkedDependentPreventsExecution) {
     WorkStealingThreadPool pool(2);
 
     std::atomic<bool> gate{false};
-    auto dep = MakeUnique<ScriptedTask>(&pool, [&gate] {
+    TaskHandle depHandle = SubmitInGraph(pool, [&gate] {
         while (!gate.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
     });
-    const TaskId depId = dep->GetTaskId();
-    TaskHandle depHandle = pool.Submit(std::move(dep));
 
     std::atomic<bool> ran{false};
-    auto dependent = MakeUnique<ScriptedTask>(&pool, [&ran] {
+    TaskHandle dependentHandle = SubmitInGraph(pool, [&ran] {
         ran.store(true, std::memory_order_release);
-    });
-    dependent->AddDependency(depId);
-    const TaskId dependentId = dependent->GetTaskId();
-    TaskHandle dependentHandle = pool.Submit(std::move(dependent)); // parked
+    }, {depHandle}); // parked
 
-    EXPECT_TRUE(pool.CancelTask(dependentId));
+    EXPECT_TRUE(pool.CancelTask(dependentHandle.GetId()));
     EXPECT_TRUE(dependentHandle.IsDone());
     EXPECT_TRUE(dependentHandle.HasFailed()); // cancelled counts as failed
 
@@ -624,8 +581,8 @@ TEST_F(TaskGraphPoolTest, CancelParkedDependentPreventsExecution) {
     EXPECT_EQ(pool.GetGraphTaskCountForTests(), 0u);
 
     // Cancelling anything terminal or unknown reports false.
-    EXPECT_FALSE(pool.CancelTask(dependentId));
-    EXPECT_FALSE(pool.CancelTask(depId));
+    EXPECT_FALSE(pool.CancelTask(dependentHandle.GetId()));
+    EXPECT_FALSE(pool.CancelTask(depHandle.GetId()));
 }
 
 /**
@@ -644,17 +601,13 @@ TEST_F(TaskGraphPoolTest, ChainedSubmitCompleteThroughputTenThousand) {
 
     const auto start = SteadyClock::now();
 
-    TaskHandle last;
-    TaskId previousId = 0;
-    for (int i = 0; i < kChainLength; ++i) {
-        auto task = MakeUnique<ScriptedTask>(&pool, [&executed] {
+    TaskHandle last = SubmitInGraph(pool, [&executed] {
+        executed.fetch_add(1, std::memory_order_relaxed);
+    });
+    for (int i = 1; i < kChainLength; ++i) {
+        last = SubmitInGraph(pool, [&executed] {
             executed.fetch_add(1, std::memory_order_relaxed);
-        });
-        if (previousId != 0) {
-            task->AddDependency(previousId);
-        }
-        previousId = task->GetTaskId();
-        last = pool.Submit(std::move(task));
+        }, {last});
     }
     last.Wait();
 

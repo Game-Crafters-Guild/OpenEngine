@@ -178,6 +178,7 @@ BufferHandle MetalDevice::CreateBuffer(const BufferDesc& desc)
 
 void MetalDevice::DestroyBuffer(BufferHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     MetalBuffer* buf = m_Buffers.Get(ToGeneric(handle));
     if (buf == nullptr)
@@ -428,6 +429,7 @@ TextureHandle MetalDevice::CreateTexture(const TextureDesc& desc)
 
 void MetalDevice::DestroyTexture(TextureHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     MetalTexture* tex = m_Textures.Get(ToGeneric(handle));
     if (tex == nullptr)
@@ -635,6 +637,7 @@ TextureViewHandle MetalDevice::CreateTextureView(TextureHandle texture, const Te
 
 void MetalDevice::DestroyTextureView(TextureViewHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     MetalTextureView* view = m_TextureViews.Get(ToGeneric(handle));
     if (view == nullptr)
@@ -739,6 +742,7 @@ SamplerHandle MetalDevice::CreateSampler(const SamplerDesc& desc)
 
 void MetalDevice::DestroySampler(SamplerHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     MetalSampler* sampler = m_Samplers.Get(ToGeneric(handle));
     if (sampler == nullptr)

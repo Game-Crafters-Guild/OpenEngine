@@ -168,7 +168,7 @@ TEST_F(ReflectionSceneSerializationTests, UserComponentRoundTripsViaReflection)
         e.Set(rt);
 
         world.ProcessCommands();
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, scenePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, scenePath));
     }
 
     // The text contains the reflected fields and does NOT contain the transient one.
@@ -180,7 +180,7 @@ TEST_F(ReflectionSceneSerializationTests, UserComponentRoundTripsViaReflection)
 
     {
         World world;
-        const bool loaded = GameEngine::Scene::LoadSceneFromFile(world, scenePath);
+        const bool loaded = GameEngine::Scene::ReadSceneInto(world, scenePath);
         ASSERT_TRUE(loaded) << "load error: " << GameEngine::Scene::GetLastSceneIOError().message
                             << " @ line " << GameEngine::Scene::GetLastSceneIOError().line;
 
@@ -223,7 +223,7 @@ TEST_F(ReflectionSceneSerializationTests, NonSerializableComponentIsSkippedOnSav
         ro.X = 7.0f;
         e.Set(ro);
         world.ProcessCommands();
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, scenePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, scenePath));
     }
 
     // The [NonSerializable] component is absent from the file; the entity (its Name) still saves.
@@ -234,7 +234,7 @@ TEST_F(ReflectionSceneSerializationTests, NonSerializableComponentIsSkippedOnSav
     // A scene referencing it loads without error (the component line is tolerated/skipped).
     {
         World world;
-        const bool loaded = GameEngine::Scene::LoadSceneFromFile(world, scenePath);
+        const bool loaded = GameEngine::Scene::ReadSceneInto(world, scenePath);
         EXPECT_TRUE(loaded) << "load error: " << GameEngine::Scene::GetLastSceneIOError().message;
     }
 
@@ -259,7 +259,7 @@ TEST_F(ReflectionSceneSerializationTests, UnknownComponentIsPreservedAndReEmitte
         std::strncpy(name.value, "Subject", sizeof(name.value) - 1);
         e.Set(name);
         world.ProcessCommands();
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, scenePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, scenePath));
     }
     {
         std::string text = ReadFile(scenePath);
@@ -275,7 +275,7 @@ TEST_F(ReflectionSceneSerializationTests, UnknownComponentIsPreservedAndReEmitte
     // Load: the unknown component is preserved (not dropped) and the load still succeeds.
     {
         World world;
-        const bool loaded = GameEngine::Scene::LoadSceneFromFile(world, scenePath);
+        const bool loaded = GameEngine::Scene::ReadSceneInto(world, scenePath);
         ASSERT_TRUE(loaded) << "load error: " << GameEngine::Scene::GetLastSceneIOError().message;
 
         const auto handle = FindByName(world, "Subject");
@@ -292,7 +292,7 @@ TEST_F(ReflectionSceneSerializationTests, UnknownComponentIsPreservedAndReEmitte
         // Re-save: the preserved component is re-emitted with the authored casing
         // (case-normalizing it would make the round-trip value-stable but not byte-stable).
         const auto rePath = TempScene("ge_reflect_unknown_preserve2.scene");
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, rePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, rePath));
         const std::string out = ReadFile(rePath);
         EXPECT_NE(out.find("UnknownGadget.Power = 9"), std::string::npos) << out;
         EXPECT_NE(out.find("UnknownGadget.Mode = \"turbo\""), std::string::npos) << out;
@@ -324,7 +324,7 @@ TEST_F(ReflectionSceneSerializationTests, DisabledPackageComponentsRoundTripWith
         std::strncpy(name.value, "PkgSubject", sizeof(name.value) - 1);
         e.Set(name);
         world.ProcessCommands();
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, scenePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, scenePath));
 
         std::string text = ReadFile(scenePath);
         const auto hdr = text.find("[entity ");
@@ -348,7 +348,7 @@ TEST_F(ReflectionSceneSerializationTests, DisabledPackageComponentsRoundTripWith
     for (int pass = 0; pass < 2; ++pass)
     {
         World world;
-        ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(world, current))
+        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(world, current))
             << GameEngine::Scene::GetLastSceneIOError().message;
 
         const auto handle = FindByName(world, "PkgSubject");
@@ -369,7 +369,7 @@ TEST_F(ReflectionSceneSerializationTests, DisabledPackageComponentsRoundTripWith
 
         const auto next = TempScene(pass == 0 ? "ge_reflect_disabled_pkg2.scene"
                                               : "ge_reflect_disabled_pkg3.scene");
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, next));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, next));
         std::string out = ReadFile(next);
         EXPECT_NE(out.find("PkgTestBuoyancy.Density = 1.25"), std::string::npos) << out;
         EXPECT_NE(out.find("PkgTestBuoyancy.Label = \"north buoy\""), std::string::npos) << out;
@@ -418,7 +418,7 @@ TEST_F(ReflectionSceneSerializationTests, AssetRefRoundTripsViaReflection)
         empty.Set(GeReflectTest::AssetHolder{}); // null Mat -> must be omitted
 
         world.ProcessCommands();
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, scenePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, scenePath));
     }
 
     const std::string text = ReadFile(scenePath);
@@ -430,7 +430,7 @@ TEST_F(ReflectionSceneSerializationTests, AssetRefRoundTripsViaReflection)
 
     {
         World world;
-        ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(world, scenePath))
+        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(world, scenePath))
             << "load error: " << GameEngine::Scene::GetLastSceneIOError().message;
 
         const auto handle = FindByName(world, "Holder");
@@ -477,7 +477,7 @@ TEST_F(ReflectionSceneSerializationTests, EnumFieldSerializesByNameAndRoundTrips
         oob.Set(oobH);
 
         world.ProcessCommands();
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, scenePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, scenePath));
     }
 
     const std::string text = ReadFile(scenePath);
@@ -486,7 +486,7 @@ TEST_F(ReflectionSceneSerializationTests, EnumFieldSerializesByNameAndRoundTrips
 
     {
         World world;
-        ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(world, scenePath))
+        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(world, scenePath))
             << "load error: " << GameEngine::Scene::GetLastSceneIOError().message;
 
         const auto* h = world.GetComponent<GeReflectTest::EnumHolder>(FindByName(world, "Gadget"));
@@ -517,7 +517,7 @@ TEST_F(ReflectionSceneSerializationTests, EnumFieldDualReadsLegacyInteger)
         e.Set(name);
         e.Set(GeReflectTest::EnumHolder{});
         world.ProcessCommands();
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, scenePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, scenePath));
     }
     // Rewrite the enum line to the legacy integer form (as an older scene file would have it).
     {
@@ -532,7 +532,7 @@ TEST_F(ReflectionSceneSerializationTests, EnumFieldDualReadsLegacyInteger)
 
     {
         World world;
-        ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(world, scenePath))
+        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(world, scenePath))
             << "load error: " << GameEngine::Scene::GetLastSceneIOError().message;
         const auto* h = world.GetComponent<GeReflectTest::EnumHolder>(FindByName(world, "Legacy"));
         ASSERT_NE(h, nullptr);
@@ -574,7 +574,7 @@ TEST_F(ReflectionSceneSerializationTests, EntityHandleRoundTripsViaReflection)
         empty.Set(GeReflectTest::RefHolder{}); // null Target -> must be omitted
 
         world.ProcessCommands();
-        ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(world, scenePath));
+        ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(world, scenePath));
     }
 
     const std::string text = ReadFile(scenePath);
@@ -584,7 +584,7 @@ TEST_F(ReflectionSceneSerializationTests, EntityHandleRoundTripsViaReflection)
 
     {
         World world;
-        ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(world, scenePath))
+        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(world, scenePath))
             << "load error: " << GameEngine::Scene::GetLastSceneIOError().message;
 
         const auto holder = FindByName(world, "Holder");

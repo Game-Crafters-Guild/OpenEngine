@@ -463,7 +463,7 @@ TEST(ComponentReflectionTests, FieldWalkSnapshotRoundTrip)
 TEST(ComponentReflectionTests, JsonEscapesStringsAndDecodesEdgeTypes)
 {
     JsonEdgeProbe p{};
-    std::strcpy(p.Text, "a\"b\\c\n");  // embeds a quote, backslash, and newline
+    std::strcpy(p.Text, "a\"b\\c\n\x1f");  // embeds a quote, backslash, newline and control char
     p.Big = 0.5;
     p.Neg = -42;
     p.Ref = EntityHandle(5, 1);
@@ -476,6 +476,7 @@ TEST(ComponentReflectionTests, JsonEscapesStringsAndDecodesEdgeTypes)
     EXPECT_NE(json.find("\\\""), std::string::npos) << "escaped quote: " << json;
     EXPECT_NE(json.find("\\\\"), std::string::npos) << "escaped backslash: " << json;
     EXPECT_NE(json.find("\\n"), std::string::npos) << "escaped newline: " << json;
+    EXPECT_NE(json.find("\\u001f"), std::string::npos) << "escaped control char: " << json;
     // Locale-independent, round-trip-exact numbers (not "0.500000").
     EXPECT_NE(json.find("\"Big\":0.5"), std::string::npos) << json;
     EXPECT_NE(json.find("\"Neg\":-42"), std::string::npos) << json;

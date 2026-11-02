@@ -19,6 +19,12 @@ The picker's home screen has a **New project** card, an **Open project** card, a
 | Windows | `%APPDATA%\GameEngine\Editor\DefaultProject` |
 | Linux | `$XDG_DATA_HOME/GameEngine/Editor/DefaultProject`, or `~/.local/share/...` when `XDG_DATA_HOME` is unset |
 
+The editor opens maximized on the primary monitor. To open it at a fixed size, for example for a recording or a screenshot series, pass `--window <width>x<height>+<x>+<y>`. The size is the window's client area and the position is its top-left corner, both in pixels (in points on macOS). The position is optional: without it, the operating system places the window. A position on a monitor to the left of or above the primary one is negative, as in `+-1920+0`. The editor does not start when the value is not in this form, and the log names the form.
+
+```text title="Open the editor at 1920 x 1080, 40 pixels from the top-left corner of the primary monitor"
+Editor.exe --window 1920x1080+40+40
+```
+
 ## Create a project
 
 :::steps

@@ -6,10 +6,10 @@
 #include "Logger/Logger.h"
 #include "Mathematics/Interpolation.h"
 #include "Serialization/JsonRead.h"
+#include "Types/PathUtils.h"
 
 #include <algorithm>
 #include <cmath>
-#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -89,14 +89,6 @@ using json = nlohmann::json;
 
 constexpr float kKeyTimeEpsilon = 1e-5f;
 constexpr float kDefaultTangentWeight = 1.0f / 3.0f;
-
-std::string NormalizeExtension(std::string extension)
-{
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](unsigned char c)
-                   { return static_cast<char>(std::tolower(c)); });
-    return extension;
-}
 
 const char* ToString(AnimPath path)
 {
@@ -440,7 +432,7 @@ bool AnimationClip::LoadFromData(const Vector<uint8>& data)
     m_Settings = {};
     m_EventTrack = {};
 
-    const std::string extension = NormalizeExtension(GetExtension());
+    const std::string extension = LowerCaseExtension(GetPath());
     bool success = false;
 
     if (extension == ".anim" || extension == ".animation")
@@ -1089,7 +1081,7 @@ bool AnimationClip::RefuseEditableData(std::string_view reason)
 
 bool AnimationClip::IsEditable() const
 {
-    const std::string extension = NormalizeExtension(GetExtension());
+    const std::string extension = LowerCaseExtension(GetPath());
     return extension == ".anim" || extension == ".animation" || GetPath().empty();
 }
 
@@ -1595,7 +1587,7 @@ std::vector<std::string> AnimationClip::EnumerateAnimationNames() const
     if (GetPath().empty())
         return {};
 
-    const std::string extension = NormalizeExtension(GetPath().extension().string());
+    const std::string extension = LowerCaseExtension(GetPath());
     if (extension == ".anim" || extension == ".animation")
     {
         const std::string stem = GetPath().stem().string();

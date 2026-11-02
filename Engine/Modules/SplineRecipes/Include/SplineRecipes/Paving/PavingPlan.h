@@ -35,15 +35,21 @@ struct PavingRoadCurve
 SplineGeometry::PavedArm BuildPavedArm(const PavingRoadCurve& road, float32 nodeArcLength, int8 direction,
                                        const Mathematics::Vector2& node);
 
+// A spline's keys under the network's ordering rule: the greater length, then the smaller x and z of
+// the first point, then the smaller saved scene id, then the smaller entity id.
+struct PavingRank
+{
+    float32 LengthMeters = 0.0f;
+    Mathematics::Vector2 FirstPoint{};
+    std::string SceneId;
+    uint32 Entity = 0;
+};
+
 // One paving as the plan reads it: its rank keys, its outline and the arms of its junctions.
 struct PavingSource
 {
     ECS::EntityHandle Entity{};
-    // The network's ordering rule: the greater length, then the smaller x and z of the first
-    // point, then the smaller saved scene id.
-    float32 LengthMeters = 0.0f;
-    Mathematics::Vector2 FirstPoint{};
-    std::string SceneId;
+    PavingRank Rank;
     // An Area's outline, paved whole; empty on a Road.
     SplineGeometry::AreaRing Outline;
     // The arms of every junction it paves; PavedArm::Road is the road's entity id.
@@ -84,6 +90,8 @@ struct PavingPlan
     std::vector<uint32> ArmRoads;
     // Per footprint arm, the arm the footprint was built from.
     std::vector<SplineGeometry::PavedArm> Arms;
+    // Per footprint outline, its ring: PavedRegion::Outlines holds these indices.
+    std::vector<SplineGeometry::AreaRing> Outlines;
     // Per source, per arm of it, the footprint arm it became, or kNoPavedArm.
     std::vector<std::vector<uint32>> SourceArms;
     // Per source, its role, and for PavedBy the source that builds its first region.
@@ -91,8 +99,8 @@ struct PavingPlan
     std::vector<uint32> PavedBy;
 };
 
-// Whether source `a` ranks before source `b` under the network's ordering rule.
-bool RanksBefore(const PavingSource& a, const PavingSource& b);
+// Whether `a` ranks before `b` under the network's ordering rule.
+bool RanksBefore(const PavingRank& a, const PavingRank& b);
 
 // The regions of `sources` as one footprint: a shared arm counts once and overlapping junctions make one
 // region. An unpaved road is cut out with a curb beside it on an outline, and flush on a Road. An

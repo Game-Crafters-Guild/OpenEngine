@@ -215,12 +215,10 @@ private:
     // pool races the executing worker's F12 arbitration CAS (Pending ->
     // Running vs Pending -> Cancelled): the enqueued envelope then finds its
     // status already terminal, which is a contract violation (Debug assert)
-    // and leaks the graph node in Release. Legitimate writers are the pool's
-    // completion/cancel paths (friend WorkStealingThreadPool) and a running
-    // Task publishing its own payload (friend Task — the protected
-    // Task::PublishResult / PublishException channel, safe because the
-    // executing task already won the arbitration). Callers whose value
-    // already exists use CreateCompletedHandle(payload) instead.
+    // and leaks the graph node in Release. The only legitimate writers are
+    // the pool's completion/cancel paths (friend WorkStealingThreadPool).
+    // Callers whose value already exists use CreateCompletedHandle(payload)
+    // instead.
 
     /**
      * @brief Store an exception for caller inspection. Does not change status.
@@ -362,7 +360,7 @@ private:
         // the plain-Submit completion path; no lock, no allocation.
         std::atomic<bool> GraphLinked{false};
 
-        // True iff this id is a GRAPH task (set in Submit(UniquePtr<Task>)
+        // True iff this id is a GRAPH task (set in SubmitToGraph
         // before the handle escapes, hence relaxed suffices). This bit — NOT
         // graph-node presence — is what LinkSubmitDependency dispatches on:
         // a cascade-retired graph task has NO node but stays Pending on its
@@ -433,9 +431,6 @@ private:
     void ExecuteCallbacks(TaskStatus newStatus);
     
     friend class WorkStealingThreadPool;
-    // For the protected PublishResult/PublishException channel — a running
-    // task is its own payload's single writer (see the mutator block above).
-    friend class Task;
     // The Submit(F&&) and JobChannel::Submit envelopes carry the task's
     // TaskData (TaskEnvelopes.h).
     friend class Detail::HandleTask;

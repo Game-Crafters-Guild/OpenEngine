@@ -6,9 +6,9 @@
 #include "Core/Engine.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 
 namespace GameEngine::Editor
@@ -45,9 +45,7 @@ void ReloadProjectSvgAssets()
             AssetMetadata metadata{};
             if (!registry.TryGetAssetMetadata(guid, metadata))
                 continue;
-            std::string extension = metadata.Path.extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const std::string extension = LowerCaseExtension(metadata.Path);
             if (extension == ".svg")
                 assets.RequestAsyncReload(guid);
         }

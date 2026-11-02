@@ -625,3 +625,63 @@ TEST(NavigationWorldTests, AGoalInAnotherRegionFailsWithoutASearch)
     world.GetPathBuffer().FreePath(path);
     EXPECT_EQ(world.GetSolverScratchStatistics().HeldBytes, kSolverBytesPerCell * kSize * kSize);
 }
+
+namespace
+{
+
+// A solve on `handle` from cell (5, 5) to the centre of cell (goalX, goalZ) for an agent one cell
+// in radius, so its footprint is the 3 x 3 cells around it.
+GridPathSolve WideAgentSolve(NavMapHandle handle, uint32 goalX, uint32 goalZ)
+{
+    GridPathSolve solve;
+    solve.Map = handle;
+    solve.Request.StartX = 5.5f;
+    solve.Request.StartZ = 5.5f;
+    solve.Request.EndX = static_cast<float32>(goalX) + 0.5f;
+    solve.Request.EndZ = static_cast<float32>(goalZ) + 0.5f;
+    solve.Request.AgentRadius = 1.0f;
+    return solve;
+}
+
+} // namespace
+
+// A one-cell gap in the wall at x = 32 keeps one region, but a footprint three cells wide cannot
+// pass it: the search closes every cell the footprint fits on the start's side (x 1 to 30, z 1 to 62)
+// and ends Unreachable. With the gap closed, the goal is in another region and no search runs.
+TEST(NavigationWorldTests, AGoalTheFootprintCannotReachRecordsAnUnreachableSearch)
+{
+    constexpr uint32 kSize = 64;
+    constexpr uint32 kWallX = 32;
+    constexpr uint32 kGapZ = 32;
+    NavigationWorld world;
+    const NavMapHandle handle = world.AddGridMap(SquareGrid(kSize));
+    GridMap& grid = *world.GetGridMap(handle);
+    for (uint32 z = 0; z < kSize; ++z)
+        grid.SetCellBlocked(kWallX, z, z != kGapZ);
+
+    std::vector<GridPathSolve> solves{WideAgentSolve(handle, 50, 50), WideAgentSolve(handle, 20, 20)};
+    world.SolveGridPaths(nullptr, solves);
+    const GridSolveRecord& unreachable = solves[0].Record;
+    const GridSolveRecord& reached = solves[1].Record;
+
+    EXPECT_EQ(solves[0].Status, PathStatus::Failed);
+    EXPECT_EQ(unreachable.End, GridSolveEnd::Unreachable);
+    EXPECT_EQ(unreachable.Expansions, 30u * 62u);
+    EXPECT_EQ(unreachable.StartX, 5u);
+    EXPECT_EQ(unreachable.StartZ, 5u);
+    EXPECT_EQ(unreachable.GoalX, 50u);
+    EXPECT_EQ(unreachable.GoalZ, 50u);
+    EXPECT_EQ(unreachable.AgentCellRadius, 1u);
+
+    EXPECT_EQ(solves[1].Status, PathStatus::Complete);
+    EXPECT_EQ(reached.End, GridSolveEnd::Reached);
+    EXPECT_GT(reached.Expansions, 0u);
+    EXPECT_GT(unreachable.Expansions, reached.Expansions);
+
+    grid.SetCellBlocked(kWallX, kGapZ, true);
+    std::vector<GridPathSolve> walled{WideAgentSolve(handle, 50, 50)};
+    world.SolveGridPaths(nullptr, walled);
+    EXPECT_EQ(walled[0].Status, PathStatus::Failed);
+    EXPECT_EQ(walled[0].Record.End, GridSolveEnd::OtherRegion);
+    EXPECT_EQ(walled[0].Record.Expansions, 0u);
+}

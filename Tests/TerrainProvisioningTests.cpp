@@ -710,7 +710,7 @@ void ApplyTerrainProperty(GameEngine::ECS::World& world, GameEngine::ECS::Entity
 {
     const auto* schema = FindTerrainSchema();
     ASSERT_NE(schema, nullptr);
-    GameEngine::Scene::SceneLoadContext loadCtx{};
+    GameEngine::Scene::SceneReadContext loadCtx{};
     std::string err;
     ASSERT_TRUE(schema->ApplyProperty(world, entity, loadCtx, property, value, &err)) << err;
 }
@@ -911,7 +911,7 @@ bool TryLoadComponentBlock(World& world, GameEngine::ECS::EntityHandle entity,
     for (std::size_t i = 0; i < props.size(); ++i)
         lowered.emplace_back(keys[i], props[i].second);
 
-    GameEngine::Scene::SceneLoadContext ctx{};
+    GameEngine::Scene::SceneReadContext ctx{};
     std::size_t failed = 0;
     return schema->ApplyProperties(world, entity, ctx, lowered, outError, &failed);
 }
@@ -934,7 +934,7 @@ std::vector<std::pair<std::string, std::string>> SerializedProps(
     GameEngine::ECS::EntityHandle entity)
 {
     std::vector<std::string> lines;
-    GameEngine::Scene::SceneSaveContext saveCtx{};
+    GameEngine::Scene::SceneWriteContext saveCtx{};
     schema.Serialize(world, entity, saveCtx, lines);
 
     std::vector<std::pair<std::string, std::string>> props;
@@ -1151,7 +1151,7 @@ TEST(TerrainModifierMigration, BareSplineModifierBlockLoadsTheSameRegionAsADefau
 
     World spelled;
     const auto a = spelled.CreateEntity();
-    GameEngine::Scene::SceneLoadContext loadCtx{};
+    GameEngine::Scene::SceneReadContext loadCtx{};
     std::string err;
     std::size_t failed = 0;
     ASSERT_TRUE(schema->ApplyProperties(spelled, a, loadCtx, pairs, &err, &failed)) << err;
@@ -1223,11 +1223,11 @@ TEST(TerrainModifierMigration, VolumeAndEffectsRoundTripThroughTheirOwnSchemas)
         const auto* schema = GameEngine::Scene::SceneSchemaRegistry::Find(name);
         ASSERT_NE(schema, nullptr) << name;
         std::vector<std::string> lines;
-        GameEngine::Scene::SceneSaveContext saveCtx{};
+        GameEngine::Scene::SceneWriteContext saveCtx{};
         schema->Serialize(src, a, saveCtx, lines);
         ASSERT_FALSE(lines.empty()) << name;
 
-        GameEngine::Scene::SceneLoadContext loadCtx{};
+        GameEngine::Scene::SceneReadContext loadCtx{};
         for (const std::string& line : lines)
         {
             const std::size_t dot = line.find('.');
@@ -1755,7 +1755,7 @@ bool TryLoadRuleProps(World& world, GameEngine::ECS::EntityHandle entity,
     pairs.reserve(props.size());
     for (const auto& kv : props)
         pairs.emplace_back(kv.first, kv.second);
-    GameEngine::Scene::SceneLoadContext ctx{};
+    GameEngine::Scene::SceneReadContext ctx{};
     std::size_t failed = 0;
     return schema->ApplyProperties(world, entity, ctx, pairs, outError, &failed);
 }
@@ -1998,11 +1998,11 @@ void RoundTripBlock(const char* name, World& src, GameEngine::ECS::EntityHandle 
     const auto* schema = GameEngine::Scene::SceneSchemaRegistry::Find(name);
     ASSERT_NE(schema, nullptr) << name;
     std::vector<std::string> lines;
-    GameEngine::Scene::SceneSaveContext saveCtx{};
+    GameEngine::Scene::SceneWriteContext saveCtx{};
     schema->Serialize(src, a, saveCtx, lines);
     ASSERT_FALSE(lines.empty()) << name;
 
-    GameEngine::Scene::SceneLoadContext loadCtx{};
+    GameEngine::Scene::SceneReadContext loadCtx{};
     for (const std::string& line : lines)
     {
         const std::size_t dot = line.find('.');
@@ -2027,7 +2027,7 @@ bool SchemaAcceptsAverage(const char* name)
         return false;
     World w;
     const auto e = w.CreateEntity();
-    GameEngine::Scene::SceneLoadContext ctx{};
+    GameEngine::Scene::SceneReadContext ctx{};
     std::string err;
     return schema->ApplyProperty(w, e, ctx, "blend", "8", &err);
 }
@@ -2131,7 +2131,7 @@ TEST(TerrainEffectPoolSchema, AnOverLongPoolGroupIsRefusedRatherThanTruncated)
         ASSERT_NE(schema, nullptr) << name;
         World w;
         const auto e = w.CreateEntity();
-        GameEngine::Scene::SceneLoadContext ctx{};
+        GameEngine::Scene::SceneReadContext ctx{};
         std::string err;
         EXPECT_FALSE(schema->ApplyProperty(w, e, ctx, "poolgroup",
                                            "\"" + tooLong + "\"", &err))

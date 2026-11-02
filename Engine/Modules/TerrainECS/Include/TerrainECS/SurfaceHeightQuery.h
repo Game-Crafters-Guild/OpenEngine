@@ -2,7 +2,7 @@
 
 #include "TerrainECS/PageLevelRule.h"
 #include "PageStreaming/CpuPageDirectory.h"
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Mathematics/Rect.h"
 #include "Mathematics/Vector3.h"
@@ -100,7 +100,7 @@ public:
     /// height originY + sample x heightScale; `edits` is where its heights stand.
     SurfaceHeightQuery(const PageStreaming::CpuPageDirectory& pages,
                        std::span<const PageStreaming::PageStoreLevel> levels, const PageRequestTerrain& shape,
-                       float32 originY, float32 heightScale, const PageStreaming::HeightPageOverlay* overlay,
+                       float32 originY, float32 heightScale, const PageStreaming::HeightPageLayer* overlay,
                        const SurfaceHeightEdits& edits);
     /// The query of a terrain placed by `shape` whose pages have no source yet: every sample is
     /// unsampled.
@@ -185,7 +185,7 @@ private:
     bool SamplePaged(float32 u, float32 v, SurfaceHeightPolicy policy, SurfaceHeightSample& out) const;
 
     PageStreaming::CpuPageDirectory m_Pages; // empty: no page source
-    const PageStreaming::HeightPageOverlay* m_Overlay = nullptr;
+    const PageStreaming::HeightPageLayer* m_Overlay = nullptr;
     const TerrainData* m_WholeMap = nullptr;
     uint64 m_WholeMapIdentity = 0;
     std::span<const PageStreaming::PageStoreLevel> m_Levels;

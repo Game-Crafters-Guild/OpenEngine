@@ -43,7 +43,7 @@ bool BindStorageViewByName(Rendering::IDevice& device, Rendering::DescriptorSetH
     uint32_t binding = 0;
     Rendering::DescriptorType reflected{};
     if (!view.IsValid() ||
-        !Engine::Renderer::Pipeline::Nodes::Detail::TryGetSet0BindingByName(meta, name, binding, reflected))
+        !Rendering::TryGetSet0BindingByName(meta, name, binding, reflected))
         return false;
     Rendering::DescriptorSetUpdate u{};
     u.binding = binding;

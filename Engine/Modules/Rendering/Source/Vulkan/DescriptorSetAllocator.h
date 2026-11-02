@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Types/FlatMap.h"
+
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <unordered_map>
@@ -49,6 +51,9 @@ public:
     VkDescriptorSet AllocatePersistent(VkDescriptorSetLayout layout, const char* debugName = nullptr);
     // Allocate a persistent set from a pool with UPDATE_AFTER_BIND support.
     VkDescriptorSet AllocatePersistentUpdateAfterBind(VkDescriptorSetLayout layout, const char* debugName = nullptr);
+    // Return a persistent set to the pool that made it. The caller makes sure that no GPU
+    // work still reads the set. A set that this allocator did not hand out is ignored.
+    void FreePersistent(VkDescriptorSet set);
 
     void Destroy();
 
@@ -78,11 +83,16 @@ private:
 
     std::vector<Pool> m_PersistentPools{};                // long-lived pools
     std::vector<Pool> m_PersistentPoolsUpdateAfterBind{}; // long-lived, UPDATE_AFTER_BIND
+    // The pool that made each live persistent set, for FreePersistent.
+    FlatMap<VkDescriptorSet, VkDescriptorPool> m_PersistentSetPools{};
     mutable std::mutex m_Mutex; // simple coarse-grained lock for thread-safety during stress tests
 
-    // Allocate from the provided pool vector. Caller must hold m_Mutex.
-    VkDescriptorSet AllocateFromPoolsLocked(std::vector<Pool>& pools, VkDescriptorSetLayout layout, const char* debugName);
-    VkDescriptorSet AllocateFromPoolsLockedImpl(std::vector<Pool>& pools, VkDescriptorSetLayout layout, bool updateAfterBind);
+    // Allocate one set from the first pool with room, or from a new pool. Caller must hold
+    // m_Mutex. On success `outPool` is the pool that made the set.
+    VkDescriptorSet AllocateFromPoolsLocked(std::vector<Pool>& pools, VkDescriptorSetLayout layout, bool updateAfterBind,
+                                            VkDescriptorPool& outPool);
+    // Allocate a persistent set and record its pool for FreePersistent. Caller must hold m_Mutex.
+    VkDescriptorSet AllocatePersistentLocked(std::vector<Pool>& pools, VkDescriptorSetLayout layout, bool updateAfterBind);
 };
 
 }} // namespace GameEngine::Rendering

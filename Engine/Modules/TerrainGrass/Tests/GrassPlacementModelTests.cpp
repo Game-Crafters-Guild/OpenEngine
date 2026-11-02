@@ -1306,7 +1306,7 @@ TEST(GrassClumpModel, TheRootColorWordRoundTripsWithinHalfAStepOfItsSquareRoot)
         {
             const float32 b = 0.5f * (r + g);
             const G::vec3 decoded = G::GrassUnpackRootColor(G::GrassPackRootColor(G::vec3(r, g, b)));
-            for (const auto [value, got] : {std::pair{r, decoded.x}, std::pair{g, decoded.y}, std::pair{b, decoded.z}})
+            for (const auto& [value, got] : {std::pair{r, decoded.x}, std::pair{g, decoded.y}, std::pair{b, decoded.z}})
             {
                 const float32 encoded = std::sqrt(value);
                 EXPECT_NEAR(got, value, kHalfStep * (2.0f * encoded + kHalfStep) + 1e-7f) << value;

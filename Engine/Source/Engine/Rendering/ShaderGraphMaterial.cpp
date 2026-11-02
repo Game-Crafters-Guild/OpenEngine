@@ -10,9 +10,9 @@
 #include "Rendering/ShaderGraph/SgPseudoNodes.h"
 #include "Rendering/ShaderGraph/SgTagParser.h"
 #include "Types/Fnv1a.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <iomanip>
 #include <sstream>
 #include <system_error>
@@ -95,13 +95,6 @@ std::string IncludeLineForSourceFile(const std::string& sourceFile)
     if (!ec && !relativePath.empty())
         return "#include \"" + relativePath.generic_string() + "\"\n";
     return "#include \"" + sourcePath.generic_string() + "\"\n";
-}
-
-std::string LowerAscii(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
 }
 
 std::string BuildMaterializedBody(const ShaderGraph::SgGraphDocument& doc,
@@ -224,7 +217,7 @@ bool IsGraphLivePreviewMaterialPath(const std::filesystem::path& materialAssetPa
     bool sawGenerated = false;
     for (const auto& part : materialAssetPath)
     {
-        const std::string lower = LowerAscii(part.string());
+        const std::string lower = ToLowerAscii(part.string());
         if (lower == "generated")
         {
             sawGenerated = true;
@@ -235,7 +228,7 @@ bool IsGraphLivePreviewMaterialPath(const std::filesystem::path& materialAssetPa
         sawGenerated = false;
     }
 
-    const std::string stem = LowerAscii(materialAssetPath.stem().string());
+    const std::string stem = ToLowerAscii(materialAssetPath.stem().string());
     return stem.rfind("live_preview", 0) == 0;
 }
 

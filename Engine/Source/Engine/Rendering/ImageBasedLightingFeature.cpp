@@ -575,8 +575,9 @@ bool ImageBasedLightingFeature::Initialize(IDevice* device)
 
     // EnvData UBO, ringed one element per device frame so the dynamic iblIntensity write
     // on frame N never lands on a buffer an in-flight earlier frame is still reading.
-    for (auto& buf : m_EnvDataBuffer)
+    for (uint32_t element = 0; element < device->GetFrameRingDepth(); ++element)
     {
+        BufferHandle& buf = m_EnvDataBuffer[element];
         if (buf.IsValid())
             continue;
         BufferDesc bd{};
@@ -666,9 +667,10 @@ BufferHandle ImageBasedLightingFeature::UploadEnvData(IDevice* device)
     //     write lands on the element the JUST-retired frame used, correct only while the
     //     fence-before-write ordering is exact and no consumer reads an earlier frame's
     //     element.
-    //   R == framesInFlight + 1 (this ring on Vulkan: 4 against 3): the element's last
-    //     reader retired a full frame before the write.
-    const uint32_t slot = m_EnvDataFrameCounter.Tick(device->GetFrameIndex()) % kCaptureFrameSlots;
+    //   R == IDevice::GetFrameRingDepth() (this ring: 5 against 3): the element's last
+    //     reader retired two full frames before the write.
+    const uint32_t slot = static_cast<uint32_t>(
+        m_EnvDataFrameCounter.Tick(device->GetFrameIndex()) % device->GetFrameRingDepth());
     BufferHandle buf = m_EnvDataBuffer[slot];
     if (!buf.IsValid())
         return {};

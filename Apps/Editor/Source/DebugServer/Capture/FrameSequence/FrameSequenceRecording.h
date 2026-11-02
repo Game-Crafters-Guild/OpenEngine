@@ -1,5 +1,7 @@
 #pragma once
 
+#include "JobSystem/TaskTypes.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -19,6 +21,12 @@ inline constexpr uint32_t kFrameRecordingMaxReadbacks = 3;
 // Frames a recording keeps queued for the encode jobs. A frame past this backlog is
 // dropped, so a slow encode costs frames, never memory.
 inline constexpr uint32_t kFrameRecordingMaxEncodes = 8;
+// The job priority of a frame's encode. A recording is the user's foreground task, so its
+// encodes share the lane of the frame's own jobs; the Background lane runs only when that lane is empty.
+inline constexpr JobSystem::JobPriority kFrameRecordingEncodePriority = JobSystem::JobPriority::Normal;
+// Presents for each tick of the recording's clock. The frame limiter holds each present to at
+// least its interval, so at one present per tick the presents drift behind the clock and miss ticks.
+inline constexpr uint32_t kFrameRecordingPresentsPerTick = 2;
 // Shortest interval between two drop notices in the log.
 inline constexpr double kFrameRecordingDropNoticeIntervalMs = 1000.0;
 
@@ -72,6 +80,9 @@ class FrameSequenceRecording
     bool IsDrained() const;
     // True at most once per notice interval, when frames dropped since the last notice.
     bool TakeDropNoticeDue(double msNow);
+    // The rate the editor presents at while the recording captures: kFrameRecordingPresentsPerTick
+    // times its frame rate, so each tick has a frame. 0 (no cap) after the capture ends or when it takes every frame.
+    double PresentCapFps() const;
 
     Summary GetSummary() const;
     // CSV with a header row and one row per written frame, in capture order:

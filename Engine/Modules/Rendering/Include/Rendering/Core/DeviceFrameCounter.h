@@ -17,8 +17,8 @@ namespace GameEngine::Rendering
 // fence-distance argument is stated in.
 //
 // Tick() consumes that change token and returns a counter that steps once per device
-// frame. Ring selection is `counter % ringDepth`; for a power-of-two ringDepth the
-// counter's own 2^32 wrap divides evenly and so keeps the rotation seamless.
+// frame. Ring selection is `counter % ringDepth`. The counter is 64-bit, so it does not
+// wrap and a ring of any depth rotates evenly.
 class DeviceFrameCounter
 {
 public:
@@ -27,7 +27,7 @@ public:
     // per-view declaration, a second subsystem entry point) all select the same
     // element; a repeated token holds the counter rather than spending rotation
     // margin inside one frame.
-    uint32_t Tick(uint32_t deviceFrameIndex)
+    uint64_t Tick(uint32_t deviceFrameIndex)
     {
         if (m_Started && deviceFrameIndex != m_LastDeviceFrameIndex)
             ++m_Counter;
@@ -37,7 +37,7 @@ public:
     }
 
 private:
-    uint32_t m_Counter = 0;
+    uint64_t m_Counter = 0;
     uint32_t m_LastDeviceFrameIndex = 0;
     bool m_Started = false; // false until the first Tick, which claims counter 0
 };

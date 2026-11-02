@@ -267,7 +267,7 @@ PrefabOverrideRow DescribeRow(ECS::World& world, ECS::EntityHandle entity, const
 }
 
 // The row of an orphaned override: the component and the field that the line names, labeled as a changed field is.
-std::string DescribeStaleLine(const Scene::SceneLoadSkip& skip)
+std::string DescribeStaleLine(const Scene::SceneDegradation::Skip& skip)
 {
     if (skip.component.empty())
         return "Removed entity";
@@ -282,13 +282,13 @@ std::string DescribeStaleLine(const Scene::SceneLoadSkip& skip)
 
 // True for an orphaned override that the load recorded on the instance's root. A line under a child that the
 // instance removes is not one: the child's Removed row stands for it.
-bool IsStaleRow(const Scene::SceneLoadSkip& skip, ECS::EntityHandle root)
+bool IsStaleRow(const Scene::SceneDegradation::Skip& skip, ECS::EntityHandle root)
 {
-    return skip.kind == Scene::SceneLoadSkipKind::OrphanedOverride && skip.entityHandle == root;
+    return skip.kind == Scene::SceneDegradation::SkipKind::OrphanedOverride && skip.entityHandle == root;
 }
 
 // One amber group for each address that the instance's orphaned overrides name, in the order of the load report.
-void AppendStaleGroups(ECS::World& world, ECS::EntityHandle root, std::span<const Scene::SceneLoadSkip> loadSkips,
+void AppendStaleGroups(ECS::World& world, ECS::EntityHandle root, std::span<const Scene::SceneDegradation::Skip> loadSkips,
                        std::vector<PrefabOverrideGroup>& groups)
 {
     const std::size_t firstStale = groups.size();
@@ -296,7 +296,7 @@ void AppendStaleGroups(ECS::World& world, ECS::EntityHandle root, std::span<cons
     std::vector<std::string_view> addresses;
     for (std::size_t index = 0; index < loadSkips.size(); ++index)
     {
-        const Scene::SceneLoadSkip& skip = loadSkips[index];
+        const Scene::SceneDegradation::Skip& skip = loadSkips[index];
         if (!IsStaleRow(skip, root))
             continue;
         const std::size_t at = static_cast<std::size_t>(std::ranges::find(addresses, skip.address) - addresses.begin());
@@ -313,7 +313,7 @@ void AppendStaleGroups(ECS::World& world, ECS::EntityHandle root, std::span<cons
 } // namespace
 
 PrefabOverrideCounts PrefabOverridesListModel::Count(ECS::World& world, ECS::EntityHandle entity,
-                                                    std::span<const Scene::SceneLoadSkip> loadSkips)
+                                                     std::span<const Scene::SceneDegradation::Skip> loadSkips)
 {
     PrefabOverrideCounts counts;
     const DescribedPrefabInstance* instance = PrefabInstanceDescriptions::Get().FindInstance(world, entity);
@@ -321,13 +321,13 @@ PrefabOverrideCounts PrefabOverridesListModel::Count(ECS::World& world, ECS::Ent
         return counts;
     for (const Scene::PrefabInstanceEntity& described : instance->Entities)
         counts.Overrides += (described.AddedOnInstance ? 1 : 0) + described.Overrides.size();
-    for (const Scene::SceneLoadSkip& skip : loadSkips)
+    for (const Scene::SceneDegradation::Skip& skip : loadSkips)
         counts.Stale += IsStaleRow(skip, instance->Root) ? 1 : 0;
     return counts;
 }
 
 PrefabOverridesListModel PrefabOverridesListModel::Describe(ECS::World& world, ECS::EntityHandle entity,
-                                                            std::span<const Scene::SceneLoadSkip> loadSkips)
+                                                            std::span<const Scene::SceneDegradation::Skip> loadSkips)
 {
     PrefabOverridesListModel model;
     const DescribedPrefabInstance* instance = PrefabInstanceDescriptions::Get().FindInstance(world, entity);

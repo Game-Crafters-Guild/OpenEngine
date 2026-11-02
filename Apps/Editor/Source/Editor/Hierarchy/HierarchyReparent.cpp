@@ -3,15 +3,12 @@
 #include "Editor/Hierarchy/HierarchyOrdering.h"
 
 #include "Components/Hierarchy.h"
+#include "Components/HierarchyQueries.h"
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 
 #include <algorithm>
-#include <cstring>
-
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 
 namespace GameEngine::Editor
 {
@@ -32,37 +29,6 @@ std::vector<HierarchyEntityState> CaptureStates(ECS::World& world,
     for (const ECS::EntityHandle e : entities)
         states.push_back(CaptureReparentState(world, e));
     return states;
-}
-
-void ReparentKeepingWorldPose(ECS::World& world, ECS::EntityHandle entity, ECS::EntityHandle destParent)
-{
-    if (destParent.IsValid())
-    {
-        Components::Parent p{};
-        p.Entity = destParent;
-        world.AddComponentImmediate(entity, p);
-
-        // Read after the add: adding Parent can move the entity to another archetype.
-        const auto* parentWorld = world.GetComponent<Components::WorldTransform>(destParent);
-        const auto* entityWorld = world.GetComponent<Components::WorldTransform>(entity);
-        if (entityWorld && parentWorld)
-        {
-            const glm::mat4 newLocal = glm::inverse(glm::make_mat4(parentWorld->matrix)) * glm::make_mat4(entityWorld->matrix);
-            Components::Transform xf{};
-            std::memcpy(xf.matrix, &newLocal[0][0], sizeof(xf.matrix));
-            world.AddComponentImmediate(entity, xf);
-        }
-        return;
-    }
-
-    // Moving to the root: the local transform becomes the current world transform.
-    if (const auto* entityWorld = world.GetComponent<Components::WorldTransform>(entity))
-    {
-        Components::Transform xf{};
-        std::memcpy(xf.matrix, entityWorld->matrix, sizeof(xf.matrix));
-        world.AddComponentImmediate(entity, xf);
-    }
-    world.RemoveComponentImmediate<Components::Parent>(entity);
 }
 
 } // namespace
@@ -137,7 +103,7 @@ HierarchyMoveStates MoveEntitiesKeepingWorldPose(ECS::World& world,
     HierarchyMoveStates states;
     states.Before = CaptureStates(world, affected);
     for (const ECS::EntityHandle e : moved)
-        ReparentKeepingWorldPose(world, e, destParent);
+        Components::ReparentKeepingWorldPose(world, e, destParent);
     WriteSiblingOrder(world, siblings);
     states.After = CaptureStates(world, affected);
     return states;

@@ -690,20 +690,16 @@ void ViewRegistry::ClearViewTargets(ViewId id)
 
 void ViewRegistry::DestroyPerViewGpuResources(PerViewResources& pv)
 {
-    for (auto& buf : pv.LightBuffers)
+    // A2: a valid GPU handle with a null device is a teardown-ordering
+    // bug — the device is nulled only WITH RenderServices::m_Device, so
+    // any release before that point still has a live device to free it.
+    assert((m_Device || !pv.HasLiveLightBuffer()) &&
+           "DestroyPerViewGpuResources: live light buffer but null device");
+    for (auto& buf : pv.TakeLightBuffers())
     {
-        if (buf.IsValid())
-        {
-            // A2: a valid GPU handle with a null device is a teardown-ordering
-            // bug — the device is nulled only WITH RenderServices::m_Device, so
-            // any release before that point still has a live device to free it.
-            assert(m_Device &&
-                   "DestroyPerViewGpuResources: valid LightBuffers handle but null device");
-            if (m_Device)
-                m_Device->DestroyBuffer(buf);
-        }
+        if (buf.IsValid() && m_Device)
+            m_Device->DestroyBuffer(buf);
     }
-    pv.LightBuffers = {};
 }
 
 void ViewRegistry::DestroyAllPerViewGpuResources()
@@ -723,7 +719,7 @@ void ViewRegistry::ForgetPerViewGpuResourcesAfterDeviceRebuild()
     for (auto& [viewId, pv] : m_PerView)
     {
         (void)viewId;
-        pv.LightBuffers = {};
+        pv.TakeLightBuffers();
         // The recorded draws name buffers and descriptor sets of the dead device; the producers
         // emit them again from live handles.
         pv.ForwardCommands.clear();

@@ -210,7 +210,7 @@ TEST(UITextureRegistryDeviceRebuild, NoDroppedDescriptorWritesAfterRebuild)
     Logger::Log::Flush();
     ASSERT_EQ(dropCount->load(), 0) << "nothing dropped before the set was materialised";
 
-    const DescriptorSetHandle set = registry.CreateTransientFrameSet();
+    const DescriptorSetHandle set = registry.GetFrameSet();
     Logger::Log::Flush();
 
     EXPECT_TRUE(set.IsValid()) << "the UI texture set could not be created after a rebuild";
@@ -224,7 +224,7 @@ TEST(UITextureRegistryDeviceRebuild, NoDroppedDescriptorWritesAfterRebuild)
 // --- Band dummy (binding 1 slot 0) across a rebuild ---
 //
 // Binding 1 reserves slot 0 for a zero-filled integer dummy, and
-// CreateTransientFrameSet writes every band slot from it, because the shader
+// GetFrameSet writes every band slot from it, because the shader
 // turns band texel data into a loop trip count — an unwritten slot is a
 // recycled descriptor and a potential GPU hang, not a wrong pixel. That gives
 // the heal two extra obligations, pinned separately below: the band dummy is
@@ -276,7 +276,7 @@ bool LoadShapedSlugAtlas(Rendering::Text::FontAtlas& atlas, unsigned pixelSize)
 // The band dummy is a device resource like the white dummy and the samplers:
 // after a rebuild the pre-rebuild handle names a destroyed VkObject while still
 // reporting IsValid(). The heal must re-provision it, and the healed handle
-// must be one the rebuilt device resolves — observable as the transient set
+// must be one the rebuilt device resolves — observable as the frame set
 // materialising every band slot with zero dropped descriptor writes.
 TEST(UITextureRegistryDeviceRebuild, BandDummyIsReprovisionedAfterRebuild)
 {
@@ -320,18 +320,18 @@ TEST(UITextureRegistryDeviceRebuild, BandDummyIsReprovisionedAfterRebuild)
 
     Logger::Log::Flush();
     ASSERT_FALSE(healLineSeen->load())
-        << "the heal ran before CreateTransientFrameSet, so the pin below would "
+        << "the heal ran before GetFrameSet, so the pin below would "
            "not be observing this call";
     ASSERT_EQ(dropCount->load(), 0) << "nothing dropped before the set was materialised";
 
     // The heal runs inside this call, ahead of the descriptor writes; the set
     // then writes every band slot, unoccupied ones from the band dummy.
-    const DescriptorSetHandle set = registry.CreateTransientFrameSet();
+    const DescriptorSetHandle set = registry.GetFrameSet();
     Logger::Log::Flush();
 
     EXPECT_TRUE(set.IsValid()) << "the UI texture set could not be created after a rebuild";
     ASSERT_TRUE(healLineSeen->load())
-        << "CreateTransientFrameSet did not heal, so every band-slot write below "
+        << "GetFrameSet did not heal, so every band-slot write below "
            "used the pre-rebuild band dummy";
     EXPECT_TRUE(bandDummyLive->load())
         << "the heal did not re-provision the band dummy (bandDummy=false): every "

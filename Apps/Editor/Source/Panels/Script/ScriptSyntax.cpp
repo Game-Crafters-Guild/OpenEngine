@@ -2,7 +2,6 @@
 
 #include "AssetCore/AssetTypes.h"
 
-#include <algorithm>
 #include <cctype>
 #include <string_view>
 #include <unordered_set>
@@ -216,10 +215,7 @@ std::size_t EndOfQuoted(const std::string& text, std::size_t openQuote)
 
 ScriptLanguage ScriptLanguageForPath(const std::filesystem::path& path)
 {
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return GetAssetTypeFromExtension(ext) == AssetType::Shader ? ScriptLanguage::Glsl : ScriptLanguage::CSharp;
+    return GetAssetTypeFromExtension(path.extension().string()) == AssetType::Shader ? ScriptLanguage::Glsl : ScriptLanguage::CSharp;
 }
 
 void TokenizeScript(ScriptLanguage language, const std::string& text, std::vector<SyntaxToken>& tokens)

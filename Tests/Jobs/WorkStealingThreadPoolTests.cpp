@@ -1,5 +1,4 @@
 #include "Logger/Logger.h"
-#include "JobSystem/Task.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "JobSystem/TaskDependencyGraph.h"
 #include "TestPlatform.h"
@@ -95,12 +94,10 @@ struct LiveResult {
     ~LiveResult() { Live->fetch_sub(1); }
 };
 
-// A Task subclass carries no TaskData of its own: with no handle, the registry entry is its only reference.
-class EmptyTask final : public Task {
-  public:
-    explicit EmptyTask(WorkStealingThreadPool* pool) : Task(pool) {}
-    void Execute() override {}
-};
+// A graph task carries no TaskData of its own: with no handle, the registry entry is its only reference.
+TaskHandle SubmitEmptyGraphTask(WorkStealingThreadPool& pool) {
+    return pool.Submit([] {}, std::span<const TaskHandle>());
+}
 } // namespace
 
 /**
@@ -165,7 +162,7 @@ TEST_F(WorkStealingThreadPoolTest, ReleaseFinishedTasksKeepsAPendingTaskTheRegis
     HeldWorkers hold(pool);
     std::atomic<bool> fired{false};
     {
-        TaskHandle handle = pool.Submit(JobSystem::MakeUnique<EmptyTask>(&pool));
+        TaskHandle handle = SubmitEmptyGraphTask(pool);
         handle.OnComplete([&fired] { fired.store(true); });
     }
     pool.ReleaseFinishedTasks();

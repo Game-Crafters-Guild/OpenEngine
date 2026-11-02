@@ -9,6 +9,7 @@
 
 #include "AssetCore/Asset.h"          // SharedPtr<Asset> in PendingGpuUpload
 #include "AssetCore/AssetRegistry.h" // AssetReference
+#include "Types/FlatMap.h"
 #include "Types/ScopedSubscription.h"
 #include "AssetCore/AssetReloadInvalidator.h"
 #include "Assets/AssetManager.h"     // AssetLoadHandle in m_TextureLoadHandles
@@ -27,6 +28,7 @@
 #include "Engine/Rendering/ViewRegistry.h"
 #include "Engine/Rendering/ViewTemporalHistory.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/DeviceFrameCounter.h"
 #include "Rendering/Core/RendererProfile.h"
 #include "Rendering/Core/Handle.h"
 #include "Rendering/Core/BindlessResourceManager.h"
@@ -463,27 +465,27 @@ class RenderServices
     // when it can attribute them (fast-path moved-instance patches, always-refresh
     // subset re-prepares). EnsurePointShadowAssignment forwards the set to the
     // per-view atlas planner, which dirties only the point lights whose influence
-    // sphere a changed caster intersects. `unattributed` = true (full-lane frame,
-    // animated-vertex caster content, bone-palette pose change, sphere-list overflow)
-    // affects every light —
-    // exactly the pre-L1b world-scoped behavior. The bump TIMING is unchanged
-    // either way. Directional cascades also use the bounds to retain unaffected
-    // layers; the RT mask continues to consume the scalar version.
+    // sphere a changed caster intersects. Scope Unbounded (full-lane frame,
+    // bone-palette pose change, sphere-list overflow) affects every light, and so
+    // does VertexDeformation (material vertex motion, no spheres). Directional
+    // cascades also use the bounds to retain unaffected layers, and defer a
+    // VertexDeformation advance through the motion budget; the RT mask
+    // continues to consume the scalar version.
     void NotifyShadowCasterContentChanged(
         uint64 worldId, std::span<const ShadowCasterChangeSphere> changedCasterSpheres,
-        bool unattributed);
+        ShadowCasterChangeScope scope);
     uint64_t ShadowCasterContentVersion(uint64 worldId) const
     {
-        const auto it = m_ShadowCasterChanges.find(worldId);
-        return it != m_ShadowCasterChanges.end() ? it->second.Version : 0u;
+        const ShadowCasterChanges* changes = m_ShadowCasterChanges.Find(worldId);
+        return changes ? changes->Version : 0u;
     }
 
     ShadowCasterChangeSet GetShadowCasterChanges(uint64 worldId) const
     {
-        const auto it = m_ShadowCasterChanges.find(worldId);
-        if (it == m_ShadowCasterChanges.end())
+        const ShadowCasterChanges* changes = m_ShadowCasterChanges.Find(worldId);
+        if (!changes)
             return {};
-        return {it->second.Version, it->second.Spheres, it->second.Unattributed};
+        return {changes->Version, changes->Spheres, changes->Scope};
     }
 
     // Idle-recompute-elision content signal (lever #2): the ANY-renderable
@@ -520,14 +522,14 @@ class RenderServices
     // spot PointShadowAtlasPlanner, both keyed on that version) see every input
     // byte-identical for a character animating in place and retain the layer
     // rendered at an older pose — the mesh animates while its shadow holds
-    // still. Unattributed, matching the vertex-mod caster precedent in
-    // RenderExtractionSystem: the extraction lane carries no per-caster signal
-    // for pose-only change, so proximity keying cannot name which casters moved.
+    // still. Unbounded: the extraction lane carries no per-caster signal for
+    // pose-only change, so proximity keying cannot name which casters moved.
     void NotifySkinPaletteContentChanged(uint64 worldId)
     {
         m_SkinPaletteContentChanged = true;
         NotifyShadowCasterContentChanged(
-            worldId, std::span<const ShadowCasterChangeSphere>{}, /*unattributed=*/true);
+            worldId, std::span<const ShadowCasterChangeSphere>{},
+            ShadowCasterChangeScope::Unbounded);
     }
     // Per-world light-list version: FinalizeWorldLights bumps it whenever the
     // finalized (sorted) list's bytes differ from the previous frame's. Exact
@@ -2057,6 +2059,8 @@ class RenderServices
     // declare→execute. Reached by RS internals via m_ViewRegistry directly and
     // by external callers through Views().
     ViewRegistry m_ViewRegistry;
+    // Steps once per device frame. It selects the slot of each view's light UBO ring.
+    Rendering::DeviceFrameCounter m_LightRingFrameCounter;
     ViewTemporalHistory m_ViewTemporalHistory;
 
     // Zero-filled placeholder for unwired set0 buffer descriptors (see
@@ -2374,10 +2378,10 @@ class RenderServices
     struct ShadowCasterChanges
     {
         uint64_t Version = 0;
-        bool Unattributed = true;
+        ShadowCasterChangeScope Scope = ShadowCasterChangeScope::Unbounded;
         std::vector<ShadowCasterChangeSphere> Spheres;
     };
-    std::unordered_map<uint64, ShadowCasterChanges> m_ShadowCasterChanges;
+    FlatMap<uint64, ShadowCasterChanges> m_ShadowCasterChanges;
 
     // Worlds whose submissions this frame include a material that moves its own
     // vertices, and whether any of those submissions casts shadows. Rebuilt

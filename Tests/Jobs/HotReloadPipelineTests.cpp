@@ -2,7 +2,6 @@
 #include "Jobs/HotReloadTasks.h"
 #include "JobSystem/JobChannel.h"
 #include "JobSystem/WorkStealingThreadPool.h"
-#include "JobSystem/TaskDependencyGraph.h"
 #include "MockHotReloadDependencies.h"
 #include <gtest/gtest.h>
 #include <filesystem>
@@ -77,7 +76,7 @@ protected:
 TEST_F(HotReloadPipelineTest, CompilationTaskExecution) {
     // Use mock compiler to avoid requiring real .NET project
     auto mockCompiler = std::make_unique<Tests::MockCompiler>(true, 10);
-    CompilationTask task(threadPool.get(), testAssemblyPath.string(), std::move(mockCompiler));
+    CompilationTask task(testAssemblyPath.string(), std::move(mockCompiler));
 
     auto startTime = std::chrono::high_resolution_clock::now();
     task.Execute();
@@ -98,7 +97,7 @@ TEST_F(HotReloadPipelineTest, CompilationTaskExecution) {
 TEST_F(HotReloadPipelineTest, CompilationTaskFailure) {
     // Use mock compiler that fails
     auto mockCompiler = std::make_unique<Tests::MockCompiler>(false, 5);
-    CompilationTask task(threadPool.get(), testAssemblyPath.string(), std::move(mockCompiler));
+    CompilationTask task(testAssemblyPath.string(), std::move(mockCompiler));
 
     // A failed compile leaves Execute by exception: that is what fails the
     // task handle and stops the dependent stages.
@@ -218,75 +217,6 @@ TEST_F(HotReloadPipelineTest, ConcurrentExecutions) {
 }
 
 /**
- * @brief Test task dependency ordering through WorkStealingThreadPool
- * NOTE: This test is temporarily disabled as it needs to be updated for the current dependency API
- */
-TEST_F(HotReloadPipelineTest, DISABLED_TaskDependencyOrdering) {
-    // Test dependency ordering by using the WorkStealingThreadPool's dependency management
-    // This test verifies that dependencies are properly managed through the thread pool
-
-    std::atomic<int> executionOrder{0};
-    std::vector<std::pair<int, std::string>> executionLog;
-    std::mutex logMutex;
-
-    // Create mock tasks that record execution order
-    class OrderedTask : public JobSystem::Task {
-    public:
-        OrderedTask(JobSystem::WorkStealingThreadPool* jobSystem, const std::string& name,
-                   std::atomic<int>* counter, std::vector<std::pair<int, std::string>>* log, std::mutex* logMutex)
-            : JobSystem::Task(jobSystem), m_Name(name), m_Counter(counter), m_Log(log), m_LogMutex(logMutex) {}
-
-        void Execute() override {
-            int order = m_Counter->fetch_add(1);
-            {
-                std::lock_guard<std::mutex> lock(*m_LogMutex);
-                m_Log->emplace_back(order, m_Name);
-            }
-        }
-
-    private:
-        std::string m_Name;
-        std::atomic<int>* m_Counter;
-        std::vector<std::pair<int, std::string>>* m_Log;
-        std::mutex* m_LogMutex;
-    };
-
-    // Create tasks with dependency chain: Compilation → FileLoad → AssemblyPrep → Swap
-    auto compilationTask = std::make_unique<OrderedTask>(threadPool.get(), "Compilation", &executionOrder, &executionLog, &logMutex);
-    auto fileLoadTask = std::make_unique<OrderedTask>(threadPool.get(), "FileLoad", &executionOrder, &executionLog, &logMutex);
-    auto assemblyPrepTask = std::make_unique<OrderedTask>(threadPool.get(), "AssemblyPrep", &executionOrder, &executionLog, &logMutex);
-    auto swapTask = std::make_unique<OrderedTask>(threadPool.get(), "Swap", &executionOrder, &executionLog, &logMutex);
-
-    // Set up dependencies before submitting (using current API)
-    // Note: Dependencies should be set up during task creation in the current API
-    // For this test, we'll submit tasks and use TaskHandle dependencies
-    auto handle1 = threadPool->Submit(std::move(compilationTask));
-    auto handle2 = threadPool->Submit(std::move(fileLoadTask));
-    auto handle3 = threadPool->Submit(std::move(assemblyPrepTask));
-    auto handle4 = threadPool->Submit(std::move(swapTask));
-
-    // Set up dependencies using TaskHandle API (if available)
-    // Note: This test may need to be updated to match current dependency API
-
-    // Wait for all tasks to complete
-    while (!handle4.IsCompleted() && !handle4.HasFailed()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    // Verify execution order
-    {
-        std::lock_guard<std::mutex> lock(logMutex);
-        EXPECT_EQ(executionLog.size(), 4);
-        if (executionLog.size() == 4) {
-            EXPECT_EQ(executionLog[0].second, "Compilation");
-            EXPECT_EQ(executionLog[1].second, "FileLoad");
-            EXPECT_EQ(executionLog[2].second, "AssemblyPrep");
-            EXPECT_EQ(executionLog[3].second, "Swap");
-        }
-    }
-}
-
-/**
  * @brief Performance benchmark test
  */
 TEST_F(HotReloadPipelineTest, PerformanceBenchmark) {
@@ -319,120 +249,6 @@ TEST_F(HotReloadPipelineTest, PerformanceBenchmark) {
         // Main thread blocking should be minimal (simulated swap is ~25ms)
         EXPECT_LT(duration.count(), 5000); // Total pipeline < 5s
     }
-}
-
-/**
- * @brief Test WorkStealingThreadPool and TaskDependencyGraph integration
- * This test specifically validates the fixes we implemented for proper task dependency handling
- * NOTE: This test is temporarily disabled as it needs to be updated for the current dependency API
- */
-TEST_F(HotReloadPipelineTest, DISABLED_WorkStealingThreadPoolIntegration) {
-    Logger::Log::Info("=== Testing WorkStealingThreadPool and TaskDependencyGraph Integration ===");
-
-    // Track execution order to verify dependency graph works correctly
-    std::atomic<int> executionOrder{0};
-    std::vector<std::pair<int, std::string>> executionLog;
-    std::mutex logMutex;
-
-    // Create mock tasks that record their execution order
-    class MockOrderedTask : public JobSystem::Task {
-    public:
-        MockOrderedTask(JobSystem::WorkStealingThreadPool* jobSystem, const std::string& name,
-                       int expectedOrder, std::atomic<int>* counter,
-                       std::vector<std::pair<int, std::string>>* log, std::mutex* logMutex)
-            : JobSystem::Task(jobSystem), m_Name(name), m_ExpectedOrder(expectedOrder),
-              m_Counter(counter), m_Log(log), m_LogMutex(logMutex) {}
-
-        void Execute() override {
-            // Simulate some work
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
-            // Record execution order
-            int order = m_Counter->fetch_add(1);
-            {
-                std::lock_guard<std::mutex> lock(*m_LogMutex);
-                m_Log->emplace_back(order, m_Name);
-            }
-
-            Logger::Log::Info("[{}] Executed with order: {} (expected: {})", m_Name, order, m_ExpectedOrder);
-
-            // Verify execution order matches dependency constraints
-            EXPECT_EQ(order, m_ExpectedOrder) << "Task " << m_Name << " executed out of order";
-        }
-
-    private:
-        std::string m_Name;
-        int m_ExpectedOrder;
-        std::atomic<int>* m_Counter;
-        std::vector<std::pair<int, std::string>>* m_Log;
-        std::mutex* m_LogMutex;
-    };
-
-    // Create tasks with dependency chain: Task1 → Task2 → Task3 → Task4
-    auto task1 = std::make_unique<MockOrderedTask>(threadPool.get(), "Compilation", 0, &executionOrder, &executionLog, &logMutex);
-    auto task2 = std::make_unique<MockOrderedTask>(threadPool.get(), "FileLoad", 1, &executionOrder, &executionLog, &logMutex);
-    auto task3 = std::make_unique<MockOrderedTask>(threadPool.get(), "AssemblyPrep", 2, &executionOrder, &executionLog, &logMutex);
-    auto task4 = std::make_unique<MockOrderedTask>(threadPool.get(), "MainThreadSwap", 3, &executionOrder, &executionLog, &logMutex);
-
-    // Set up dependencies
-    task2->AddDependency(task1->GetTaskId());
-    task3->AddDependency(task2->GetTaskId());
-    task4->AddDependency(task3->GetTaskId());
-
-    Logger::Log::Info("Created dependency chain: Compilation → FileLoad → AssemblyPrep → MainThreadSwap");
-
-    // Submit tasks to WorkStealingThreadPool
-    auto handle1 = threadPool->Submit(std::move(task1));
-    auto handle2 = threadPool->Submit(std::move(task2));
-    auto handle3 = threadPool->Submit(std::move(task3));
-    auto handle4 = threadPool->Submit(std::move(task4));
-
-    Logger::Log::Info("All tasks submitted to WorkStealingThreadPool with dependency registration");
-
-    // Wait for all tasks to complete
-    auto startTime = std::chrono::high_resolution_clock::now();
-    const auto timeout = std::chrono::seconds(10);
-
-    while (!handle4.IsCompleted() && !handle4.HasFailed() &&
-           std::chrono::high_resolution_clock::now() - startTime < timeout) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-
-    // Verify all tasks completed successfully
-    EXPECT_TRUE(handle1.IsCompleted()) << "Compilation task failed";
-    EXPECT_FALSE(handle1.HasFailed()) << "Compilation task failed: " << handle1.GetErrorMessage();
-    EXPECT_TRUE(handle2.IsCompleted()) << "FileLoad task failed";
-    EXPECT_FALSE(handle2.HasFailed()) << "FileLoad task failed: " << handle2.GetErrorMessage();
-    EXPECT_TRUE(handle3.IsCompleted()) << "AssemblyPrep task failed";
-    EXPECT_FALSE(handle3.HasFailed()) << "AssemblyPrep task failed: " << handle3.GetErrorMessage();
-    EXPECT_TRUE(handle4.IsCompleted()) << "MainThreadSwap task failed";
-    EXPECT_FALSE(handle4.HasFailed()) << "MainThreadSwap task failed: " << handle4.GetErrorMessage();
-
-    // Verify execution order
-    EXPECT_EQ(executionOrder.load(), 4) << "Not all tasks executed";
-
-    // Verify execution log
-    {
-        std::lock_guard<std::mutex> lock(logMutex);
-        EXPECT_EQ(executionLog.size(), 4) << "Execution log incomplete";
-
-        if (executionLog.size() == 4) {
-            EXPECT_EQ(executionLog[0].second, "Compilation");
-            EXPECT_EQ(executionLog[1].second, "FileLoad");
-            EXPECT_EQ(executionLog[2].second, "AssemblyPrep");
-            EXPECT_EQ(executionLog[3].second, "MainThreadSwap");
-        }
-    }
-
-    Logger::Log::Info("=== WorkStealingThreadPool Integration Test Completed Successfully ===");
-    Logger::Log::Info("Total execution time: {}ms", totalDuration.count());
-    Logger::Log::Info("All tasks executed in correct dependency order");
-
-    // Performance validation - should complete quickly since tasks are lightweight
-    EXPECT_LT(totalDuration.count(), 1000) << "Task execution took too long";
 }
 
 // A superseded run reports failure, so every consumer that picks a log severity has to

@@ -97,6 +97,9 @@ struct VulkanBuffer
     // by the developer-build guard on host writes.
     BufferCreateFlags createFlags = BufferCreateFlags::None;
     std::string debugName;
+    BufferHandle handle;
+    // Index of this buffer in VulkanDevice::m_LiveBuffers while it is tracked.
+    size_t liveSlot = 0;
 };
 
 /**
@@ -839,6 +842,8 @@ class VulkanDevice : public IDevice
     bool     m_HaveReadAnyFrameEndTimestamp = false;
     // Immediate destruction helpers used when GPU completion is confirmed (e.g., retirement path)
     void DestroyBufferImmediate(BufferHandle handle);
+    // Teardown only: destroys every buffer in m_LiveBuffers.
+    void DestroyLiveBuffers();
     void DestroyTextureImmediate(TextureHandle handle);
     // Arm per-frame fences for compute/transfer queues that had commands submitted this frame.
     void ArmComputeTransferFences();
@@ -1409,6 +1414,7 @@ class VulkanDevice : public IDevice
         std::vector<TextureViewHandle> deferredTextureViews;
         std::vector<SamplerHandle> deferredSamplers;
         std::vector<PersistentDescriptorBytes> deferredDescriptorBytes;
+        std::vector<VkDescriptorSet> deferredPoolDescriptorSets;
         VkFence fence = VK_NULL_HANDLE;                // signals when this frame finishes (graphics path)
         bool fenceArmed = false;                       // true only if we submitted using this fence last time this frame index was active
         // Compute only: true once any command list was routed on the compute queue in this slot
@@ -1494,10 +1500,16 @@ class VulkanDevice : public IDevice
         QueueRetireTags tags;
     };
     std::vector<DeferredDescriptorBytes> m_DeferredDescriptorBytesTimeline; // released when every queue passes its tag
+    struct DeferredPoolDescriptorSet
+    {
+        VkDescriptorSet handle = VK_NULL_HANDLE; // a persistent set from m_DsAllocator
+        QueueRetireTags tags;
+    };
+    std::vector<DeferredPoolDescriptorSet> m_DeferredPoolDescriptorSetsTimeline; // freed when every queue passes its tag
 
-    // Guards m_Deferred{Buffers,Textures,TextureViews,Samplers,DescriptorBytes}Timeline,
+    // Guards m_Deferred{Buffers,Textures,TextureViews,Samplers,DescriptorBytes,PoolDescriptorSets}Timeline,
     // the m_Pending*DestroyIds sets, the per-frame
-    // PerQueueFrame::deferred{Buffers,Textures,TextureViews,Samplers,DescriptorBytes}
+    // PerQueueFrame::deferred{Buffers,Textures,TextureViews,Samplers,DescriptorBytes,PoolDescriptorSets}
     // vectors, and m_DeferralFrameSlot.
     //
     // The public Destroy* entry points are genuinely concurrent: ECS extraction
@@ -1536,6 +1548,7 @@ class VulkanDevice : public IDevice
     void QueueDeferredTextureViewDestroy(TextureViewHandle handle);
     void QueueDeferredSamplerDestroy(SamplerHandle handle);
     void QueueDeferredDescriptorBytesRelease(const PersistentDescriptorBytes& bytes);
+    void QueueDeferredPoolDescriptorSetFree(VkDescriptorSet set);
 
     struct DeferredStagingBuffer
     {
@@ -1670,6 +1683,17 @@ class VulkanDevice : public IDevice
     void BindQueueSubmitContexts();
     QueueSubmitContext& SubmitContextFor(QueueType queue);
     const QueueSubmitContext& SubmitContextFor(QueueType queue) const;
+
+    // UpdateBuffer contract: the data is in the buffer for any work submitted after the call
+    // returns. A staged copy publishes its value on the upload queue's timeline; each graphics
+    // and compute submit waits once at ALL_COMMANDS on a value its queue has not waited on yet.
+    struct UploadWait
+    {
+        VkSemaphore Semaphore = VK_NULL_HANDLE;
+        uint64_t Value = 0; // 0: no wait.
+    };
+    // Call only inside `context`'s submitFn; after a successful submit, NoteUploadWaited(Value).
+    UploadWait PendingUploadWait(const QueueSubmitContext& context) const;
     // Gates device/allocator-touching entry points against an in-place device
     // rebuild. Every create/update/map/destroy entry reachable off the render
     // thread holds this SHARED for its duration via DeviceRebuildSharedGuard
@@ -2403,7 +2427,10 @@ class VulkanDevice : public IDevice
     //   m_BindlessMutex is independent (never held with any of the above)
     //   m_LayoutCacheMutex is independent
     mutable std::mutex m_ResourceTrackingMutex;
-    std::vector<BufferHandle> m_LiveBuffers;
+    // Shared state: the device's live buffers. Interleaving: workers append in CreateBuffer while the owner
+    // thread's destroy drain removes. Mechanism: each buffer stores its slot (VulkanBuffer::liveSlot) and a
+    // removal moves the last entry into it, so each add and remove holds the mutex for O(1), never a scan.
+    std::vector<VulkanBuffer*> m_LiveBuffers;
     std::vector<TextureHandle> m_LiveTextures;
     std::vector<TextureViewHandle> m_LiveTextureViews;
     std::vector<SamplerHandle> m_LiveSamplers;

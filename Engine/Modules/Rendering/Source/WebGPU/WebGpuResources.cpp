@@ -131,6 +131,7 @@ BufferHandle WebGpuDevice::CreateBuffer(const BufferDesc& desc)
 
 void WebGpuDevice::DestroyBuffer(BufferHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     WebGpuBuffer* buffer = m_Buffers.Get(ToGeneric(handle));
     if (buffer == nullptr)
@@ -635,6 +636,7 @@ TextureHandle WebGpuDevice::CreateTexture(const TextureDesc& desc)
 
 void WebGpuDevice::DestroyTexture(TextureHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     WebGpuTexture* texture = m_Textures.Get(ToGeneric(handle));
     if (texture == nullptr)
@@ -700,6 +702,7 @@ TextureViewHandle WebGpuDevice::CreateTextureView(TextureHandle texture, const T
 
 void WebGpuDevice::DestroyTextureView(TextureViewHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     WebGpuTextureView* view = m_TextureViews.Get(ToGeneric(handle));
     if (view == nullptr)
@@ -759,6 +762,7 @@ SamplerHandle WebGpuDevice::CreateSampler(const SamplerDesc& desc)
 
 void WebGpuDevice::DestroySampler(SamplerHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     WebGpuSampler* sampler = m_Samplers.Get(ToGeneric(handle));
     if (sampler == nullptr)

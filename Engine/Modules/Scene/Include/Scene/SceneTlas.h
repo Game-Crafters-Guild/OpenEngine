@@ -270,6 +270,9 @@ public:
     uint64 GetLeafCountForTesting() const;
     // Test seam: whether RequestCurrent's work is still running.
     bool IsWorkInFlightForTesting() const;
+    // Test seam: RequestCurrent calls since construction, its own retries and WaitCurrent's
+    // included. Main thread only.
+    uint64 GetRequestCountForTesting() const;
 
     // Test/diagnostic: number of SyncEntities calls that actually forked.
     // Lets tests assert the poll lane, overflow frames, and below-threshold

@@ -13,6 +13,7 @@
 
 #include "EditorApplication/EditorApplication.h"
 
+#include "Audio/AudioTypes.h"
 #include "Core/Application.h"
 #include "Core/Engine.h"
 #include "Engine/Build/GameConfig.h"
@@ -308,6 +309,7 @@ int main()
     config.Name = "Open Engine Editor";
     config.EnableEditor = true;
     config.PersistScenesEagerly = true; // browser storage is the only place a scene survives
+    config.AudioOutput = GameEngine::Audio::AudioOutput::Device;
     // A project opened in the first frames deadlocks the wasm main thread in
     // the scene view's boot batch (the frame-3 shadow/fog boundary). Boots land
     // on the picker; a later open wins that race far more often.

@@ -50,6 +50,7 @@ kPackages: dict[str, dict[str, str | tuple[str, list[str]]]] = {
     "tonemap": {"vs": "fullscreen_noinput.vert", "fs": "tonemap.frag"},
     "copy": {"vs": "fullscreen_noinput.vert", "fs": "copy.frag"},
     "msaa_color_resolve": {"vs": "fullscreen_noinput.vert", "fs": "msaa_color_resolve.frag"},
+    "msaa_color_resolve_bloom_delta": {"vs": "fullscreen_noinput.vert", "fs": "msaa_color_resolve_bloom_delta.frag"},
     "clear_color_backdrop": {"vs": "fullscreen_noinput.vert", "fs": "clear_color_backdrop.frag"},
     "solidcolor": {"vs": "fullscreen_noinput.vert", "fs": "solidcolor.frag"},
     "forwardplus_lighting": {"vs": "fullscreen_noinput.vert", "fs": "forwardplus_lighting.frag"},
@@ -68,6 +69,8 @@ kPackages: dict[str, dict[str, str | tuple[str, list[str]]]] = {
     "depth_copy": {"cs": "depth_copy.comp"},
     # The late transparents' single-sample depth under MSAA (WebGPU runs 4x): sample 0 of the view depth.
     "depth_copy_sample0": {"vs": "fullscreen_noinput.vert", "fs": "depth_copy_sample0.frag"},
+    # DepthUpsamplePass loads this package before depth_copy_sample0 and runs neither without it.
+    "taau_depth_upsample": {"vs": "fullscreen_noinput.vert", "fs": "taau_depth_upsample.frag"},
     "depth_reduce": {"cs": "depth_reduce.comp"},
     "depth_reduce_ms": {"cs": "depth_reduce_ms.comp"},
     # Web.rendergraph's SSSR path (HZBBuild + ScreenSpaceReflections). These
@@ -82,6 +85,10 @@ kPackages: dict[str, dict[str, str | tuple[str, list[str]]]] = {
     "sssr_reproject": {"cs": "ScreenSpaceReflections/sssr_reproject.comp"},
     "sssr_temporal": {"cs": "ScreenSpaceReflections/sssr_temporal.comp"},
     "msm_write": {"vs": "fullscreen_noinput.vert", "fs": "msm_write.frag"},
+    # ShadowMapNode loads the moment blur and cascade passes whenever the graph has a shadow map.
+    "msm_blur_h": {"vs": "fullscreen_noinput.vert", "fs": "msm_blur_h.frag"},
+    "msm_blur_v": {"vs": "fullscreen_noinput.vert", "fs": "msm_blur_v.frag"},
+    "msm_cascade": {"cs": "msm_cascade.comp"},
     # Contact shadows are selected by the view's Shadow Settings at runtime,
     # so both Player and Editor exports need the complete compute chain.
     "screen_space_shadow_prepare": {"cs": "ScreenSpaceShadows/screen_space_shadow_prepare.comp"},
@@ -174,7 +181,6 @@ kEditorPackages: dict[str, dict[str, str]] = {
     "sun_glare": {"vs": "sun_glare.vert", "fs": "sun_glare.frag"},
     "sun_glare_ms": {"vs": "sun_glare_ms.vert", "fs": "sun_glare.frag"},
     "sun_glare_casters": {"cs": "sun_glare_casters.comp"},
-    "msm_blur_h": {"vs": "fullscreen_noinput.vert", "fs": "msm_blur_h.frag"},
     "sssr_classify": {"cs": "ScreenSpaceReflections/sssr_classify.comp"},
     "sssr_composite": {"cs": "ScreenSpaceReflections/sssr_composite.comp"},
     "sssr_intersect": {"cs": "ScreenSpaceReflections/sssr_intersect.comp"},
@@ -232,7 +238,6 @@ kEditorPackages: dict[str, dict[str, str]] = {
     # Render scale != 1.0 resolves through the upscale variant; without it web
     # degrades to the warned bilinear passthrough.
     "taa_resolve_upscale": {"cs": "taa_resolve_upscale.comp"},
-    "taau_depth_upsample": {"vs": "fullscreen_noinput.vert", "fs": "taau_depth_upsample.frag"},
     # The ForwardPlus graph's remaining passes. Generated from the
     # _ge_add_shaderpkg_* declarations in Engine/Modules/Rendering/CMakeLists.txt,
     # which is the source of truth for what each package's stages are; a package
@@ -275,9 +280,7 @@ kEditorPackages: dict[str, dict[str, str]] = {
 
 # Built-in packages the web library's engine pack (engine_pack.py) cooks on top of
 # kPackages: those the library's own pipeline (Apps/WebLibrary/Assets/RenderPipelines/
-# Web.rendergraph) adds to the web export's graph (auto exposure, sun glare, bloom and TAA),
-# the shadow map's moment blur and cascade passes, which ShadowMapNode loads by name
-# whenever the graph has a shadow map (its moment write, msm_write, is in kPackages), and
+# Web.rendergraph) adds to the web export's graph (auto exposure, sun glare, bloom and TAA), and
 # the DDGI software lane with its screen-space resolve, which the graph's DDGIGen pass and
 # the compat forward pass (GE_DDGI_RESOLVE_ONLY, Includes/ibl.glsl) run once a page adds a
 # DDGIVolume: without them the volume lights nothing.
@@ -286,15 +289,10 @@ kLibraryPackages: dict[str, dict[str, str]] = {
         "auto_exposure_histogram", "auto_exposure_resolve", "pre_exposure_snapshot", "sun_glare",
         "sun_glare_ms", "sun_glare_casters",
         "bloom_threshold", "bloom_downsample", "bloom_octave_gather", "bloom_lens_dirt_gather",
-        "bloom_combine", "bloom_lens_dirt", "msm_blur_h",
+        "bloom_combine", "bloom_lens_dirt",
         "taa_motion_vectors", "taa_motion_vectors_skinned", "taa_resolve", "taa_resolve_upscale",
-        "taau_depth_upsample",
         *(name for name in kEditorPackages if name.startswith("ddgi_")))
 }
-# The moment rows belong in kPackages, where the web Player needs them too (#3138); these two
-# literals and msm_blur_h above are duplicates to delete once they are there.
-kLibraryPackages["msm_blur_v"] = {"vs": "fullscreen_noinput.vert", "fs": "msm_blur_v.frag"}
-kLibraryPackages["msm_cascade"] = {"cs": "msm_cascade.comp"}
 # The render-scale crossing without TAA (RenderScaleUpscaleNode): the graph's RenderScaleUpscale pass
 # resamples a view whose camera sets a render scale and runs no TAA.
 kLibraryPackages["spatial_upscale"] = {"vs": "fullscreen_noinput.vert", "fs": "spatial_upscale.frag"}

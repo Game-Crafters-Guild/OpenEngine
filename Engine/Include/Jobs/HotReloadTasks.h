@@ -1,7 +1,7 @@
 #pragma once
 
+#include "JobSystem/TaskHandle.h"
 #include "JobSystem/TaskTypes.h"
-#include "JobSystem/Task.h"
 #include "Logger/Logger.h"
 #include "Types/Types.h"
 #include <array>
@@ -226,9 +226,10 @@ class IAssemblyLoader
 } // namespace Jobs
 
 /**
- * @brief Base class for all hot-reload pipeline tasks
+ * @brief Base class for the hot-reload pipeline stages. The pipeline calls a
+ * stage's Execute inside the job that runs the stage.
  */
-class HotReloadTask : public JobSystem::Task
+class HotReloadTask
 {
   public:
     // Lightweight cancellation exception to short-circuit task work
@@ -237,11 +238,8 @@ class HotReloadTask : public JobSystem::Task
         const char* what() const noexcept override { return "HotReload task cancelled"; }
     };
 
-    HotReloadTask(JobSystem::WorkStealingThreadPool* jobSystem, const String& assemblyPath,
-                  const std::shared_ptr<std::atomic<bool>>& cancelToken = nullptr)
-        : JobSystem::Task(jobSystem), m_AssemblyPath(assemblyPath), m_StartTime(std::chrono::high_resolution_clock::now()), m_CancelToken(cancelToken) {}
-
-    virtual ~HotReloadTask() = default;
+    HotReloadTask(const String& assemblyPath, const std::shared_ptr<std::atomic<bool>>& cancelToken = nullptr)
+        : m_AssemblyPath(assemblyPath), m_StartTime(std::chrono::high_resolution_clock::now()), m_CancelToken(cancelToken) {}
 
     /**
      * @brief Get the assembly path being processed
@@ -277,9 +275,8 @@ class HotReloadTask : public JobSystem::Task
         m_ErrorMessage = errorMessage;
 
         bool success = (result == HotReloadResult::Success);
-        JobSystem::TaskId taskId = GetTaskId();
-        Logger::Log::Debug("[HotReload] Task {} completed with result: {}",
-                           taskId, success ? "success" : "failed");
+        Logger::Log::Debug("[HotReload] Stage for {} completed with result: {}",
+                           m_AssemblyPath, success ? "success" : "failed");
     }
 
     /**
@@ -307,11 +304,10 @@ class HotReloadTask : public JobSystem::Task
 class CompilationTask : public HotReloadTask
 {
   public:
-    CompilationTask(JobSystem::WorkStealingThreadPool* jobSystem,
-                    const String& assemblyPath,
+    CompilationTask(const String& assemblyPath,
                     std::unique_ptr<Jobs::ICompiler> compiler = nullptr,
                     const std::shared_ptr<std::atomic<bool>>& cancelToken = nullptr)
-        : HotReloadTask(jobSystem, assemblyPath, cancelToken), m_Compiler(std::move(compiler))
+        : HotReloadTask(assemblyPath, cancelToken), m_Compiler(std::move(compiler))
     {
         if (!m_Compiler)
         {
@@ -326,7 +322,7 @@ class CompilationTask : public HotReloadTask
      * fails, so the task handle reports Failed and the dependent stages never
      * run. A cancelled compile returns normally with result Cancelled.
      */
-    void Execute() override;
+    void Execute();
 
     /**
      * @brief Get compilation output
@@ -380,12 +376,12 @@ struct PreloadSync
 class AssemblyPrepTask : public HotReloadTask
 {
   public:
-    AssemblyPrepTask(JobSystem::WorkStealingThreadPool* jobSystem, const String& assemblyPath, std::vector<uint8_t> assemblyBytes,
+    AssemblyPrepTask(const String& assemblyPath, std::vector<uint8_t> assemblyBytes,
                      std::shared_ptr<PreloadSync> preloadSync,
                      const std::shared_ptr<std::atomic<bool>>& cancelToken = nullptr)
-        : HotReloadTask(jobSystem, assemblyPath, cancelToken), m_AssemblyBytes(std::move(assemblyBytes)), m_PreloadSync(std::move(preloadSync)) {}
+        : HotReloadTask(assemblyPath, cancelToken), m_AssemblyBytes(std::move(assemblyBytes)), m_PreloadSync(std::move(preloadSync)) {}
 
-    void Execute() override;
+    void Execute();
 
     /**
      * @brief Get prepared assembly context (only valid after successful execution)
@@ -441,12 +437,15 @@ class AssemblyPrepTask : public HotReloadTask
 class AssemblySwapTask : public HotReloadTask
 {
   public:
+    /**
+     * @param jobSystem Runs the old context's cleanup; null skips the cleanup.
+     */
     AssemblySwapTask(JobSystem::WorkStealingThreadPool* jobSystem, const String& assemblyPath,
                      std::shared_ptr<PreloadSync> preloadSync,
                      const std::shared_ptr<std::atomic<bool>>& cancelToken = nullptr)
-        : HotReloadTask(jobSystem, assemblyPath, cancelToken), m_PreloadSync(std::move(preloadSync)) {}
+        : HotReloadTask(assemblyPath, cancelToken), m_JobSystem(jobSystem), m_PreloadSync(std::move(preloadSync)) {}
 
-    void Execute() override;
+    void Execute();
 
     /**
      * @brief Get swap duration (should be <1ms)
@@ -475,6 +474,7 @@ class AssemblySwapTask : public HotReloadTask
     void UpdateAssemblyReferences();
 
   private:
+    JobSystem::WorkStealingThreadPool* m_JobSystem;
     void* m_OldContext{nullptr};
     std::chrono::milliseconds m_SwapDuration{0};
     bool m_SwapCompleted{false};

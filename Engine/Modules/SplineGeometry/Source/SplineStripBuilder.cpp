@@ -236,20 +236,11 @@ void AppendBandQuad(std::vector<uint32>& indices, const std::vector<SplineVertex
 // A profile point picks its side by the SIGN of its lateral coordinate, and a
 // point on the centreline (x == 0) scales to zero either way. When the two
 // half-widths are equal both sides resolve to one value and every vertex is the
-// single-half-width arithmetic unchanged.
-struct StationScale
+// single-half-width arithmetic unchanged. Rise is SplineStripStation::RiseScale.
+[[nodiscard]] SplineStripScale ScaleOfStation(const SplineStripStation& station,
+                                              const SplineProfile& profile, SplineProfileScale mode)
 {
-    float32 Left = 1.0f;
-    float32 Right = 1.0f;
-    bool ScaleVertical = false;
-    // SplineStripStation::RiseScale: the multiplier of every height above zero.
-    float32 Rise = 1.0f;
-};
-
-[[nodiscard]] StationScale ScaleOfStation(const SplineStripStation& station,
-                                          const SplineProfile& profile, SplineProfileScale mode)
-{
-    StationScale scale;
+    SplineStripScale scale;
     if (mode != SplineProfileScale::None)
     {
         const float32 left = std::max(0.0f, station.HalfWidthLeft) / profile.NominalHalfWidth;
@@ -264,7 +255,7 @@ struct StationScale
 
 // The lateral and vertical multipliers a profile point takes: the lateral one by the side its
 // lateral coordinate falls on, the vertical one times Rise when the point stands above zero.
-[[nodiscard]] std::pair<float32, float32> ScaleForPoint(const StationScale& scale, const V2& point)
+[[nodiscard]] std::pair<float32, float32> ScaleForPoint(const SplineStripScale& scale, const V2& point)
 {
     const float32 s = (point.x < 0.0f) ? scale.Left : scale.Right;
     const float32 vertical = scale.ScaleVertical ? s : 1.0f;
@@ -312,7 +303,7 @@ void EmitRiser(SplineStripMesh& mesh, const SplineProfile& profile, std::span<co
     // U runs along the lateral axis and V up the riser.
     const float32 handedness =
         V3::Dot(V3::Cross(riserNormal, lateral), laterStation.Up) >= 0.0f ? 1.0f : -1.0f;
-    const StationScale scale = ScaleOfStation(laterStation, profile, widthScale);
+    const SplineStripScale scale = ScaleOfStation(laterStation, profile, widthScale);
 
     const uint32 base = static_cast<uint32>(mesh.Vertices.size());
     const auto emitCorner = [&](uint32 ring, uint32 point)
@@ -413,15 +404,7 @@ SplineStripMesh BuildSplineStrip(const SplineProfile& profile,
     for (uint32 r = 0; r < ringCount; ++r)
     {
         const SplineStripStation& station = walk[r];
-        const StationScale scale = ScaleOfStation(station, profile, params.WidthScale);
-
-        for (uint32 j = 0; j < pointCount; ++j)
-        {
-            const auto [lateralScale, verticalScale] =
-                ScaleForPoint(scale, profile.Points[j].Position);
-            scaledPoints[j] = V2{profile.Points[j].Position.x * lateralScale,
-                                 profile.Points[j].Position.y * verticalScale};
-        }
+        StripProfileV(profile, ScaleOfStation(station, profile, params.WidthScale), scaledPoints, pointV);
 
         float32 perimeter = 0.0f;
         for (uint32 e = 0; e < topo.EdgeCount; ++e)
@@ -439,9 +422,6 @@ SplineStripMesh BuildSplineStrip(const SplineProfile& profile,
                                ? V2{delta.x / length, delta.y / length}
                                : NormalizedOr2D(unscaled, V2{1.0f, 0.0f});
             edgeNormals[e] = NormalizedOr2D(PerpendicularOutward(dir), V2{0.0f, 1.0f});
-
-            if (b != 0u)
-                pointV[b] = pointV[a] + length;
             perimeter = pointV[a] + length;
         }
 
@@ -607,7 +587,7 @@ SplineStripMesh BuildSplineStrip(const SplineProfile& profile,
         {
             const uint32 base = static_cast<uint32>(mesh.Vertices.size());
             const SplineStripStation& station = walk[ring];
-            const StationScale scale = ScaleOfStation(station, profile, params.WidthScale);
+            const SplineStripScale scale = ScaleOfStation(station, profile, params.WidthScale);
             const V3 forward = NormalizedOr(station.Forward, V3{0.0f, 0.0f, 1.0f});
             const V3 capNormal = front ? forward * -1.0f : forward;
 
@@ -673,6 +653,22 @@ SplineStripMesh BuildSplineStrip(const SplineProfile& profile,
     mesh.MinBounds = minBounds;
     mesh.MaxBounds = maxBounds;
     return mesh;
+}
+
+void StripProfileV(const SplineProfile& profile, const SplineStripScale& scale, std::span<V2> scaledPoints,
+                   std::span<float32> pointV)
+{
+    for (size_t j = 0; j < profile.Points.size(); ++j)
+    {
+        const auto [lateralScale, verticalScale] = ScaleForPoint(scale, profile.Points[j].Position);
+        scaledPoints[j] = V2{profile.Points[j].Position.x * lateralScale, profile.Points[j].Position.y * verticalScale};
+        if (j == 0)
+        {
+            pointV[j] = 0.0f;
+            continue;
+        }
+        pointV[j] = pointV[j - 1] + (scaledPoints[j] - scaledPoints[j - 1]).Length();
+    }
 }
 
 } // namespace GameEngine::SplineGeometry

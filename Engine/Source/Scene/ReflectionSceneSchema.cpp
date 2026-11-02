@@ -74,7 +74,7 @@ bool IsAssetGuidArrayField(const ECS::FieldInfo& f)
 // per sub-field, through that sub-field's own codec; a struct array inside an element nests the
 // same way ("<Name><index>.<Inner><index>.<SubField>"). An element equal to what the owning
 // component's default bytes hold at its place writes no line at all (unless the save writes every
-// field, SceneSaveContext::WriteEveryField), because that default is
+// field, SceneWriteContext::WriteEveryField), because that default is
 // what the reader starts from — comparing against the element struct's own default instead would
 // drop an authored value that happens to equal it wherever the owner defaults differently. So an
 // untouched table costs nothing on disk and a filled one round-trips slot-exact, as the AssetGuid
@@ -134,7 +134,7 @@ struct StructArrayLine
 // the defaults become later. A struct array nested in an element whose struct has no field table
 // cannot be written, and says so rather than vanishing from the file.
 void WriteStructArrayLines(const ECS::FieldInfo& f, const std::uint8_t* field, const std::uint8_t* defaults,
-                           const SceneSaveContext& ctx, std::string_view componentName, const std::string& prefix,
+                           const SceneWriteContext& ctx, std::string_view componentName, const std::string& prefix,
                            std::vector<StructArrayLine>& out)
 {
     StructArrayLayout layout;
@@ -380,7 +380,7 @@ enum class PropertyApply
 // The authored keys a component block names and the component has no field for (renamed or removed
 // since the file was written, or misspelled). A scene load takes them for its load report; any other
 // apply gets one warning for all of them.
-void ReportUnknownFields(const SceneLoadContext& ctx, const std::string& componentName,
+void ReportUnknownFields(const SceneReadContext& ctx, const std::string& componentName,
                          std::span<const std::string_view> unknown)
 {
     if (unknown.empty())
@@ -404,7 +404,7 @@ void ReportUnknownFields(const SceneLoadContext& ctx, const std::string& compone
 // default and is appended to `unknownFields`, which the caller reports once per component.
 PropertyApply ApplyPropertyToBytes(ECS::ComponentTypeId typeId, const std::string& componentName,
                                    const PostProcessEffectDescriptor* desc, std::vector<std::uint8_t>& bytes,
-                                   const SceneLoadContext& ctx, std::string_view property,
+                                   const SceneReadContext& ctx, std::string_view property,
                                    std::string_view value, std::string* outError,
                                    std::vector<std::string_view>& unknownFields)
 {
@@ -560,7 +560,7 @@ void ReflectionSceneSchema::EnumerateAssetReferences(const ECS::World& world, EC
 }
 
 void ReflectionSceneSchema::Serialize(const ECS::World& world, ECS::EntityHandle entity,
-                                      const SceneSaveContext& ctx, std::vector<std::string>& outLines) const
+                                      const SceneWriteContext& ctx, std::vector<std::string>& outLines) const
 {
     if (!world.HasComponent(entity, m_TypeId))
         return;
@@ -698,7 +698,7 @@ void ReflectionSceneSchema::Serialize(const ECS::World& world, ECS::EntityHandle
     }
 }
 
-bool ReflectionSceneSchema::ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+bool ReflectionSceneSchema::ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                                           std::string_view property, std::string_view value, std::string* outError) const
 {
     if (!world.HasComponent(entity, m_TypeId))
@@ -741,7 +741,7 @@ bool ReflectionSceneSchema::ApplyProperty(ECS::World& world, ECS::EntityHandle e
     return true;
 }
 
-bool ReflectionSceneSchema::ApplyProperties(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+bool ReflectionSceneSchema::ApplyProperties(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                                             std::span<const std::pair<std::string_view, std::string_view>> props,
                                             std::string* outError, std::size_t* outFailedIndex) const
 {

@@ -8,7 +8,6 @@
 #include "ECS/ECSTemplates.h"
 #include "Mathematics/Vector3.h"
 #include "Mathematics/VectorOps.h"
-#include "PageStreaming/Height/HeightPageOverlay.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "TerrainECS/PlanetPageRequester.h"
 #include "TerrainECS/TerrainService.h"
@@ -17,7 +16,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <memory>
 #include <vector>
 
 namespace GameEngine
@@ -60,7 +58,7 @@ json PlacePlanetPageOverlay(const EditorDebugServer::RequestContext& ctx)
         return Editor::RefuseRequest("No active planet: open a scene with a spherical terrain first");
     if (ctx.params.value("clear", false))
     {
-        service->SetPlanetPageOverlay(entity.id, nullptr);
+        service->ClearPlanetPageLayer(entity.id);
         return json{{"ok", true}, {"cleared", true}};
     }
 
@@ -85,13 +83,8 @@ json PlacePlanetPageOverlay(const EditorDebugServer::RequestContext& ctx)
     rect.MinZ = z > radius ? z - radius : 0u;
     rect.MaxX = std::min(x + radius, samples - 1u);
     rect.MaxZ = std::min(z + radius, samples - 1u);
-    if (!PageStreaming::Level0RectStaysInsideFace(levels, rect))
-        return Editor::RefuseRequest("The bump must lie inside its face: an overlay stops at the face's edge (the "
-                                     "neighbor face's pages are not written). Move x, z inward or lower radius",
-                                     json{{"faceSamples", samples}});
-    auto overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(static_cast<uint8>(face), levels, rect,
-                                                                            RaisedCosine(rect, x, z, radius, height));
-    service->SetPlanetPageOverlay(entity.id, std::move(overlay));
+    service->WritePlanetPageLayer(entity.id, levels, static_cast<uint8>(face), rect,
+                                  RaisedCosine(rect, x, z, radius, height));
 
     const Mathematics::Vector3 direction =
         PageStreaming::EqualAngleSampleDirection(static_cast<uint8>(face), x, z, samples);
@@ -107,7 +100,8 @@ json PlacePlanetPageOverlay(const EditorDebugServer::RequestContext& ctx)
 void RegisterPlanetPageOverlayHandler(EditorDebugServer& server)
 {
     // Params: face (0 to 5), x and z (level-0 samples of the face), radius (samples), height (meters);
-    // clear: true removes the overlay. Replies with the bump's unit direction from the planet's center.
+    // writes the bump into the planet's layer over its rect; clear: true removes the layer. Replies
+    // with the bump's unit direction from the planet's center.
     server.RegisterHandler("planet_page_overlay", PlacePlanetPageOverlay);
 }
 

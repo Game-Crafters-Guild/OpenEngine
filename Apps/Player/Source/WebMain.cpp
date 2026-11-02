@@ -11,6 +11,7 @@
 #include "PlayerApplication.h"
 #include "WebDistLoader.h"
 
+#include "Audio/AudioTypes.h"
 #include "Core/EngineLoggerBridge.h"
 #include "Core/Engine.h"
 #include "Engine/Build/GameConfig.h"
@@ -98,6 +99,7 @@ int main()
     appConfig.WindowWidth = gameConfig.windowWidth;
     appConfig.WindowHeight = gameConfig.windowHeight;
     appConfig.Fullscreen = false; // the canvas is the window; CSS sizes it
+    appConfig.AudioOutput = GameEngine::Audio::AudioOutput::Device;
     appConfig.AssetDirectory = (contentRoot / "Assets").string();
     // MEMFS is writable; keep runtime caches inside the content mount.
     appConfig.WorkspaceDirectory = (contentRoot / ".workspace").string();

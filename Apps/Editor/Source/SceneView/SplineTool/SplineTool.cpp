@@ -7,7 +7,6 @@
 #include "UndoRedo/Spline/SplineUndoHelpers.h"
 #include "Scene/WorldSnapshotCommand.h"
 #include "Components/Rendering/MeshRenderer.h"
-#include "Components/RuntimeOnlyEntity.h"
 #include "Components/Transform.h"
 #include "ECS/Components.h"
 #include "ECS/ECS.h"
@@ -25,6 +24,7 @@
 #include "Spline/SplineEvaluator.h"
 #include "Spline/SplineUtility.h"
 #include "SplineECS/SplineService.h"
+#include "SplineRecipes/SplineSurfaceConform.h"
 #include "Types/ColorUtils.h"
 #include "Editor/Entities/EntityDisplayName.h"
 #include "Core/Engine.h"
@@ -51,6 +51,11 @@ using Mathematics::Vector3;
 
 namespace
 {
+UndoRedoService::SnapshotTarget MakeSplinesEditableSnapshotTarget(
+    SplineECS::SplineService* splineService,
+    const std::vector<std::pair<ECS::EntityHandle, SplineECS::SplineHandle>>& splines,
+    ECS::World* world, Editor::EditorChangeNotifications* notifications, const std::string& label);
+
 // Same basis as SceneViewTransformTool translate gizmo (constant screen size).
 constexpr float kSplineScreenScaleRefAxisLength = 1.5f;
 constexpr float kSplineScreenScaleBase            = 0.1875f;
@@ -486,11 +491,17 @@ bool SplineTool::RaycastScene(const GizmoRay& ray, Vector3& outHit, uint32* hitE
 
     const bool snapToMeshes = Editor::SplineEditorSettings::Get().GetSnapToMeshes();
 
+    // Generator output (paving, a road band) is rebuilt from its spline: the ray passes through
+    // it to the ground under it, as the recipes' conform ray does.
+    const std::vector<ECS::EntityHandle> ignore = SplineRecipes::CollectConformRayIgnoreList(*world);
+
+    // No bounds fallback: a box is not a surface. A mesh with no CPU copy, or with its BVH still
+    // building, gives no hit, and the ray lands on what is under it.
     Scene::PickOptions options;
     options.IncludeMeshes     = snapToMeshes;
     options.IncludePrimitives = snapToMeshes;
     options.IncludeTerrain    = true;
-    options.IncludeBoundsFallback = true; // a stroke over a renderer with no CPU mesh lands on its box
+    options.IgnoreEntities    = ignore;
 
     const auto pick = Editor::Picking::PickScene(mathRay, *world, options);
     if (pick.Hit)
@@ -498,12 +509,9 @@ bool SplineTool::RaycastScene(const GizmoRay& ray, Vector3& outHit, uint32* hitE
         outHit = pick.Best.WorldPosition;
         if (hitEntityId)
         {
-            // Generator output (paving, a road band) is rebuilt from its spline: a stroke on it
-            // belongs to the ground under it, so the stroke does not stick to it.
             const bool canStickToHit =
                 (pick.Best.Kind == Scene::PickableKind::Mesh || pick.Best.Kind == Scene::PickableKind::Primitive) &&
-                pick.Best.Entity.IsValid() &&
-                !world->HasComponent<Components::RuntimeOnlyEntity>(pick.Best.Entity);
+                pick.Best.Entity.IsValid();
             *hitEntityId = canStickToHit ? pick.Best.Entity.id : 0u;
         }
         return true;
@@ -948,14 +956,12 @@ void SplineTool::BeginSelectedControlTransformEdit(const char* editName)
     }
 
     m_SplineDragUndo = {};
-    if (m_UndoRedo && undoSplines.size() == 1u)
+    if (m_UndoRedo)
     {
         const char* label = (editName && *editName) ? editName : "Transform Spline Control";
         m_SplineDragUndo = m_UndoRedo->BeginInteractiveEdit(
             label,
-            Editor::SplineUndo::MakeSplineEditableSnapshotTarget(
-                splineService, undoSplines.front().second, world, undoSplines.front().first,
-                m_ChangeNotifications, label));
+            MakeSplinesEditableSnapshotTarget(splineService, undoSplines, world, m_ChangeNotifications, label));
     }
 }
 
@@ -1510,7 +1516,7 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
     UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
 
-    target.Capture = [splineService, splines](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+    target.Capture = [splineService, splines, world](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
     {
         out.clear();
         const uint32_t count = static_cast<uint32_t>(splines.size());
@@ -1519,7 +1525,8 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
         for (const auto& entry : splines)
         {
             UndoRedoService::SnapshotTarget::Snapshot one;
-            const auto* data = splineService ? splineService->GetSplineData(entry.second) : nullptr;
+            const auto currentHandle = Editor::SplineUndo::ResolveSplineUndoHandle(world, entry.first, entry.second);
+            const auto* data = splineService ? splineService->GetSplineData(currentHandle) : nullptr;
             if (!Editor::SplineUndo::EncodeSplineConfig(data, one))
                 return false;
             const uint32_t bytes = static_cast<uint32_t>(one.size());
@@ -1531,7 +1538,7 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
         return true;
     };
 
-    target.Apply = [splineService, splines](const UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
+    target.Apply = [splineService, splines, world](const UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
     {
         if (snap.size() < 4u)
             return false;
@@ -1559,12 +1566,13 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
             Spline::SplineData restored{};
             if (!Editor::SplineUndo::DecodeSplineConfig(one, restored))
                 return false;
-            auto* data = splineService ? splineService->GetSplineData(splines[i].second) : nullptr;
+            const auto currentHandle = Editor::SplineUndo::ResolveSplineUndoHandle(world, splines[i].first, splines[i].second);
+            auto* data = splineService ? splineService->GetSplineData(currentHandle) : nullptr;
             if (!data)
                 return false;
             *data = std::move(restored);
             data->MarkDirty();
-            splineService->RebuildCache(splines[i].second);
+            splineService->RebuildCache(currentHandle);
         }
         return offset == snap.size();
     };
@@ -1578,6 +1586,18 @@ UndoRedoService::SnapshotTarget MakeMultiSplineEditableSnapshotTarget(
     };
 
     return target;
+}
+
+// The undo target of an edit over `splines`: one spline takes the single-spline target, more take the multi-spline one.
+UndoRedoService::SnapshotTarget MakeSplinesEditableSnapshotTarget(
+    SplineECS::SplineService* splineService,
+    const std::vector<std::pair<ECS::EntityHandle, SplineECS::SplineHandle>>& splines,
+    ECS::World* world, Editor::EditorChangeNotifications* notifications, const std::string& label)
+{
+    if (splines.size() == 1u)
+        return Editor::SplineUndo::MakeSplineEditableSnapshotTarget(splineService, splines.front().second, world,
+                                                                    splines.front().first, notifications, label);
+    return MakeMultiSplineEditableSnapshotTarget(splineService, splines, world, notifications, label);
 }
 
 } // namespace
@@ -1699,12 +1719,7 @@ bool SplineTool::DeleteSelectedControlPoints()
     {
         edit = m_UndoRedo->BeginInteractiveEdit(
             editName,
-            undoSplines.size() <= 1u
-                ? Editor::SplineUndo::MakeSplineEditableSnapshotTarget(
-                      splineService, undoSplines.front().second, world, undoSplines.front().first,
-                      m_ChangeNotifications, editName)
-                : MakeMultiSplineEditableSnapshotTarget(
-                      splineService, undoSplines, world, m_ChangeNotifications, editName));
+            MakeSplinesEditableSnapshotTarget(splineService, undoSplines, world, m_ChangeNotifications, editName));
     }
 
     ECS::EntityHandle survivorEntity{};
@@ -2016,12 +2031,7 @@ bool SplineTool::TryBeginEditDrag(const ScenePointerEvent& event,
     {
         m_SplineDragUndo = m_UndoRedo->BeginInteractiveEdit(
             "Edit Spline",
-            undoSplines.size() <= 1u
-                ? Editor::SplineUndo::MakeSplineEditableSnapshotTarget(
-                      splineService, undoSplines.front().second, world, undoSplines.front().first,
-                      m_ChangeNotifications, "Edit Spline")
-                : MakeMultiSplineEditableSnapshotTarget(
-                      splineService, undoSplines, world, m_ChangeNotifications, "Edit Spline"));
+            MakeSplinesEditableSnapshotTarget(splineService, undoSplines, world, m_ChangeNotifications, "Edit Spline"));
     }
     return true;
 }

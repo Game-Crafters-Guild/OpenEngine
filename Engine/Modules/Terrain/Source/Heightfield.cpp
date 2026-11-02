@@ -298,6 +298,23 @@ void HeightfieldData::Fill(float32 value)
     std::fill(m_Samples.begin(), m_Samples.end(), value);
 }
 
+} // namespace GameEngine::Terrain
+
+// The grid noise fill is content (a procedural base, a generated heightmap). It must give the
+// same bits on every machine, so contraction is off (the rule of CBTDeepDecode.h).
+#if defined(_MSC_VER)
+#pragma float_control(push)
+#pragma fp_contract(off)
+#elif defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC optimize ("fp-contract=off")
+#else
+#pragma STDC FP_CONTRACT OFF
+#endif
+
+namespace GameEngine::Terrain
+{
+
 // Simple hash-based value noise with smoothstep interpolation (no external dependency)
 namespace
 {
@@ -380,6 +397,21 @@ void HeightfieldData::FillRegionWithNoise(float32 frequency, float32 amplitude,
         }
     }
 }
+
+} // namespace GameEngine::Terrain
+
+// The world-space fill stays outside: TileSampleWorld (GeneratedHeightPageProvider.cpp) repeats
+// its sample position expression, and the two must round it the same way.
+#if defined(_MSC_VER)
+#pragma float_control(pop)
+#elif defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#else
+#pragma STDC FP_CONTRACT DEFAULT
+#endif
+
+namespace GameEngine::Terrain
+{
 
 void HeightfieldData::FillWithNoiseWorldSpace(float32 frequency, float32 amplitude,
                                                 float32 worldOriginX, float32 worldOriginZ,

@@ -1,12 +1,12 @@
 #include "AssetCore/GUID.h"
+#include "Types/FormatNumber.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <charconv>
 #include <cstring>
-#include <iomanip>
 #include <random>
-#include <sstream>
+#include <span>
 
 namespace GameEngine {
 
@@ -106,28 +106,28 @@ bool GUID::IsNull() const {
 }
 
 String GUID::ToString() const {
-    std::stringstream ss;
-    ss << std::hex << std::setfill('0');
+    // 8-4-4-4-12 hex digits: the byte groups end at bytes 4, 6, 8, 10 and 16.
+    constexpr size_t kGroupEnds[] = { 4, 6, 8, 10, kSize };
+    const std::span<const uint8> bytes(m_Data);
 
-    for (size_t i = 0; i < kSize; ++i) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) {
-            ss << '-';
+    String text;
+    text.reserve(kSize * 2 + std::size(kGroupEnds) - 1);
+    size_t groupBegin = 0;
+    for (size_t groupEnd : kGroupEnds) {
+        if (groupBegin != 0) {
+            text += '-';
         }
-        ss << std::setw(2) << static_cast<int>(m_Data[i]);
+        AppendHexBytes(text, bytes.subspan(groupBegin, groupEnd - groupBegin));
+        groupBegin = groupEnd;
     }
-
-    return ss.str();
+    return text;
 }
 
 String GUID::ToCompactString() const {
-    std::stringstream ss;
-    ss << std::hex << std::setfill('0');
-
-    for (uint8 byte : m_Data) {
-        ss << std::setw(2) << static_cast<int>(byte);
-    }
-
-    return ss.str();
+    String text;
+    text.reserve(kSize * 2);
+    AppendHexBytes(text, m_Data);
+    return text;
 }
 
 bool GUID::operator==(const GUID& other) const {

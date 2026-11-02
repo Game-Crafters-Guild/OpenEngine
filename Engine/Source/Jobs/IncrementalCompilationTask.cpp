@@ -18,11 +18,8 @@
 
 namespace GameEngine {
 
-IncrementalCompilationTask::IncrementalCompilationTask(JobSystem::WorkStealingThreadPool* jobSystem,
-                                                     CoreCLRHost& clrHost,
-                                                     const CompilationConfig& config)
-    : Task(jobSystem)
-    , m_Config(config)
+IncrementalCompilationTask::IncrementalCompilationTask(CoreCLRHost& clrHost, const CompilationConfig& config)
+    : m_Config(config)
     , m_ClrHost(clrHost)
     , m_LastFullCompilation(std::chrono::steady_clock::now()) {
 
@@ -471,10 +468,9 @@ void IncrementalCompilationTask::UpdateConfig(const CompilationConfig& config) {
 }
 
 std::unique_ptr<IncrementalCompilationTask> CreateIncrementalCompilationTask(
-    JobSystem::WorkStealingThreadPool* jobSystem,
     CoreCLRHost& clrHost,
     const IncrementalCompilationTask::CompilationConfig& config) {
-    return std::make_unique<IncrementalCompilationTask>(jobSystem, clrHost, config);
+    return std::make_unique<IncrementalCompilationTask>(clrHost, config);
 }
 
 } // namespace GameEngine

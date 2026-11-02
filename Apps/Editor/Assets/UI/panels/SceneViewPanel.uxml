@@ -37,14 +37,14 @@
       <SceneViewRulerOverlay id="SceneViewRulerOverlay" class="scene-view-ruler-overlay" />
       <SceneViewMeasureOverlay id="SceneViewMeasureOverlay" class="scene-view-measure-overlay" />
 
-      <!-- Floating tool overlay (top-left of viewport) -->
-      <UIElement id="SceneToolOverlay" class="scene-tool-overlay">
+      <!-- Floating tool overlay: left edge of the viewport, centered on its height; slides up to keep one inset above the FPS label, pins at the top inset when it cannot -->
+      <SceneViewToolOverlay id="SceneToolOverlay" class="scene-tool-overlay">
         <Button id="SelectModeBtn" class="scene-tool-btn select-tool-icon" />
         <Button id="TranslateModeBtn" class="scene-tool-btn translate-tool-icon icon-active" />
         <Button id="RotateModeBtn" class="scene-tool-btn rotate-tool-icon" />
         <Button id="ScaleModeBtn" class="scene-tool-btn scale-tool-icon" />
         <Button id="MeasureToolBtn" class="scene-tool-btn ruler-tool-icon" />
-      </UIElement>
+      </SceneViewToolOverlay>
 
       <!-- Axis orientation gizmo (top-right of viewport) -->
       <ViewportRotationGizmo id="ViewportRotationGizmo" class="viewport-rotation-gizmo" />

@@ -683,7 +683,7 @@ void HierarchyVcsController::RevertEntityToBaseline(
         }
 
         std::vector<std::string> unknownFields;
-        Scene::SceneLoadContext loadContext{};
+        Scene::SceneReadContext loadContext{};
         loadContext.TargetWorld = &world;
         loadContext.UnknownFields = &unknownFields;
         for (const ComponentBaseline& component : components)
@@ -846,7 +846,7 @@ void HierarchyVcsController::RestoreGhostEntity(TreeId id)
         }
 
         std::vector<std::string> unknownFields;
-        Scene::SceneLoadContext loadContext{};
+        Scene::SceneReadContext loadContext{};
         loadContext.TargetWorld = &world;
         loadContext.UnknownFields = &unknownFields;
         for (const ComponentBaseline& component : components)

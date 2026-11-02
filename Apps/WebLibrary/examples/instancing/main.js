@@ -22,7 +22,7 @@ const avocado = await scene.load(kModel, { onProgress: downloadProgress('the avo
 // The model's mesh is a child of its root (at the origin); the copies draw it with its material.
 const part = avocado.transform.children.find((child) => child.has(MeshRenderer)), mesh = part?.get(MeshRenderer);
 if (!part || !mesh) throw new Error('The model has no mesh under its root; this page copies a single mesh.');
-const { meshId, meshGpuHandleId, materialAssetGuid, modelAssetGuid } = mesh;
+const { meshId, materialAssetGuid, modelAssetGuid } = mesh;
 const instances = [part];   // the model's mesh and its copies, in spiral order
 let turning = false;   // the panel's switch (with ?turntable=1): off, so the page opens at the rate of copies at rest
 /** Places copy `index` on the spiral, turned by its golden angle. @param {import('@game-crafters-guild/openengine-web').Entity} entity @param {number} index */
@@ -41,7 +41,7 @@ function setCount(count) {
     while (instances.length > count) instances.pop()?.destroy();
     while (instances.length < count) {
         const copy = scene.create();
-        copy.set(MeshRenderer, { meshId, meshGpuHandleId, materialAssetGuid, modelAssetGuid });
+        copy.set(MeshRenderer, { meshId, materialAssetGuid, modelAssetGuid });
         place(copy, instances.length);
         instances.push(copy);
     }

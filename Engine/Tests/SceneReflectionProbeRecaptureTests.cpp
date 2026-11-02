@@ -18,6 +18,7 @@ using GameEngine::Engine::Renderer::Material;
 using GameEngine::Engine::Renderer::RenderServices;
 using GameEngine::Engine::Renderer::SceneProbeRecaptureSchedule;
 using GameEngine::Engine::Renderer::SceneProbeWorldEpochs;
+using GameEngine::Engine::Renderer::ShadowCasterChangeScope;
 
 namespace
 {
@@ -147,7 +148,7 @@ TEST(SceneProbeRecaptureSchedule, EpochsReadContentCasterLightAndMaterialVersion
     EXPECT_NE(SceneProbeWorldEpochs::Read(rs, kWorld).RenderContent, before.RenderContent);
 
     before = SceneProbeWorldEpochs::Read(rs, kWorld);
-    rs.NotifyShadowCasterContentChanged(kWorld, {}, /*unattributed=*/true);
+    rs.NotifyShadowCasterContentChanged(kWorld, {}, ShadowCasterChangeScope::Unbounded);
     EXPECT_NE(SceneProbeWorldEpochs::Read(rs, kWorld).ShadowCasters, before.ShadowCasters);
 
     before = SceneProbeWorldEpochs::Read(rs, kWorld);

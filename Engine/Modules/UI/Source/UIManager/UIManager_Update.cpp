@@ -189,9 +189,9 @@ void UIManager::Update(float deltaTime, bool interactive)
 
     // Stage 5 Block D: refresh the :focus-within chain. Marks any element
     // entering or leaving the chain dirty so its style re-cascades with
-    // the new FocusWithin flag. Cheap when m_FocusId is stable — the
-    // indexed FindById plus the parent ascent is O(depth) and only the
-    // symmetric difference triggers MarkDirty calls.
+    // the new FocusWithin flag. Cheap when m_FocusId is stable: the
+    // focused element is held between frames, the parent ascent is
+    // O(depth) and only the symmetric difference triggers MarkDirty calls.
     RebuildFocusWithinChain();
 
     // Diagnostics for redundant-BuildYoga investigation. Populated throughout

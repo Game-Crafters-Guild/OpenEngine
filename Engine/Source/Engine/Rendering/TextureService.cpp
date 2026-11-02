@@ -2,6 +2,7 @@
 // TextureService.h for the service contract.
 
 #include "Engine/Rendering/TextureService.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
 #include "CpuTextureSources.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/PostProcessSettings.h"
@@ -99,6 +100,8 @@
 #include <cassert>
 #include <cstring>
 #include <cstdlib>
+#include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -362,10 +365,8 @@ void TextureService::CreateDefaultTexturesAndLuts(Rendering::IDevice* dev)
             createDefaultTexture("DefaultWhite1x1Array", 1, 1, Rendering::TextureCreateFlags::ForceArrayView);
         m_DefaultBlackCubeTexture = CreateBlackCube1x1(dev);
 
-        // Batch-upload the default textures in a single command list submission.
-        // Note: SubmitTextureUploads (async transfer queue) causes VUID errors because
-        // the implementation transitions textures with shader-stage barriers that are
-        // invalid on the transfer queue. Use the synchronous graphics-queue path instead.
+        // Batch-upload the default textures on the graphics queue: queue order makes them
+        // visible to every later frame submit, which cannot wait on a transfer-queue token.
         uint32_t whitePixel = 0xFFFFFFFFu;
         uint32_t blackPixel = 0xFF000000u;
         uint32_t normalPixel = 0xFFFF8080u;
@@ -1436,7 +1437,7 @@ static bool LoadsThroughTextureCook(const std::filesystem::path& path)
 // caller to the legacy single-mip RGBA8 path. Block-compressed payloads are
 // ALWAYS handled: their bytes are not per-pixel addressable, so the legacy
 // expansion/swizzle path must never see them.
-// True when the asset's own mip chain can be uploaded as it is (TryUploadFromMipChain): a
+// True when the asset's own mip chain can be uploaded as it is (StageContainerMipChain): a
 // block-compressed payload, or a tightly packed RGBA8/RGBA32F one with no unbaked swizzle.
 // Reads the asset only, so the CPU half of an upload can decide it on any thread.
 static bool UsesContainerUpload(const TextureAsset& texAsset, const std::filesystem::path& path)
@@ -1455,99 +1456,126 @@ static bool UsesContainerUpload(const TextureAsset& texAsset, const std::filesys
     return texAsset.IsSwizzleBaked() || isFloat || !ResolveTextureSwizzle(path, swz);
 }
 
-static bool TryUploadFromMipChain(Rendering::IDevice* device,
-                                  const TextureAsset& texAsset,
-                                  const std::filesystem::path& path,
-                                  TextureColorSpace colorSpace,
-                                  const char* debugName,
-                                  Rendering::TextureHandle& out)
+// The GPU format a container payload uploads as. Nullopt when the device cannot take it: a BC
+// payload on a device without BC support. The decode-time transcode target and the cook output
+// make that unreachable; the guard keeps the slot's default instead of an undefined format.
+static std::optional<Rendering::TextureFormat> ResolveContainerGpuFormat(const Rendering::IDevice& device,
+                                                                        const TextureAsset& texAsset,
+                                                                        const std::filesystem::path& path,
+                                                                        TextureColorSpace colorSpace)
 {
-    out = {};
-    if (!UsesContainerUpload(texAsset, path))
-        return false;
-    const auto& chain = texAsset.GetMipChain();
-    const bool isBlock = texAsset.IsBlockCompressed();
-    const bool isFloat = texAsset.GetFormat() == GameEngine::TextureFormat::RGBA32F;
-
     const bool srgb = colorSpace == TextureColorSpace::SRGB;
-    Rendering::TextureFormat gpuFormat;
-    if (isBlock)
+    if (!texAsset.IsBlockCompressed())
     {
-        if (!device->GetCapabilities().supportsTextureCompressionBC)
-        {
-            // Decode-time transcode-target / cook-output selection makes this
-            // unreachable; guard so a mismatch degrades to the slot's default
-            // binding instead of a VK_FORMAT_UNDEFINED texture.
-            Logger::Log::Error(
-                "TextureService: BC payload for '{}' but the device lacks BC support; skipping upload",
-                path.string());
-            return true;
-        }
-        char swz[4];
-        if (!texAsset.IsSwizzleBaked() && ResolveTextureSwizzle(path, swz))
-        {
-            Logger::Log::Warning(
-                "TextureService: swizzle meta on block-compressed texture '{}' cannot be applied; ignoring",
-                path.string());
-        }
-        switch (texAsset.GetFormat())
-        {
-        case GameEngine::TextureFormat::BC1:
-            gpuFormat = srgb ? Rendering::TextureFormat::BC1_SRGB
-                             : Rendering::TextureFormat::BC1_UNORM;
-            break;
-        case GameEngine::TextureFormat::BC4:
-            gpuFormat = Rendering::TextureFormat::BC4_UNORM;
-            break;
-        case GameEngine::TextureFormat::BC5:
-            gpuFormat = Rendering::TextureFormat::BC5_UNORM;
-            break;
-        case GameEngine::TextureFormat::BC6H:
-            gpuFormat = Rendering::TextureFormat::BC6H_UF16;
-            break;
-        case GameEngine::TextureFormat::BC7:
-        default:
-            gpuFormat = srgb ? Rendering::TextureFormat::BC7_SRGB
-                             : Rendering::TextureFormat::BC7_UNORM;
-            break;
-        }
+        if (texAsset.GetFormat() == GameEngine::TextureFormat::RGBA32F)
+            return Rendering::TextureFormat::R32G32B32A32_FLOAT;
+        return srgb ? Rendering::TextureFormat::RGBA8_SRGB : Rendering::TextureFormat::RGBA8_UNORM;
     }
-    else if (isFloat)
+    if (!device.GetCapabilities().supportsTextureCompressionBC)
+        return std::nullopt;
+    char swz[4];
+    if (!texAsset.IsSwizzleBaked() && ResolveTextureSwizzle(path, swz))
     {
-        gpuFormat = Rendering::TextureFormat::R32G32B32A32_FLOAT;
+        Logger::Log::Warning("TextureService: swizzle meta on block-compressed texture '{}' cannot be applied; ignoring",
+                             path.string());
     }
-    else
+    switch (texAsset.GetFormat())
     {
-        gpuFormat = srgb ? Rendering::TextureFormat::RGBA8_SRGB
-                         : Rendering::TextureFormat::RGBA8_UNORM;
+    case GameEngine::TextureFormat::BC1:
+        return srgb ? Rendering::TextureFormat::BC1_SRGB : Rendering::TextureFormat::BC1_UNORM;
+    case GameEngine::TextureFormat::BC4:
+        return Rendering::TextureFormat::BC4_UNORM;
+    case GameEngine::TextureFormat::BC5:
+        return Rendering::TextureFormat::BC5_UNORM;
+    case GameEngine::TextureFormat::BC6H:
+        return Rendering::TextureFormat::BC6H_UF16;
+    case GameEngine::TextureFormat::BC7:
+    default:
+        return srgb ? Rendering::TextureFormat::BC7_SRGB : Rendering::TextureFormat::BC7_UNORM;
+    }
+}
+
+// A new 2D texture and a staging buffer that holds every level of `levels`, ready to submit.
+// Nullopt, with nothing left on the device and `refusal` set, when the device refuses the format,
+// the buffer or the texture.
+static std::optional<Rendering::StagedTextureUpload> StageMipChain(Rendering::IDevice& device,
+                                                                  Rendering::TextureFormat format,
+                                                                  std::span<const Rendering::TextureMipUploadEntry> levels,
+                                                                  const char* debugName,
+                                                                  const char*& refusal)
+{
+    std::optional<Rendering::StagedTextureUpload> upload =
+        Rendering::StageTextureMips(device, format, levels, "MaterialTexStaging");
+    if (!upload)
+    {
+        refusal = "no staging buffer for its format and size";
+        return std::nullopt;
     }
 
     Rendering::TextureDesc td{};
-    td.width = texAsset.GetWidth();
-    td.height = texAsset.GetHeight();
-    td.mipLevels = static_cast<uint32_t>(chain.size());
+    td.width = levels.front().Width;
+    td.height = levels.front().Height;
+    td.mipLevels = static_cast<uint32_t>(levels.size());
     td.arrayLayers = 1;
-    td.format = static_cast<uint32_t>(gpuFormat);
+    td.format = static_cast<uint32_t>(format);
     td.usage = static_cast<uint32_t>(Rendering::TextureUsage::ShaderResource)
              | static_cast<uint32_t>(Rendering::TextureUsage::TransferDst);
     td.persistent = true;
     td.debugName = debugName;
-    auto tex = device->CreateTexture(td);
-    if (!tex.IsValid())
-        return true;
-
-    const uint8_t* pixels = texAsset.GetPixelData();
-    std::vector<Rendering::TextureMipUploadEntry> mips(chain.size());
-    for (size_t i = 0; i < chain.size(); ++i)
+    upload->Texture = device.CreateTexture(td);
+    if (!upload->Texture.IsValid())
     {
-        mips[i] = {pixels + chain[i].Offset, static_cast<size_t>(chain[i].Size),
-                   chain[i].Width, chain[i].Height};
+        device.DestroyBuffer(upload->Staging);
+        refusal = "the device refused the texture";
+        return std::nullopt;
     }
-    Rendering::UploadTextureMips(device, tex, mips.data(), static_cast<uint32_t>(mips.size()),
-                                 gpuFormat, "MaterialTexStaging");
-    out = tex;
-    return true;
+    return upload;
 }
+
+// A container payload's own mip chain, staged as it is stored (see UsesContainerUpload). Nullopt,
+// with `refusal` set, when the device refuses it.
+static std::optional<Rendering::StagedTextureUpload> StageContainerMipChain(Rendering::IDevice& device,
+                                                                           const TextureAsset& texAsset,
+                                                                           const std::filesystem::path& path,
+                                                                           TextureColorSpace colorSpace,
+                                                                           const char* debugName,
+                                                                           const char*& refusal)
+{
+    if (!UsesContainerUpload(texAsset, path))
+    {
+        refusal = "its payload does not upload as stored";
+        return std::nullopt;
+    }
+    const std::optional<Rendering::TextureFormat> gpuFormat =
+        ResolveContainerGpuFormat(device, texAsset, path, colorSpace);
+    if (!gpuFormat)
+    {
+        refusal = "a BC payload, and the device lacks BC support";
+        return std::nullopt;
+    }
+    const auto& chain = texAsset.GetMipChain();
+    const uint8_t* pixels = texAsset.GetPixelData();
+    std::vector<Rendering::TextureMipUploadEntry> levels(chain.size());
+    for (size_t i = 0; i < chain.size(); ++i)
+        levels[i] = {pixels + chain[i].Offset, static_cast<size_t>(chain[i].Size), chain[i].Width, chain[i].Height};
+    return StageMipChain(device, *gpuFormat, levels, debugName, refusal);
+}
+
+// Submits the staged uploads with one command list. False when the device gives no command list:
+// the textures are destroyed, and the caller reports each one as refused.
+static bool SubmitOrDiscardStagedUploads(Rendering::IDevice& device,
+                                         std::span<const Rendering::StagedTextureUpload> uploads)
+{
+    if (Rendering::SubmitStagedTextureUploads(device, uploads))
+        return true;
+    for (const Rendering::StagedTextureUpload& upload : uploads)
+        device.DestroyTexture(upload.Texture);
+    return false;
+}
+
+// Why the device refused a texture, when no staging step names a cause.
+constexpr const char* kDeviceRefusal = "the device refused it";
+constexpr const char* kNoCommandListRefusal = "the device gave no command list";
 
 GUID TextureService::ResolveTextureRefGuid(const std::string& guidStr,
                                            const std::string& pathStr) const
@@ -1658,11 +1686,11 @@ struct TextureService::PreparedTextureUpload
     {
         Ready,   // upload it
         Refused, // terminal: publish a negative cache entry so callers stop retrying
-        Failed,  // nothing to upload (no pixels); publish nothing
+        Failed,  // nothing to upload (no pixels)
     };
     Outcome Result = Outcome::Failed;
     std::filesystem::path Path;
-    SharedPtr<TextureAsset> Container;          // uploads its own mip chain (TryUploadFromMipChain)
+    SharedPtr<TextureAsset> Container;          // uploads its own mip chain (StageContainerMipChain)
     std::vector<TextureCookMipLevel> MipChain;  // raw levels, RGBA8 or RGBA32F
     Rendering::TextureFormat Format = Rendering::TextureFormat::RGBA8_UNORM;
     // The asset's color space with the per-asset override applied. Carried here rather than
@@ -1878,65 +1906,88 @@ TextureGPUCache::Entry TextureService::SubmitPreparedUpload(const GUID& textureG
         return m_TextureGPUCache.PublishOrAdopt(textureGuid, TextureGPUCache::Entry{});
     if (prepared.Result != Outcome::Ready || !m_Device)
         return {};
-    const char* preparedWhere = prepared.PreparedOn == m_RenderThreadId ? "render thread" : "worker";
 
-    Rendering::TextureHandle tex;
-    Rendering::TextureHandle companion;
     const auto tUpload = Clock::now();
+    std::vector<Rendering::StagedTextureUpload> batch;
+    const char* refusal = kDeviceRefusal;
+    const TextureGPUCache::Entry uploaded = StagePreparedUpload(prepared, batch, refusal);
+    if (!uploaded.Texture.IsValid())
+        return PublishFailedUpload(textureGuid, prepared.Path, refusal);
+    if (!SubmitOrDiscardStagedUploads(*m_Device, batch))
+        return PublishFailedUpload(textureGuid, prepared.Path, kNoCommandListRefusal);
+    LogUploadTiming(prepared, "upload", std::chrono::duration<double, std::milli>(Clock::now() - tUpload).count());
+    return PublishUploadedEntry(textureGuid, uploaded);
+}
+
+TextureGPUCache::Entry TextureService::StagePreparedUpload(const PreparedTextureUpload& prepared,
+                                                           std::vector<Rendering::StagedTextureUpload>& batch,
+                                                           const char*& refusal)
+{
+    std::optional<Rendering::StagedTextureUpload> texture;
+    std::optional<Rendering::StagedTextureUpload> companion;
     if (prepared.Container)
     {
-        TryUploadFromMipChain(m_Device, *prepared.Container, prepared.Path, prepared.ColorSpace, "MaterialTexture",
-                              tex);
-        if (!tex.IsValid())
-            return {};
-        if (const TextureAsset* variance = prepared.Container->GetNormalVarianceCompanion())
-            TryUploadFromMipChain(m_Device, *variance, prepared.Path, TextureColorSpace::Linear,
-                                  "NormalVarianceCompanion", companion);
-        if (prepared.LogTiming)
-            Logger::Log::Info("[ModelLoad]     Texture '{}' {}x{} ({} mips{}): load {:.1f}ms on the {}, upload {:.1f}ms",
-                          prepared.Path.filename().string(), prepared.Width, prepared.Height,
-                          prepared.Container->GetMipmapLevels(), prepared.Container->IsBlockCompressed() ? ", BC" : "",
-                          prepared.LoadMs, preparedWhere,
-                          std::chrono::duration<double, std::milli>(Clock::now() - tUpload).count());
+        texture = StageContainerMipChain(*m_Device, *prepared.Container, prepared.Path, prepared.ColorSpace,
+                                         "MaterialTexture", refusal);
+        // A refused companion is not a refused texture: the texture uploads without it.
+        const TextureAsset* variance = prepared.Container->GetNormalVarianceCompanion();
+        const char* companionRefusal = nullptr;
+        if (texture && variance)
+            companion = StageContainerMipChain(*m_Device, *variance, prepared.Path, TextureColorSpace::Linear,
+                                               "NormalVarianceCompanion", companionRefusal);
     }
     else
     {
-        Rendering::TextureDesc td{};
-        td.width = prepared.Width;
-        td.height = prepared.Height;
-        td.mipLevels = static_cast<uint32_t>(prepared.MipChain.size());
-        td.arrayLayers = 1;
-        td.format = static_cast<uint32_t>(prepared.Format);
-        td.usage = static_cast<uint32_t>(Rendering::TextureUsage::ShaderResource)
-                 | static_cast<uint32_t>(Rendering::TextureUsage::TransferDst);
-        td.persistent = true;
-        td.debugName = "MaterialTexture";
-        tex = m_Device->CreateTexture(td);
-        if (!tex.IsValid())
-            return {};
-        std::vector<Rendering::TextureMipUploadEntry> mipEntries(prepared.MipChain.size());
+        std::vector<Rendering::TextureMipUploadEntry> levels(prepared.MipChain.size());
         for (size_t i = 0; i < prepared.MipChain.size(); ++i)
-            mipEntries[i] = {prepared.MipChain[i].Bytes.data(), prepared.MipChain[i].Bytes.size(),
-                             prepared.MipChain[i].Width, prepared.MipChain[i].Height};
-        Rendering::UploadTextureMips(m_Device, tex, mipEntries.data(), static_cast<uint32_t>(mipEntries.size()),
-                                     prepared.Format, "MaterialTexStaging");
-        if (prepared.LogTiming)
-            Logger::Log::Info(
-            "[ModelLoad]     Texture '{}' {}x{} ({} mips, raw): load {:.1f}ms and mip {:.1f}ms on the {}, upload {:.1f}ms",
-            prepared.Path.filename().string(), prepared.Width, prepared.Height, prepared.MipChain.size(),
-            prepared.LoadMs, prepared.MipMs, preparedWhere,
-            std::chrono::duration<double, std::milli>(Clock::now() - tUpload).count());
+            levels[i] = {prepared.MipChain[i].Bytes.data(), prepared.MipChain[i].Bytes.size(),
+                         prepared.MipChain[i].Width, prepared.MipChain[i].Height};
+        texture = StageMipChain(*m_Device, prepared.Format, levels, "MaterialTexture", refusal);
     }
+    if (!texture)
+        return {};
+    batch.push_back(*texture);
+    if (companion)
+        batch.push_back(*companion);
+    return {texture->Texture, companion ? companion->Texture : Rendering::TextureHandle{}};
+}
 
+void TextureService::LogUploadTiming(const PreparedTextureUpload& prepared, const char* step, double stepMs) const
+{
+    if (!prepared.LogTiming)
+        return;
+    const char* preparedWhere = prepared.PreparedOn == m_RenderThreadId ? "render thread" : "worker";
+    if (prepared.Container)
+        Logger::Log::Info("[ModelLoad]     Texture '{}' {}x{} ({} mips{}): load {:.1f}ms on the {}, {} {:.1f}ms",
+                          prepared.Path.filename().string(), prepared.Width, prepared.Height,
+                          prepared.Container->GetMipmapLevels(), prepared.Container->IsBlockCompressed() ? ", BC" : "",
+                          prepared.LoadMs, preparedWhere, step, stepMs);
+    else
+        Logger::Log::Info(
+            "[ModelLoad]     Texture '{}' {}x{} ({} mips, raw): load {:.1f}ms and mip {:.1f}ms on the {}, {} {:.1f}ms",
+            prepared.Path.filename().string(), prepared.Width, prepared.Height, prepared.MipChain.size(),
+            prepared.LoadMs, prepared.MipMs, preparedWhere, step, stepMs);
+}
+
+TextureGPUCache::Entry TextureService::PublishFailedUpload(const GUID& textureGuid, const std::filesystem::path& path,
+                                                           const char* reason)
+{
+    Logger::Log::Error("TextureService: texture {} '{}' not uploaded: {}", textureGuid.ToString(), path.string(),
+                       reason);
+    return m_TextureGPUCache.PublishOrAdopt(textureGuid, TextureGPUCache::Entry{});
+}
+
+TextureGPUCache::Entry TextureService::PublishUploadedEntry(const GUID& textureGuid,
+                                                            const TextureGPUCache::Entry& uploaded)
+{
     // Another extraction worker may have published this GUID while this thread was preparing and
     // uploading outside the lock; adopt its entry and retire the duplicate rather than orphaning
     // a texture callers already hold.
-    const TextureGPUCache::Entry candidate{tex, companion};
-    const TextureGPUCache::Entry published = m_TextureGPUCache.PublishOrAdopt(textureGuid, candidate);
-    if (published != candidate)
+    const TextureGPUCache::Entry published = m_TextureGPUCache.PublishOrAdopt(textureGuid, uploaded);
+    if (published != uploaded)
     {
-        ParkDuplicateTexture(tex);
-        ParkDuplicateTexture(companion);
+        ParkDuplicateTexture(uploaded.Texture);
+        ParkDuplicateTexture(uploaded.NormalVarianceCompanion);
     }
     return published;
 }
@@ -2251,6 +2302,18 @@ void TextureService::FlushPendingUploads()
             uploadEpochs.emplace_back(u.TextureGuid, m_TextureEpochByGuid[u.TextureGuid]);
     }
 
+    // The flush's uploads, staged for one command list, and what each publishes after the submit.
+    struct StagedFlushUpload
+    {
+        GUID TextureGuid;
+        TextureGPUCache::Entry Uploaded;
+        std::shared_ptr<const PreparedTextureUpload> Prepared;
+        double StageMs = 0.0;
+    };
+    using Clock = std::chrono::high_resolution_clock;
+    std::vector<Rendering::StagedTextureUpload> batch;
+    std::vector<StagedFlushUpload> staged;
+
     for (size_t i = 0; i < uploads.size(); ++i)
     {
         auto& upload = uploads[i];
@@ -2268,18 +2331,26 @@ void TextureService::FlushPendingUploads()
         }
 
         // Idempotency: a hot-reload re-upload path may have already populated
-        // the cache for this GUID since we drained the queue.
-        if (m_TextureGPUCache.Contains(upload.TextureGuid))
+        // the cache for this GUID since we drained the queue, or this flush
+        // already stages it.
+        if (m_TextureGPUCache.Contains(upload.TextureGuid) ||
+            std::any_of(staged.begin(), staged.end(),
+                        [&](const StagedFlushUpload& source) { return source.TextureGuid == upload.TextureGuid; }))
             continue;
 
         // The CPU half ran on the loading worker (or an upload job); a queued load without it
-        // runs it here. Either way this thread only submits the upload.
+        // runs it here. Either way this thread only stages the upload.
         std::shared_ptr<const PreparedTextureUpload> prepared = upload.Prepared;
         if (!prepared)
         {
             SharedPtr<TextureAsset> texAsset = std::dynamic_pointer_cast<TextureAsset>(upload.TextureAsset);
             if (!texAsset)
+            {
+                PublishFailedUpload(upload.TextureGuid,
+                                    upload.TextureAsset ? upload.TextureAsset->GetPath() : std::filesystem::path{},
+                                    "its asset is not a texture");
                 continue;
+            }
             prepared = PrepareUpload(upload.TextureGuid, std::move(texAsset), nullptr, upload.LogTiming);
         }
         else if (AssetMetadata texMeta{};
@@ -2295,8 +2366,44 @@ void TextureService::FlushPendingUploads()
                 continue;
             }
         }
-        if (prepared)
-            (void)SubmitPreparedUpload(upload.TextureGuid, *prepared);
+        if (prepared && prepared->Result == PreparedTextureUpload::Outcome::Refused)
+        {
+            m_TextureGPUCache.PublishOrAdopt(upload.TextureGuid, TextureGPUCache::Entry{});
+            continue;
+        }
+        // Null only when cancelled, and this flush gives no cancel flag.
+        if (!prepared || prepared->Result != PreparedTextureUpload::Outcome::Ready)
+        {
+            PublishFailedUpload(upload.TextureGuid, prepared ? prepared->Path : std::filesystem::path{},
+                                "it has no pixels");
+            continue;
+        }
+        const auto tStage = Clock::now();
+        const char* refusal = kDeviceRefusal;
+        const TextureGPUCache::Entry uploaded = StagePreparedUpload(*prepared, batch, refusal);
+        if (!uploaded.Texture.IsValid())
+        {
+            PublishFailedUpload(upload.TextureGuid, prepared->Path, refusal);
+            continue;
+        }
+        staged.push_back({upload.TextureGuid, uploaded, std::move(prepared),
+                          std::chrono::duration<double, std::milli>(Clock::now() - tStage).count()});
+    }
+
+    // One command list copies every texture of this flush, submitted once. Each texture is
+    // published after the submit, before the bind pass below picks it up.
+    if (SubmitOrDiscardStagedUploads(*m_Device, batch))
+    {
+        for (const StagedFlushUpload& upload : staged)
+        {
+            LogUploadTiming(*upload.Prepared, "stage", upload.StageMs);
+            PublishUploadedEntry(upload.TextureGuid, upload.Uploaded);
+        }
+    }
+    else
+    {
+        for (const StagedFlushUpload& upload : staged)
+            PublishFailedUpload(upload.TextureGuid, upload.Prepared->Path, kNoCommandListRefusal);
     }
 
     // Drop the load handles whose uploads landed in the cache, and pull out
@@ -3377,6 +3484,32 @@ size_t TextureService::PendingMaterialTextureBindCount() const
 {
     std::lock_guard lock(m_PendingTexturesMutex);
     return m_PendingTextureBinds.size();
+}
+
+struct TextureService::LoadReport
+{
+    static SceneLoadTracker::GateReport Evaluate(const TextureService& textures);
+
+    SceneLoadTracker::Category Category;
+    SceneLoadTracker::Gate Gate;
+};
+
+void TextureService::ReportLoadingWork(SceneLoadTracker& tracker)
+{
+    auto report = std::make_shared<LoadReport>();
+    report->Category = tracker.RegisterCategory({.Id = "render.texture-upload", .Label = "Loading textures"});
+    report->Gate = report->Category.RegisterGate([this] { return LoadReport::Evaluate(*this); });
+    m_LoadReport = std::move(report);
+}
+
+SceneLoadTracker::GateReport TextureService::LoadReport::Evaluate(const TextureService& textures)
+{
+    const std::size_t pending = textures.PendingMaterialTextureBindCount();
+    if (pending == 0)
+        return {};
+    return {.State = SceneLoadTracker::GateState::Waiting,
+            .Reason = "material texture binds pending",
+            .Pending = pending};
 }
 
 size_t TextureService::PendingMaterialTextureCount() const

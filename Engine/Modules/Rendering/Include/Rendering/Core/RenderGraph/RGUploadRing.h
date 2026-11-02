@@ -1,11 +1,11 @@
 #pragma once
 
-// One per-frame host-visible upload ring (framesInFlight slots), over the engine's
+// One per-frame host-visible upload ring (slotCount slots), over the engine's
 // real IDevice. ALL CPU-written per-frame data (camera UBOs, params, instance
 // scratch) sub-allocates an {offset, ptr} from the current frame's slot —
 // replacing the old per-resource perFrame=true N-copy multiplication + canonical-ID
 // map with a single ring. Each slot is a persistently-mapped Upload buffer;
-// BeginFrame selects slot = frameIndex % framesInFlight and rewinds it, so a slot
+// BeginFrame selects slot = frameIndex % slotCount and rewinds it, so a slot
 // is reused only once its frame's GPU work is complete (caller's frames-in-flight
 // contract). Slots auto-grow (between frames) to the observed high-water mark.
 //
@@ -44,7 +44,7 @@ class RGUploadRing
         bool Valid() const { return Ptr != nullptr; }
     };
 
-    RGUploadRing(IDevice* device, uint32_t framesInFlight, uint64_t initialSlotCapacityBytes);
+    RGUploadRing(IDevice* device, uint32_t slotCount, uint64_t initialSlotCapacityBytes);
     ~RGUploadRing();
     RGUploadRing(const RGUploadRing&) = delete;
     RGUploadRing& operator=(const RGUploadRing&) = delete;
@@ -71,7 +71,7 @@ class RGUploadRing
     // frames-in-flight guarantee that makes the slot itself reusable.
     Alloc Allocate(uint64_t size, uint64_t align = 256);
 
-    uint32_t FramesInFlight() const { return static_cast<uint32_t>(m_Slots.size()); }
+    uint32_t SlotCount() const { return static_cast<uint32_t>(m_Slots.size()); }
     uint32_t CurrentSlot() const { return m_CurSlot; }
     uint64_t SlotCapacity() const { return m_Slots.empty() ? 0 : m_Slots[m_CurSlot].Capacity; }
     uint64_t BytesUsedThisFrame() const { return m_FrameBytes; }

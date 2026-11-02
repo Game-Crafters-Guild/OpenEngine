@@ -6,6 +6,7 @@
 #include "Logger/Logger.h"
 #include "MovieRecorderController.h"
 #include "Platform/Shell.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Dropdown.h"
@@ -75,7 +76,7 @@ std::string RecentRecordingKey(const std::filesystem::path& path)
 
 bool IsMoviePath(const std::filesystem::path& path)
 {
-    const std::string ext = ToLowerAscii(path.extension().string());
+    const std::string ext = LowerCaseExtension(path);
     return ext == ".mov" || ext == ".mp4" || ext == ".m4v" || ext == ".hevc" || ext == ".h265";
 }
 

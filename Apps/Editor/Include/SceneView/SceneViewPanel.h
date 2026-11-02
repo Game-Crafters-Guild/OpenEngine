@@ -10,7 +10,7 @@
 #include "EditorChangeNotifications.h"
 #include "InspectorRegistry.h"
 #include "SceneView/SceneViewToolStrip.h"
-#include "UI/Controls/Widgets/SceneViewMeasureOverlay.h"
+#include "UI/Controls/Widgets/SceneView/SceneViewMeasureOverlay.h"
 #include "UI/Interaction/Types.h"
 
 #include <array>
@@ -261,7 +261,10 @@ private:
     static bool IsQuadViewKindAllowedForSlot(ViewportSlot slot, QuadViewKind kind);
     UIElement* GetActiveViewportElement() const;
     UIElement* GetViewportForOverlay() const;
-    UIElement* FindViewportOverlayById(const char* id) const;
+    UIElement* FindViewportOverlayById(StringId id) const;
+    // The shared overlay with `id` (one that follows the active pane), held while it is
+    // alive and found again through FindViewportOverlayById once it is destroyed.
+    UIElement* HeldSharedViewportOverlay(StringId id) const;
     bool ViewportOverlaysNeedSync() const;
     void RequestViewportOverlaySync();
     void RefreshOverlayElementPointers();
@@ -413,6 +416,9 @@ private:
         m_HeldRulerOverlays{};
     std::array<UIElement::WeakRef<class SceneViewMeasureOverlay>, static_cast<size_t>(ViewportSlot::Count)>
         m_HeldMeasureOverlays{};
+    // The shared overlays, in the order of kSharedViewportOverlayIds. Mutable: a cache
+    // that the const per-frame sync check fills.
+    mutable std::array<UIElement::WeakRef<UIElement>, 4> m_HeldSharedViewportOverlays{};
     bool m_MeasureToolEnabled = false;
     bool m_MeasureDragActive = false;
     bool m_MeasureCreateEntitiesMode = false;
@@ -432,6 +438,7 @@ private:
 
     // Camera bookmarks
     uint64_t m_CameraBookmarksBoundInstanceId = 0; // last bound instance id (best-effort, avoids stale pointers)
+    UIElement::WeakRef<class CameraBookmarksWidget> m_HeldCameraBookmarks;
     UIElement* m_BookmarkPreviewPopup = nullptr; // owned
     UIElement* m_BookmarkPreviewImage = nullptr; // owned
     UIElement* m_AssetPreviewOverlay = nullptr; // owned

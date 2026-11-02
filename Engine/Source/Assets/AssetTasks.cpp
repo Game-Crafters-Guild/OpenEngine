@@ -445,19 +445,13 @@ Function<AssetDecodeInputs(const Vector<uint8>&)> MakeDecodeInputResolver(AssetM
 // UNIFIED ASSET UNLOAD TASK
 // ========================================
 
-AssetUnloadTask::AssetUnloadTask(JobSystem::WorkStealingThreadPool* jobSystem,
-                                 const GUID& assetGuid, AssetManager& assetManager)
-    : JobSystem::Task(jobSystem), m_AssetGuid(assetGuid), m_AssetManager(assetManager)
+AssetUnloadTask::AssetUnloadTask(const GUID& assetGuid, AssetManager& assetManager)
+    : m_AssetGuid(assetGuid), m_AssetManager(assetManager)
 {
 }
 
-void AssetUnloadTask::Execute()
+void AssetUnloadTask::operator()() const
 {
-    if (m_Cancelled.load())
-    {
-        throw std::runtime_error("Task was cancelled");
-    }
-
     auto startTime = std::chrono::high_resolution_clock::now();
 
     try
@@ -556,7 +550,7 @@ void AssetBatchCoordinator::LoadAsset(const AssetMetadata& metadata, AssetLoadPr
 
 JobSystem::TaskHandle AssetBatchCoordinator::UnloadAsset(const GUID& assetGuid)
 {
-    return m_JobSystem.Submit(std::make_unique<AssetUnloadTask>(&m_JobSystem, assetGuid, m_AssetManager));
+    return m_JobSystem.Submit(AssetUnloadTask(assetGuid, m_AssetManager));
 }
 
 // ========================================

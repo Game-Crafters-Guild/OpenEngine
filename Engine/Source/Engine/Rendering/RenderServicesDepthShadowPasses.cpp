@@ -459,11 +459,12 @@ void RenderServices::SetPointShadowBudget(uint32_t budget)
 
 void RenderServices::NotifyShadowCasterContentChanged(
     uint64 worldId, std::span<const ShadowCasterChangeSphere> changedCasterSpheres,
-    bool unattributed)
+    ShadowCasterChangeScope scope)
 {
-    ShadowCasterChanges& changes = m_ShadowCasterChanges[worldId];
+    assert(scope == ShadowCasterChangeScope::Bounded || changedCasterSpheres.empty());
+    ShadowCasterChanges& changes = m_ShadowCasterChanges.GetOrInsert(worldId);
     ++changes.Version;
-    changes.Unattributed = unattributed;
+    changes.Scope = scope;
     // The stored set explains exactly the advance to `Version`; the planner
     // applies it only across that single step (any gap globalizes there).
     changes.Spheres.assign(changedCasterSpheres.begin(), changedCasterSpheres.end());
@@ -604,10 +605,10 @@ const RenderServices::PointShadowAssignment& RenderServices::EnsurePointShadowAs
     // advance. The span aliases the per-world store, which the single-writer
     // discipline keeps stable for the rest of this frame; Plan() does not
     // retain it.
-    if (const auto csIt = m_ShadowCasterChanges.find(worldId); csIt != m_ShadowCasterChanges.end())
+    if (const ShadowCasterChanges* changes = m_ShadowCasterChanges.Find(worldId))
     {
-        cache.ChangedCasters = csIt->second.Spheres;
-        cache.Unattributed = csIt->second.Unattributed;
+        cache.ChangedCasters = changes->Spheres;
+        cache.Unattributed = changes->Scope != ShadowCasterChangeScope::Bounded;
     }
 
     const auto plan = m_PointShadowPlanners[viewId].Plan(

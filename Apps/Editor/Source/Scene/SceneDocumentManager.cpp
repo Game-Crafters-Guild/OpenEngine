@@ -178,7 +178,7 @@ void SceneDocumentManager::RecordLoadFailure(const std::filesystem::path& docume
 }
 
 void SceneDocumentManager::RecordLoadDegradation(const std::filesystem::path& documentPath,
-                                                 Scene::SceneLoadDegradation census)
+                                                 Scene::SceneDegradation census)
 {
     if (!census.IsDegraded())
     {
@@ -223,7 +223,7 @@ std::optional<SceneLoadDegraded> SceneDocumentManager::GetOutstandingLoadDegrade
 
     SceneLoadDegraded outstanding{};
     outstanding.DocumentPath = m_LastLoadDegraded->DocumentPath;
-    for (const Scene::SceneLoadSkip& s : m_LastLoadDegraded->Census.skips)
+    for (const Scene::SceneDegradation::Skip& s : m_LastLoadDegraded->Census.skips)
     {
         if (Scene::SkipIsOutstanding(*m_World, s))
             outstanding.Census.skips.push_back(s);
@@ -244,22 +244,22 @@ std::size_t SceneDocumentManager::OutstandingDegradedSkipCount() const
     return Scene::OutstandingSkipCount(*m_World, m_LastLoadDegraded->Census);
 }
 
-std::optional<Scene::SceneLoadSkip> SceneDocumentManager::DiscardLoadSkip(std::size_t index)
+std::optional<Scene::SceneDegradation::Skip> SceneDocumentManager::DiscardLoadSkip(std::size_t index)
 {
     if (!m_LastLoadDegraded.has_value() || index >= m_LastLoadDegraded->Census.skips.size())
         return std::nullopt;
-    std::vector<Scene::SceneLoadSkip>& skips = m_LastLoadDegraded->Census.skips;
-    Scene::SceneLoadSkip skip = std::move(skips[index]);
+    std::vector<Scene::SceneDegradation::Skip>& skips = m_LastLoadDegraded->Census.skips;
+    Scene::SceneDegradation::Skip skip = std::move(skips[index]);
     skips.erase(skips.begin() + static_cast<std::ptrdiff_t>(index));
     MarkDirty();
     return skip;
 }
 
-void SceneDocumentManager::RestoreLoadSkip(std::size_t index, Scene::SceneLoadSkip skip)
+void SceneDocumentManager::RestoreLoadSkip(std::size_t index, Scene::SceneDegradation::Skip skip)
 {
     if (!m_LastLoadDegraded.has_value())
         return;
-    std::vector<Scene::SceneLoadSkip>& skips = m_LastLoadDegraded->Census.skips;
+    std::vector<Scene::SceneDegradation::Skip>& skips = m_LastLoadDegraded->Census.skips;
     skips.insert(skips.begin() + static_cast<std::ptrdiff_t>(std::min(index, skips.size())), std::move(skip));
     MarkDirty();
 }
@@ -323,22 +323,22 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
 
     Logger::Log::Info("SceneDocument: loading (replace) '{}'", contentPath.string());
 
-    // Everything scoped to the outgoing scene dies here, before LoadSceneFromFile
+    // Everything scoped to the outgoing scene dies here, before ReadSceneInto
     // reaches World::Clear.
     ReleaseSceneScopedState(rs);
 
     Scene::EnsureTerrainSceneSchemasRegistered();
     Scene::EnsureTerrainGrassSceneSchemasRegistered();
 
-    Scene::LoadOptions opts{};
-    opts.mode = Scene::LoadMode::Replace;
+    Scene::SceneReadOptions opts{};
+    opts.clearWorldFirst = true;
     Scene::SceneHierarchyUiFromFile hierarchyFromFile{};
     opts.outHierarchyUiFromFile = &hierarchyFromFile;
     Scene::SceneEditorCameraFromFile editorCameraFromFile{};
     opts.outEditorCameraFromFile = &editorCameraFromFile;
-    Scene::SceneLoadTimings timings{};
+    Scene::SceneReadTimings timings{};
     opts.outTimings = &timings;
-    Scene::SceneLoadDegradation degradation{};
+    Scene::SceneDegradation degradation{};
     opts.outDegradation = &degradation;
 
     auto& am = EngineCore::GetInstance().GetAssetManager();
@@ -352,7 +352,7 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
 
     const auto tLoad0 = std::chrono::steady_clock::now();
     Editor::HangWatchdogPhase watchdogPhase("SceneLoad.ParseInstantiate");
-    const bool ok = Scene::LoadSceneFromFile(*m_World, contentPath, opts);
+    const bool ok = Scene::ReadSceneInto(*m_World, contentPath, opts);
     const double loadMs = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - tLoad0)
                               .count();
@@ -406,7 +406,10 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
     m_BuildPumpCpuMs = 0.0;
 
     if (rs)
+    {
+        m_BuildPump.ReportLoadingWork(EngineCore::GetInstance().GetSceneLoadTracker());
         m_BuildPump.Begin(*m_World, *rs);
+    }
 
     Logger::Log::Info("SceneDocument: loaded file '{}' in {:.0f}ms main thread "
                       "(read {:.1f} / parse {:.1f} / validate {:.1f} / clear {:.1f} / "
@@ -680,8 +683,8 @@ bool SceneDocumentManager::LoadSceneAdditive(const std::filesystem::path& sceneP
     Scene::EnsureTerrainSceneSchemasRegistered();
     Scene::EnsureTerrainGrassSceneSchemasRegistered();
 
-    Scene::LoadOptions opts{};
-    opts.mode = Scene::LoadMode::Additive;
+    Scene::SceneReadOptions opts{};
+    opts.clearWorldFirst = false;
 
     auto& am = EngineCore::GetInstance().GetAssetManager();
     Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
@@ -692,10 +695,10 @@ bool SceneDocumentManager::LoadSceneAdditive(const std::filesystem::path& sceneP
     Scene::SceneEngineEmbedMaterializer embedMat(am);
     opts.embedMaterializer = &embedMat;
 
-    Scene::SceneLoadDegradation degradation{};
+    Scene::SceneDegradation degradation{};
     opts.outDegradation = &degradation;
 
-    const bool ok = Scene::LoadSceneFromFile(*m_World, scenePath, opts);
+    const bool ok = Scene::ReadSceneInto(*m_World, scenePath, opts);
     if (!ok)
     {
         // An additive load never clears, so the open document survives — but the
@@ -836,7 +839,7 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
     if (RefuseSaveWrite(*m_ScenePath, degradedPolicy))
         return false;
 
-    Scene::SaveOptions opts{};
+    Scene::SceneWriteOptions opts{};
     auto& am = EngineCore::GetInstance().GetAssetManager();
     auto& reg = am.GetRegistry();
     Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
@@ -881,7 +884,7 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
     // before this thread gets to, and the announcement is what marks that report as this
     // write arriving rather than as a second change.
     auto sceneWrite = EngineCore::GetInstance().GetAssetManager().ExpectWrite(*m_ScenePath);
-    const bool ok = Scene::SaveSceneToFile(*m_World, *m_ScenePath, opts);
+    const bool ok = Scene::WriteSceneFile(*m_World, *m_ScenePath, opts);
     if (!ok)
         return false;
 
@@ -938,7 +941,7 @@ bool SceneDocumentManager::SaveAs(const std::filesystem::path& scenePath, Degrad
         std::filesystem::copy_file(*m_ScenePath, scenePath, std::filesystem::copy_options::overwrite_existing, ec);
     }
 
-    Scene::SaveOptions opts{};
+    Scene::SceneWriteOptions opts{};
     auto& am = EngineCore::GetInstance().GetAssetManager();
     auto& reg = am.GetRegistry();
     Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
@@ -973,7 +976,7 @@ bool SceneDocumentManager::SaveAs(const std::filesystem::path& scenePath, Degrad
     Editor::MintMissingTerrainMaterialLibraries(*m_World, scenePath,
                                                 EngineCore::GetInstance().GetAssetManager());
     Editor::WriteNavigationBakedDataForSave(*m_World, scenePath, EngineCore::GetInstance().GetAssetManager());
-    const bool ok = Scene::SaveSceneToFile(*m_World, scenePath, opts);
+    const bool ok = Scene::WriteSceneFile(*m_World, scenePath, opts);
     if (!ok)
         return false;
 
@@ -1013,7 +1016,7 @@ bool SceneDocumentManager::SaveBackupCopy()
     // as though it were the user's work.
     if (m_LastLoadDegraded.has_value())
     {
-        for (const Scene::SceneLoadSkip& skip : m_LastLoadDegraded->Census.skips)
+        for (const Scene::SceneDegradation::Skip& skip : m_LastLoadDegraded->Census.skips)
         {
             if (!skip.preserved && Scene::SkipIsOutstanding(*m_World, skip))
                 return false;
@@ -1055,7 +1058,7 @@ bool SceneDocumentManager::SaveBackupCopy()
     ec.clear();
     std::filesystem::copy_file(src, backupPath, std::filesystem::copy_options::overwrite_existing, ec);
 
-    Scene::SaveOptions opts{};
+    Scene::SceneWriteOptions opts{};
     Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
                                               Scene::AssetManagerSceneResolver::UnknownFile::Register);
     opts.assetResolver = &resolver;
@@ -1076,7 +1079,7 @@ bool SceneDocumentManager::SaveBackupCopy()
         cameraPtr = &cameraSnap;
     }
     opts.editorCamera = cameraPtr;
-    return Scene::SaveSceneToFile(*m_World, backupPath, opts);
+    return Scene::WriteSceneFile(*m_World, backupPath, opts);
 }
 
 std::vector<uint8_t> SceneDocumentManager::CaptureWorldSnapshot() const

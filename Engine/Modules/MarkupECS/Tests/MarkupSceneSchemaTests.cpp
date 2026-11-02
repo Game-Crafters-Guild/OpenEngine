@@ -124,7 +124,7 @@ TEST_F(MarkupSceneSchemaTest, AMarkupAndItsNotesRoundTripWithLineBreaksQuotesAnd
     ASSERT_TRUE(service.SetTags(original, lake, tags, MarkupAuthor::User, 1759750004));
 
     const auto path = PathOf("Lake.scene");
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
     const std::string text = ReadText(path);
     // Written once, by the schema that owns the type: no reflected field lines beside it.
     EXPECT_EQ(CountLinesStartingWith(text, "Markup.status = "), 1u) << text;
@@ -133,7 +133,7 @@ TEST_F(MarkupSceneSchemaTest, AMarkupAndItsNotesRoundTripWithLineBreaksQuotesAnd
     EXPECT_EQ(CountLinesStartingWith(text, "Markup.description = \"Line one\\nLine \\\"two\\\""), 1u) << text;
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, Scene::SceneReadOptions{}));
     const ECS::EntityHandle loadedLake = FindByTag(loaded, "lake");
     ASSERT_TRUE(loadedLake.IsValid());
     const Markup* loadedMarkup = loaded.GetComponent<Markup>(loadedLake);
@@ -179,7 +179,7 @@ TEST_F(MarkupSceneSchemaTest, TagsTheVocabularyLacksAreAddedOnLoad)
     }
 
     ECS::World world;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(world, path, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(world, path, Scene::SceneReadOptions{}));
     const ECS::EntityHandle village = FindByTag(world, "village");
     ASSERT_TRUE(village.IsValid());
 
@@ -204,7 +204,7 @@ void LoadSceneText(ECS::World& world, const std::filesystem::path& path, const s
         std::ofstream out(path, std::ios::binary);
         out << "[scene name=\"Probe\" version=1]\n\n" << body;
     }
-    (void)Scene::LoadSceneFromFile(world, path, Scene::LoadOptions{Scene::LoadMode::Replace});
+    (void)Scene::ReadSceneInto(world, path, Scene::SceneReadOptions{});
 }
 
 } // namespace
@@ -222,7 +222,7 @@ TEST_F(MarkupSceneSchemaTest, AReplaceLoadKeepsTheNextScenesNotesItsOwn)
     const MarkupECS::MarkupNotes* notes = MarkupService::Get().FindNotes(world, b);
     EXPECT_TRUE(notes == nullptr || notes->Description.empty());
 
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, PathOf("B-saved.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(world, PathOf("B-saved.scene")));
     EXPECT_EQ(ReadText(PathOf("B-saved.scene")).find("Scene A secret"), std::string::npos);
 }
 
@@ -258,10 +258,10 @@ TEST_F(MarkupSceneSchemaTest, AnEntrysStatusNameIsEscaped)
     original.AddComponentImmediate(lake, Components::SceneEntityTag{"lake"});
     original.AddComponentImmediate(lake, Markup{});
     ASSERT_TRUE(service.SetStatus(original, lake, waiting, MarkupAuthor::User, 7));
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, PathOf("Waiting.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, PathOf("Waiting.scene")));
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, PathOf("Waiting.scene"), Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, PathOf("Waiting.scene"), Scene::SceneReadOptions{}));
     const ECS::EntityHandle loadedLake = FindByTag(loaded, "lake");
     ASSERT_TRUE(loadedLake.IsValid());
     EXPECT_EQ(loaded.GetComponent<Markup>(loadedLake)->Status, waiting);
@@ -328,10 +328,10 @@ TEST_F(MarkupSceneSchemaTest, AnUnreadableEntryKeepsItsSlotAndSavesAsAuthored)
     }
 
     ECS::World world;
-    Scene::SceneLoadDegradation degradation;
-    Scene::LoadOptions options{Scene::LoadMode::Replace};
+    Scene::SceneDegradation degradation;
+    Scene::SceneReadOptions options{};
     options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(world, path, options));
+    ASSERT_TRUE(Scene::ReadSceneInto(world, path, options));
     ASSERT_EQ(degradation.skips.size(), 1u);
     EXPECT_EQ(degradation.skips[0].field, "entry1");
     EXPECT_TRUE(degradation.skips[0].preserved);
@@ -344,7 +344,7 @@ TEST_F(MarkupSceneSchemaTest, AnUnreadableEntryKeepsItsSlotAndSavesAsAuthored)
     EXPECT_EQ(notes->Entries[1].Kind, MarkupEntryKind::Unreadable);
     EXPECT_EQ(notes->Entries[2].Text, "ok2");
 
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, PathOf("Thread-saved.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(world, PathOf("Thread-saved.scene")));
     const std::string saved = ReadText(PathOf("Thread-saved.scene"));
     EXPECT_NE(saved.find(entry0 + "\n"), std::string::npos) << saved;
     EXPECT_NE(saved.find(entry1 + "\n"), std::string::npos) << saved;
@@ -363,10 +363,10 @@ TEST_F(MarkupSceneSchemaTest, TheRevisionSurvivesAReopen)
     for (int edit = 0; edit < 5; ++edit)
         ASSERT_TRUE(service.Touch(original, lake, MarkupAuthor::User, 10 + edit));
     const uint32 readerSince = service.GetRevision(original);
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, PathOf("Reopen.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, PathOf("Reopen.scene")));
 
     ECS::World reopened;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reopened, PathOf("Reopen.scene"), Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(reopened, PathOf("Reopen.scene"), Scene::SceneReadOptions{}));
     const ECS::EntityHandle loadedLake = FindByTag(reopened, "lake");
     ASSERT_TRUE(loadedLake.IsValid());
     EXPECT_EQ(reopened.GetComponent<Markup>(loadedLake)->Revision, readerSince);
@@ -390,7 +390,7 @@ TEST_F(MarkupSceneSchemaTest, AMarkupInAPrefabIsRefused)
     }
 
     ECS::World world;
-    (void)Scene::LoadSceneFromFile(world, path, Scene::LoadOptions{Scene::LoadMode::Replace});
+    (void)Scene::ReadSceneInto(world, path, Scene::SceneReadOptions{});
     const ECS::EntityHandle cart = FindByTag(world, "root");
     ASSERT_TRUE(cart.IsValid());
     EXPECT_EQ(world.GetComponent<Markup>(cart), nullptr);
@@ -416,7 +416,7 @@ TEST_F(MarkupSceneSchemaTest, SetTagsKeepsAnUnreadableTagLinesSlot)
     const uint32 tags[] = {service.AddTag("Alpha", {}, color), service.AddTag("Beta", {}, color)};
     ASSERT_TRUE(service.SetTags(world, lake, tags, MarkupAuthor::User, 50));
 
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, PathOf("Tags-saved.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(world, PathOf("Tags-saved.scene")));
     const std::string saved = ReadText(PathOf("Tags-saved.scene"));
     EXPECT_NE(saved.find(unreadable + "\n"), std::string::npos) << saved;
     EXPECT_NE(saved.find("Markup.tag0 = \"Alpha\"\n"), std::string::npos) << saved;
@@ -442,7 +442,7 @@ TEST_F(MarkupSceneSchemaTest, ARenumberedUnreadableTagLineKeepsItsText)
     const uint32 tags[] = {service.AddTag("Alpha", {}, color)};
     ASSERT_TRUE(service.SetTags(world, lake, tags, MarkupAuthor::User, 50));
 
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, PathOf("Renumber-saved.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(world, PathOf("Renumber-saved.scene")));
     const std::string saved = ReadText(PathOf("Renumber-saved.scene"));
     EXPECT_NE(saved.find("Markup.tag0 = \"Alpha\"\n"), std::string::npos) << saved;
     EXPECT_NE(saved.find("Markup.tag1 = \"Requested\"\n"), std::string::npos) << saved;
@@ -468,12 +468,12 @@ TEST_F(MarkupSceneSchemaTest, AnEditEntryRoundTripsItsChanges)
     ASSERT_TRUE(service.BeginMarkup(original, docks, MarkupAuthor::User, 7));
     const uint8 changes = MarkupEditChanges({MarkupEditChange::Moved, MarkupEditChange::Resized, MarkupEditChange::Recolored});
     ASSERT_TRUE(service.RecordEdit(original, docks, changes, MarkupAuthor::Agent, 9));
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, PathOf("Edit.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, PathOf("Edit.scene")));
     EXPECT_NE(ReadText(PathOf("Edit.scene")).find("Markup.entry1 = Edit|Agent|9|\"\"|\"moved resized recolored=#F28C26\""),
               std::string::npos);
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, PathOf("Edit.scene"), Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, PathOf("Edit.scene"), Scene::SceneReadOptions{}));
     const MarkupECS::MarkupNotes* notes = service.FindNotes(loaded, FindByTag(loaded, "docks"));
     ASSERT_NE(notes, nullptr);
     ASSERT_EQ(notes->Entries.size(), 2u);
@@ -494,13 +494,13 @@ TEST_F(MarkupSceneSchemaTest, AnEditEntryRoundTripsItsChanges)
     ASSERT_TRUE(service.BeginMarkup(renamed, quay, MarkupAuthor::User, 7));
     ASSERT_TRUE(service.RecordEdit(renamed, quay, MarkupEditChanges({MarkupEditChange::Moved, MarkupEditChange::Renamed}),
                                    MarkupAuthor::User, 11));
-    ASSERT_TRUE(Scene::SaveSceneToFile(renamed, PathOf("Renamed.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(renamed, PathOf("Renamed.scene")));
     EXPECT_NE(ReadText(PathOf("Renamed.scene"))
                   .find("Markup.entry1 = Edit|User|11|\"Quay \\\"east\\\" | west\"|\"moved renamed\""),
               std::string::npos)
         << ReadText(PathOf("Renamed.scene"));
     ECS::World reloaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, PathOf("Renamed.scene"), Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, PathOf("Renamed.scene"), Scene::SceneReadOptions{}));
     const MarkupECS::MarkupNotes* quayNotes = service.FindNotes(reloaded, FindByTag(reloaded, "quay"));
     ASSERT_NE(quayNotes, nullptr);
     ASSERT_EQ(quayNotes->Entries.size(), 2u);
@@ -513,10 +513,10 @@ TEST_F(MarkupSceneSchemaTest, AnEditEntryRoundTripsItsChanges)
             << "Markup.entry0 = Edit|User|5|\"\"|\"teleported\"\n";
     }
     ECS::World refused;
-    Scene::SceneLoadDegradation degradation;
-    Scene::LoadOptions options{Scene::LoadMode::Replace};
+    Scene::SceneDegradation degradation;
+    Scene::SceneReadOptions options{};
     options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(refused, bad, options));
+    ASSERT_TRUE(Scene::ReadSceneInto(refused, bad, options));
     ASSERT_EQ(degradation.skips.size(), 1u);
     const MarkupECS::MarkupNotes* badNotes = service.FindNotes(refused, FindByTag(refused, "d"));
     ASSERT_NE(badNotes, nullptr);
@@ -594,7 +594,7 @@ TEST_F(MarkupRegionSceneSchemaTest, ARegionRoundTripsItsHeightMembersAndOutline)
     original.AddComponentImmediate(forest, region);
 
     const auto path = PathOf("Forest.scene");
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
     const std::string text = ReadText(path);
     EXPECT_EQ(CountLinesStartingWith(text, "MarkupRegion.extrudeHeight = 12.5"), 1u) << text;
     EXPECT_EQ(CountLinesStartingWith(text, "MarkupRegion.member0 = exclude \"lake\""), 1u) << text;
@@ -604,7 +604,7 @@ TEST_F(MarkupRegionSceneSchemaTest, ARegionRoundTripsItsHeightMembersAndOutline)
     EXPECT_EQ(CountLinesStartingWith(text, "Spline.closed = true"), 1u) << text;
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, Scene::SceneReadOptions{}));
     const ECS::EntityHandle loadedForest = FindByTag(loaded, "forest");
     const auto* loadedRegion = loaded.GetComponent<Components::MarkupRegion>(loadedForest);
     ASSERT_NE(loadedRegion, nullptr);
@@ -640,7 +640,7 @@ TEST_F(MarkupRegionSceneSchemaTest, ADanglingMemberIsDroppedOnSave)
     world.AddComponentImmediate(forest, region);
     world.DestroyEntityImmediate(lake);
 
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, PathOf("Deleted.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(world, PathOf("Deleted.scene")));
     const std::string text = ReadText(PathOf("Deleted.scene"));
     EXPECT_EQ(CountLinesStartingWith(text, "MarkupRegion.member0 = include \"field\""), 1u) << text;
     EXPECT_EQ(CountLinesStartingWith(text, "MarkupRegion.member1"), 0u) << text;
@@ -655,7 +655,7 @@ TEST_F(MarkupRegionSceneSchemaTest, ADanglingMemberIsDroppedOnSave)
     ASSERT_NE(loaded, nullptr);
     ASSERT_EQ(loaded->MemberCount, 1u);
     EXPECT_FALSE(loaded->Members[0].Entity.IsValid());
-    ASSERT_TRUE(Scene::SaveSceneToFile(dangling, PathOf("Dangling-saved.scene")));
+    ASSERT_TRUE(Scene::WriteSceneFile(dangling, PathOf("Dangling-saved.scene")));
     EXPECT_EQ(CountLinesStartingWith(ReadText(PathOf("Dangling-saved.scene")), "MarkupRegion.member"), 0u);
 }
 
@@ -703,14 +703,14 @@ TEST_F(MarkupRegionSceneSchemaTest, APathRoundTripsAsAMarkupOnAnOpenSpline)
     original.AddComponentImmediate(road, spline);
 
     const auto path = PathOf("Road.scene");
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
     const std::string text = ReadText(path);
     EXPECT_EQ(CountLinesStartingWith(text, "Spline.closed = false"), 1u) << text;
     EXPECT_EQ(CountLinesStartingWith(text, "MarkupRegion."), 0u) << text;
     EXPECT_EQ(CountLinesStartingWith(text, "MarkupVolume."), 0u) << text;
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, Scene::SceneReadOptions{}));
     const ECS::EntityHandle loadedRoad = FindByTag(loaded, "road");
     ASSERT_NE(loaded.GetComponent<Markup>(loadedRoad), nullptr);
     EXPECT_EQ(loaded.GetComponent<Components::MarkupRegion>(loadedRoad), nullptr);

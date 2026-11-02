@@ -361,7 +361,7 @@ void TerrainPages::Request(const PagedTerrainRequest& request, std::span<const M
     }
     if (request.OverlayVersion != terrain.OverlayVersion)
     {
-        RefreshOverlay(terrain.Stream, terrain.Overlay.get(), terrain.OverlayVersion, request.Overlay.get(),
+        RefreshOverlay(terrain.Stream, terrain.Overlay.get(), terrain.OverlayVersion, request.Overlay.get(), 0u,
                        request.OverlayChanged, request.OverlayChangedSince);
         terrain.Overlay = request.Overlay;
         terrain.OverlayVersion = request.OverlayVersion;
@@ -389,23 +389,34 @@ void TerrainPages::Request(const PagedTerrainRequest& request, std::span<const M
         terrain.WantedPages.push_back(want.Address);
 }
 
-void TerrainPages::RefreshOverlay(uint32 stream, const PageStreaming::HeightPageOverlay* held, uint64 heldVersion,
-                                  const PageStreaming::HeightPageOverlay* requested,
+void TerrainPages::RefreshOverlay(uint32 stream, const PageStreaming::HeightPageLayer* held, uint64 heldVersion,
+                                  const PageStreaming::HeightPageLayer* requested, uint8 changedFace,
                                   const PageStreaming::PageSampleRect& changed, uint64 changedSince)
 {
-    // An edit: the pages over the changed rect are rewritten with the new overlay as they reload,
-    // keeping their old content until then. An overlay not derived from the one the pages hold (its
-    // data was rebuilt, as a scene load does) rewrites every page either overlay reaches.
+    // An edit: the pages over the changed rect are rewritten with the new layer as they reload,
+    // keeping their old content until then. A layer not derived from the one the pages hold (its
+    // data was rebuilt, as a scene load does) rewrites every page either layer reaches.
     if (changedSince == heldVersion)
     {
-        const PageStreaming::HeightPageOverlay* face = requested ? requested : held;
-        m_Residency.Refresh(stream, face ? face->Face() : uint8{0}, changed);
+        if (const PageStreaming::HeightPageLayer* layer = requested ? requested : held)
+            RefreshLayerRect(stream, *layer, changedFace, changed);
+        else
+            m_Residency.Refresh(stream, changedFace, changed);
         return;
     }
-    if (held)
-        m_Residency.Refresh(stream, held->Face(), held->Level0Rect());
-    if (requested)
-        m_Residency.Refresh(stream, requested->Face(), requested->Level0Rect());
+    for (const PageStreaming::HeightPageLayer* layer : {held, requested})
+        for (uint8 face = 0; layer && face < layer->FaceCount(); ++face)
+            if (const std::optional<PageStreaming::PageSampleRect>& extent = layer->Extent(face))
+                RefreshLayerRect(stream, *layer, face, *extent);
+}
+
+void TerrainPages::RefreshLayerRect(uint32 stream, const PageStreaming::HeightPageLayer& layer, uint8 face,
+                                    const PageStreaming::PageSampleRect& rect)
+{
+    // A write near a planet's face side also changes the neighbor face's apron.
+    layer.RefreshRects(face, rect, m_FaceRects);
+    for (const PageStreaming::PageFaceRect& faceRect : m_FaceRects)
+        m_Residency.Refresh(stream, faceRect.Face, faceRect.Level0Rect);
 }
 
 void TerrainPages::RequestPlanet(const PlanetPagedRequest& request, std::span<const Mathematics::Vector3> cameras,
@@ -439,9 +450,9 @@ void TerrainPages::RequestPlanet(const PlanetPagedRequest& request, std::span<co
     }
     if (request.OverlayVersion != planet.OverlayVersion)
     {
-        std::shared_ptr<const PageStreaming::HeightPageOverlay> overlay = FittingOverlay(planet, request);
+        std::shared_ptr<const PageStreaming::HeightPageLayer> overlay = FittingOverlay(planet, request);
         RefreshOverlay(planet.Stream, planet.Overlay.get(), planet.OverlayVersion, overlay.get(),
-                       request.OverlayChanged, request.OverlayChangedSince);
+                       request.OverlayChangedFace, request.OverlayChanged, request.OverlayChangedSince);
         planet.Overlay = std::move(overlay);
         planet.OverlayVersion = request.OverlayVersion;
     }
@@ -462,14 +473,14 @@ void TerrainPages::RequestPlanet(const PlanetPagedRequest& request, std::span<co
         planet.WantedPages.push_back(want.Address);
 }
 
-std::shared_ptr<const PageStreaming::HeightPageOverlay>
+std::shared_ptr<const PageStreaming::HeightPageLayer>
 TerrainPages::FittingOverlay(const PagedPlanet& planet, const PlanetPagedRequest& request) const
 {
     if (!request.Overlay || request.Overlay->FitsLevels(planet.Requester.Levels()))
         return request.Overlay;
     // Its samples are another lattice's: they would land at other places and miss levels.
-    Logger::Log::Warning("Terrain pages: {} ignores its height page overlay: it was made for another lattice "
-                         "(the planet's radius or Samples Per Meter changed); place it again",
+    Logger::Log::Warning("Terrain pages: {} ignores its height page layer: it was made for another lattice "
+                         "(the planet's radius or Samples Per Meter changed); write it again",
                          planet.Label);
     return nullptr;
 }

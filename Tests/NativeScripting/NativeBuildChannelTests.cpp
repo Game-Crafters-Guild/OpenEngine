@@ -184,3 +184,16 @@ TEST(NativeBuildChannel, ToolchainDetectionHoldsNoComputeWorker)
     parked.Wait();
     EXPECT_TRUE(detectedWhileWorkerParked) << "toolchain detection waited for the only compute worker";
 }
+
+#if !defined(_WIN32)
+// POSIX detection is a PATH scan, so a host without a job system builds with Ninja, as the editor
+// does. The macOS default generator (make 3.81) misses an edit saved in the same second as a build.
+TEST(NativeBuildChannel, ToolchainDetectsNinjaWithoutAJobSystemOnPosix)
+{
+    GameEngine::TestUtils::ScopedTempDir toolchainCache(GameEngine::TestUtils::MakeUniqueTempDirectory("ge_nbc_toolchain"));
+    ns::MsvcToolchain toolchain;
+    toolchain.WarmAsync(nullptr, toolchainCache.Path());
+    EXPECT_TRUE(toolchain.WaitUntilReady(0ms)) << "no Ninja detected without a job system (BUILD.md requires ninja on PATH)";
+    EXPECT_FALSE(toolchain.NinjaExe().empty());
+}
+#endif

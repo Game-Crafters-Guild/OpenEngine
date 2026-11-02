@@ -13,6 +13,7 @@
 #include "FileSystem/FileSystem.h"
 #include "Image/Decode.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 #include <algorithm>
@@ -398,9 +399,7 @@ std::optional<bool> TextureAsset::LoadPackagedTexture([[maybe_unused]] const Vec
         if (registry.TryGetAssetMetadata(GetGUID(), metadata) &&
             registry.TryGetMetaValue(metadata.Path, kTextureSwizzleMetaKey, swizzle))
         {
-            auto extension = metadata.Path.extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+            const std::string extension = LowerCaseExtension(metadata.Path);
             m_SwizzleBaked = ParseTextureSwizzleMeta(swizzle, channels) && channels[0] != 0 && extension != ".hdr";
         }
         return true;
@@ -619,7 +618,7 @@ namespace
         const auto readMetadata = [&registry, &metadata](const char* key, std::string& value) {
             return registry.TryGetMetaValue(metadata.Path, key, value);
         };
-        return ResolveTextureCookInputs(ToLowerAscii(metadata.Path.extension().string()), readMetadata, inputs,
+        return ResolveTextureCookInputs(LowerCaseExtension(metadata.Path), readMetadata, inputs,
                                         error) &&
                HasNormalVarianceCompanion(inputs, TextureCookOutput::BC5);
     }
@@ -995,9 +994,7 @@ bool TextureAsset::DecodeSourceFile() {
         return false;
     }
 
-    String extension = GetExtension();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](char c) { return static_cast<char>(std::tolower(c)); });
+    const String extension = ToLowerAscii(GetExtension());
 
     // Derived-cache cook (BCn + mips) replaces the raw decode when available.
     AlphaCoveragePolicy coveragePolicy;
@@ -1042,9 +1039,7 @@ bool TextureAsset::DecodeSourceFile() {
 
 bool TextureAsset::DecodeSourceBytes(const Vector<uint8>& data) {
     AlphaCoveragePolicy coveragePolicy;
-    String extension = GetExtension();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](char c) { return static_cast<char>(std::tolower(c)); });
+    const String extension = ToLowerAscii(GetExtension());
     {
         // Derived-cache cook (BCn + mips) replaces the raw decode when available.
         if (TryLoadViaCook(data, extension, coveragePolicy))

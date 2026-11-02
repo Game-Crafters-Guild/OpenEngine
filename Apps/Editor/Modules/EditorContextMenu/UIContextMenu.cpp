@@ -10,7 +10,7 @@
 #include "Platform/Window.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
-#include <cctype>
+#include "Types/StringUtils.h"
 #include <cstdlib>
 #include <cmath>
 #include <functional>
@@ -37,17 +37,6 @@ constexpr float kSubmenuGap = 2.0f;
 constexpr const char* kSearchFieldId = "context-menu-search-field";
 // Separates submenu titles in a filtered row's origin path.
 constexpr const char* kMenuPathSeparator = " > ";
-
-// Menu titles are editor UI strings, so ASCII folding is enough to make the
-// filter case-insensitive.
-std::string ToLower(std::string_view text)
-{
-    std::string lowered;
-    lowered.reserve(text.size());
-    for (char c : text)
-        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    return lowered;
-}
 
 // Each menu surface — the root panel and every open submenu — registers as a
 // DismissablePopup. That is what makes the manager gate pointer targets to the
@@ -863,7 +852,7 @@ UIContextMenu::UIContextMenu() = default;
 
             // The path counts as well as the title, so a query naming the group
             // ("transform") lists the commands inside it.
-            if (ToLower(path).find(lowerQuery) == std::string::npos)
+            if (ToLowerAscii(path).find(lowerQuery) == std::string::npos)
                 continue;
 
             matches.push_back(LeafMatch{item.get(), pathPrefix});
@@ -873,7 +862,7 @@ UIContextMenu::UIContextMenu() = default;
     void UIContextMenu::BuildFilteredRows(UIElement* container, const std::string& query)
     {
         std::vector<LeafMatch> matches;
-        CollectLeafMatches(m_RootItems, ToLower(query), {}, matches);
+        CollectLeafMatches(m_RootItems, ToLowerAscii(query), {}, matches);
 
         // Commands only: a filtered menu has no submenus to open and no groups to
         // rule off, so separators and submenu parents have nothing left to mark.

@@ -268,7 +268,7 @@ void AONode::DeclareForView(ViewDeclare& d)
                     {
                         uint32_t slot = 0;
                         DescriptorType type{};
-                        if (!Detail::TryGetSet0BindingByName(*shader.Meta, b.Name, slot, type)) return;
+                        if (!Rendering::TryGetSet0BindingByName(*shader.Meta, b.Name, slot, type)) return;
                         if (b.Mip != ~0u)
                         {
                             const auto mipView = ctx.GetOrCreatePooledMipView(b.Texture, b.Mip);

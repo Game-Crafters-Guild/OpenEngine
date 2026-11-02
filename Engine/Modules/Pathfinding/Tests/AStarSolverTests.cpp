@@ -36,10 +36,11 @@ bool SolveInWindow(AStarSolver& solver, const GridMap& grid, uint32 startIndex, 
                    std::vector<uint32>& outPathCellIndices)
 {
     grid.OpenPathSolveWindow();
-    const bool found = solver.Solve(grid.View(), startIndex, endIndex, excludeAgentId, currentTime,
-                                    agentCellRadius, outPathCellIndices);
+    uint32 expansions = 0;
+    const GridSolveEnd end = solver.Solve(grid.View(), startIndex, endIndex, excludeAgentId, currentTime,
+                                          agentCellRadius, outPathCellIndices, expansions);
     grid.ClosePathSolveWindow();
-    return found;
+    return end == GridSolveEnd::Reached;
 }
 
 } // namespace

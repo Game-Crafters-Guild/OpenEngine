@@ -14,6 +14,7 @@
 #include "Engine/Rendering/TextureService.h"
 #include "EngineLogCapture.h"
 #include "Logger/LogSink.h"
+#include "TestTempDir.h"
 
 #include <atomic>
 #include <chrono>
@@ -64,7 +65,9 @@ class TextureCookUsageTag : public testing::Test
 
     static void SetUpTestSuite()
     {
-        s_Workspace = fs::temp_directory_path() / ("ge-cook-usage-tag-" + GUID::Generate().ToString());
+        // The canonical temp root: the engine resolves the workspace root, and the registry
+        // stores meta values only for asset paths spelled under that resolved root.
+        s_Workspace = TestUtils::MakeUniqueTempDirectory("ge-cook-usage-tag");
         fs::create_directories(s_Workspace / "Assets");
         auto& engine = EngineCore::GetInstance();
         ScriptsConfig scripts;

@@ -331,7 +331,7 @@ TEST(SplineExtrudeRecipe, ChoosingAProfileRevivesARunSavedWithTheRetiredWall)
                "SplineExtrude.Width = 0.8\n";
     }
     ECS::World world;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::ReadSceneInto(world, scenePath, Scene::SceneReadOptions{}));
     std::filesystem::remove(scenePath);
 
     ECS::EntityHandle run{};

@@ -32,6 +32,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace GameEngine::Engine::Renderer
@@ -103,7 +104,7 @@ public:
     };
 
     using PerFrameLightBuffers =
-        std::array<Rendering::BufferHandle, Rendering::IDevice::kMaxSupportedFramesInFlight>;
+        std::array<Rendering::BufferHandle, Rendering::IDevice::kMaxFrameRingDepth>;
 
     // Persistent per-view state, created on first touch and destroyed AS A UNIT
     // by ReleaseView — one erase point instead of scattered per-map erases (the
@@ -228,14 +229,36 @@ public:
         // declaration window. nullopt = no world pass yet.
         std::optional<Rendering::MaterialKeyword> DeclaredWorldPassKeywords;
 
-        // Light UBO ring, one slot per device frame in flight: WriteViewLightBuffer
-        // fills the slot GetFrameIndex() names inside an acquired frame while older
-        // frames still read theirs. GPU-owned: device-destroyed by
-        // DestroyPerViewGpuResources.
-        PerFrameLightBuffers LightBuffers{};
+        // The light UBO that WriteViewLightBuffer wrote last. The world pass and the shader-graph
+        // preview bind this buffer, so a pass never binds a slot that its frame did not write.
+        Rendering::BufferHandle CurrentLightBuffer() const { return m_LightBuffers[m_LightSlot]; }
+        // Makes `slot` the current slot and returns its buffer. Only WriteViewLightBuffer calls it:
+        // it creates the buffer on demand and fills it.
+        Rendering::BufferHandle& SelectLightBuffer(uint32_t slot)
+        {
+            m_LightSlot = slot;
+            return m_LightBuffers[slot];
+        }
+        // Empties the light ring and returns its buffers, for the owner to destroy or forget.
+        PerFrameLightBuffers TakeLightBuffers() { return std::exchange(m_LightBuffers, {}); }
+        // True when a slot of the light ring holds a buffer.
+        bool HasLiveLightBuffer() const
+        {
+            for (const auto& buf : m_LightBuffers)
+                if (buf.IsValid())
+                    return true;
+            return false;
+        }
         // HasTransmissionInView memo, stamped with the device frame index so it
         // self-invalidates next frame without manual clearing. {frameIndex, result}.
         std::pair<uint64_t, bool> TransmissionMemo{~0ull, false};
+
+    private:
+        // Light UBO ring, IDevice::GetFrameRingDepth() deep: WriteViewLightBuffer fills one slot
+        // inside an acquired frame while older frames still read theirs. Only the accessors above
+        // reach it, so a reader binds only CurrentLightBuffer(). GPU-owned.
+        PerFrameLightBuffers m_LightBuffers{};
+        uint32_t m_LightSlot = 0;
     };
 
     // — camera registry —
@@ -507,7 +530,7 @@ public:
 
     // Device-destroys the GPU-owned members of one entry and resets them to
     // invalid; CPU-side fields are untouched (device teardown must not lose
-    // view state). Asserts a live LightBuffers handle implies a live device.
+    // view state). Asserts a live light buffer implies a live device.
     void DestroyPerViewGpuResources(PerViewResources& pv);
 
     // — frame + device hooks (called by RenderServices only) —

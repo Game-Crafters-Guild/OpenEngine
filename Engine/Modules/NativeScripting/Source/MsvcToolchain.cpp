@@ -137,11 +137,19 @@ MsvcToolchain::~MsvcToolchain() = default;
 
 void MsvcToolchain::WarmAsync(JobSystem::WorkStealingThreadPool* jobSystem, std::filesystem::path cacheDir)
 {
-    // No-op without a job system (e.g. unit tests): detection shells out to vswhere/vcvars
-    // (~seconds), so we never run it on a caller's thread. Builds simply fall back to the
-    // default generator until a warmed toolchain is available.
     if (!jobSystem)
+    {
+#if defined(_WIN32)
+        // Windows detection waits seconds on vswhere and vcvars, so it never runs on the caller's
+        // thread. Without a job system (e.g. unit tests), builds use the default generator.
         return;
+#else
+        // POSIX detection is a PATH scan with no child process, so it runs on the caller's thread.
+        // A host without a job system then builds with Ninja, as the editor does.
+        Detect(std::move(cacheDir));
+        return;
+#endif
+    }
     if (cacheDir.empty())
     {
         std::error_code ec;
@@ -194,15 +202,15 @@ bool MsvcToolchain::WaitUntilReady(std::chrono::milliseconds timeout) const
     return NinjaReady();
 }
 
-void MsvcToolchain::Detect(std::filesystem::path cacheDir)
+void MsvcToolchain::Detect([[maybe_unused]] std::filesystem::path cacheDir) // the env batch cache is Windows-only
 {
-    std::error_code ec;
-    std::filesystem::create_directories(cacheDir, ec);
-
     std::filesystem::path ninja;
     std::filesystem::path envBatch;
 
 #if defined(_WIN32)
+    std::error_code ec;
+    std::filesystem::create_directories(cacheDir, ec);
+
     // 1. Ninja: PATH, then the Visual Studio bundled copy.
     ninja = FirstExistingPathLine(RunCapture("where ninja"));
     const std::filesystem::path vs = FindVisualStudio();
@@ -228,11 +236,10 @@ void MsvcToolchain::Detect(std::filesystem::path cacheDir)
 
     const bool ready = !ninja.empty() && !envBatch.empty();
 #else
-    // POSIX: the compiler environment is ambient; just locate ninja on PATH.
-    // Scan PATH directly instead of `command -v ninja` — shelling out forks, and a
-    // fork from this worker during engine init can deadlock the main thread (see
-    // FindExecutableOnPath). cmake's default generator is the fallback when ninja
-    // is absent, so a miss is harmless.
+    // POSIX: the compiler environment is ambient; just locate ninja on PATH. Scan PATH, not
+    // `command -v ninja`: a fork from this worker during engine init can deadlock the main
+    // thread (see FindExecutableOnPath). Without ninja, cmake's default generator builds; on
+    // macOS that is make 3.81, which compares whole seconds and can miss a same-second edit.
     ninja = FindExecutableOnPath("ninja");
     const bool ready = !ninja.empty();
 #endif

@@ -15,6 +15,7 @@
 #include "ECS/EntityRemap.h"
 #include "ECS/Query.h"
 #include "ECS/World.h"
+#include "Events/Event.h"
 #include "Logger/Logger.h"
 #include "Scene/AssetManagerSceneResolver.h"
 #include "Scene/PrefabLibrary.h"
@@ -200,10 +201,10 @@ static bool WritePrefabFile(ECS::World& world, std::span<const SubtreeEntity> su
     scratch.RemoveComponentImmediate<Components::Parent>(copies.front());
     scratch.AddComponentImmediate(copies.front(), Components::Transform{});
 
-    SaveOptions options;
+    SceneWriteOptions options;
     options.writePrefabHeader = true;
     options.assetResolver = &resolver;
-    if (!SaveSceneToFile(scratch, prefabFile, options))
+    if (!WriteSceneFile(scratch, prefabFile, options))
     {
         outError = "Cannot write the prefab " + prefabFile.string() + ": " + GetLastSceneIOError().message;
         return false;
@@ -214,7 +215,7 @@ static bool WritePrefabFile(ECS::World& world, std::span<const SubtreeEntity> su
 // The resident template of `prefab`, built from its file through `options.assetResolver` when it is
 // not resident. Null, with the cause in `outError`, when the file cannot be placed; when the project
 // has no such prefab, `missingFix` follows the cause.
-static const PrefabTemplate* ResolveForPlacement(PrefabLibrary& library, const GUID& prefab, const LoadOptions& options,
+static const PrefabTemplate* ResolveForPlacement(PrefabLibrary& library, const GUID& prefab, const SceneReadOptions& options,
                                                  std::string_view missingFix, std::string& outError)
 {
     if (const PrefabTemplate* resident = library.FindByGuid(prefab))
@@ -244,7 +245,7 @@ ECS::EntityHandle PlacePrefab(ECS::World& world, const GUID& prefab, const Compo
            "Scene::PlacePrefab runs on the main thread only, outside any job");
     AssetManagerSceneResolver resolver(engine.GetAssetManager(), engine.GetResolvedAssetRoot(),
                                        AssetManagerSceneResolver::UnknownFile::Register);
-    LoadOptions options{LoadMode::Additive};
+    SceneReadOptions options{.clearWorldFirst = false};
     options.assetResolver = &resolver;
     std::string error;
     const PrefabTemplate* prefabTemplate =
@@ -293,6 +294,30 @@ void RebuildPrefab(const GUID& prefab)
         return;
     }
     library->RebuildChanged(std::span(&prefab, 1));
+}
+
+void SetPrefabPropagationDeferred(ECS::World& world, bool deferred)
+{
+    PrefabLibrary* library = EngineCore::GetInstance().TryGetPrefabLibrary();
+    if (!library)
+    {
+        Logger::Log::Error(
+            "Scene::SetPrefabPropagationDeferred needs an initialized engine: call EngineCore::Initialize first.");
+        return;
+    }
+    library->SetPropagationDeferred(world, deferred);
+}
+
+EventSubscription SubscribePrefabInstancesChanged(std::function<void(ECS::World&)> onChanged)
+{
+    PrefabLibrary* library = EngineCore::GetInstance().TryGetPrefabLibrary();
+    if (!library)
+    {
+        Logger::Log::Error(
+            "Scene::SubscribePrefabInstancesChanged needs an initialized engine: call EngineCore::Initialize first.");
+        return {};
+    }
+    return library->InstancesChanged.Subscribe(std::move(onChanged));
 }
 
 std::size_t CountPrefabEntities(ECS::World& world, ECS::EntityHandle root)
@@ -374,7 +399,7 @@ static void HoldInstancePrefabs(ECS::World& world, std::span<const GUID> sources
         return;
     AssetManagerSceneResolver resolver(engine.GetAssetManager(), engine.GetResolvedAssetRoot(),
                                        AssetManagerSceneResolver::UnknownFile::Register);
-    LoadOptions options{LoadMode::Additive};
+    SceneReadOptions options{.clearWorldFirst = false};
     options.assetResolver = &resolver;
     for (const GUID& source : sources)
     {
@@ -571,7 +596,7 @@ CreatedPrefab CreatePrefab(ECS::World& world, ECS::EntityHandle root, const std:
                    ": the file is outside the project's assets. Save the prefab in a folder of the project.";
         return {};
     }
-    LoadOptions loadOptions{LoadMode::Additive};
+    SceneReadOptions loadOptions{.clearWorldFirst = false};
     loadOptions.assetResolver = &resolver;
     std::string buildError;
     const PrefabTemplate* prefabTemplate = BuildTemplateFromFile(*library, path, guid, loadOptions, buildError);

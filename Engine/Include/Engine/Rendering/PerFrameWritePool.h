@@ -71,12 +71,6 @@ struct PerFrameWritePoolConfig
         // ring at next BeginFrame up to this cap (Reserve can grow an
         // empty ring before allocation).
         size_t maxCapacityBytes = 0;
-        // Frames BEYOND the writing one that still read a slot — 1 for a usage
-        // class whose previous frame's buffer is read by GPU work. It is the `k`
-        // of FrameBufferAllocator::BeginFrame's depth rule; the pool adds the
-        // device's pacing and the update-phase margin itself. Costs one
-        // additional ring of capacityBytes each.
-        uint32_t ExtraReaderFrames = 0;
     };
 
     std::array<UsageConfig, kFrameWriteUsageCount> usages = {{
@@ -87,9 +81,8 @@ struct PerFrameWritePoolConfig
         // grows by appending). The starting capacity therefore holds
         // capacityBytes / kMaterialEntryStride materials — about 1.3K, which
         // covers ordinary scenes — and grows on demand up to 32 MB (~40K).
-        // The cap is per ring slot and MaterialParams has no extra reader, so
-        // the worst case is 32 MB x the ring depth (128 MB at Vulkan's 3-frame
-        // pacing plus the update-phase slot), and only for a scene that demands it.
+        // The cap is per ring slot, so the worst case is 32 MB x the ring depth
+        // (160 MB at 3 frames in flight), and only for a scene that demands it.
         {1u << 20, 256, Rendering::BufferUsage::Storage, 32u << 20},
         // BonePalette: starts at 32 MB (~700K mat3x4 bones — see
         // BonePaletteLayout.h); grows on demand up to 256 MB if a crowd
@@ -98,10 +91,10 @@ struct PerFrameWritePoolConfig
         // frames-in-flight = ~4.8 MB live with ~6x headroom). Grow-on-
         // demand removes the hard cap that previously forced overflow
         // entities to render at bind pose.
-        // ExtraReaderFrames=1: the TAA skinned motion-vector pass reads LAST
-        // frame's palettes to evaluate the previous skinned pose, so a slot is
-        // still read one frame after the frame that wrote it.
-        {32u << 20, 16, Rendering::BufferUsage::Storage, 256u << 20, 1},
+        // The TAA skinned motion-vector pass reads LAST frame's palettes to
+        // evaluate the previous skinned pose, so a slot is still read one frame
+        // after the frame that wrote it: the ring depth has a slot for that reader.
+        {32u << 20, 16, Rendering::BufferUsage::Storage, 256u << 20},
     }};
 
     // 0 = read the device's pacing at Initialize. Only pass an explicit value
@@ -141,14 +134,12 @@ class PerFrameWritePool
             };
 
             // Every usage class is filled during the application UPDATE phase
-            // (RenderingLoop::Update, before the frame's IDevice::BeginFrame), so
-            // the ring carries the update-phase margin on top of the device's
-            // pacing — FrameBufferAllocator::BeginFrame states the rule.
-            // The clamp is a bound, not a policy: kMaxRingSlots is sized so the
-            // deepest class here (one extra reader frame) still fits at the deepest
-            // pacing a backend may report, so it never actually reduces the depth.
+            // (RenderingLoop::Update, before the frame's IDevice::BeginFrame), and
+            // BonePalette has a reader of the previous frame: the shared ring depth
+            // covers both. The clamp is a bound for a caller's own pacing; at a
+            // backend's pacing it never reduces the depth.
             const uint32_t slots =
-                std::min(m_FramesInFlight + 1u + uc.ExtraReaderFrames,
+                std::min(Rendering::IDevice::FrameRingDepth(m_FramesInFlight),
                          Rendering::FrameBufferAllocator::kMaxRingSlots);
 
             // The static usage table can't consult the device; drop BDA here

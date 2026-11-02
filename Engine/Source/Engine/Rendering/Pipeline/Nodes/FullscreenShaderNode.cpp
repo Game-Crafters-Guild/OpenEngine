@@ -837,6 +837,11 @@ void FullscreenShaderNode::Declare(RenderPipelineInstance& instance,
     EnsureCachedResources(m_RenderServices->GetDevice());
 }
 
+bool FullscreenShaderNode::HasPassthroughSource() const
+{
+    return !m_PassthroughInputName.empty() || m_Inputs.size() == 1;
+}
+
 void FullscreenShaderNode::StitchThrough(ViewDeclare& d)
 {
     std::string srcRef;
@@ -1031,7 +1036,7 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
         }
         if (skip)
         {
-            if (node.m_StitchWhenSkipped)
+            if (node.m_StitchWhenSkipped && node.HasPassthroughSource())
                 node.StitchThrough(d);
             return;
         }
@@ -1196,7 +1201,7 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
         uint32_t binding = 0;
         Rendering::DescriptorType dtype{};
         if (node.m_ShaderMeta && node.m_Buffers.find(kCompensationBinding) == node.m_Buffers.end() &&
-            Detail::TryGetSet0BindingByName(*node.m_ShaderMeta, kCompensationBinding, binding, dtype))
+            Rendering::TryGetSet0BindingByName(*node.m_ShaderMeta, kCompensationBinding, binding, dtype))
         {
             const PipelineBufferBindingRG compensation = ResolveViewExposureCompensation(d);
             if (compensation.IsValid())
@@ -1527,7 +1532,7 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
                     {
                         if (!bb.Buf.IsValid())
                             continue;
-                        if (Detail::TryGetSet0BindingByName(*node.m_ShaderMeta, bb.Name, binding, dtype))
+                        if (Rendering::TryGetSet0BindingByName(*node.m_ShaderMeta, bb.Name, binding, dtype))
                         {
                             if (dtype == Rendering::DescriptorType::StorageBuffer ||
                                 dtype == Rendering::DescriptorType::UniformBuffer)
@@ -1562,7 +1567,7 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
                         if (sampler.IsValid())
                         {
                             wdesc.AddCombinedImageSampler(tb.Name, tb.Tex, sampler);
-                            if (Detail::TryGetSet0BindingByName(*node.m_ShaderMeta, tb.Name, binding, dtype))
+                            if (Rendering::TryGetSet0BindingByName(*node.m_ShaderMeta, tb.Name, binding, dtype))
                                 writtenBindings.insert(binding);
                         }
                     }
@@ -1589,7 +1594,7 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
                         if (svcTex.IsValid())
                         {
                             wdesc.AddCombinedImageSampler(svc, svcTex, node.m_LinearClampSampler);
-                            if (Detail::TryGetSet0BindingByName(*node.m_ShaderMeta, svc, binding, dtype))
+                            if (Rendering::TryGetSet0BindingByName(*node.m_ShaderMeta, svc, binding, dtype))
                                 writtenBindings.insert(binding);
                         }
                     }
@@ -1605,7 +1610,7 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
                         {
                             wdesc.AddStorageBuffer("Aces2Tables", aces2Tables, 0,
                                                    Rendering::Passes::GetAces2TablesBufferBytes());
-                            if (Detail::TryGetSet0BindingByName(*node.m_ShaderMeta, "Aces2Tables", binding, dtype))
+                            if (Rendering::TryGetSet0BindingByName(*node.m_ShaderMeta, "Aces2Tables", binding, dtype))
                                 writtenBindings.insert(binding);
                         }
                     }

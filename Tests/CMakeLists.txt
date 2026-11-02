@@ -232,6 +232,17 @@ add_test(NAME EngineSdk.HeaderMirrorsPruneRemovedFiles
           -DGENERATOR=${CMAKE_GENERATOR}
           -P ${CMAKE_SOURCE_DIR}/cmake/Tests/StageSdkHeadersTest.cmake)
 
+# A tree that names DebugFast before project(), as a single-config DebugFast tree does,
+# has the Debug compiler and linker flags in DebugFast, and a DebugFast value from the
+# user stays. Exercised in child configures.
+add_test(NAME DebugFastFlags.DebugFastHasTheDebugFlags
+  COMMAND ${CMAKE_COMMAND}
+          -DSCRIPT=${CMAKE_SOURCE_DIR}/cmake/DebugFastFlags.cmake
+          -DWORK=${CMAKE_BINARY_DIR}/Tests/DebugFastFlagsScratch
+          "-DGENERATOR=${CMAKE_GENERATOR}"
+          "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+          -P ${CMAKE_SOURCE_DIR}/cmake/Tests/DebugFastFlagsTest.cmake)
+
 # Engine's public interface: an interface definition or include directory of Engine or
 # a module that cmake/EnginePublicInterface.cmake does not list fails configure.
 # Exercised against scratch INTERFACE targets in child configures.
@@ -474,6 +485,21 @@ if(Python3_Interpreter_FOUND AND TARGET ShaderReflect AND NOT EMSCRIPTEN)
             --shaderpkg-dir ${CMAKE_BINARY_DIR}/Shaders
             --shader-reflect $<TARGET_FILE:ShaderReflect>)
   set_tests_properties(WebBuiltinShaderMetadata PROPERTIES SKIP_RETURN_CODE 125 TIMEOUT 300)
+endif()
+
+# Every built-in stage a web build ships cooks to WGSL.
+# PROCESSORS is the test's worker count (kMaxWorkers).
+if(Python3_Interpreter_FOUND AND NOT EMSCRIPTEN)
+  add_test(NAME WebBuiltinShaderWgsl
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Tools/Web/test_builtin_shader_wgsl.py)
+  set_tests_properties(WebBuiltinShaderWgsl PROPERTIES SKIP_RETURN_CODE 125 TIMEOUT 300 PROCESSORS 12)
+endif()
+
+# Every package a web pass loads ships in the web build or has a stated reason not to.
+if(Python3_Interpreter_FOUND AND NOT EMSCRIPTEN)
+  add_test(NAME WebBuiltinShaderCoverage
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Tools/Web/test_builtin_shader_coverage.py)
+  set_tests_properties(WebBuiltinShaderCoverage PROPERTIES TIMEOUT 60)
 endif()
 
 # A package a browser gets carries no SPIR-V for a stage it has WGSL for.
@@ -1065,6 +1091,7 @@ target_include_directories(PhysicsSmokeTests PRIVATE
   ${CMAKE_SOURCE_DIR}/Engine/Tests
   ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Include
   ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Include
+  ${CMAKE_SOURCE_DIR}/Engine/Modules/PhysicsECS/Source # ProceduralMeshCollidersInternal.h
 )
 # The removal hooks must never resolve a sibling component off the dying entity
 # (self-deadlock on worldMutex); that shape is asserted against the sources.
@@ -1565,6 +1592,14 @@ target_include_directories(HotReloadDemo PRIVATE
 # Output layout: bin/<Config>/Tests
 ge_set_output_tests(HotReloadDemo)
 ge_stage_runtime_dependencies(HotReloadDemo)
+
+if(ENABLE_SCRIPTING)
+  # One managed configuration for every managed test build, staging copy and run.
+  # DebugFast maps to Debug because the suites call Debug-only managed test hooks.
+  set(GE_MANAGED_TEST_CFG "$<IF:$<OR:$<CONFIG:Debug>,$<CONFIG:DebugFast>>,Debug,Release>")
+  add_subdirectory(NativeShim)
+  add_subdirectory(ManagedInterop)
+endif()
 
 # Add async hot-reload job system tests
 add_subdirectory(Jobs)

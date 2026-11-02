@@ -1,5 +1,6 @@
 #include "Inspectors/Physics/PhysicsColliderInspector.h"
 
+#include "Editor/Entities/EditorComponentTraits.h"
 #include "InspectorRegistry.h"
 
 #include <functional>
@@ -12,6 +13,7 @@
 #include "PhysicsECS/Components/BoxColliderShape.h"
 #include "PhysicsECS/Components/SphereColliderShape.h"
 #include "PhysicsECS/Components/CapsuleColliderShape.h"
+#include "PhysicsECS/Components/MeshColliderShape.h"
 #include "PhysicsECS/Components/PlaneColliderShape.h"
 
 #include "UndoRedo/UndoRedoService.h"
@@ -825,6 +827,11 @@ static void RegisterPlaneShapeInspector()
 
 void RegisterPhysicsColliderInspectors()
 {
+    // The geometry owner sets a mesh collider's handle; an author has nothing to edit on it.
+    Editor::EditorComponentTraits meshColliderTraits;
+    meshColliderTraits.HideInInspector = true;
+    Editor::EditorComponentTraitsRegistry::Get().Register(ECS::GetComponentTypeId<Components::MeshColliderShape>(),
+                                                          std::move(meshColliderTraits));
     InspectorFn colliderFn = [](const InspectorContext& ctx)
     {
         if (!ctx.Parent || !ctx.World || !ctx.Entity.IsValid())

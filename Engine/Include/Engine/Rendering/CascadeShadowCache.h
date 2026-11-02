@@ -10,10 +10,13 @@
 // the cull tightens to, the main camera (GPU LOD selection consumes it at cull
 // time), the relevant shadow-caster content version
 // (RenderServices::ShadowCasterContentVersion — bumped on any moved / added /
-// removed / vertex-mod caster, and on a bone-palette content change so a
-// skeletal animation playing in place re-renders its caster rather than
-// retaining a layer rasterized at an older pose), the pooled physical texture
-// identity (a realloc yields a fresh Undefined image under a matching key),
+// removed caster, and on a bone-palette content change so a skeletal animation
+// playing in place re-renders its caster rather than retaining a layer
+// rasterized at an older pose), the vertex-deformation epoch (a caster whose
+// material moves its vertices, such as vegetation sway: the layer is stale by
+// a bounded drift, not wrong, so the motion scheduler may defer it), the
+// pooled physical texture identity (a realloc yields a fresh Undefined image
+// under a matching key),
 // and the config/LOD knobs. When every input is byte-identical to the last
 // rendered frame, re-rendering would reproduce the retained layer exactly, so
 // the pass declaration can be skipped and receivers keep sampling the pooled
@@ -77,6 +80,8 @@ enum class CascadeCacheDirtyCause : uint8_t
     CascadeFitChanged,   // snapped LightVP / LightVPRel / split distances stepped
     ConfigChanged,       // resolution / cascade count / LOD knobs / caster-reduction lane
     CullNotSettled,      // last render's cull consumed a different fit (one-frame lag rule)
+    CasterDeformed,      // only vertex deformation (vegetation sway) advanced: deferrable
+                         // like camera motion, never older than the scheduler's maxAge
     CauseCount,
 };
 
@@ -101,6 +106,7 @@ struct CascadeRenderInputs
     int32_t RenderOriginSector[3]{};
     uint64_t WorldId = 0;
     uint64_t CasterEpoch = 0; // latest change relevant to this cascade's light-space footprint
+    uint64_t DeformationEpoch = 0; // latest advance from vertex deformation alone
     uint64_t PhysicalId = 0; // raw pooled texture handle bits (depth array, or tint array for tint slots)
     uint32_t Resolution = 0;
     uint32_t NumCascades = 0;
@@ -135,16 +141,24 @@ class CascadeShadowCache
     static constexpr uint32_t kTintSlotBase = kMaxCascadesPerView;
     static constexpr uint32_t kSlotsPerView = kMaxCascadesPerView * 2;
 
+    struct CasterEpochs
+    {
+        uint64_t Content = 0;     // CascadeRenderInputs::CasterEpoch
+        uint64_t Deformation = 0; // CascadeRenderInputs::DeformationEpoch
+    };
+
     // Fold attributed caster changes into this slot's content epoch. Only XY
     // separation from BOTH the requested and retained light-space footprints
     // can exclude a caster: directional depth passes
     // clamp depth, so casters beyond the near/far planes still affect the map.
-    // Repeated calls for an epoch are idempotent (motion planning and declaration
-    // both build keys). Unattributed changes, version gaps and world switches
-    // refresh conservatively. No borrowed change-set storage is retained.
-    uint64_t TrackCasterChanges(uint32_t viewId, uint32_t slot, uint64_t worldId,
-                                const ShadowCasterChangeSet& changes, const float lightVP[16],
-                                uint32_t resolution);
+    // A one-step VertexDeformation advance moves the deformation epoch instead.
+    // Repeated calls for an epoch are idempotent (motion planning and
+    // declaration both build keys). Unbounded changes, version gaps and world
+    // switches refresh the content epoch. No borrowed change-set storage
+    // is retained.
+    CasterEpochs TrackCasterChanges(uint32_t viewId, uint32_t slot, uint64_t worldId,
+                                    const ShadowCasterChangeSet& changes, const float lightVP[16],
+                                    uint32_t resolution);
 
     struct Decision
     {
@@ -229,6 +243,7 @@ class CascadeShadowCache
         uint64_t ObservedWorldId = 0;
         uint64_t ObservedCasterEpoch = 0;
         uint64_t RelevantCasterEpoch = 0;
+        uint64_t DeformationEpoch = 0;
         bool HasObservedCasters = false;
         CascadeRenderInputs Rendered{}; // inputs at last committed render
         bool HasRendered = false;

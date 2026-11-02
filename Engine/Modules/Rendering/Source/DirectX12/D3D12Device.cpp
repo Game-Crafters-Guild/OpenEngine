@@ -646,18 +646,19 @@ PipelineHandle D3D12Device::CreateConcreteComputePipeline(const ComputePipelineD
 // Resource destruction methods
 void D3D12Device::DestroyBuffer(BufferHandle handle)
 {
-
+    EvictCachedDescriptorSetsUsing(handle);
     m_ResourceContainers->buffers.Destroy(handle);
 }
 
 void D3D12Device::DestroyTexture(TextureHandle handle)
 {
-
+    EvictCachedDescriptorSetsUsing(handle);
     m_ResourceContainers->textures.Destroy(handle);
 }
 
 void D3D12Device::DestroyTextureView(TextureViewHandle handle)
 {
+    EvictCachedDescriptorSetsUsing(handle);
     if (const D3D12TextureView* view = m_ResourceContainers->textureViews.TryGet(handle))
     {
         m_ResourceContainers->srvCpuPool.Free(view->ChunkIndex, view->SlotIndex);
@@ -667,7 +668,7 @@ void D3D12Device::DestroyTextureView(TextureViewHandle handle)
 
 void D3D12Device::DestroySampler(SamplerHandle handle)
 {
-
+    EvictCachedDescriptorSetsUsing(handle);
     m_ResourceContainers->samplers.Destroy(handle);
 }
 
@@ -848,6 +849,7 @@ void D3D12Device::WaitForIdle()
 
 bool D3D12Device::BeginFrame()
 {
+    AgeCachedDescriptorSets();
 
     // D3D12 doesn't need explicit frame begin like Vulkan
     // Swapchain images are acquired during present

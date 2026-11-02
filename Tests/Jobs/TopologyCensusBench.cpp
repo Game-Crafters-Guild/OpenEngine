@@ -29,6 +29,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <initializer_list>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -149,23 +151,13 @@ void LogTimerResolution()
 #endif
 }
 
-/** Pool-level graph task whose body is supplied by the bench. */
-class ScriptedTask : public JobSystem::Task {
-public:
-    ScriptedTask(WorkStealingThreadPool* pool, std::function<void()> body)
-        : Task(pool), m_Body(std::move(body)) {}
-
-    void Execute() override
-    {
-        if (m_Body)
-        {
-            m_Body();
-        }
-    }
-
-private:
-    std::function<void()> m_Body;
-};
+/** Submits `body` as a graph task that runs after `dependencies` (none: a graph root). */
+JobSystem::TaskHandle SubmitInGraph(WorkStealingThreadPool& pool, std::function<void()> body,
+                                    std::initializer_list<JobSystem::TaskHandle> dependencies = {})
+{
+    return pool.Submit(std::move(body),
+                       std::span<const JobSystem::TaskHandle>(dependencies.begin(), dependencies.size()));
+}
 
 // Warm the slab pool / queue blocks so census runs measure steady state.
 void Warmup(WorkStealingThreadPool& pool)
@@ -364,17 +356,14 @@ TEST(TopologyBench, BENCHMARK_FeedCensus_GraphChainStorm)
     const auto t0 = SteadyClock::now();
     for (uint32_t i = 0; i < kPairs; ++i)
     {
-        auto parent = MakeUnique<ScriptedTask>(&pool, [&parentsRan] {
+        const JobSystem::TaskHandle parent = SubmitInGraph(pool, [&parentsRan] {
             BusyWaitUs(5);
             parentsRan.fetch_add(1, std::memory_order_relaxed);
         });
-        auto child = MakeUnique<ScriptedTask>(&pool, [&childrenRan] {
+        SubmitInGraph(pool, [&childrenRan] {
             BusyWaitUs(1);
             childrenRan.fetch_add(1, std::memory_order_relaxed);
-        });
-        child->AddDependency(parent->GetTaskId());
-        pool.Submit(std::move(parent));
-        pool.Submit(std::move(child));
+        }, {parent});
     }
     ASSERT_TRUE(WaitUntil([&] { return childrenRan.load(std::memory_order_relaxed) == kPairs; },
                           std::chrono::milliseconds(30000)));
@@ -480,29 +469,24 @@ TEST(TopologyBench, BENCHMARK_StealReality_LocalHeavyFanout)
         // worker in a yield loop for the submission phase; that is the price
         // of a genuinely parked wave.
         std::atomic<bool> release{false};
-        auto gate = MakeUnique<ScriptedTask>(&pool, [&release] {
+        const JobSystem::TaskHandle gate = SubmitInGraph(pool, [&release] {
             while (!release.load(std::memory_order_acquire))
             {
                 std::this_thread::yield();
             }
         });
-        const JobSystem::TaskId gateId = gate->GetTaskId();
-        pool.Submit(std::move(gate));
 
         for (uint32_t p = 0; p < kParentsPerWave; ++p)
         {
-            auto parent = MakeUnique<ScriptedTask>(&pool, [] { BusyWaitUs(20); });
-            const JobSystem::TaskId parentId = parent->GetTaskId();
-            parent->AddDependency(gateId);
-            pool.Submit(std::move(parent)); // parks until the gate completes
+            // Parks until the gate completes.
+            const JobSystem::TaskHandle parent = SubmitInGraph(pool, [] { BusyWaitUs(20); }, {gate});
             for (uint32_t c = 0; c < kChildrenPerParent; ++c)
             {
-                auto child = MakeUnique<ScriptedTask>(&pool, [&childrenRan] {
+                // Parks until its parent completes.
+                SubmitInGraph(pool, [&childrenRan] {
                     BusyWaitUs(static_cast<int>(kChildBodyUs));
                     childrenRan.fetch_add(1, std::memory_order_relaxed);
-                });
-                child->AddDependency(parentId);
-                pool.Submit(std::move(child)); // parks until its parent completes
+                }, {parent});
             }
         }
 

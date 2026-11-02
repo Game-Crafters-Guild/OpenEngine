@@ -16,7 +16,7 @@
 #include "TerrainPagedField.h"
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/PageResidency.h"
 #include "PageStreaming/PageSampleRect.h"
 #include "PageStreaming/PageStore/PageStoreAccess.h"
@@ -260,8 +260,9 @@ TEST(TerrainPages, AnOverlayOfRebuiltModifierDataRewritesEveryPageTheOldOverlayR
     const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(257, 257);
     const PageStreaming::PageSampleRect raised{240, 240, 256, 256}; // the far corner: nine pages read it
     PagedTerrainRequest modified = FlatTileRequest(257);
-    modified.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
-        uint8{0}, levels, raised, std::vector<float32>(raised.Width() * raised.Height(), 5.0f));
+    auto layer = std::make_shared<PageStreaming::HeightPageLayer>(1u, levels);
+    layer->WriteLevel0(0, raised, std::vector<float32>(raised.Width() * raised.Height(), 5.0f));
+    modified.Overlay = layer;
     modified.OverlayVersion = 3;
     modified.OverlayChanged = raised;
 
@@ -414,8 +415,9 @@ HeightPageDirtyRect EditDirtyUnion(PagedTerrainRequest request, const PageStream
 
     const std::vector<PageStreaming::PageStoreLevel> levels =
         PageStreaming::BuildPageStoreLevels(request.Shape.SamplesX, request.Shape.SamplesZ);
-    request.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
-        uint8{0}, levels, edit, std::vector<float32>(edit.Width() * edit.Height(), 5.0f));
+    auto layer = std::make_shared<PageStreaming::HeightPageLayer>(1u, levels);
+    layer->WriteLevel0(0, edit, std::vector<float32>(edit.Width() * edit.Height(), 5.0f));
+    request.Overlay = layer;
     request.OverlayVersion = 1;
     request.OverlayChangedSince = 0; // derived from the pages' overlay (none)
     request.OverlayChanged = edit;
@@ -582,12 +584,14 @@ TEST(TerrainPages, A1KmSquareModifierOnAQuarterMeterTerrainFitsEveryOverlayCapAn
 {
     const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(240001, 60001);
     // 1 km x 1 km at 0.25 m: 4001 x 4001 samples and the bake's one-sample margin on each side.
-    const uint64 local = PageStreaming::HeightPageOverlay::Bytes(levels, {100000, 20000, 104002, 24002});
+    const PageStreaming::PageSampleRect square{100000, 20000, 104002, 24002};
+    const uint64 local = PageStreaming::HeightPageLayerBytesOver(levels, std::span(&square, 1));
     EXPECT_GT(local, 4003ull * 4003ull * sizeof(float32)) << "the coarser levels hold samples too";
     EXPECT_EQ(OverlayRefusal("Outer", local, kDesktopHeightPages), "");
     EXPECT_EQ(OverlayRefusal("Outer", local, kSteamDeckHeightPages), "");
     // A modifier over the whole 60 x 15 km terrain reaches all of its 14.4 G samples.
-    const uint64 wide = PageStreaming::HeightPageOverlay::Bytes(levels, {0, 0, 240000, 60000});
+    const PageStreaming::PageSampleRect whole{0, 0, 240000, 60000};
+    const uint64 wide = PageStreaming::HeightPageLayerBytesOver(levels, std::span(&whole, 1));
     const std::string refusal = OverlayRefusal("Outer", wide, kDesktopHeightPages);
     EXPECT_NE(refusal.find("Outer does not stream its height"), std::string::npos) << refusal;
     EXPECT_NE(refusal.find(std::format("needs {} bytes", wide)), std::string::npos) << refusal;
@@ -1237,8 +1241,11 @@ TEST(TerrainHeightPages, AnOverlayOnOneFaceOfAPlanetRewritesItsPagesWithTheBumpA
     const uint32 x = address.X * PageStreaming::kPageOwnedSamples + 64u;
     const uint32 z = address.Z * PageStreaming::kPageOwnedSamples + 64u;
     const PageStreaming::PageSampleRect bump{x, z, x, z};
-    request.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
-        address.Face, PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples), bump, std::vector<float32>{5.0f});
+    auto layer = std::make_shared<PageStreaming::HeightPageLayer>(
+        PageStreaming::kPageStoreMaxFaces, PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples));
+    layer->WriteLevel0(address.Face, bump, std::vector<float32>{5.0f});
+    request.Overlay = layer;
+    request.OverlayChangedFace = address.Face;
     request.OverlayVersion = 1;
     request.OverlayChanged = bump;
     request.OverlayChangedSince = 0;
@@ -1300,9 +1307,10 @@ TEST(TerrainHeightPages, APlanetIgnoresAnOverlayMadeForItsOldLattice)
     const uint32 oldSamples = request.Shape.FaceSamples;
     const PageStreaming::PageSampleRect bump{oldSamples / 2u - 8u, oldSamples / 2u - 8u, oldSamples / 2u + 8u,
                                              oldSamples / 2u + 8u};
-    request.Overlay = std::make_shared<const PageStreaming::HeightPageOverlay>(
-        uint8{0}, PageStreaming::BuildPageStoreLevels(oldSamples, oldSamples), bump,
-        std::vector<float32>(bump.Width() * bump.Height(), 5.0f));
+    auto layer = std::make_shared<PageStreaming::HeightPageLayer>(
+        PageStreaming::kPageStoreMaxFaces, PageStreaming::BuildPageStoreLevels(oldSamples, oldSamples));
+    layer->WriteLevel0(0, bump, std::vector<float32>(bump.Width() * bump.Height(), 5.0f));
+    request.Overlay = layer;
     request.OverlayVersion = 1;
     request.OverlayChanged = bump;
     const Mathematics::Vector3 camera{2005.0f, 0.0f, 0.0f};

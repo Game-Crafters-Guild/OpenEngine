@@ -62,14 +62,14 @@ var<storage> global_8: type_30;
 var<storage> global_9: type_35;
 
 fn function_() {
-    var phi_219_: bool;
-    var phi_610_: f32;
-    var phi_616_: vec3<f32>;
-    var phi_614_: vec3<f32>;
-    var phi_613_: u32;
-    var phi_617_: f32;
-    var phi_623_: vec3<f32>;
-    var phi_622_: vec3<f32>;
+    var phi_228_: bool;
+    var phi_623_: f32;
+    var phi_629_: vec3<f32>;
+    var phi_627_: vec3<f32>;
+    var phi_626_: u32;
+    var phi_630_: f32;
+    var phi_636_: vec3<f32>;
+    var phi_635_: vec3<f32>;
     var local: vec3<f32>;
 
     switch bitcast<i32>(0u) {
@@ -97,17 +97,17 @@ fn function_() {
             let _e100 = dpdx(_e99);
             let _e101 = dpdy(_e99);
             let _e103 = normalize(cross(_e100, _e101));
-            if (_e65.x <= 0.000001f) {
+            if (_e65.x <= 0f) {
                 global_7 = vec4<f32>(0f, 0f, 0f, 0f);
                 break;
             }
             let _e105 = (_e63 / _e51);
             let _e107 = (_e105.x >= _e35);
-            phi_219_ = _e107;
+            phi_228_ = _e107;
             if !(_e107) {
-                phi_219_ = (_e105.y >= _e39);
+                phi_228_ = (_e105.y >= _e39);
             }
-            let _e112 = phi_219_;
+            let _e112 = phi_228_;
             if _e112 {
                 global_7 = vec4<f32>(0f, 0f, 0f, 0f);
                 break;
@@ -115,65 +115,65 @@ fn function_() {
             let _e115 = global_6.member_2[0u];
             let _e116 = max(_e115, 0.0001f);
             let _e119 = global_6.member_2[1u];
-            phi_610_ = _e119;
+            phi_623_ = _e119;
             if (_e119 <= (_e116 + 0.0001f)) {
-                phi_610_ = (_e116 + 1000f);
+                phi_623_ = (_e116 + 1000f);
             }
-            let _e124 = phi_610_;
+            let _e124 = phi_623_;
             let _e133 = global_6.member_2[2u];
             let _e150 = global_1.member_1[((_e105.x + (_e105.y * _e35)) + (u32(floor((clamp((log((((_e116 * _e124) / max(((_e65.x * (_e124 - _e116)) + _e116), 0.000001f)) / _e116)) * _e133), 0f, 0.999999f) * f32(max(_e42, 1u))))) * (_e35 * _e39)))];
-            phi_616_ = _e103;
+            phi_629_ = _e103;
             if (dot(_e103, -(normalize(_e99))) < 0f) {
-                phi_616_ = -(_e103);
+                phi_629_ = -(_e103);
             }
-            let _e160 = phi_616_;
-            phi_614_ = vec3<f32>(0f, 0f, 0f);
-            phi_613_ = 0u;
+            let _e160 = phi_629_;
+            phi_627_ = vec3<f32>(0f, 0f, 0f);
+            phi_626_ = 0u;
             loop {
-                let _e162 = phi_614_;
-                let _e164 = phi_613_;
+                let _e162 = phi_627_;
+                let _e164 = phi_626_;
                 local = _e162;
                 if (_e164 < min(_e150.y, max(_e46, 1u))) {
                     let _e169 = global_8.member[(_e150.x + _e164)];
                     let _e172 = global_9.member[0u];
                     if (_e169 >= _e172) {
-                        phi_622_ = _e162;
+                        phi_635_ = _e162;
                         continue;
                     }
                     let _e176 = global_9.member_1[_e169];
                     if (_e176.member.w == 0u) {
-                        phi_622_ = _e162;
+                        phi_635_ = _e162;
                         continue;
                     }
                     let _e185 = _e176.member_3.xyz;
                     if (_e176.member.x == 0u) {
                         let _e190 = normalize(_e176.member_2.xyz);
                         let _e192 = global_6.member_1;
-                        phi_623_ = (_e162 + (_e185 * (_e176.member_2.w * max(dot(_e160, normalize(-(normalize((_e192 * vec4<f32>(_e190.x, _e190.y, _e190.z, 0f)).xyz)))), 0f))));
+                        phi_636_ = (_e162 + (_e185 * (_e176.member_2.w * max(dot(_e160, normalize(-(normalize((_e192 * vec4<f32>(_e190.x, _e190.y, _e190.z, 0f)).xyz)))), 0f))));
                     } else {
                         let _e210 = global_6.member_1;
                         let _e217 = ((_e210 * vec4<f32>(_e176.member_1.x, _e176.member_1.y, _e176.member_1.z, 1f)).xyz - _e99);
                         let _e218 = length(_e217);
                         let _e221 = (_e217 / vec3(max(_e218, 0.000001f)));
                         let _e226 = clamp((1f - (_e218 / max(_e176.member_1.w, 0.001f))), 0f, 1f);
-                        phi_617_ = 1f;
+                        phi_630_ = 1f;
                         if (_e176.member.x == 2u) {
                             let _e229 = normalize(_e176.member_2.xyz);
-                            phi_617_ = smoothstep(_e176.member_5.x, _e176.member_4.w, dot(normalize(-(_e221)), normalize(normalize((_e210 * vec4<f32>(_e229.x, _e229.y, _e229.z, 0f)).xyz))));
+                            phi_630_ = smoothstep(_e176.member_5.x, _e176.member_4.w, dot(normalize(-(_e221)), normalize(normalize((_e210 * vec4<f32>(_e229.x, _e229.y, _e229.z, 0f)).xyz))));
                         }
-                        let _e245 = phi_617_;
-                        phi_623_ = (_e162 + (_e185 * ((((_e176.member_2.w * max(dot(_e160, _e221), 0f)) * _e226) * _e226) * _e245)));
+                        let _e245 = phi_630_;
+                        phi_636_ = (_e162 + (_e185 * ((((_e176.member_2.w * max(dot(_e160, _e221), 0f)) * _e226) * _e226) * _e245)));
                     }
-                    let _e253 = phi_623_;
-                    phi_622_ = _e253;
+                    let _e253 = phi_636_;
+                    phi_635_ = _e253;
                     continue;
                 } else {
                     break;
                 }
                 continuing {
-                    let _e255 = phi_622_;
-                    phi_614_ = _e255;
-                    phi_613_ = (_e164 + bitcast<u32>(1i));
+                    let _e255 = phi_635_;
+                    phi_627_ = _e255;
+                    phi_626_ = (_e164 + bitcast<u32>(1i));
                 }
             }
             let _e259 = global.member_2;

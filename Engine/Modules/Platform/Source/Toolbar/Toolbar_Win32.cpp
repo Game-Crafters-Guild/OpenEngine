@@ -53,6 +53,9 @@ class Win32Toolbar : public INativeToolbar
         m_PrevProc = reinterpret_cast<WNDPROC>(GetWindowLongPtr(m_Hwnd, GWLP_WNDPROC));
         s_Instances.InsertOrAssign(m_Hwnd, this);
         SetWindowLongPtr(m_Hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&Win32Toolbar::WndProcThunk));
+        // The custom frame installs now, so the client rect is final before a swapchain reads it.
+        // The first title bar layout then changes only the caption height and the menu regions.
+        m_Frame.SetLayout(m_Hwnd, m_Frame.GetMetrics(m_Hwnd).Height, {});
         return true;
     }
 

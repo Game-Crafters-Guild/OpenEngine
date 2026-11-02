@@ -1,9 +1,9 @@
 #pragma once
 
+#include "Types/FlatMap.h"
 #include "Types/Types.h"
 
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 namespace GameEngine::PageStreaming
@@ -34,7 +34,7 @@ struct ResidentSlotRef
 /// may evict a farther one in Acquire), never as a side effect of a lookup. Acquire places a key
 /// only from the free list, so an over-subscribed pool degrades to "the farthest keys go without"
 /// rather than thrashing a slot between two keys inside one frames-in-flight window.
-template <typename Key, typename KeyHash>
+template <typename Key>
 class ResidentSlotPool
 {
 public:
@@ -104,7 +104,7 @@ private:
 
     std::vector<Slot> m_Slots;
     std::vector<uint32> m_FreeList;
-    std::unordered_map<Key, uint32, KeyHash> m_KeyToSlot;
+    FlatMap<Key, uint32> m_KeyToSlot; // reserved for every slot by Initialize, so it never allocates after
 
     uint32 m_FramesInFlight = 0;
     uint64 m_CurrentFrame = 0;

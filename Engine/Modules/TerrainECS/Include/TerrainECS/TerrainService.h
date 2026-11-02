@@ -17,7 +17,7 @@
 #include "Terrain/CDLODQuadtree.h"
 #include "AssetCore/AssetReloadInvalidator.h"
 #include "AssetCore/GUID.h"
-#include "PageStreaming/Height/HeightPageOverlay.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/PageAddress.h"
 #include "Types/FlatMap.h"
 #include "GenerationalVector/GenerationalVector.h"
@@ -497,23 +497,23 @@ struct TiledTerrainData
     TerrainHeightBakeReport HeightBakeReport;
 
     // ---- Height page overlay (TerrainModifierSystem, BakeHeightPageOverlay) ----
-    // What the modifiers add to this terrain's base height pages: the baked minus the base over the
-    // rect the height modifiers reach, on the tile lattice (level 0 of the terrain's pages). Null
-    // when no height modifier reaches the terrain. PageOverlayVersion takes a new process-wide
-    // value on every change (zero until the first: two terrains' data never share a non-zero
-    // version) and PageOverlayChanged is the level-0 rect that change touched relative to version
-    // PageOverlayChangedSince; PageOverlayCurrent is set once the
+    // What the modifiers add to this terrain's base height pages: the baked minus the base under
+    // each height modifier's bounds, on the tile lattice (level 0 of the terrain's pages), held as
+    // the pages those bounds reach. Null when no height modifier reaches the terrain.
+    // PageOverlayVersion takes a new process-wide value on every change (zero until the first: two
+    // terrains' data never share a non-zero version) and PageOverlayChanged is the level-0 rect that
+    // change touched relative to version PageOverlayChangedSince; PageOverlayCurrent is set once the
     // overlay reflects the gathered modifier set, so the terrain pages only with its modifiers.
     // PageOverlayByteCap is set by the height page driver each frame: the platform's overlay cap
     // (HeightPageProfile::OverlayByteCap) when the terrain has CPU pages (TerrainHeightHasCpuPages), zero
     // when it has no page source: only a terrain with a cap holds an overlay.
-    // PageOverlayRefusedBytes is what the overlay would hold when it is over the cap, zero
+    // PageOverlayRefusedBytes is what the overlay's pages would hold when they are over the cap, zero
     // otherwise: such a terrain keeps its texture and the driver logs OverlayRefusal.
     // PageOverlayOffGrid (set by the driver, PageOverlayAllowance) says the terrain's pages are not
     // on the tile lattice the overlay is baked on; PageOverlayRefusedOffGrid is set when a height
     // modifier reaches such a terrain: it keeps its texture and the driver logs OverlayGridRefusal.
-    // The modifier system owns PageOverlay and rebakes it in place; the height pages hold it read-only.
-    std::shared_ptr<PageStreaming::HeightPageOverlay> PageOverlay;
+    // The modifier system owns PageOverlay and writes it in place; the height pages hold it read-only.
+    std::shared_ptr<PageStreaming::HeightPageLayer> PageOverlay;
     uint64 PageOverlayVersion = 0;
     PageStreaming::PageSampleRect PageOverlayChanged;
     uint64 PageOverlayChangedSince = 0;
@@ -791,17 +791,26 @@ public:
     // discriminator bit. Used by the physics provider.
     const PageColliderData* ResolvePageCollider(uint32 handleIndex, uint32 generation) const;
 
-    // ---- Planet height page overlay ----
-    /// What one face of a planet's layers adds to its height pages, and the version the pages compare.
+    // ---- Planet height page layer ----
+    /// What a planet's layer adds to its height pages, the version the pages compare, and the face
+    /// rect the version changed relative to version ChangedSince (zero: the layer is new).
     struct PlanetPageOverlay
     {
-        std::shared_ptr<const PageStreaming::HeightPageOverlay> Overlay;
+        std::shared_ptr<PageStreaming::HeightPageLayer> Layer;
         uint64 Version = 0;
+        uint8 ChangedFace = 0;
+        PageStreaming::PageSampleRect Changed;
+        uint64 ChangedSince = 0;
     };
-    /// Replaces the overlay of the planet whose terrain entity id is `planet` (null removes it). The
-    /// pages that either overlay reaches are rewritten. Main thread, as the page requests read it.
-    void SetPlanetPageOverlay(uint32 planet, std::shared_ptr<const PageStreaming::HeightPageOverlay> overlay);
-    /// The overlay of planet `planet`, or null when it has none.
+    /// Writes `deltas` (row-major over level-0 rect `rect` of face `face`) into the layer of the planet
+    /// whose terrain entity id is `planet`, a six-face layer of the pyramid `levels`; a layer made for
+    /// another pyramid is replaced. The pages the write reaches are rewritten. Main thread, as the
+    /// page requests read it.
+    void WritePlanetPageLayer(uint32 planet, std::span<const PageStreaming::PageStoreLevel> levels, uint8 face,
+                              const PageStreaming::PageSampleRect& rect, std::span<const float32> deltas);
+    /// Removes the layer of planet `planet`: the pages it reached are rewritten without it.
+    void ClearPlanetPageLayer(uint32 planet);
+    /// The layer of planet `planet`, or null when it has none.
     const PlanetPageOverlay* FindPlanetPageOverlay(uint32 planet) const;
 
     // ---- Editable spherical sculpt (planet editing) ----

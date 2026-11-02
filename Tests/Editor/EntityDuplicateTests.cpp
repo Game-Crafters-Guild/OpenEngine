@@ -374,13 +374,13 @@ TEST_F(EntityDuplicateTests, DuplicatedSplineStaysIndependentAfterSceneSaveLoad)
         GameEngine::TestUtils::MakeUniqueTempDirectory("GameEngine_EntityDuplicateTests")};
     const auto scenePath = sceneDir.Path() / "duplicated_spline_roundtrip.scene";
 
-    ASSERT_TRUE(GameEngine::Scene::SaveSceneToFile(*world, scenePath, GameEngine::Scene::SaveOptions{}));
+    ASSERT_TRUE(GameEngine::Scene::WriteSceneFile(*world, scenePath, GameEngine::Scene::SceneWriteOptions{}));
 
     World loadedWorld;
-    ASSERT_TRUE(GameEngine::Scene::LoadSceneFromFile(
+    ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(
         loadedWorld,
         scenePath,
-        GameEngine::Scene::LoadOptions{GameEngine::Scene::LoadMode::Replace}));
+        GameEngine::Scene::SceneReadOptions{}));
 
     const auto loadedOriginalEntity = FindEntityByName(loadedWorld, "Spline");
     const auto loadedCloneEntity = FindEntityByName(loadedWorld, "Spline (1)");

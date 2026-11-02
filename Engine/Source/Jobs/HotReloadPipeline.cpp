@@ -63,11 +63,11 @@ struct HotReloadPipeline::Run {
     // The preparation job. A compile that was terminal when this job was
     // submitted added no dependency edge, so the job can run after a failed
     // compile; it then fails too.
-    void Prepare(JobSystem::WorkStealingThreadPool& pool, const JobSystem::TaskHandle& compile) {
+    void Prepare(const JobSystem::TaskHandle& compile) {
         if (!compile.IsCompleted()) {
             throw std::runtime_error("The compile did not complete");
         }
-        AssemblyPrepTask prep(&pool, AssemblyPath, std::move(AssemblyBytes), Preload, CancelToken);
+        AssemblyPrepTask prep(AssemblyPath, std::move(AssemblyBytes), Preload, CancelToken);
         prep.Execute();
         PrepEnd = std::chrono::steady_clock::now();
     }
@@ -174,8 +174,8 @@ std::future<HotReloadPipeline::PipelineStats> HotReloadPipeline::ExecuteAsync(co
     // Stage 1 is one "Script compiles" job that compiles and reads the bytes:
     // it queues behind any other compile of the process instead of meeting it
     // at the compile server's pipe, and it holds no compute worker.
-    auto compilation = std::make_unique<CompilationTask>(&m_ThreadPool, assemblyPath,
-                                                         m_CompilerFactory ? m_CompilerFactory() : nullptr, run->CancelToken);
+    auto compilation = std::make_unique<CompilationTask>(assemblyPath, m_CompilerFactory ? m_CompilerFactory() : nullptr,
+                                                         run->CancelToken);
     std::unique_ptr<Jobs::IAssemblyLoader> loader = m_LoaderFactory ? m_LoaderFactory() : nullptr;
     JobSystem::TaskHandle compile = m_Compiles.Submit(
         [run, compilation = std::move(compilation), loader = std::move(loader)] { run->CompileAndRead(*compilation, loader.get()); });
@@ -199,7 +199,7 @@ std::future<HotReloadPipeline::PipelineStats> HotReloadPipeline::ExecuteAsync(co
     // Stage 2 prepares the assembly on a compute worker after the compile; its
     // completion starts the swap, so no thread waits for the run.
     const JobSystem::TaskHandle prepDependencies[] = {compile};
-    JobSystem::TaskHandle prep = m_ThreadPool.Submit([run, compile, pool = &m_ThreadPool] { run->Prepare(*pool, compile); },
+    JobSystem::TaskHandle prep = m_ThreadPool.Submit([run, compile] { run->Prepare(compile); },
                                                      std::span<const JobSystem::TaskHandle>(prepDependencies));
     if (prep.IsValid()) {
         prep.OnComplete([this, lifetime = m_Lifetime, run] {

@@ -32,7 +32,7 @@ std::string_view TrimSceneLine(std::string_view value)
 std::unordered_map<std::string, std::string> SerializeLiveProperties(
     const ECS::World& world, ECS::EntityHandle entity)
 {
-    Scene::SceneSaveContext saveContext{};
+    Scene::SceneWriteContext saveContext{};
     std::vector<std::string> lines;
     for (const Scene::ISceneComponentSchema* schema :
          Scene::SceneSchemaRegistry::GetAllSorted())

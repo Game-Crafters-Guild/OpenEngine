@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -13,7 +15,6 @@
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/DeviceFormatting.h"
-#include "Rendering/Core/NamedDescriptorWriter.h"
 #include "Rendering/Core/NamedPushConstantWriter.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/Materials/MaterialHelper.h"
@@ -40,6 +41,8 @@ struct SRGBEncodeShaderBytes
 	// layout and push-constant block (never hand-mirrored from encode_srgb.frag;
 	// see TonemapPass for the drift-class rationale).
 	ShaderMeta meta;
+	// Set 0 binding of uLinearColor in meta. Empty when the shader does not declare it.
+	std::optional<uint32_t> linearColorBinding;
 	bool loaded = false;
 	bool warned = false;
 };
@@ -297,6 +300,10 @@ static SRGBEncodeShaderBytes& GetSRGBEncodeShaderBytes(const IDevice& device)
 			if (itFs != pkg.stageBytes.end())
 				s.fs = std::move(itFs->second);
 			s.meta = std::move(pkg.meta);
+			uint32_t linearColorBinding = 0;
+			DescriptorType linearColorType{};
+			if (TryGetSet0BindingByName(s.meta, "uLinearColor", linearColorBinding, linearColorType))
+				s.linearColorBinding = linearColorBinding;
 		}
 		// Latch only on success: this is the TERMINAL encode — a one-shot
 		// failure latch here is a permanently black swapchain with no log.
@@ -730,7 +737,7 @@ RenderGraph::RGPass AddSRGBEncodePassRG(RenderGraph::RGFrame& frame, RenderGraph
 			ops.Store = RenderGraph::RGStoreOp::Store;
 			p.AttachColor(0, dst, ops);
 		},
-		[pipelineId, src, set0, pcw, meta = &shaders.meta, w, h](RenderGraph::RGContext& ctx)
+		[pipelineId, src, set0, pcw, linearColorBinding = shaders.linearColorBinding, w, h](RenderGraph::RGContext& ctx)
 		{
 			auto* cl = ctx.Cmd;
 			auto* dev = ctx.GetDevice();
@@ -761,16 +768,16 @@ RenderGraph::RGPass AddSRGBEncodePassRG(RenderGraph::RGFrame& frame, RenderGraph
 			cl->SetViewport(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h));
 			cl->SetScissor(0, 0, static_cast<int>(w), static_cast<int>(h));
 
-			DescriptorSetDesc dsDesc{};
-			dsDesc.layout = set0;
-			dsDesc.transient = true;
-			dsDesc.debugName = "SRGBEncode.DS0";
-			const DescriptorSetHandle ds = dev->CreateDescriptorSet(dsDesc);
+			DescriptorWrite write{};
+			if (linearColorBinding)
+				write = {.Binding = *linearColorBinding,
+						 .Type = DescriptorType::CombinedImageSampler,
+						 .Texture = srcTex,
+						 .Sampler = sampler};
+			const DescriptorSetHandle ds = dev->GetOrCreateDescriptorSet(
+				set0, std::span(&write, linearColorBinding ? 1u : 0u), "SRGBEncode.DS0");
 			if (!ds.IsValid())
 				return;
-			NamedDescriptorWriter wd(dev, ds, *meta, 0);
-			wd.AddCombinedImageSampler("uLinearColor", srcTex, sampler);
-			wd.Flush();
 			cl->BindDescriptorSet(0, ds, pipeline);
 			cl->Draw(3, 1);
 		});

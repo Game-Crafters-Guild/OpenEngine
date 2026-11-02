@@ -157,8 +157,8 @@ bool NativeScriptManager::Initialize(JobSystem::WorkStealingThreadPool* jobSyste
         m_Initialized = true;
         m_ShutDown = false;
     }
-    // Warm the fast-build toolchain (Ninja + cached MSVC env) as a job so it's ready
-    // before the first user build. No-op without a JobSystem (builds use the default generator).
+    // Warm the fast-build toolchain (Ninja + cached MSVC env) so it is ready before the first
+    // user build: a job with a JobSystem; without one, POSIX detects here and Windows does not.
     m_Toolchain.WarmAsync(jobSystem);
     Logger::Log::Info("[NativeScripting] NativeScriptManager initialized");
     return true;

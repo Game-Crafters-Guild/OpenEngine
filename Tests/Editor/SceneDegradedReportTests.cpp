@@ -8,14 +8,14 @@
 
 using GameEngine::Editor::BuildSceneDegradedReport;
 using GameEngine::Editor::SceneLoadDegraded;
-using GameEngine::Scene::SceneLoadSkip;
+using GameEngine::Scene::SceneDegradation;
 
 namespace
 {
 
-SceneLoadSkip MakeSkip(const char* component, const char* field, bool preserved)
+SceneDegradation::Skip MakeSkip(const char* component, const char* field, bool preserved)
 {
-    SceneLoadSkip s{};
+    SceneDegradation::Skip s{};
     s.entityId = "lamp";
     s.component = component;
     s.field = field;
@@ -25,11 +25,11 @@ SceneLoadSkip MakeSkip(const char* component, const char* field, bool preserved)
     return s;
 }
 
-SceneLoadDegraded MakeRecord(std::initializer_list<SceneLoadSkip> skips)
+SceneLoadDegraded MakeRecord(std::initializer_list<SceneDegradation::Skip> skips)
 {
     SceneLoadDegraded d{};
     d.DocumentPath = "C:/scenes/degraded.scene";
-    for (const SceneLoadSkip& s : skips)
+    for (const SceneDegradation::Skip& s : skips)
         d.Census.skips.push_back(s);
     return d;
 }

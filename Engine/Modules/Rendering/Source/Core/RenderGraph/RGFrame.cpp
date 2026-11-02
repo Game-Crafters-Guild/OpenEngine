@@ -955,7 +955,7 @@ void RGFrame::Execute()
     m_TransientPool->ReleaseFrame(m_FrameIndex);
     m_TransientPool->EvictIdle(m_FrameIndex, kTransientMaxIdleFrames);
     m_PersistentPool->TickPoolElements(m_FrameIndex, kPersistentMaxIdleFrames,
-                                       m_UploadRing->FramesInFlight());
+                                       m_UploadRing->SlotCount());
 }
 
 } // namespace GameEngine::Rendering::RenderGraph

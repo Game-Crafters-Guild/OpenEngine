@@ -58,6 +58,8 @@ public:
         m_Timeline = timeline;
         m_TimelineSemaphore = timelineSemaphore;
         m_LastSignalled.store(0, std::memory_order_release);
+        m_LatestUpload.store(0, std::memory_order_release);
+        m_UploadWaited = 0;
     }
 
     /// Drops the queue, the timeline and the counter. A device rebuild invalidates every handle
@@ -69,6 +71,8 @@ public:
         m_Timeline = {};
         m_TimelineSemaphore = VK_NULL_HANDLE;
         m_LastSignalled.store(0, std::memory_order_release);
+        m_LatestUpload.store(0, std::memory_order_release);
+        m_UploadWaited = 0;
     }
 
     /// The binding these four read is written only by Bind/Unbind, under the submit mutex,
@@ -123,6 +127,35 @@ public:
         return {true, signalValue};
     }
 
+    /// Records that a staged upload's copy signalled `value` on this queue's timeline. Keeps the
+    /// highest value published, so publishers that race on different threads need no lock.
+    void PublishUpload(uint64_t value)
+    {
+        uint64_t latest = m_LatestUpload.load(std::memory_order_relaxed);
+        while (latest < value &&
+               !m_LatestUpload.compare_exchange_weak(latest, value, std::memory_order_release,
+                                                     std::memory_order_relaxed))
+        {
+        }
+    }
+
+    /// The highest staged-upload value published on this queue's timeline; 0 when none.
+    uint64_t LatestUpload() const { return m_LatestUpload.load(std::memory_order_acquire); }
+
+    /// Call only inside `submitFn`. Returns `latestUpload` when no earlier submit on this queue
+    /// waited on it, else 0. One wait covers every later submit on the same queue.
+    uint64_t UploadWaitFor(uint64_t latestUpload) const
+    {
+        return latestUpload > m_UploadWaited ? latestUpload : 0;
+    }
+
+    /// Call only inside `submitFn`, after the submit that waited on `value` succeeded.
+    void NoteUploadWaited(uint64_t value)
+    {
+        if (value > m_UploadWaited)
+            m_UploadWaited = value;
+    }
+
     /// Runs `queueOp()` with this queue's mutex held, for the operations that consume no
     /// timeline value: fence-only frame markers, bring-up submits, and presentation. Consuming a
     /// value here would leave a hole the timeline never reaches, hanging every later wait on it.
@@ -143,6 +176,11 @@ private:
     // Written only under m_SubmitMutex, which is what makes allocate-and-publish indivisible.
     // Atomic so LastSignalled() readers never serialise against a submit in flight.
     std::atomic<uint64_t> m_LastSignalled{0};
+    // Highest staged-upload value on this queue's timeline. Written without the submit mutex.
+    std::atomic<uint64_t> m_LatestUpload{0};
+    // Highest upload value, on the upload queue's timeline, that a submit here waited on.
+    // Read and written only under m_SubmitMutex.
+    uint64_t m_UploadWaited = 0;
     std::mutex m_SubmitMutex;
 };
 

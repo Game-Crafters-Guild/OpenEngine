@@ -3,10 +3,8 @@
 #include "PageStreaming/PageAddress.h"
 
 #include "AssetCore/AssetTypes.h"
-#include "AssetCore/GUID.h"
 
 #include <atomic>
-#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -66,35 +64,55 @@ uint64 NextPageFetchRetryFrame(uint64 frameIndex, uint32 failedAttempts);
 /// its bake changes the store's layout; the page is absent while any plane does not hold it.
 PageFetchOutcome FetchPage(const PageSource& source, const PageAddress& address);
 
-/// One asynchronous page load.
-struct PageLoadRequest
+/// Why a fetch was started, returned with its outcome: the stream, its restart and its source version.
+struct PageFetchTag
 {
-    /// The open store to read from; kept alive until the load resolves.
-    std::shared_ptr<const PageStoreReader> Store;
-    /// The store's identity for the reader queue (cancellation and logs): the asset it was cooked from.
-    GUID StoreAsset;
-    PageAddress Address;
-    AssetLoadPriority Priority = AssetLoadPriority::Normal;
-    /// Set to drop the load: a queued read is skipped, a finished read is not decoded.
-    std::shared_ptr<std::atomic<bool>> Cancel;
-    /// The decoded page's bytes (PageStoreReader::DecodePayload), on a Background job.
-    std::function<void(const PageAddress&, std::vector<uint8>)> OnLoaded;
-    /// Why the page did not load (absent, unreadable, cancelled, the service or the job pool
-    /// stopped), on whichever thread found out. Exactly one of OnLoaded and OnFailed runs, also when
-    /// the decode is dropped without running (a pool shutdown cancels queued work).
-    std::function<void(const PageAddress&, const std::string&)> OnFailed;
+    uint32 Stream = 0;
+    uint64 Epoch = 0;
+    uint64 SourceVersion = 0;
+    bool Cpu = false; ///< started for the CPU's pages
 };
 
-/// Loads one page of any field: a byte-range read of the page on `io`'s reader threads at the
-/// request's priority, then the decode with the store's codec on a Background job. An absent page
-/// fails inline.
-void SubmitPageLoad(AssetIOService& io, PageLoadRequest request);
+/// One finished fetch.
+struct FinishedPageFetch
+{
+    PageFetchTag Tag;
+    PageFetchOutcome Outcome;
+};
 
-/// Fetches page `address` of `source`: a store page through `io`'s reader threads, a generated page
-/// (or any page when there is no `io`) on a Background job of `pool`, inline when there is no pool.
-/// `done` runs exactly once; a set `cancel` ends the fetch with an error and no bytes.
-void SubmitPageFetch(JobSystem::WorkStealingThreadPool* pool, AssetIOService* io, const PageSource& source,
-                     const PageAddress& address, std::shared_ptr<std::atomic<bool>> cancel,
-                     std::function<void(PageFetchOutcome)> done);
+/// Fetches pages off the calling thread and returns each outcome once, through Finished: a store page
+/// on `io`'s reader threads at High priority, then a Background job of `pool`; any other page (every
+/// page without `io`) on a Background job, inline without a pool. Called on one thread at a time.
+class PageFetcher
+{
+public:
+    /// `loadsInFlight`: the most fetches the owner keeps in flight. The fetcher sizes its lists for
+    /// them once and keeps as many buffers that Reuse gives back, so a store page that streams in
+    /// again allocates no fetch state and no payload.
+    PageFetcher(JobSystem::WorkStealingThreadPool* pool, AssetIOService* io, uint32 loadsInFlight);
+    /// The fetches still in flight end on their own threads; their outcomes are dropped.
+    ~PageFetcher();
+
+    PageFetcher(const PageFetcher&) = delete;
+    PageFetcher& operator=(const PageFetcher&) = delete;
+
+    /// Starts fetching page `address` of `source`. A set `cancel` ends the fetch with an error and no
+    /// bytes. Its outcome comes out of a later Finished exactly once, also when its read or decode is
+    /// dropped without running (the reader service stopped, the job pool shut down).
+    void Fetch(const PageSource& source, const PageAddress& address, std::shared_ptr<std::atomic<bool>> cancel,
+               const PageFetchTag& tag);
+    /// Moves the fetches that ended since the last call into `finished`, which it clears first.
+    void Finished(std::vector<FinishedPageFetch>& finished);
+    /// Gives back the bytes of a dropped page that came from this fetcher, for a later store page of
+    /// the same size to decode into. The bytes go when the spares are full or another owner holds them.
+    void Reuse(std::shared_ptr<const std::vector<uint8>> bytes);
+
+private:
+    struct Shared;
+
+    JobSystem::WorkStealingThreadPool* m_Pool = nullptr;
+    AssetIOService* m_Io = nullptr;
+    std::shared_ptr<Shared> m_Shared;
+};
 
 } // namespace GameEngine::PageStreaming

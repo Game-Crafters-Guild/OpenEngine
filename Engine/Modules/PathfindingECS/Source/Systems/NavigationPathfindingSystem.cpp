@@ -119,6 +119,12 @@ void ReleasePath(Components::NavigationAgentState& state, Pathfinding::PathBuffe
     state.PathGeneration = 0;
 }
 
+// True when `a` closed more cells than `b`, or as many cells in more time.
+bool OutranksGridSolve(const Pathfinding::GridSolveRecord& a, const Pathfinding::GridSolveRecord& b)
+{
+    return a.Expansions != b.Expansions ? a.Expansions > b.Expansions : a.Microseconds > b.Microseconds;
+}
+
 } // anonymous namespace
 
 // A request is an agent with HasDestination and either PathDirty or
@@ -344,6 +350,14 @@ void NavigationPathfindingSystem::SolveOldestRequests(ECS::World& world)
     m_Statistics.Solved = 0;
     m_Statistics.LongestSolvedWaitFrames = 0;
     m_Statistics.LongestSolvedWaitSeconds = 0.0f;
+    m_Statistics.GridSolves = 0;
+    m_Statistics.GridSolveExpansions = 0;
+    m_Statistics.MostGridSolveExpansions = 0;
+    m_Statistics.SlowestGridSolveMicroseconds = 0;
+    m_Statistics.GridSolvesByEnd.fill(0);
+    ExpireWorstGridSolves();
+    for (std::size_t i = 0; i < gridSolveCount; ++i)
+        RecordGridSolve(m_GridSolves[i].Record);
     std::size_t gridSolve = 0;
     for (std::size_t i = 0; i < solveCount; ++i)
     {
@@ -411,6 +425,45 @@ void NavigationPathfindingSystem::SolveOldestRequests(ECS::World& world)
     if (!m_SequenceIssues.empty())
         m_SequenceIssues.erase(m_SequenceIssues.begin(),
                                m_SequenceIssues.begin() + static_cast<std::ptrdiff_t>(FindIssue(oldest->Sequence)));
+}
+
+void NavigationPathfindingSystem::RecordGridSolve(const Pathfinding::GridSolveRecord& record)
+{
+    auto& stats = m_Statistics;
+    const auto end = static_cast<std::size_t>(record.End);
+    ++stats.GridSolves;
+    ++stats.GridSolvesByEnd[end];
+    ++stats.TotalGridSolvesByEnd[end];
+    stats.GridSolveExpansions += record.Expansions;
+    stats.TotalGridSolveExpansions += record.Expansions;
+    stats.MostGridSolveExpansions = std::max(stats.MostGridSolveExpansions, record.Expansions);
+    stats.SlowestGridSolveMicroseconds = std::max(stats.SlowestGridSolveMicroseconds, record.Microseconds);
+
+    // The list stays sorted, most cells first: the new solve goes in above the
+    // first entry it outranks, and a full list drops its last entry.
+    constexpr uint32 kCapacity = NavigationPathfindingStatistics::kWorstGridSolveCount;
+    uint32 slot = stats.WorstGridSolveCount;
+    while (slot > 0 && OutranksGridSolve(record, stats.WorstGridSolves[slot - 1].Record))
+        --slot;
+    if (slot == kCapacity)
+        return;
+    const uint32 last = std::min(stats.WorstGridSolveCount, kCapacity - 1);
+    for (uint32 i = last; i > slot; --i)
+        stats.WorstGridSolves[i] = stats.WorstGridSolves[i - 1];
+    stats.WorstGridSolves[slot] = {stats.Frames, m_AccumulatedTime, record};
+    stats.WorstGridSolveCount = std::min(stats.WorstGridSolveCount + 1, kCapacity);
+}
+
+void NavigationPathfindingSystem::ExpireWorstGridSolves()
+{
+    auto& stats = m_Statistics;
+    uint32 kept = 0;
+    for (uint32 i = 0; i < stats.WorstGridSolveCount; ++i)
+    {
+        if (m_AccumulatedTime - stats.WorstGridSolves[i].Seconds < NavigationPathfindingStatistics::kWorstGridSolveSeconds)
+            stats.WorstGridSolves[kept++] = stats.WorstGridSolves[i];
+    }
+    stats.WorstGridSolveCount = kept;
 }
 
 uint32 NavigationPathfindingSystem::IssueSequence()

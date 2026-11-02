@@ -215,7 +215,7 @@ void PrefabOverridesList::BuildRows()
     m_Scroll->GetViewport()->RemoveAllChildren();
     m_Targets.clear();
     SceneDocumentManager* document = Document();
-    std::span<const Scene::SceneLoadSkip> skips;
+    std::span<const Scene::SceneDegradation::Skip> skips;
     if (document && document->GetLastLoadDegraded().has_value())
         skips = document->GetLastLoadDegraded()->Census.skips;
     const PrefabOverridesListModel model = PrefabOverridesListModel::Describe(m_World, m_Entity, skips);

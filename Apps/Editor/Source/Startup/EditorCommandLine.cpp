@@ -1,5 +1,8 @@
 #include "Startup/EditorCommandLine.h"
 
+#include "Types/ParseNumber.h"
+
+#include <limits>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -24,6 +27,52 @@ std::optional<std::uint16_t> ParsePort(const char* text)
         return std::nullopt;
 
     return static_cast<std::uint16_t>(parsed);
+}
+
+std::optional<std::int32_t> ParseInt32(std::string_view text)
+{
+    const std::optional<std::int64_t> parsed = ParseInt(text);
+    if (!parsed || *parsed < std::numeric_limits<std::int32_t>::min() ||
+        *parsed > std::numeric_limits<std::int32_t>::max())
+        return std::nullopt;
+    return static_cast<std::int32_t>(*parsed);
+}
+
+// <W>x<H>[+<X>+<Y>]. W and H are positive; X and Y may be negative ("+-1920+0").
+bool ParseWindowGeometry(std::string_view text, Mathematics::RectInt& outRect, bool& outHasPosition)
+{
+    const std::size_t plus = text.find('+');
+    const std::string_view size = text.substr(0, plus);
+    const std::size_t times = size.find('x');
+    if (times == std::string_view::npos)
+        return false;
+    const std::optional<std::int32_t> width = ParseInt32(size.substr(0, times));
+    const std::optional<std::int32_t> height = ParseInt32(size.substr(times + 1));
+    if (!width || !height || *width <= 0 || *height <= 0)
+        return false;
+
+    outRect = {.Width = *width, .Height = *height};
+    outHasPosition = plus != std::string_view::npos;
+    if (!outHasPosition)
+        return true;
+
+    const std::string_view position = text.substr(plus + 1);
+    const std::size_t secondPlus = position.find('+');
+    if (secondPlus == std::string_view::npos)
+        return false;
+    const std::optional<std::int32_t> x = ParseInt32(position.substr(0, secondPlus));
+    const std::optional<std::int32_t> y = ParseInt32(position.substr(secondPlus + 1));
+    if (!x || !y)
+        return false;
+    outRect.X = *x;
+    outRect.Y = *y;
+    return true;
+}
+
+std::string WindowRefusal(std::string_view value)
+{
+    return "--window '" + std::string(value) +
+           "' is not valid: use --window <width>x<height>[+<x>+<y>], for example --window 1920x1080+40+40";
 }
 } // namespace
 
@@ -255,6 +304,36 @@ EditorCommandLineArgs ParseEditorCommandLine(int argc, char** argv)
                 continue;
             }
             out.unrecognizedArgs.emplace_back(arg);
+            continue;
+        }
+
+        // --window <W>x<H>[+<X>+<Y>] / --window=<W>x<H>[+<X>+<Y>]
+        if (arg == "--window" || arg.starts_with("--window="))
+        {
+            std::string_view value;
+            if (arg == "--window")
+            {
+                // A missing value must not swallow the next flag.
+                const char* next = (i + 1 < argc) ? argv[i + 1] : nullptr;
+                if (next && next[0] != '-')
+                {
+                    value = next;
+                    ++i;
+                }
+            }
+            else
+            {
+                value = arg.substr(std::string_view("--window=").size());
+            }
+            Mathematics::RectInt rect;
+            bool hasPosition = false;
+            if (ParseWindowGeometry(value, rect, hasPosition))
+            {
+                out.windowRect = rect;
+                out.windowHasPosition = hasPosition;
+                continue;
+            }
+            out.refusedArgs.push_back(WindowRefusal(value));
             continue;
         }
 

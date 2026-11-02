@@ -32,11 +32,11 @@ class ReflectionSceneSchema final : public ISceneComponentSchema
 
     std::string_view GetComponentName() const override { return m_Name; }
     bool IsPresent(const ECS::World& world, ECS::EntityHandle entity) const override;
-    void Serialize(const ECS::World& world, ECS::EntityHandle entity, const SceneSaveContext& ctx,
+    void Serialize(const ECS::World& world, ECS::EntityHandle entity, const SceneWriteContext& ctx,
                    std::vector<std::string>& outLines) const override;
-    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperty(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                        std::string_view property, std::string_view value, std::string* outError) const override;
-    bool ApplyProperties(ECS::World& world, ECS::EntityHandle entity, const SceneLoadContext& ctx,
+    bool ApplyProperties(ECS::World& world, ECS::EntityHandle entity, const SceneReadContext& ctx,
                          std::span<const std::pair<std::string_view, std::string_view>> props,
                          std::string* outError, std::size_t* outFailedIndex) const override;
     bool AddDefault(ECS::World& world, ECS::EntityHandle entity, std::string* outError) const override;

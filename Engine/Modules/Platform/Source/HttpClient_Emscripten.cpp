@@ -2,6 +2,8 @@
 #include "HttpHeaderRules.h"
 
 #include "Logger/Logger.h"
+#include "Types/FormatNumber.h"
+#include "Types/StringUtils.h"
 
 #ifndef GE_WASM_SINGLE_THREAD
 #include <emscripten/fetch.h>
@@ -353,7 +355,6 @@ bool HttpClient::IsAvailable()
 
 std::string HttpClient::UrlEncode(const std::string& str)
 {
-    static constexpr char kHex[] = "0123456789ABCDEF";
     std::string encoded;
     encoded.reserve(str.size());
     for (const char c : str)
@@ -366,10 +367,12 @@ std::string HttpClient::UrlEncode(const std::string& str)
         }
         else
         {
+            // RFC 3986 2.1: write the escape in uppercase, as curl does on desktop.
             const auto byte = static_cast<unsigned char>(c);
+            std::string digits;
+            AppendHexBytes(digits, std::span<const std::uint8_t>(&byte, 1));
             encoded += '%';
-            encoded += kHex[byte >> 4];
-            encoded += kHex[byte & 0x0F];
+            encoded += ToUpperAscii(digits);
         }
     }
     return encoded;

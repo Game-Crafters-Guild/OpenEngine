@@ -4,6 +4,7 @@
 #include "Logger/Logger.h"
 #include "Mathematics/HalfFloat.h"
 #include "Mathematics/Interpolation.h"
+#include "Types/FormatNumber.h"
 #include "Panels/LogView.h"
 #include "UI/UIManager.h"
 #include "UI/UIElement.h"
@@ -25,6 +26,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <filesystem>
 
@@ -46,14 +48,12 @@ static std::uint64_t HashFnv1a64(const std::uint8_t* data, size_t size)
 
 static std::string ToHex64(std::uint64_t v)
 {
-    static const char* kHex = "0123456789abcdef";
-    char buf[16];
-    for (int i = 15; i >= 0; --i)
-    {
-        buf[i] = kHex[(int)(v & 0xFULL)];
-        v >>= 4;
-    }
-    return std::string(buf, buf + 16);
+    std::array<std::uint8_t, sizeof(v)> bigEndian{};
+    for (std::size_t i = 0; i < bigEndian.size(); ++i)
+        bigEndian[i] = static_cast<std::uint8_t>(v >> (8 * (bigEndian.size() - 1 - i)));
+    std::string text;
+    AppendHexBytes(text, bigEndian);
+    return text;
 }
 
 static void R11G11B10ToRgb01(std::uint32_t v, float& outR, float& outG, float& outB)

@@ -9,6 +9,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "UI/UIManager.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <chrono>
@@ -39,10 +40,7 @@ static constexpr int kHdrTargetPrimaryMonitor = -2;
 
 static bool LooksLikeLivingRoomHdrDisplay(std::string_view displayName)
 {
-    std::string lower;
-    lower.reserve(displayName.size());
-    for (const char c : displayName)
-        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    const std::string lower = ToLowerAscii(displayName);
     return lower.find("tv") != std::string::npos ||
            lower.find("oled") != std::string::npos ||
            lower.find("hdr") != std::string::npos ||
@@ -267,9 +265,9 @@ static bool IsHdrRequestEnabledForMonitor(const EditorHdrOutputRequest& request,
     // Load-bearing: do NOT "clean this up" by making the checks above decide.
     //
     // Platform::MonitorInfo's HDR fields are never assigned on Win32 or Linux —
-    // the only writers are Display.cpp:219 (Apple-only) and Display.cpp:235
-    // (the GE_FORCE_HDR_DISPLAY override), with supportsScRGB additionally gated
-    // on GE_FORCE_SCRGB_HDR at Display.cpp:332/378. So on Windows every term of
+    // the only writers are ApplyMacEdrCapabilities (Apple-only) and
+    // ApplyForcedHdrAndDiagnostics (the GE_FORCE_HDR_DISPLAY override) in Display.cpp,
+    // with supportsScRGB gated on GE_FORCE_SCRGB_HDR. So on Windows every term of
     // backendReportedHdr is false no matter what the display is doing, and this
     // return is the only reason HDR output works there at all. Deleting it, or
     // turning the OR into an AND, disables HDR on every Windows machine while
@@ -494,6 +492,8 @@ void HdrOutputController::Tick()
     if (now - m_LastSdrWhitePollAt >= kSdrWhitePollInterval)
     {
         m_LastSdrWhitePollAt = now;
+        // The OS sends no message when the slider moves, so the kept monitor list is read again.
+        Platform::InvalidateMonitors();
         const float osSdrWhiteNits = Platform::GetPrimaryMonitorInfo().sdrWhiteLevelNits;
         if (osSdrWhiteNits > 0.0f && m_LastSdrWhiteLevelNits > 0.0f &&
             std::abs(osSdrWhiteNits - m_LastSdrWhiteLevelNits) > 0.5f)

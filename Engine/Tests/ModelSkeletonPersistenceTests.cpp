@@ -116,12 +116,12 @@ class ModelSkeletonPersistence : public testing::Test
         std::ofstream file(Path);
         file << text;
     }
-    void Load(ECS::World& world, Scene::LoadMode mode = Scene::LoadMode::Replace)
+    void Load(ECS::World& world, bool clearWorldFirst = true)
     {
-        Scene::SceneLoadDegradation degradation;
-        Scene::LoadOptions options{mode};
+        Scene::SceneDegradation degradation;
+        Scene::SceneReadOptions options{.clearWorldFirst = clearWorldFirst};
         options.outDegradation = &degradation;
-        ASSERT_TRUE(Scene::LoadSceneFromFile(world, Path, options));
+        ASSERT_TRUE(Scene::ReadSceneInto(world, Path, options));
         EXPECT_TRUE(degradation.skips.empty());
     }
     AssetManager Assets;
@@ -146,7 +146,7 @@ TEST_F(ModelSkeletonPersistence, SceneOmitsNumericCachesAndLegacyValuesAreIgnore
     auto skin = *world.GetComponent<SkinnedMeshRenderer>(part);
     skin.skeletonId = 123456;
     world.AddComponentImmediate(part, skin);
-    ASSERT_TRUE(Scene::SaveSceneToFile(world, Path));
+    ASSERT_TRUE(Scene::WriteSceneFile(world, Path));
     const auto text = Read();
     EXPECT_EQ(text.find("skeletonId ="), std::string::npos);
     EXPECT_EQ(text.find("runtimeId ="), std::string::npos);
@@ -180,7 +180,7 @@ TEST_F(ModelSkeletonPersistence, AdditiveLoadRemapsGroupAndRebuildsFromCurrentMo
     EXPECT_EQ(original.GetComponent<SkeletonRef>(b)->runtimeId, old.runtimeId);
     EXPECT_EQ(original.GetComponent<SkeletonRef>(helper)->runtimeId, old.runtimeId);
     EXPECT_EQ(store.GetRuntimeRefCount(old.runtimeId), 3u);
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, Path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, Path));
     original.Clear();
     EXPECT_EQ(store.GetRuntime(old.runtimeId), nullptr);
     Model->SetSkeletonIdForTest(NewSkeleton()); // Different import/store order after restart.
@@ -188,7 +188,7 @@ TEST_F(ModelSkeletonPersistence, AdditiveLoadRemapsGroupAndRebuildsFromCurrentMo
     ECS::World restored;
     Hooks(restored);
     for (int i = 0; i < 9; ++i) (void)Entity(restored, ("existing" + std::to_string(i)).c_str());
-    Load(restored, Scene::LoadMode::Additive);
+    Load(restored, false);
     const auto newRoot = Find(restored, "root");
     ASSERT_TRUE(newRoot.IsValid());
     ASSERT_NE(newRoot, root);
@@ -225,7 +225,7 @@ TEST_F(ModelSkeletonPersistence, MissingSharedOwnerStaysUnresolvedThroughResave)
     const auto root = Entity(original, "root");
     Part(original, "orphan", root, true);
     original.DestroyEntityImmediate(root);
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, Path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, Path));
     EXPECT_NE(Read().find("SkeletonRef.ownerMode = Entity"), std::string::npos);
     ECS::World restored;
     Hooks(restored);
@@ -237,7 +237,7 @@ TEST_F(ModelSkeletonPersistence, MissingSharedOwnerStaysUnresolvedThroughResave)
     EXPECT_EQ(ref->ownerMode, SkeletonInstanceOwner::Entity);
     EXPECT_FALSE(ref->instanceOwner.IsValid());
     EXPECT_EQ(ref->runtimeId, 0u);
-    ASSERT_TRUE(Scene::SaveSceneToFile(restored, Path));
+    ASSERT_TRUE(Scene::WriteSceneFile(restored, Path));
     Load(restored);
     ResolveSkinnedMeshAnimation(restored, Assets);
     EXPECT_EQ(restored.GetComponent<SkeletonRef>(Find(restored, "orphan"))->runtimeId, 0u);
@@ -441,7 +441,7 @@ TEST_F(ModelSkeletonPersistence, DirectSceneLoadHydratesThroughSharedBinderWitho
     const auto owner = Entity(source, "owner");
     Part(source, "body", owner);
     Part(source, "helper", owner, true);
-    ASSERT_TRUE(Scene::SaveSceneToFile(source, Path));
+    ASSERT_TRUE(Scene::WriteSceneFile(source, Path));
     SkeletonResolveState state;
     BindChangedSkinnedMeshAnimation(source, state, Resolves, Assets);
     Hooks(source);

@@ -5,6 +5,8 @@
 # the new UI module via AssetRuntime's ParserRegistry (UILayoutAsset/UIStyleAsset
 # registration).
 set(EDITOR_TEST_SOURCES
+	# The per-window dock Mount hold behind MountedViewPanels (header only).
+	MountedViewPanelsTests.cpp
 	CssInspectorIdleTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/CssInspector/CssInspector.cpp
 	SceneViewTransformToolTests.cpp
@@ -26,10 +28,15 @@ set(EDITOR_TEST_SOURCES
 	DebugServerRequestGatesTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/EditorDebugServer.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/DebugServer/AssistantSessionHandlers.cpp
+	PickRootResolverTests.cpp
 	SceneViewToolStripTests.cpp
 	# The tool strip's badge count, laid out over the real editor stylesheets: inside its strip at
 	# every count it can show, in both floating orientations and in the toolbar.
 	SceneViewToolStripBadgeLayoutTests.cpp
+	# The floating tool strip over the real editor stylesheets at UI scale 1, 1.5 and 2: centered,
+	# clear of the FPS label, pinned under the viewport's top when it cannot fit, kept where dragged.
+	SceneViewToolOverlayPlacementTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/Widgets/SceneView/SceneViewToolOverlay.cpp
 	MarkupNotesEditCommandTests.cpp
 	GizmoEllipseTests.cpp
 	SceneViewPostProcessSwitchesTests.cpp
@@ -141,6 +148,10 @@ set(EDITOR_TEST_SOURCES
 	# hidden once its duration passes. Its layout file is staged below.
 	TransientNoticeTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/TransientNotice.cpp
+	# The custom title bar: when its layout or style does not load, Bind removes the custom frame, so
+	# the window shows its system title bar.
+	EditorTitleBarTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/EditorTitleBar.cpp
 	# A row disabled through its control: every element inside the control takes the state, so an
 	# enum field's dropdown draws its disabled look. Leaf TU over the editor stylesheets.
 	InspectorDisabledRowTests.cpp
@@ -610,6 +621,8 @@ set(EDITOR_TEST_SOURCES
 	# The prefab drop: the placement, the refusal notice, the drop's undo step; Create Prefab, its dialog and its
 	# undo step; Create Prefab from a Hierarchy entity dropped on an Assets folder (PrefabPlaceTests).
 	PrefabPlaceTests.cpp
+	# A prefab file change held back during Play and reported to the panels (PrefabPropagationTests).
+	PrefabPropagationTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Assets/AssetsFolderDropRegistry.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/PrefabService.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Prefabs/CreatePrefab/CreatePrefabCommand.cpp

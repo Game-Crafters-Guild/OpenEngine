@@ -56,6 +56,10 @@ struct NativeBuildConfig
     // The Engine shared library the import lib above stands for: its link stamp is the
     // engine identity the ABI digest folds (HashEngineAbiInputs).
     std::filesystem::path              EngineBinary;
+    // The oldest macOS the engine runs on (its CMAKE_OSX_DEPLOYMENT_TARGET). The module
+    // builds for the same version, so it loads wherever the engine loads. Empty leaves
+    // the minimum to the compiler's default.
+    std::string                        MacOSDeploymentTarget;
 
     // EditorSDK interface (native Editor-kind package modules only): the
     // EditorSDK import lib, its shared library + the staged editor headers. All

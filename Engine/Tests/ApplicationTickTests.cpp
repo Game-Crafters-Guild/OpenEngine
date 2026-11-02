@@ -1,11 +1,6 @@
-// Tick/PollEventsAndTick driver contract. External frame drivers call them
-// directly instead of Run(): tests call Tick(), the browser
-// requestAnimationFrame runner calls PollEventsAndTick(). These tests pin the
-// properties they rely on: a requested exit makes both return false without
-// running a frame, each manual call advances exactly one frame until exit
-// (PollEventsAndTick included, when its pump ran no frame), each frame's update
-// may use frame memory, a frame reports nothing unless asked to, and a frame
-// waits on the CPU only when GE_FRAME_CAP asks for a limiter.
+// The Tick and PollEventsAndTick contract that external frame drivers rely on: exit stops
+// both without a frame, each call runs one frame, the update may use frame memory, and a frame
+// waits on the CPU only when GE_FRAME_CAP or SetFrameRateCap asks for a limiter.
 
 #include "Core/Application.h"
 #include "Core/Engine.h"
@@ -18,6 +13,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -95,8 +91,9 @@ private:
 
 // Ticks `frames` frames of a non-editor application, as the Player runs, and
 // counts the frames the frame-rate limiter held with a CPU wait. The frames do
-// no work, so a limiter at any ordinary rate holds them.
-int CountFramesHeldByTheLimiter(const char* name, int frames)
+// no work, so a limiter at any ordinary rate holds them. Before the first frame,
+// the application gets each of `frameRateCaps` in order through SetFrameRateCap.
+int CountFramesHeldByTheLimiter(const char* name, int frames, std::initializer_list<double> frameRateCaps)
 {
     const fs::path tempRoot = fs::temp_directory_path() / "ge_application_frame_cap_test";
     fs::create_directories(tempRoot / "Assets");
@@ -118,6 +115,8 @@ int CountFramesHeldByTheLimiter(const char* name, int frames)
     {
         CountingApp app(cfg);
         EXPECT_TRUE(app.Initialize());
+        for (const double cap : frameRateCaps)
+            app.SetFrameRateCap(cap);
         for (int frame = 0; frame < frames; ++frame)
         {
             app.Tick();
@@ -269,16 +268,27 @@ TEST(ApplicationTick, StartupFrameTimingsNeedTheFrameTraceSwitch)
 TEST(ApplicationTick, NoFrameWaitsWithoutTheFrameCapSwitch)
 {
     ScopedFrameCapEnv frameCap(nullptr);
-    EXPECT_EQ(CountFramesHeldByTheLimiter("TickContract.NoFrameCap", 5), 0)
+    EXPECT_EQ(CountFramesHeldByTheLimiter("TickContract.NoFrameCap", 5, {}), 0)
         << "a non-editor application with GE_FRAME_CAP unset must not throttle";
 }
 
-// GE_FRAME_CAP is the one way to ask for a limiter, and it still holds the
-// frame. This is also the live control for the zero above: a frame the limiter
-// held reports its wait in SleepMs.
+// GE_FRAME_CAP asks for a limiter, and it holds the frame. This is also the
+// live control for the zero above: a frame the limiter held reports its wait in
+// SleepMs.
 TEST(ApplicationTick, FrameCapSwitchHoldsTheFrame)
 {
     ScopedFrameCapEnv frameCap("30");
-    EXPECT_GT(CountFramesHeldByTheLimiter("TickContract.FrameCapSwitch", 5), 0)
+    EXPECT_GT(CountFramesHeldByTheLimiter("TickContract.FrameCapSwitch", 5, {}), 0)
         << "GE_FRAME_CAP=30 must hold frames that do no work";
+}
+
+// SetFrameRateCap holds the frame with the GE_FRAME_CAP switch unset, and a cap
+// of 0 removes the limiter again.
+TEST(ApplicationTick, AFrameRateCapHoldsTheFrameUntilRemoved)
+{
+    ScopedFrameCapEnv frameCap(nullptr);
+    EXPECT_GT(CountFramesHeldByTheLimiter("TickContract.FrameRateCap", 5, {30.0}), 0)
+        << "SetFrameRateCap(30) must hold frames that do no work";
+    EXPECT_EQ(CountFramesHeldByTheLimiter("TickContract.FrameRateCapRemoved", 5, {30.0, 0.0}), 0)
+        << "SetFrameRateCap(0) must remove the cap";
 }

@@ -10,9 +10,9 @@ namespace JobSystem {
 
 TaskDependencyGraph::~TaskDependencyGraph() = default;
 
-UniquePtr<Task> TaskDependencyGraph::Register(UniquePtr<Task> task) {
+UniquePtr<TaskBase> TaskDependencyGraph::Register(UniquePtr<TaskBase> task,
+                                                  std::span<const TaskId> dependencies) {
     const TaskId taskId = task->GetTaskId();
-    const Vector<TaskId>& declaredDependencies = task->GetDependencies();
 
     std::lock_guard<std::mutex> lock(m_Mutex);
 
@@ -28,7 +28,7 @@ UniquePtr<Task> TaskDependencyGraph::Register(UniquePtr<Task> task) {
     }
 
     TaskNode& node = it->second;
-    for (TaskId dependencyId : declaredDependencies) {
+    for (TaskId dependencyId : dependencies) {
         if (dependencyId == taskId || dependencyId == 0) {
             continue; // self-dependency / invalid id
         }
@@ -40,8 +40,9 @@ UniquePtr<Task> TaskDependencyGraph::Register(UniquePtr<Task> task) {
             // section that flips them). The dependent runs; it observes the
             // dependency's outcome through its handle.
 #if GE_DEBUG_INSTRUMENTATION
-            // F7: a never-submitted dependency id is a submit-order
-            // violation — the dependent would silently run early. Loud but
+            // F7: an id the graph never saw is a linking defect, because
+            // Submit(fn, deps) links only submitted dependencies. The
+            // dependent would silently run early. Loud but
             // NON-FATAL by default: the tombstone ring is a bounded
             // "recently terminal" heuristic, so a dependency held long past
             // terminal (or evicted in an extreme retirement burst) is legal
@@ -50,11 +51,8 @@ UniquePtr<Task> TaskDependencyGraph::Register(UniquePtr<Task> task) {
             if (!IsRecentlyTerminalLocked(dependencyId)) {
                 std::fprintf(stderr,
                              "TaskDependencyGraph: task %llu depends on task %llu which is not "
-                             "recently terminal — either a submit-order violation (submit "
-                             "dependencies before dependents), a plain Submit(F&&) lambda id "
-                             "passed to AddDependency directly (plain lambda submits never "
-                             "graph-register; route lambda dependencies through Submit(fn, "
-                             "deps), which bridges them), or a handle held long past "
+                             "recently terminal: either a dependency id that was never "
+                             "submitted (a linking defect) or a handle held long past "
                              "terminal.\n",
                              static_cast<unsigned long long>(taskId),
                              static_cast<unsigned long long>(dependencyId));

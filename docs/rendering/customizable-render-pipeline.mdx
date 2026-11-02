@@ -211,9 +211,11 @@ Skipping a stage and gating an input:
   view when every listed field reads within 1/1024 of its value. A field name the settings do
   not know keeps the stage running, and the compiler warns about it. A skipped stage publishes
   its input under its `output` name, so the stages after it read the chain unchanged.
-  `passthroughInput` names which input is published when the stage has more than one, and
-  `"stitchWhenSkipped": false` publishes nothing, for a stage whose output no running stage
-  reads while it is skipped.
+  `passthroughInput` names which input is published when the stage has more than one. A skipped
+  stage with more than one input and no `passthroughInput` publishes nothing: this is the case
+  for a stage that makes a texture for later stages of the same effect, such as `BloomThreshold`.
+  `"stitchWhenSkipped": false` makes any skipped stage publish nothing. Use it for a stage whose
+  output no running stage reads while it is skipped.
 - `optionalInputs` (array of input binding names): when the reference of one of these inputs
   does not resolve this frame, its binding samples the engine's black texture and the stage
   still runs. Without it, an input that does not resolve skips the stage. `BloomThreshold`

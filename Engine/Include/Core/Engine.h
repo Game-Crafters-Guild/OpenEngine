@@ -23,6 +23,8 @@ class WorkStealingThreadPool;
 // Forward declare ECS World to avoid heavy includes in header
 namespace GameEngine
 {
+class SceneLoadTracker;
+
 namespace Input
 {
 class InputSystem;
@@ -373,6 +375,9 @@ class EngineCore
     void DisableRenderingLoop();
     // Non-owning access to the RenderServices instance currently driving the engine-managed rendering loop (if enabled).
     Engine::Renderer::RenderServices* GetRenderServices() const { return m_RenderServices; }
+    /// The owners of loading work report it here; a game asks it if the scene is ready to
+    /// show (docs/scripting/scene-ready-to-show.mdx). Lives as long as the engine instance.
+    SceneLoadTracker& GetSceneLoadTracker() { return *m_SceneLoadTracker; }
     // Control whether Engine::Update automatically steps the rendering loop.
     // Default is true; tools like the Editor can disable this and drive the
     // rendering loop explicitly at a more appropriate point in their frame.
@@ -472,6 +477,7 @@ class EngineCore
     UniquePtr<AssetManager> m_AssetManager;
     // Built after the AssetManager and destroyed before it: it listens for changed files.
     UniquePtr<Scene::PrefabLibrary> m_PrefabLibrary;
+    UniquePtr<SceneLoadTracker> m_SceneLoadTracker;
     // Engine-managed rendering loop state
     UniquePtr<Engine::Renderer::RenderingLoop> m_RenderingLoop;
     bool m_RenderingLoopEnabled = false;

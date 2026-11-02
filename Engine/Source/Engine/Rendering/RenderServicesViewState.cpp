@@ -407,9 +407,10 @@ void RenderServices::WriteViewLightBuffer(ViewId viewId)
     if (!view || !m_Device)
         return;
 
-    auto& lightBuffers = m_ViewRegistry.PerView(viewId).LightBuffers;
-    const uint32_t frameSlot = m_Device->GetFrameIndex();
-    auto& buf = lightBuffers[frameSlot];
+    // The unwrapped counter rotates the whole ring; GetFrameIndex() names only the pacing's slots.
+    auto& perView = m_ViewRegistry.PerView(viewId);
+    auto& buf = perView.SelectLightBuffer(static_cast<uint32_t>(
+        m_LightRingFrameCounter.Tick(m_Device->GetFrameIndex()) % m_Device->GetFrameRingDepth()));
     if (!buf.IsValid())
     {
         Rendering::BufferDesc bd{};

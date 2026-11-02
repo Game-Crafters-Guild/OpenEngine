@@ -4,8 +4,11 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <limits>
+#include <string>
 
+using GameEngine::AppendHexBytes;
 using GameEngine::FormatFixed;
 using GameEngine::FormatMeters;
 
@@ -28,4 +31,12 @@ TEST(FormatNumberTests, FormatMetersGivesTheLengthToItsDecimalsAndTheUnit)
     EXPECT_EQ(FormatMeters(10.0, 1), "10 m");
     EXPECT_EQ(FormatMeters(61.97, 1), "62 m");
     EXPECT_EQ(FormatMeters(-0.01, 1), "0 m");
+}
+
+TEST(FormatNumberTests, AppendHexBytesAppendsTwoLowercaseDigitsPerByte)
+{
+    const std::uint8_t bytes[] = {0x00, 0x0a, 0x7f, 0xff};
+    std::string text = "id:";
+    AppendHexBytes(text, bytes);
+    EXPECT_EQ(text, "id:000a7fff");
 }

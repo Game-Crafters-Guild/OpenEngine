@@ -9,6 +9,7 @@
 #include "Assets/ModelAsset.h"
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
@@ -49,6 +50,18 @@ Mesh Triangle(float lift)
 MeshGPUKey KeyOf(const char* name, uint32 index = 0u)
 {
     return MeshGPUKey{GUID::Derive(GUID::Null(), name), index};
+}
+
+ECS::EntityHandle FirstChild(ECS::World& world, ECS::EntityHandle owner)
+{
+    ECS::EntityHandle child{};
+    world.Query<ECS::Read<Components::Parent>>().Each(
+        [&](ECS::EntityHandle entity, const Components::Parent& parent)
+        {
+            if (parent.Entity == owner)
+                child = entity;
+        });
+    return child;
 }
 
 size_t ChildCount(ECS::World& world, ECS::EntityHandle owner)
@@ -146,4 +159,58 @@ TEST(SplineChunkCommit, AWorldResetForgetsTheChunksAndReleasesTheKeys)
     world.ProcessCommands();
     EXPECT_EQ(ChildCount(world, owner), 1u) << "nothing may be destroyed after a reset";
     EXPECT_EQ(registry.FindByKey({space, 0u}), nullptr);
+}
+
+// The transform hierarchy runs before the recipes in a frame, and extraction skips a renderable whose
+// WorldTransform is unresolved. A new chunk starts at its owner's world pose, so it draws in the frame
+// that updates its neighbours in place (a road's trim and the junction lid that fills it).
+TEST(SplineChunkCommit, ANewChunkStartsAtItsOwnersWorldPose)
+{
+    ECS::World world;
+    MeshGPURegistry registry;
+    SplineChunkCommit commit;
+    Components::WorldTransform ownerWorld{};
+    ownerWorld.matrix[12] = 5.0f;
+    ownerWorld.matrix[13] = 2.0f;
+    ownerWorld.matrix[14] = -3.0f;
+    ownerWorld.Version = 7u;
+    ECS::Entity ownerEntity = world.Create();
+    ownerEntity.Set(Components::Transform{});
+    ownerEntity.Set(ownerWorld);
+    world.ProcessCommands();
+    const ECS::EntityHandle owner = ownerEntity.GetHandle();
+    const std::vector<Mesh> meshes = {Triangle(0.0f)};
+
+    commit.CommitSlots(world, registry, owner, GUID::Derive(GUID::Null(), "space"), meshes,
+                       Components::MeshRenderer{}, true);
+    world.ProcessCommands();
+
+    const ECS::EntityHandle chunk = FirstChild(world, owner);
+    ASSERT_TRUE(world.IsValid(chunk));
+    const auto* chunkWorld = world.GetComponent<Components::WorldTransform>(chunk);
+    ASSERT_NE(chunkWorld, nullptr);
+    EXPECT_NE(chunkWorld->Version, 0u) << "an unresolved chunk is skipped by extraction for one frame";
+    for (int i = 0; i < 16; ++i)
+        EXPECT_EQ(chunkWorld->matrix[i], ownerWorld.matrix[i]) << "matrix element " << i;
+}
+
+// An owner the hierarchy has not resolved yet gives no pose: the chunk waits for the hierarchy.
+TEST(SplineChunkCommit, ANewChunkUnderAnUnresolvedOwnerWaitsForTheHierarchy)
+{
+    ECS::World world;
+    MeshGPURegistry registry;
+    SplineChunkCommit commit;
+    ECS::Entity ownerEntity = world.Create();
+    ownerEntity.Set(Components::Transform{});
+    world.ProcessCommands();
+    const ECS::EntityHandle owner = ownerEntity.GetHandle();
+    const std::vector<Mesh> meshes = {Triangle(0.0f)};
+
+    commit.CommitSlots(world, registry, owner, GUID::Derive(GUID::Null(), "space"), meshes,
+                       Components::MeshRenderer{}, true);
+    world.ProcessCommands();
+
+    const auto* chunkWorld = world.GetComponent<Components::WorldTransform>(FirstChild(world, owner));
+    ASSERT_NE(chunkWorld, nullptr);
+    EXPECT_EQ(chunkWorld->Version, 0u);
 }

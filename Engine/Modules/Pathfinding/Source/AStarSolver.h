@@ -18,11 +18,12 @@ class AStarSolver
 public:
     // Solves A* on the grid through a view taken inside a path-solve window.
     // Working memory is owned by this solver instance. Thread-safe as long as
-    // each thread uses its own AStarSolver.
-    bool Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32 endIndex,
-               uint32 excludeAgentId, float32 currentTime,
-               uint32 agentCellRadius,
-               std::vector<uint32>& outPathCellIndices);
+    // each thread uses its own AStarSolver. `outExpansions` receives the cells
+    // the search closed; the path is written only when the end is Reached.
+    GridSolveEnd Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32 endIndex,
+                       uint32 excludeAgentId, float32 currentTime,
+                       uint32 agentCellRadius,
+                       std::vector<uint32>& outPathCellIndices, uint32& outExpansions);
 
     // The bytes the buffers hold, by capacity.
     uint64 HeldBytes() const;

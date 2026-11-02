@@ -32,6 +32,7 @@ class EditorDebugServer;
 
 // Serves start_frame_recording and stop_frame_recording. A recording reads back frames of
 // the Scene View or the window and writes them as numbered PNG or raw files with frames.csv.
+// While a recording captures, the editor presents at twice the recording's frame rate.
 // While no recording runs, no render callback is queued and no frame pays for it.
 class FrameSequenceRecorder : public std::enable_shared_from_this<FrameSequenceRecorder>
 {

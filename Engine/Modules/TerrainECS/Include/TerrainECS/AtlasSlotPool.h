@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PageStreaming/ResidentSlotPool.h"
-#include "TerrainECS/TerrainService.h" // TileCoord / TileCoordHash
+#include "TerrainECS/TerrainService.h" // TileCoord
 
 namespace GameEngine::TerrainECS
 {
@@ -13,7 +13,7 @@ inline constexpr uint32 kAtlasNoSlot = PageStreaming::kNoResidentSlot;
 
 // The resident-window atlas's tile <-> slot pool: the shared residency pool keyed by tile. Splat and
 // normal stay per tile until they move to pages; height takes the page cache's pool keyed by page.
-using AtlasSlotPool = PageStreaming::ResidentSlotPool<TileCoord, TileCoordHash>;
+using AtlasSlotPool = PageStreaming::ResidentSlotPool<TileCoord>;
 using AtlasSlotRef = PageStreaming::ResidentSlotRef;
 
 } // namespace GameEngine::TerrainECS

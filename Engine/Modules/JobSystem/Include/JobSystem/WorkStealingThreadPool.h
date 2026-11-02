@@ -4,7 +4,7 @@
 #include "JobSystem/JobCounter.h"
 #include "JobSystem/JobSystemStatistics.h"
 #include "JobSystem/ParallelForOptions.h"
-#include "JobSystem/Task.h"
+#include "JobSystem/TaskBase.h"
 #include "JobSystem/TaskHandle.h"
 #include "JobSystem/TaskSlabPool.h"
 #include "JobSystem/TaskTypes.h"
@@ -108,7 +108,7 @@ bool ParallelFor(WorkStealingThreadPool* pool, size_t count, Body&& body, const 
  *   fairness (see Worker::GlobalConsumerToken).
  * - A worker's local queue has one feed: graph tasks published from that
  *   worker (a completion releasing its ready dependents, or a
- *   Submit(UniquePtr<Task>) on the worker). Owners consume their own
+ *   Submit(F&&, dependencies) on the worker). Owners consume their own
  *   extractions first, for cache locality.
  * - The steal ring lets an idle worker take from other workers' local queues
  *   in ring order, tokenless, giving up after half the ring. A task in a busy
@@ -189,8 +189,7 @@ class WorkStealingThreadPool
      *       envelope (from the 128-byte slab pool, or the heap for a closure
      *       too large for a slab, chosen at compile time) and the execute side
      *       all share it, so execution never looks it up again.
-     * @note Use Submit(F&&, dependencies) or Submit(UniquePtr<Task>) when the
-     *       task must run after others.
+     * @note Use Submit(F&&, dependencies) when the task must run after others.
      * @note Gated on shutdown: once Shutdown() has been requested this returns
      *       an invalid handle and the callable never runs. A Submit that passes
      *       the gate concurrently with Shutdown() re-checks after its publish
@@ -208,8 +207,8 @@ class WorkStealingThreadPool
      * `dependencies` is terminal: the callable form of the dependency-graph
      * path.
      *
-     * The callable is a graph task (Detail::SubmitGraphTask) submitted through
-     * Submit(UniquePtr<Task>), so graph registration, the rule that an absent
+     * The callable is a graph task (Detail::SubmitGraphTask) registered in the
+     * dependency graph, so graph registration, the rule that an absent
      * dependency is terminal, the failure cascade, the cancel cascade and
      * shutdown coverage are the graph path's own. It costs a graph node and a
      * heap envelope like any graph task, and always runs at
@@ -227,8 +226,8 @@ class WorkStealingThreadPool
      * A terminal or invalid handle in `dependencies` adds no edge, and the task
      * runs: dependents of completed, failed or cancelled dependencies run and
      * observe the outcomes through the handles. A dependency that fails while
-     * the dependent is parked in the graph cascades Failed to it instead, as on
-     * the subclass path. A handle from another pool is a contract violation:
+     * the dependent is parked in the graph cascades Failed to it instead. A
+     * handle from another pool is a contract violation:
      * Debug-asserted, skipped in Release.
      */
     template <typename F, typename = std::enable_if_t<std::is_invocable_v<F&>>>
@@ -417,16 +416,6 @@ class WorkStealingThreadPool
      * counter has a single waiter.
      */
     void Wait(JobCounter& counter);
-
-    /**
-     * @brief Submit a dependency-aware task, registering its declared
-     * dependencies in the graph.
-     * @param task Task to execute (dependencies declared with AddDependency)
-     * @return TaskHandle for status, result and cancellation
-     * @note The task keeps the id it was constructed with, which is what its
-     *       dependents name.
-     */
-    TaskHandle Submit(UniquePtr<Task> task);
 
     /**
      * @brief Create a handle born terminal (Completed) carrying `result` as
@@ -1097,7 +1086,6 @@ class WorkStealingThreadPool
     Vector<WeakPtr<Detail::JobChannelState>> m_Channels;
 
     friend class TaskHandle;
-    friend class Task;
     // Writes its result through GetOrCreateTaskData.
     template <typename F>
     friend class Detail::SubmitGraphTask;
@@ -1227,8 +1215,8 @@ class WorkStealingThreadPool
                                 size_t count);
 
     // The registry's factory: the TaskData every handle of `taskId` shares.
-    // Callers are the pool, TaskHandle's constructor, Task (GenerateTaskId in
-    // its constructor) and Detail::SubmitGraphTask (its result).
+    // Callers are the pool, TaskHandle's constructor and
+    // Detail::SubmitGraphTask (its result).
     SharedPtr<TaskHandle::TaskData> GetOrCreateTaskData(TaskId taskId);
     TaskId GenerateTaskId();
 
@@ -1251,6 +1239,10 @@ class WorkStealingThreadPool
     // that completed during the linking (the implementation carries the race
     // argument).
     bool LinkSubmitDependency(const TaskHandle& dependency);
+    // Registers a graph envelope with the ids that LinkSubmitDependency
+    // linked, and queues it when none is pending. The envelope's id is
+    // graph-managed before the returned handle escapes.
+    TaskHandle SubmitToGraph(UniquePtr<TaskBase> task, std::span<const TaskId> dependencies);
     // Completion bridge for a graph-linked task outside the graph (GraphLinked
     // set): releases or cascades the graph dependents of `taskId` through
     // MarkCompleted, suppressing the source's own terminal events, which
@@ -1299,7 +1291,7 @@ namespace JobSystem
 template <typename F, typename>
 TaskHandle WorkStealingThreadPool::Submit(F&& task, JobPriority priority)
 {
-    // Gated on shutdown, like Submit(UniquePtr<Task>): the callable never
+    // Gated on shutdown, like Submit(F&&, dependencies): the callable never
     // runs and the caller gets an invalid handle.
     if (IsShuttingDown())
     {
@@ -1327,24 +1319,25 @@ TaskHandle WorkStealingThreadPool::Submit(F&& task, JobPriority priority)
 template <typename F, typename>
 TaskHandle WorkStealingThreadPool::Submit(F&& task, std::span<const TaskHandle> dependencies)
 {
-    // The shutdown gate of every submit path. Submit(UniquePtr<Task>) below
-    // re-checks after its publish, so a shutdown landing between here and
-    // there cannot strand the returned handle.
+    // The shutdown gate of every submit path. SubmitToGraph re-checks after
+    // its publish, so a shutdown landing between here and there cannot
+    // strand the returned handle.
     if (IsShuttingDown())
     {
         return TaskHandle();
     }
 
-    auto graphTask =
-        JobSystem::MakeUnique<Detail::SubmitGraphTask<std::decay_t<F>>>(this, std::forward<F>(task));
+    auto graphTask = JobSystem::MakeUnique<Detail::SubmitGraphTask<std::decay_t<F>>>(
+        this, GenerateTaskId(), std::forward<F>(task));
+    Vector<TaskId> linkedDependencies;
     for (const TaskHandle& dependency : dependencies)
     {
         if (LinkSubmitDependency(dependency))
         {
-            graphTask->AddDependency(dependency.GetId());
+            linkedDependencies.push_back(dependency.GetId());
         }
     }
-    return Submit(UniquePtr<Task>(std::move(graphTask)));
+    return SubmitToGraph(UniquePtr<TaskBase>(std::move(graphTask)), linkedDependencies);
 }
 
 template <typename Envelope, typename F, typename... Extra>

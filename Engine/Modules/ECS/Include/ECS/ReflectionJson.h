@@ -11,6 +11,7 @@
 
 #include "ECS/FieldAccess.h"
 #include "ECS/Reflection.h"
+#include "Types/FormatNumber.h"
 
 #include <charconv>
 #include <cmath>
@@ -43,16 +44,11 @@ void AppendNumber(std::string& out, T value)
         out += "null";
 }
 
-inline void AppendHexBytes(std::string& out, const std::byte* bytes, std::uint32_t count)
+// The bytes as one JSON string of lowercase hex digits, two digits per byte.
+inline void AppendHexString(std::string& out, const std::byte* bytes, std::uint32_t count)
 {
-    static constexpr char kHex[] = "0123456789abcdef";
     out += '"';
-    for (std::uint32_t i = 0; i < count; ++i)
-    {
-        const auto b = static_cast<unsigned char>(bytes[i]);
-        out += kHex[b >> 4];
-        out += kHex[b & 0x0F];
-    }
+    AppendHexBytes(out, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes), count));
     out += '"';
 }
 
@@ -72,7 +68,7 @@ inline void AppendOpaqueBytes(std::string& out, const std::byte* bytes, std::uin
     out += "{\"size\":";
     AppendNumber(out, count);
     out += ",\"data\":";
-    AppendHexBytes(out, bytes, count);
+    AppendHexString(out, bytes, count);
     out += '}';
 }
 
@@ -157,7 +153,7 @@ inline void AppendScalar(std::string& out, const FieldInfo& field, std::span<con
             if (IsAllZero(raw, 16))
                 out += "\"\"";
             else
-                AppendHexBytes(out, raw, 16);
+                AppendHexString(out, raw, 16);
             break;
         case FieldTypeId::String:
         case FieldTypeId::Unknown:
@@ -168,7 +164,6 @@ inline void AppendScalar(std::string& out, const FieldInfo& field, std::span<con
 
 inline void AppendString(std::string& out, const std::byte* bytes, std::uint32_t maxSize)
 {
-    static constexpr char kHex[] = "0123456789abcdef";
     out += '"';
     for (std::uint32_t i = 0; i < maxSize; ++i)
     {
@@ -187,8 +182,7 @@ inline void AppendString(std::string& out, const std::byte* bytes, std::uint32_t
                 if (uc < 0x20)  // remaining control chars must be \u-escaped (RFC 8259)
                 {
                     out += "\\u00";
-                    out += kHex[(uc >> 4) & 0x0F];
-                    out += kHex[uc & 0x0F];
+                    AppendHexBytes(out, std::span<const std::uint8_t>(&uc, 1));
                 }
                 else
                 {

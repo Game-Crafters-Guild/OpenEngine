@@ -23,12 +23,14 @@
 #include "Panels/ProjectPicker/ProjectPickerModal.h"
 #include "Assets/Polyhaven/PolyhavenDownloadManager.h"
 #include "Panels/PlayModeChangeReviewModal.h"
+#include "SceneView/MountedViewPanels.h"
 #include "Editor/RenderGraphTickRegistry.h"
 #include "Editor/Registries/EditorServiceRegistry.h"
 #include "Editor/Registries/StatusBarItemRegistry.h"
 #include "EditorVideoPlayerController.h"
 #include "Startup/EditorSessionDescriptor.h"
 #include "JobSystem/TaskHandle.h"
+#include "Mathematics/RectInt.h"
 
 #include <array>
 #include <chrono>
@@ -259,6 +261,8 @@ class EditorApplication : public Application
         std::unique_ptr<class SceneViewController> scene;
         std::array<std::unique_ptr<class SceneViewController>, 3> sceneQuadViews;
         std::unique_ptr<class GameViewController> gameView;
+        // The Scene View and Game View panels in this window's dock, for per-frame callers.
+        Editor::MountedViewPanels mountedViewPanels;
         DockingManager* docking = nullptr;
         std::unique_ptr<DockingManager> dockingOwned;
         std::string floatingPanelId;
@@ -487,6 +491,10 @@ class EditorApplication : public Application
     Logger::RingBufferSink* m_DebugLogSink = nullptr; // non-owning; owned by Logger
     // Port override from --debug-port; outranks GE_EDITOR_DEBUG_PORT.
     std::optional<std::uint16_t> m_DebugPortOverride;
+    // Main window client rect from --window; unset opens the window maximized.
+    // X and Y apply only when m_WindowHasPosition is true.
+    std::optional<Mathematics::RectInt> m_WindowRectOverride;
+    bool m_WindowHasPosition = false;
 
     // Who this session is, stamped in ConfigureFromCommandLine (before Initialize) and
     // never refreshed. Surfaced in the window title and over get_editor_state so that

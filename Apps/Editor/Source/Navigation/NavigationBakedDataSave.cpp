@@ -13,9 +13,10 @@
 #include "Components/Navigation/NavigationSurface.h"
 #include "PathfindingECS/Navigation.h"
 #include "Types/Fnv1a.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <format>
 #include <unordered_set>
 #include <vector>
@@ -35,19 +36,11 @@ std::filesystem::path BakedDataFileFor(ECS::World& world, ECS::EntityHandle enti
     return scenePath.parent_path() / (scenePath.stem().string() + "-" + identity + ".navsurface");
 }
 
-// `text` in lower case: the registry may report a path case-folded.
-std::string Lower(std::string text)
-{
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return text;
-}
-
 // True when `stem` is a name BakedDataFileFor gives under `prefix`: the prefix, then a tag's 16 hex
 // digits or a GUID's 36 characters. Compared without case.
 bool IsSceneFileName(const std::string& stem, const std::string& prefix)
 {
-    if (!Lower(stem).starts_with(Lower(prefix)))
+    if (!ToLowerAscii(stem).starts_with(ToLowerAscii(prefix)))
         return false;
     const size_t identity = stem.size() - prefix.size();
     return identity == 16 || identity == 36;
@@ -65,12 +58,12 @@ std::filesystem::path BakedDataTarget(ECS::World& world, ECS::EntityHandle entit
     AssetMetadata metadata{};
     const std::string prefix = scenePath.stem().string() + "-";
     if (!surface.BakedData.IsNull() && registry.TryGetAssetMetadata(surface.BakedData.ToGuid(), metadata) &&
-        Lower(metadata.Path.extension().string()) == ".navsurface" &&
-        Lower(metadata.Path.parent_path().generic_string()) == Lower(scenePath.parent_path().generic_string()) &&
-        IsSceneFileName(metadata.Path.stem().string(), prefix) && claimed.insert(Lower(metadata.Path.generic_string())).second)
+        LowerCaseExtension(metadata.Path) == ".navsurface" &&
+        ToLowerAscii(metadata.Path.parent_path().generic_string()) == ToLowerAscii(scenePath.parent_path().generic_string()) &&
+        IsSceneFileName(metadata.Path.stem().string(), prefix) && claimed.insert(ToLowerAscii(metadata.Path.generic_string())).second)
         return metadata.Path;
     std::filesystem::path target = BakedDataFileFor(world, entity, scenePath);
-    while (!claimed.insert(Lower(target.generic_string())).second)
+    while (!claimed.insert(ToLowerAscii(target.generic_string())).second)
         target = scenePath.parent_path() / (prefix + GUID::Generate().ToString() + ".navsurface");
     return target;
 }

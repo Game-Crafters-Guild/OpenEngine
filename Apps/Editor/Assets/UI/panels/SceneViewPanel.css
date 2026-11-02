@@ -187,17 +187,20 @@
 	display: none;
 }
 
-/* Inward nudge for the floating tool overlay when the 2D rulers occupy the
-   left band. Top stays where it is — the overlay normally sits well below the
-   top ruler — only the left inset needs to clear the vertical ruler. */
+/* The floating tool overlay's left inset while the 2D rulers show. SceneViewToolOverlay
+   pins the overlay this same distance below the viewport's top, so the value clears the
+   left ruler and the top ruler. */
 .scene-tool-overlay.rulers-visible {
 	left: 32px;
 }
 
+/* The floating tool overlay sits on the viewport's left edge with the 14 px inset of the
+   other viewport overlays. The viewport is a row flex box, so align-self centers it; when the
+   centered overlay meets the FPS label, SceneViewToolOverlay sets top. A drag sets left and top. */
 .scene-tool-overlay {
 	position: absolute;
-	top: 110px;
 	left: 14px;
+	align-self: center;
 	display: flex;
 	flex-direction: column;
 	align-items: center;

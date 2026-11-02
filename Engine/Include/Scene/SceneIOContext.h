@@ -18,7 +18,7 @@ namespace GameEngine::Scene
 // pattern: schemas now receive ctx by const reference, so the helpers they
 // call (TryResolveResourceIdToAssetReference, TryGetEmbedDefinition,
 // TryResolveAssetReference) have no hidden TLS coupling.
-struct SceneLoadContext
+struct SceneReadContext
 {
     const std::filesystem::path* SceneFile = nullptr;
     std::filesystem::path AssetRoot;
@@ -80,8 +80,8 @@ struct SceneLoadContext
 };
 
 // Per-scene-save state threaded through schema dispatch (Serialize) and
-// FormatAssetReferenceForSave. Mirrors SceneLoadContext on the save side.
-struct SceneSaveContext
+// FormatAssetReferenceForSave. Mirrors SceneReadContext on the save side.
+struct SceneWriteContext
 {
     const std::filesystem::path* SceneFile = nullptr;
     std::filesystem::path AssetRoot;

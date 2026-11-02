@@ -1,6 +1,8 @@
 #include "Assets/FileWatchingService.h"
 #include "Logger/Logger.h"
 #include "Platform/Capabilities.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 #include <algorithm>
 #include <atomic>
 #include <string>
@@ -35,21 +37,11 @@ static std::filesystem::path MakeAbsoluteLexical(const std::filesystem::path& p)
 static std::string NormalizeWatcherKey(const std::filesystem::path& directory)
 {
     std::filesystem::path abs = MakeAbsoluteLexical(directory);
-    std::string key = abs.string();
 #ifdef _WIN32
-    std::transform(key.begin(), key.end(), key.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ToLowerAscii(abs.string());
+#else
+    return abs.string();
 #endif
-    return key;
-}
-
-static std::string NormalizeExtensionLower(std::string ext)
-{
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (!ext.empty() && ext[0] != '.')
-        ext.insert(ext.begin(), '.');
-    return ext;
 }
 
 /// Absolute + lexically-normal form, case-folded on Windows. Used for
@@ -61,10 +53,7 @@ static std::filesystem::path NormalizeForMatching(const std::filesystem::path& p
         return {};
     std::filesystem::path abs = MakeAbsoluteLexical(p);
 #ifdef _WIN32
-    std::string s = abs.string();
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return std::filesystem::path(std::move(s));
+    return std::filesystem::path(ToLowerAscii(abs.string()));
 #else
     return abs;
 #endif
@@ -82,13 +71,8 @@ static bool IsStrictAncestor(const std::filesystem::path& ancestor,
                              const std::filesystem::path& descendant)
 {
 #ifdef _WIN32
-    auto toLower = [](std::string s) {
-        std::transform(s.begin(), s.end(), s.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return s;
-    };
-    const std::filesystem::path ancLower(toLower(ancestor.string()));
-    const std::filesystem::path descLower(toLower(descendant.string()));
+    const std::filesystem::path ancLower(ToLowerAscii(ancestor.string()));
+    const std::filesystem::path descLower(ToLowerAscii(descendant.string()));
     const auto rel = descLower.lexically_relative(ancLower);
 #else
     const auto rel = descendant.lexically_relative(ancestor);
@@ -139,12 +123,12 @@ bool FilePattern::MatchesNormalized(const std::filesystem::path& absFile) const 
         return false; // File is in subdirectory but recursion is disabled
     }
 
-    // Check extension filter (uses original filePath casing would differ but
-    // extensions are already case-folded in Extensions set).
+    // The compare is in lower case, so Extensions must hold lower-case values,
+    // with or without the dot.
     if (!Extensions.empty()) {
-        std::string ext = NormalizeExtensionLower(absFile.extension().string());
-        if (Extensions.find(ext) == Extensions.end() &&
-            Extensions.find(ext.empty() ? ext : ext.substr(1)) == Extensions.end()) {
+        const std::string extension = LowerCaseExtension(absFile);
+        if (Extensions.find(extension) == Extensions.end() &&
+            Extensions.find(extension.empty() ? extension : extension.substr(1)) == Extensions.end()) {
             return false;
         }
     }

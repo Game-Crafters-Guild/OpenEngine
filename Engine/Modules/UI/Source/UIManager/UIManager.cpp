@@ -1,4 +1,5 @@
 #include "UI/Internal/AttachDetachInternal.h"
+#include "UI/Internal/AttachedRootAccess.h"
 #include "UI/UIManager.h"
 #include "UIManager_Internal.h"
 #include "../DefaultStylesheet.h"
@@ -431,14 +432,31 @@ void UIManager::RemoveFromDirtyQueues(UIElement* el)
     el->m_InQueueFlags = 0;
 }
 
+UIElement* UIManager::FindFocusedElement()
+{
+    if (m_FocusId.empty() || !m_Root)
+        return nullptr;
+    const uint64_t structureGeneration = GetTreeStructureGeneration();
+    const uint64_t idGeneration = GetElementIdGeneration();
+    // The generations come first: they prove m_HeldFocus alive before it is read.
+    if (m_HeldFocus && m_HeldFocusStructureGeneration == structureGeneration &&
+        m_HeldFocusIdGeneration == idGeneration && m_HeldFocusId == m_FocusId &&
+        UIAttachedRootAccess::AttachedRoot(*m_HeldFocus) == m_Root.get())
+        return m_HeldFocus;
+
+    UIElement* found = m_Root->FindById(HashStringId(m_FocusId));
+    m_HeldFocus = found;
+    m_HeldFocusId = m_FocusId;
+    m_HeldFocusStructureGeneration = structureGeneration;
+    m_HeldFocusIdGeneration = idGeneration;
+    return found;
+}
+
 void UIManager::RebuildFocusWithinChain()
 {
-    // Find the focused element by walking the tree once. If m_FocusId is
-    // empty or the id no longer resolves to a live element, the chain is
-    // empty (nothing has :focus-within).
-    UIElement* focused = nullptr;
-    if (!m_FocusId.empty() && m_Root)
-        focused = m_Root->FindById(HashStringId(m_FocusId));
+    // If m_FocusId is empty or the id no longer resolves to a live element
+    // under the root, the chain is empty (nothing has :focus-within).
+    UIElement* focused = FindFocusedElement();
 
     // A control that is disabled while it holds focus loses it, and so does one
     // inside a container that is disabled — the focus a user cannot reach by Tab

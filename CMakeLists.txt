@@ -523,12 +523,8 @@ if(CMAKE_CONFIGURATION_TYPES)
 endif()
 # Seed DebugFast flags from Debug, then strip /RTC1 (runtime checks are the big single
 # overhead that /W4 + ASAN already cover). /MDd → /MD is handled by CMAKE_MSVC_RUNTIME_LIBRARY.
-set(CMAKE_C_FLAGS_DEBUGFAST                "${CMAKE_C_FLAGS_DEBUG}"                CACHE STRING "")
-set(CMAKE_CXX_FLAGS_DEBUGFAST              "${CMAKE_CXX_FLAGS_DEBUG}"              CACHE STRING "")
-set(CMAKE_EXE_LINKER_FLAGS_DEBUGFAST       "${CMAKE_EXE_LINKER_FLAGS_DEBUG}"       CACHE STRING "")
-set(CMAKE_SHARED_LINKER_FLAGS_DEBUGFAST    "${CMAKE_SHARED_LINKER_FLAGS_DEBUG}"    CACHE STRING "")
-set(CMAKE_STATIC_LINKER_FLAGS_DEBUGFAST    "${CMAKE_STATIC_LINKER_FLAGS_DEBUG}"    CACHE STRING "")
-set(CMAKE_MODULE_LINKER_FLAGS_DEBUGFAST    "${CMAKE_MODULE_LINKER_FLAGS_DEBUG}"    CACHE STRING "")
+include(cmake/DebugFastFlags.cmake)
+ge_seed_debugfast_flags()
 
 # Route IMPORTED targets (vcpkg deps) in DebugFast to their Release variants.
 # Without this, CMake's fallback for unknown configs can pick the first entry of
@@ -1112,6 +1108,7 @@ ge_find_glslc()
 if(EMSCRIPTEN)
     add_subdirectory(Engine/Modules/Logger)
     add_subdirectory(Engine/Modules/Events)
+    add_subdirectory(Engine/Modules/SceneLoadTracker)
     add_subdirectory(Engine/Modules/GenerationalVector)
     add_subdirectory(Engine/Modules/Types)
     add_subdirectory(Engine/Modules/AssetCore)
@@ -1196,6 +1193,8 @@ add_subdirectory(Engine/Modules/GenerationalVector)  # Generational handle syste
 add_subdirectory(Engine/Modules/Types)
 # Event: header-only multicast event with self-detaching handles (Events/Event.h)
 add_subdirectory(Engine/Modules/Events)
+# SceneLoadTracker: the work a scene's first frame needs, reported by the owners of that work
+add_subdirectory(Engine/Modules/SceneLoadTracker)
 # Native plugin lifecycle API used by Engine and Editor extension modules.
 add_subdirectory(Engine/Modules/PluginAPI)
 # AssetCore depends on Logger + Types

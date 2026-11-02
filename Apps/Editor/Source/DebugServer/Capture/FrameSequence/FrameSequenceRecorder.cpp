@@ -183,6 +183,7 @@ json FrameSequenceRecorder::Start(const json& params)
     m_FrameWidth = 0;
     m_FrameHeight = 0;
     m_Recording.emplace(maxFrames, m_Format, frameRate);
+    m_App.SetFrameRateCap(m_Recording->PresentCapFps());
     m_StartTime = std::chrono::steady_clock::now();
     m_FinishedReply.reset();
     QueueRenderPhase();
@@ -200,7 +201,10 @@ json FrameSequenceRecorder::Stop(const std::string& requestId)
     if (!m_Recording && !m_FinishedReply)
         return Editor::RefuseRequest("No frame recording is running. Call start_frame_recording first.");
     if (m_Recording)
+    {
         m_Recording->Stop();
+        m_App.SetFrameRateCap(m_Recording->PresentCapFps());
+    }
     m_Server.EnqueueDeferredResponse(
         requestId, [self = shared_from_this()](json& outResult) { return self->PollStop(outResult); },
         kStopPollBudget);
@@ -341,9 +345,8 @@ void FrameSequenceRecorder::SubmitEncode(const PendingReadback& pending, Renderi
     auto outcome = std::make_shared<EncodeOutcome>();
     auto request = std::make_shared<FrameEncodeRequest>(
         FrameEncodeRequest{std::move(readback), m_Directory / m_Recording->FrameFileName(pending.Index), m_Format});
-    // Background priority: a late encode becomes a counted drop, never a stall of the frame's own jobs.
     auto job = EngineCore::GetInstance().GetJobSystem().Submit([request, outcome] { EncodeFrame(*request, *outcome); },
-                                                               JobSystem::JobPriority::Background);
+                                                               Editor::kFrameRecordingEncodePriority);
     m_Encodes.push_back(PendingEncode{pending.Index, std::move(job), std::move(outcome)});
 }
 
@@ -390,6 +393,7 @@ void FrameSequenceRecorder::Finish()
                {"encodeMsMax", summary.EncodeMsMax}};
     LOG_INFO("Frame recording: stopped, {} presented, {} written, {} dropped, {} failed, folder={}",
              summary.Presented, summary.Written, summary.Dropped, summary.Failed, m_Directory.string());
+    m_App.SetFrameRateCap(m_Recording->PresentCapFps());
     m_Readbacks.clear();
     m_Encodes.clear();
     m_Recording.reset();

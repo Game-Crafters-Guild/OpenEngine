@@ -33,6 +33,7 @@
 
 namespace GameEngine
 {
+class SceneLoadTracker;
 struct EmbeddedImage;
 struct MaterialDocument;
 // Forward-declared, not included: Assets/TextureAsset.h drags in GameEngine::TextureFormat, which
@@ -45,6 +46,7 @@ class TextureAsset;
 namespace Rendering
 {
 class NamedPushConstantWriter;
+struct StagedTextureUpload;
 }
 
 namespace Engine::Renderer
@@ -350,6 +352,10 @@ class TextureService
     // is what lets a capture harness tell "not bound yet" from "never binds".
     size_t PendingMaterialTextureBindCount() const;
 
+    // Report the pending binds, from the request through decode and upload to the slot
+    // bind, as the render.texture-upload gate.
+    void ReportLoadingWork(SceneLoadTracker& tracker);
+
     // The distinct textures those pending bindings wait on: what the editor's status bar
     // counts, since several materials and slots can wait on one texture.
     size_t PendingMaterialTextureCount() const;
@@ -378,6 +384,7 @@ class TextureService
 
   private:
     friend struct TextureCoverageUploadTestAccess;
+    friend struct TextureUploadBatchTestAccess;
     // Widen the texture's stored cook usage to serve `usage`, needed by the material slot
     // (materialGuid, slotName) or by a declaration when materialGuid is null (see the
     // definition). Returns true when it wrote a new tag.
@@ -547,9 +554,26 @@ class TextureService
                                                                       SharedPtr<TextureAsset> resident,
                                                                       const std::atomic<bool>* cancel,
                                                                       bool logTiming);
-    // The upload half: create, upload and publish (or publish the refusal). Render thread, or an
-    // extraction worker through GetOrUpload.
+    // The upload half: create, upload and publish (or publish the refusal), in a submission of its
+    // own. GetOrUpload's path (an extraction worker) and the hot swap; FlushPendingUploads batches.
     TextureGPUCache::Entry SubmitPreparedUpload(const GUID& textureGuid, const PreparedTextureUpload& prepared);
+    // Creates a ready upload's texture and its normal-variance companion, fills a staging buffer for
+    // each and appends them to `batch`, the companion after its texture. No texture, with `refusal`
+    // set, when the device refuses the format, the texture or the buffer; the companion is optional.
+    TextureGPUCache::Entry StagePreparedUpload(const PreparedTextureUpload& prepared,
+                                               std::vector<Rendering::StagedTextureUpload>& batch,
+                                               const char*& refusal);
+    // A texture that does not upload (the device refuses it, or it has no pixels) fails as a failed
+    // load does: one error line with `reason`, and no texture cached until an Evict or a reupload, so
+    // its binds take the slot default and leave the pending set, and GetOrUpload does not try again.
+    TextureGPUCache::Entry PublishFailedUpload(const GUID& textureGuid, const std::filesystem::path& path,
+                                               const char* reason);
+    // Logs the load and mip times of an upload that asked for timing, and `stepMs` under the name
+    // `step`: "upload" for a submission of its own, "stage" for a texture of a batched flush.
+    void LogUploadTiming(const PreparedTextureUpload& prepared, const char* step, double stepMs) const;
+    // Publish uploaded textures under their GUID; an entry another thread published first wins,
+    // and these are parked for the render thread to destroy. Returns the published entry.
+    TextureGPUCache::Entry PublishUploadedEntry(const GUID& textureGuid, const TextureGPUCache::Entry& uploaded);
 
     struct CubeLutGpuCacheKey
     {
@@ -702,6 +726,10 @@ class TextureService
     mutable std::mutex m_PendingTexturesMutex;
     std::vector<PendingGpuUpload> m_PendingGpuUploads;
     std::vector<PendingTextureBind> m_PendingTextureBinds;
+    // The render.texture-upload gate; null until ReportLoadingWork. It reads the binds
+    // above, so it is declared after them and destroyed before them.
+    struct LoadReport;
+    std::shared_ptr<LoadReport> m_LoadReport;
     // GUIDs requested for re-upload from another thread; drained + hot-swapped
     // on the render thread at the start of FlushPendingUploads.
     std::vector<GUID> m_PendingTextureReupload;

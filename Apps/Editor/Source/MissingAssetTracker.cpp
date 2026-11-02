@@ -247,7 +247,7 @@ size_t MissingAssetTracker::ClearAllReferencesTo(ECS::World& world,
                         if (g == guid)
                             propsToClear.emplace_back(propertyName);
                     });
-                Scene::SceneLoadContext stubCtx{};
+                Scene::SceneReadContext stubCtx{};
                 for (const auto& prop : propsToClear)
                 {
                     std::string err;

@@ -11,7 +11,6 @@ set(JOBSYSTEM_SOURCES
     Source/JobChannel.cpp
     Source/JobChannelState.cpp
     Source/JobCounter.cpp
-    Source/Task.cpp
     Source/TaskHandle.cpp
     Source/TaskDependencyGraph.cpp
     Source/TaskSlabPool.cpp
@@ -25,7 +24,7 @@ set(JOBSYSTEM_HEADERS
     Include/JobSystem/JobChannel.h
     Include/JobSystem/JobSystemStatistics.h
     Include/JobSystem/JobCounter.h
-    Include/JobSystem/Task.h
+    Include/JobSystem/TaskBase.h
     Include/JobSystem/TaskEnvelopes.h
     Include/JobSystem/TaskHandle.h
     Include/JobSystem/TaskDependencyGraph.h

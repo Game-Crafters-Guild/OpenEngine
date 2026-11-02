@@ -31,6 +31,7 @@ class MemoryAllocator;
 class IQueryPool;
 class PipelineCache;
 class PipelineBuildTable;
+class DescriptorSetCache;
 enum class TextureFormat : uint32_t;
 // New pipeline desc types — defined in PipelineTypes.h. Forward-declared
 // here so IDevice can take them by const-ref without pulling in the
@@ -1405,6 +1406,24 @@ struct DescriptorSetUpdate
     std::vector<TlasSlotHandle> accelerationStructures;
 };
 
+// One write of a set that IDevice::GetOrCreateDescriptorSet builds from its content.
+// A valid View replaces Texture. Range 0 binds the buffer from Offset to its end.
+// Plain data, so a caller keeps its writes in a stack array.
+struct DescriptorWrite
+{
+    uint32_t Binding = 0;
+    uint32_t ArrayElement = 0;
+    DescriptorType Type = DescriptorType::UniformBuffer;
+    BufferHandle Buffer{};
+    uint64_t Offset = 0;
+    uint64_t Range = 0;
+    TextureHandle Texture{};
+    TextureViewHandle View{};
+    SamplerHandle Sampler{};
+
+    bool operator==(const DescriptorWrite&) const = default;
+};
+
 // Pipeline type enumeration
 enum class PipelineType
 {
@@ -2205,6 +2224,9 @@ class IDevice
     // Returns a GpuSyncToken that becomes signaled when all transfers complete
     // on the GPU. Poll via QueryGpuSyncToken() or block via WaitGpuSyncToken().
     // After the token is signaled the textures are in ShaderResource state.
+    // Another queue must wait on this token in its submission, including
+    // when the host has already observed completion. The upload waits on no
+    // other queue: upload only to subresources that no submitted work still reads.
     //
     // Thread safety: may be called from any thread.
     //
@@ -2238,6 +2260,18 @@ class IDevice
     // Frames-in-flight introspection (for frame-safe transient allocation and resource reuse).
     // Defaults are conservative for backends without explicit multi-frame pacing.
     virtual uint32_t GetFramesInFlight() const { return 1u; }
+
+  private:
+    // Declared before kMaxFrameRingDepth: a static constexpr initializer reads only earlier members.
+    static constexpr uint32_t kFrameRingSlotsPastPacing = 2;
+
+  public:
+    // The depth of every per-frame ring: the pacing, one slot for a write in the update phase and
+    // one for a reader of the previous frame (FrameBufferAllocator::BeginFrame states the rule).
+    // All rings rotate at this one depth, so a set that binds several of them repeats every this many frames.
+    static constexpr uint32_t kMaxFrameRingDepth = kMaxSupportedFramesInFlight + kFrameRingSlotsPastPacing;
+    static constexpr uint32_t FrameRingDepth(uint32_t framesInFlight) { return framesInFlight + kFrameRingSlotsPastPacing; }
+    uint32_t GetFrameRingDepth() const { return FrameRingDepth(GetFramesInFlight()); }
     // Current frame slot index in [0, GetFramesInFlight()) when applicable (default 0).
     virtual uint32_t GetFrameIndex() const { return 0u; }
     // Multi-window frame slot index for a specific presentation target.
@@ -2400,6 +2434,14 @@ class IDevice
             UpdateDescriptorSet(descriptorSet, u);
     }
     virtual void DestroyDescriptorSet(DescriptorSetHandle descriptorSet) = 0;
+    // Return a set that holds `writes` in `layout`, for binding in this frame. The device returns
+    // the same set while the layout and every write, in order, stay the same. Do not update or
+    // destroy it. Thread-safe. An AccelerationStructure write is refused (invalid handle).
+    DescriptorSetHandle GetOrCreateDescriptorSet(const DescriptorSetLayoutDesc& layout,
+                                                 std::span<const DescriptorWrite> writes,
+                                                 const char* debugName = nullptr);
+    // Write `writes` into `set` as one batch update. Thread-safe for different sets.
+    void WriteDescriptorSet(DescriptorSetHandle set, std::span<const DescriptorWrite> writes);
 
     // Convenience descriptor helpers
     void UpdateBufferBinding(DescriptorSetHandle set, uint32_t binding, BufferHandle buffer, size_t offset, size_t size)
@@ -3032,6 +3074,16 @@ class IDevice
     // the queued pipeline builds and waits for the running ones, so no build is
     // inside a backend create call while the objects it uses are destroyed.
     void InvokePerDeviceCacheCleanups();
+    // Advance the descriptor-set cache one frame and destroy the sets not used for more than
+    // kFramesKeptAfterLastUse frames. Backends call this in BeginFrame when the slot's previous frame is
+    // done: Metal and WebGPU after the transient-set recycle, Vulkan after the slot fence, D3D12 (no fences) first.
+    void AgeCachedDescriptorSets();
+    // Stop returning the cached sets that bind this resource. Backends call these first in
+    // each Destroy* of a resource that a set can bind.
+    void EvictCachedDescriptorSetsUsing(BufferHandle buffer);
+    void EvictCachedDescriptorSetsUsing(TextureHandle texture);
+    void EvictCachedDescriptorSetsUsing(TextureViewHandle view);
+    void EvictCachedDescriptorSetsUsing(SamplerHandle sampler);
     // Invoke the registered device-rebuilt callbacks (kept, not cleared — a device
     // can be rebuilt more than once). Backends call this at the end of a
     // successful RebuildDevice, AFTER entering AwaitingReprovision so the device is
@@ -3083,6 +3135,8 @@ class IDevice
     std::vector<std::pair<std::string, std::function<void(IDevice*)>>> m_DeviceRebuiltCallbacks;
     mutable std::mutex m_GraphicsPipelineFailureMutex;
     mutable std::string m_LastGraphicsPipelineFailure;
+    // The sets GetOrCreateDescriptorSet built, by content (Source/Core/DescriptorSetCache.h).
+    std::unique_ptr<DescriptorSetCache> m_DescriptorSetCache;
 };
 
 /**

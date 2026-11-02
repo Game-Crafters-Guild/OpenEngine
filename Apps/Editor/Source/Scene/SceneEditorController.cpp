@@ -27,7 +27,6 @@
 #include "UI/UIElement.h"
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <memory>
 #include <system_error>
@@ -78,17 +77,14 @@ std::string NormalizeRecentSceneKey(const std::filesystem::path& path)
 {
     std::string key = NormalizeRecentScenePath(path).string();
 #if defined(_WIN32)
-    std::transform(key.begin(), key.end(), key.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    key = ToLowerAscii(key);
 #endif
     return key;
 }
 
 bool IsSceneFilePath(const std::filesystem::path& path)
 {
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string ext = LowerCaseExtension(path);
     return ext == ".scene";
 }
 
@@ -340,9 +336,7 @@ bool SceneEditorController::HandleAssetOpen(const std::filesystem::path& path)
 {
     if (path.empty())
         return false;
-    std::string ext = path.extension().string();
-    for (auto& ch : ext)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const std::string ext = LowerCaseExtension(path);
     if (ext != ".scene")
         return false;
 

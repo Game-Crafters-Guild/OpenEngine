@@ -318,9 +318,10 @@ private:
 
 uint64 DigestWhenCurrent(ECS::World& world, const Mathematics::AABB& run)
 {
-    Scene::GetSceneTlas(world).WaitCurrent(world);
+    Scene::SceneTlas& tlas = Scene::GetSceneTlas(world);
+    tlas.WaitCurrent(world);
     SplineRecipes::SceneConformDigest digest;
-    SplineRecipes::RefreshSceneConformDigest(world, run, digest);
+    SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest);
     return digest.Value;
 }
 
@@ -352,6 +353,20 @@ TEST(SplineSceneConformDigest, MovesWithAMeshUnderTheRunAndNotWithGeneratedOrFar
     Scene::ReleaseSceneTlas(world);
 }
 
+// A conform ray starts above the run and reaches far below it, so a mesh on the ground under a run
+// authored high above it is in the digest.
+TEST(SplineSceneConformDigest, HoldsAMeshFarBelowTheRun)
+{
+    ECS::World world;
+    Mathematics::AABB run = Mathematics::AABB::Empty();
+    run.Expand(Mathematics::Vector3(0.0f, 50.0f, 0.0f));
+    run.Expand(Mathematics::Vector3(50.0f, 50.0f, 0.0f));
+    const uint64 withoutTheMesh = DigestWhenCurrent(world, run);
+    CreateMesh(world, Mathematics::Vector3(10.0f, 0.0f, 0.0f), false);
+    EXPECT_NE(DigestWhenCurrent(world, run), withoutTheMesh) << "a mesh 50 m under the run is not in the digest";
+    Scene::ReleaseSceneTlas(world);
+}
+
 // A frame with no change to the scene TLAS walks nothing; a move of a mesh walks once.
 TEST(SplineSceneConformDigest, WalksTheSceneOnlyWhenTheSceneTlasChanges)
 {
@@ -361,10 +376,14 @@ TEST(SplineSceneConformDigest, WalksTheSceneOnlyWhenTheSceneTlasChanges)
     run.Expand(Mathematics::Vector3(0.0f, 0.0f, 0.0f));
     run.Expand(Mathematics::Vector3(50.0f, 0.0f, 0.0f));
     const ECS::EntityHandle prop = CreateMesh(world, Mathematics::Vector3(10.0f, 0.0f, 0.0f), false);
+    Scene::SceneTlas& tlas = Scene::GetSceneTlas(world);
     SplineRecipes::SceneConformDigest digest;
     int walks = 0;
     for (int frame = 0; frame < kFrames; ++frame)
-        walks += SplineRecipes::RefreshSceneConformDigest(world, run, digest) ? 1 : 0;
+    {
+        tlas.RequestCurrent(world);
+        walks += SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest) ? 1 : 0;
+    }
     EXPECT_EQ(walks, 1) << "a frame with no change to the scene walked it";
     const uint64 atRest = digest.Value;
 
@@ -373,7 +392,10 @@ TEST(SplineSceneConformDigest, WalksTheSceneOnlyWhenTheSceneTlasChanges)
     ++propTransform->Version;
     walks = 0;
     for (int frame = 0; frame < kFrames; ++frame)
-        walks += SplineRecipes::RefreshSceneConformDigest(world, run, digest) ? 1 : 0;
+    {
+        tlas.RequestCurrent(world);
+        walks += SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest) ? 1 : 0;
+    }
     EXPECT_EQ(walks, 1) << "a mesh move did not walk the scene once";
     EXPECT_NE(digest.Value, atRest) << "the walk after the move did not see it";
     Scene::ReleaseSceneTlas(world);
@@ -393,7 +415,7 @@ TEST(SplineSceneConformDigest, WalksNothingWhileTheSceneTlasIsUpdating)
     Scene::SceneTlas& tlas = Scene::GetSceneTlas(world);
     tlas.WaitCurrent(world);
     SplineRecipes::SceneConformDigest digest;
-    ASSERT_TRUE(SplineRecipes::RefreshSceneConformDigest(world, run, digest));
+    ASSERT_TRUE(SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest));
     const uint64 versionAtRest = digest.TlasVersion;
 
     auto* propTransform = world.GetComponentForWrite<Components::WorldTransform>(prop);
@@ -402,14 +424,16 @@ TEST(SplineSceneConformDigest, WalksNothingWhileTheSceneTlasIsUpdating)
     run.Expand(Mathematics::Vector3(60.0f, 0.0f, 0.0f));
     {
         WorkerBlocker blocker(pool);
-        EXPECT_FALSE(SplineRecipes::RefreshSceneConformDigest(world, run, digest))
+        tlas.RequestCurrent(world);
+        EXPECT_FALSE(SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest))
             << "the digest walked the scene while its TLAS was updating";
         EXPECT_TRUE(tlas.IsWorkInFlightForTesting()) << "the refit did not stay in flight, so the check proves nothing";
         EXPECT_EQ(digest.TlasVersion, versionAtRest);
     }
     while (tlas.IsWorkInFlightForTesting())
         std::this_thread::yield();
-    EXPECT_TRUE(SplineRecipes::RefreshSceneConformDigest(world, run, digest)) << "the walk did not run after the work landed";
+    EXPECT_TRUE(SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest))
+        << "the walk did not run after the work landed";
     EXPECT_NE(digest.TlasVersion, versionAtRest);
     Scene::ReleaseSceneTlas(world);
 }

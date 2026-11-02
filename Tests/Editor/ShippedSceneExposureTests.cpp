@@ -76,10 +76,10 @@ std::filesystem::path StagedScenePath(const char* stagedRelativePath)
 
 bool LoadStagedScene(GameEngine::ECS::World& world, const std::filesystem::path& scenePath)
 {
-    GameEngine::Scene::LoadOptions options{};
-    options.mode = GameEngine::Scene::LoadMode::Replace;
+    GameEngine::Scene::SceneReadOptions options{};
+    options.clearWorldFirst = true;
     options.assetRootOverride = scenePath.parent_path();
-    return GameEngine::Scene::LoadSceneFromFile(world, scenePath, options);
+    return GameEngine::Scene::ReadSceneInto(world, scenePath, options);
 }
 
 KeyLight ResolveKeyLight(GameEngine::ECS::World& world)

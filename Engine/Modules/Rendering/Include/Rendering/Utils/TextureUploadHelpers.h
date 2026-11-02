@@ -7,6 +7,8 @@
 #include <array>
 #include <cstring>
 #include <new>
+#include <optional>
+#include <span>
 #include <vector>
 
 namespace GameEngine
@@ -255,12 +257,196 @@ struct TextureMipUploadEntry
     uint32_t Height;
 };
 
-// Upload a full 2D mip chain (layer 0) in a single submission. The texture must
-// be created with mipLevels >= mipCount and TextureUsage::TransferDst. `format`
-// must match the texture's format: it drives packing (block-compressed levels
-// upload tightly packed; uncompressed levels use Width * BytesPerPixel rows).
-// Initial layout is assumed Undefined; final state is ShaderResource across all
-// uploaded levels.
+// Where one mip level sits in a staging buffer.
+struct TextureMipStagingLevel
+{
+    size_t Offset = 0;        // byte offset of the level in the staging buffer
+    size_t RowPitch = 0;      // staging row pitch in bytes; 0 = tightly packed (block-compressed)
+    size_t TightRowPitch = 0; // Width * bytes per pixel; 0 for block-compressed
+    size_t SizeBytes = 0;     // the level's tight payload size
+    size_t StagedBytes = 0;   // bytes the level occupies in staging (SizeBytes, or RowPitch * Height when padded)
+    uint32_t Width = 0;
+    uint32_t Height = 0;
+
+    // True when rows must be written one by one: the staging pitch is wider than the payload's.
+    bool HasPaddedRows() const { return RowPitch != 0 && RowPitch != TightRowPitch; }
+};
+
+// One staging buffer for a 2D mip chain (layer 0), laid out by the device's copy
+// rules. Empty Levels = the device cannot take the format (see PlanTextureMipStaging).
+struct TextureMipStagingPlan
+{
+    TextureFormat Format = TextureFormat::Unknown;
+    std::vector<TextureMipStagingLevel> Levels;
+    size_t TotalBytes = 0;
+
+    bool IsValid() const { return !Levels.empty() && TotalBytes != 0; }
+};
+
+// A texture whose staging buffer holds every planned level, ready to record.
+struct StagedTextureUpload
+{
+    TextureHandle Texture;
+    BufferHandle Staging;
+    TextureMipStagingPlan Plan;
+};
+
+namespace Detail
+{
+// A mip level's tight payload size and texel dimensions, without its bytes: what
+// PlanTextureMipStaging needs to place the level.
+struct TextureMipExtent
+{
+    size_t SizeBytes;
+    uint32_t Width;
+    uint32_t Height;
+};
+
+// Plan one staging buffer for a 2D mip chain. Each level starts 16-byte aligned (Vulkan's texel-block
+// rule; 512 on D3D12), and uncompressed rows use the device's copy row pitch. The plan is invalid for
+// a format with no per-pixel size and for a block-compressed format on D3D12 (no DXGI mapping yet).
+inline TextureMipStagingPlan PlanTextureMipStaging(const IDevice& device,
+                                                   TextureFormat format,
+                                                   std::span<const TextureMipExtent> levels)
+{
+    TextureMipStagingPlan plan;
+    plan.Format = format;
+    const bool isBlock = IsBlockCompressedFormat(format);
+    const uint32_t bpp = BytesPerPixel(format);
+    const bool isD3D12 = device.GetAPI() == GraphicsAPI::DirectX12;
+    if (levels.empty() || (isBlock && isD3D12) || (!isBlock && bpp == 0))
+        return plan;
+
+    const size_t rowPitchAlignment = isD3D12
+                                         ? kD3D12TextureDataPitchAlignment
+                                         : std::max<size_t>(1, device.GetCapabilities().textureCopyRowPitchAlignment);
+    constexpr size_t kVulkanMipOffsetAlignment = 16;
+    constexpr size_t kD3D12TextureDataPlacementAlignment = 512;
+    const size_t mipOffsetAlignment = isD3D12 ? kD3D12TextureDataPlacementAlignment : kVulkanMipOffsetAlignment;
+
+    plan.Levels.resize(levels.size());
+    for (size_t m = 0; m < levels.size(); ++m)
+    {
+        TextureMipStagingLevel& level = plan.Levels[m];
+        level.Width = levels[m].Width;
+        level.Height = levels[m].Height;
+        level.SizeBytes = levels[m].SizeBytes;
+        level.StagedBytes = levels[m].SizeBytes;
+        if (!isBlock)
+        {
+            level.TightRowPitch = static_cast<size_t>(level.Width) * bpp;
+            level.RowPitch = AlignUp(level.TightRowPitch, rowPitchAlignment);
+            if (level.HasPaddedRows())
+                level.StagedBytes = level.RowPitch * level.Height;
+        }
+        level.Offset = plan.TotalBytes;
+        plan.TotalBytes += AlignUp(level.StagedBytes, mipOffsetAlignment);
+    }
+    return plan;
+}
+
+// Copy one tightly packed level into its planned place in `staging`, padding its
+// rows when the plan does.
+inline void WriteTextureMipLevel(IDevice& device,
+                                 BufferHandle staging,
+                                 const TextureMipStagingPlan& plan,
+                                 uint32_t level,
+                                 const void* pixels)
+{
+    const TextureMipStagingLevel& placed = plan.Levels[level];
+    if (!placed.HasPaddedRows())
+    {
+        device.UpdateBuffer(staging, placed.Offset, placed.SizeBytes, pixels);
+        return;
+    }
+    std::vector<unsigned char> padded(placed.StagedBytes, 0);
+    const auto* tight = static_cast<const unsigned char*>(pixels);
+    for (uint32_t y = 0; y < placed.Height; ++y)
+        std::memcpy(padded.data() + static_cast<size_t>(y) * placed.RowPitch,
+                    tight + static_cast<size_t>(y) * placed.TightRowPitch, placed.TightRowPitch);
+    device.UpdateBuffer(staging, placed.Offset, padded.size(), padded.data());
+}
+
+// Record every upload's copies into one command list: one barrier batch moves every texture's
+// levels from Undefined to CopyDest, the copies follow, and a second batch moves them all to
+// ShaderResource. SubmitStagedTextureUploads records, submits and releases.
+inline void RecordStagedTextureUploads(CommandList& commandList, std::span<const StagedTextureUpload> uploads)
+{
+    std::vector<ResourceBarrier> toCopyDest;
+    std::vector<ResourceBarrier> toShaderResource;
+    toCopyDest.reserve(uploads.size());
+    toShaderResource.reserve(uploads.size());
+    for (const StagedTextureUpload& upload : uploads)
+    {
+        const auto mipCount = static_cast<uint32_t>(upload.Plan.Levels.size());
+        toCopyDest.push_back(ResourceBarrier::CreateTextureBarrier(
+            upload.Texture, ResourceState::Undefined, ResourceState::CopyDest, 0, mipCount));
+        toShaderResource.push_back(ResourceBarrier::CreateTextureBarrier(
+            upload.Texture, ResourceState::CopyDest, ResourceState::ShaderResource, 0, mipCount));
+    }
+
+    commandList.BarrierBatch(toCopyDest);
+    for (const StagedTextureUpload& upload : uploads)
+    {
+        for (uint32_t m = 0; m < upload.Plan.Levels.size(); ++m)
+        {
+            const TextureMipStagingLevel& level = upload.Plan.Levels[m];
+            commandList.CopyBufferToTextureSubresource(upload.Staging, upload.Texture, m, 0,
+                                                       level.Width, level.Height,
+                                                       level.Offset, level.RowPitch,
+                                                       1, 0, 0, 0, ResourceState::CopyDest);
+        }
+    }
+    commandList.BarrierBatch(toShaderResource);
+}
+} // namespace Detail
+
+// Plan one staging buffer for a 2D mip chain and write every level into it. The
+// caller sets Texture to the texture the copies go to. Nullopt, with nothing left
+// on the device, when the plan is invalid or the device refuses the buffer.
+inline std::optional<StagedTextureUpload> StageTextureMips(IDevice& device,
+                                                           TextureFormat format,
+                                                           std::span<const TextureMipUploadEntry> mips,
+                                                           const char* stagingDebugName)
+{
+    std::vector<Detail::TextureMipExtent> extents(mips.size());
+    for (size_t m = 0; m < mips.size(); ++m)
+        extents[m] = {mips[m].SizeBytes, mips[m].Width, mips[m].Height};
+    StagedTextureUpload upload{{}, {}, Detail::PlanTextureMipStaging(device, format, extents)};
+    if (!upload.Plan.IsValid())
+        return std::nullopt;
+
+    upload.Staging = device.CreateUploadBuffer(upload.Plan.TotalBytes, stagingDebugName);
+    if (!upload.Staging.IsValid())
+        return std::nullopt;
+    for (uint32_t m = 0; m < mips.size(); ++m)
+        Detail::WriteTextureMipLevel(device, upload.Staging, upload.Plan, m, mips[m].Pixels);
+    return upload;
+}
+
+// Copy every upload with one command list and one submit. False when the device gives no command
+// list: the textures stay unwritten. The staging buffers are destroyed in both cases (the backend
+// defers that until the GPU is done, see the contract at the top of this header).
+inline bool SubmitStagedTextureUploads(IDevice& device, std::span<const StagedTextureUpload> uploads)
+{
+    if (uploads.empty())
+        return true;
+    const std::unique_ptr<CommandList> commandList = device.CreateCommandList(IDevice::QueueType::Graphics);
+    if (commandList)
+    {
+        commandList->Begin();
+        Detail::RecordStagedTextureUploads(*commandList, uploads);
+        commandList->End();
+        device.ExecuteCommandLists({commandList.get()});
+    }
+    for (const StagedTextureUpload& upload : uploads)
+        device.DestroyBuffer(upload.Staging);
+    return commandList != nullptr;
+}
+
+// Upload a 2D mip chain (layer 0) with one submit. The texture needs mipLevels >= mipCount,
+// TransferDst usage and `format` as its format; it goes from Undefined to ShaderResource.
+// To upload several textures with one submit, use StageTextureMips and SubmitStagedTextureUploads.
 inline void UploadTextureMips(IDevice* device,
                               TextureHandle tex,
                               const TextureMipUploadEntry* mips,
@@ -270,96 +456,11 @@ inline void UploadTextureMips(IDevice* device,
 {
     if (!device || !mips || mipCount == 0)
         return;
-
-    const bool isBlock = IsBlockCompressedFormat(format);
-    const uint32_t bpp = BytesPerPixel(format);
-    const bool isD3D12 = device->GetAPI() == GraphicsAPI::DirectX12;
-    const size_t mipRowPitchAlignment = isD3D12
-                                            ? Detail::kD3D12TextureDataPitchAlignment
-                                            : std::max<size_t>(1, device->GetCapabilities().textureCopyRowPitchAlignment);
-    if (isBlock && isD3D12)
-    {
-        // No DXGI mapping exists for the BC TextureFormats yet, so a BC texture
-        // handle cannot have been created on this backend.
+    std::optional<StagedTextureUpload> upload = StageTextureMips(*device, format, {mips, mipCount}, stagingDebugName);
+    if (!upload)
         return;
-    }
-    if (!isBlock && bpp == 0)
-        return;
-
-    // Staging layout: one buffer, each level 16-byte aligned so Vulkan's
-    // bufferOffset % texel-block-size rule holds for every supported format
-    // (BC1 = 8, BC5/7 = 16, uncompressed <= 16). D3D12 additionally requires
-    // D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT (512) for each subresource start,
-    // and uncompressed rows are repacked to the 256-byte pitch alignment.
-    constexpr size_t kVulkanMipOffsetAlignment = 16;
-    constexpr size_t kD3D12TextureDataPlacementAlignment = 512;
-    const size_t mipOffsetAlignment =
-        isD3D12 ? kD3D12TextureDataPlacementAlignment : kVulkanMipOffsetAlignment;
-    std::vector<size_t> offsets(mipCount);
-    std::vector<size_t> rowPitches(mipCount);
-    size_t totalBytes = 0;
-    for (uint32_t m = 0; m < mipCount; ++m)
-    {
-        size_t rowPitch = 0;
-        size_t levelBytes = mips[m].SizeBytes;
-        if (!isBlock)
-        {
-            rowPitch = static_cast<size_t>(mips[m].Width) * bpp;
-            if (mipRowPitchAlignment > 1)
-            {
-                rowPitch = Detail::AlignUp(rowPitch, mipRowPitchAlignment);
-                levelBytes = rowPitch * mips[m].Height;
-            }
-        }
-        offsets[m] = totalBytes;
-        rowPitches[m] = rowPitch; // 0 for block-compressed = tightly packed
-        totalBytes += Detail::AlignUp(levelBytes, mipOffsetAlignment);
-    }
-
-    BufferHandle staging = device->CreateUploadBuffer(totalBytes, stagingDebugName);
-    if (!staging.IsValid())
-        return;
-
-    std::vector<unsigned char> padded;
-    for (uint32_t m = 0; m < mipCount; ++m)
-    {
-        const void* src = mips[m].Pixels;
-        size_t writeBytes = mips[m].SizeBytes;
-        const size_t tightRowPitch = static_cast<size_t>(mips[m].Width) * bpp;
-        if (!isBlock && rowPitches[m] != 0 && rowPitches[m] != tightRowPitch)
-        {
-            padded.assign(rowPitches[m] * mips[m].Height, 0);
-            const auto* tight = static_cast<const unsigned char*>(mips[m].Pixels);
-            for (uint32_t y = 0; y < mips[m].Height; ++y)
-                std::memcpy(padded.data() + static_cast<size_t>(y) * rowPitches[m],
-                            tight + static_cast<size_t>(y) * tightRowPitch, tightRowPitch);
-            src = padded.data();
-            writeBytes = padded.size();
-        }
-        device->UpdateBuffer(staging, offsets[m], writeBytes, src);
-    }
-
-    auto cl = device->CreateCommandList(IDevice::QueueType::Graphics);
-    cl->Begin();
-    cl->Barrier(ResourceBarrier::CreateTextureBarrier(
-        tex, ResourceState::Undefined, ResourceState::CopyDest, 0, mipCount));
-    for (uint32_t m = 0; m < mipCount; ++m)
-    {
-        cl->CopyBufferToTextureSubresource(staging, tex, m, 0,
-                                           mips[m].Width, mips[m].Height,
-                                           offsets[m], rowPitches[m],
-                                           1, 0, 0, 0, ResourceState::CopyDest);
-    }
-    cl->Barrier(ResourceBarrier::CreateTextureBarrier(
-        tex, ResourceState::CopyDest, ResourceState::ShaderResource, 0, mipCount));
-    cl->End();
-
-    CommandList* raw = cl.get();
-    device->ExecuteCommandLists({raw});
-
-    // Safe: the backend defers deallocation until GPU work completes (see the
-    // contract at the top of this header).
-    device->DestroyBuffer(staging);
+    upload->Texture = tex;
+    SubmitStagedTextureUploads(*device, {&*upload, 1});
 }
 
 // Upload tightly or explicitly pitched voxel data to a single existing 3D texture.

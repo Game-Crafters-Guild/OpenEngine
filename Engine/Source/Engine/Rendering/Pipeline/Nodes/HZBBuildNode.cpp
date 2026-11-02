@@ -236,15 +236,12 @@ void HZBBuildNode::DeclareChainBuild(ViewDeclare& d, RenderGraph::RGTexture dept
             if (!dstView.IsValid())
                 return;
 
-            DescriptorSetDesc dsDesc{};
-            dsDesc.layout = m_Set0Layout;
-            dsDesc.transient = true;
-            dsDesc.debugName = "HZBBuild.Mip0.Set0";
-            DescriptorSetHandle ds = dev->CreateDescriptorSet(dsDesc);
+            const DescriptorWrite writes[] = {
+                {.Binding = m_SrcBinding, .Type = DescriptorType::StorageImage, .Texture = depthTex},
+                {.Binding = m_DstBinding, .Type = DescriptorType::StorageImage, .View = dstView}};
+            const DescriptorSetHandle ds = dev->GetOrCreateDescriptorSet(m_Set0Layout, writes, "HZBBuild.Mip0.Set0");
             if (!ds.IsValid())
                 return;
-            dev->UpdateStorageImageBinding(ds, m_SrcBinding, depthTex);
-            dev->UpdateStorageImageBinding(ds, m_DstBinding, dstView);
 
             PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_PipelineId);
             if (!pipe.IsValid())
@@ -288,15 +285,13 @@ void HZBBuildNode::DeclareChainBuild(ViewDeclare& d, RenderGraph::RGTexture dept
                 if (!srcView.IsValid() || !dstView.IsValid())
                     return;
 
-                DescriptorSetDesc dsDesc{};
-                dsDesc.layout = m_Set0Layout;
-                dsDesc.transient = true;
-                dsDesc.debugName = "HZBBuild.Reduce.Set0";
-                DescriptorSetHandle ds = dev->CreateDescriptorSet(dsDesc);
+                const DescriptorWrite writes[] = {
+                    {.Binding = m_SrcBinding, .Type = DescriptorType::StorageImage, .View = srcView},
+                    {.Binding = m_DstBinding, .Type = DescriptorType::StorageImage, .View = dstView}};
+                const DescriptorSetHandle ds =
+                    dev->GetOrCreateDescriptorSet(m_Set0Layout, writes, "HZBBuild.Reduce.Set0");
                 if (!ds.IsValid())
                     return;
-                dev->UpdateStorageImageBinding(ds, m_SrcBinding, srcView);
-                dev->UpdateStorageImageBinding(ds, m_DstBinding, dstView);
 
                 PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_PipelineId);
                 if (!pipe.IsValid())
@@ -338,23 +333,22 @@ void HZBBuildNode::DeclareSpdBuild(ViewDeclare& d, RenderGraph::RGTexture depth,
             if (!depthTex.IsValid() || !mip0View.IsValid())
                 return;
 
-            DescriptorSetDesc dsDesc{};
-            dsDesc.layout = m_SpdSet0Layout;
-            dsDesc.transient = true;
-            dsDesc.debugName = "HZBBuild.SPD.Set0";
-            DescriptorSetHandle ds = dev->CreateDescriptorSet(dsDesc);
-            if (!ds.IsValid())
-                return;
-            dev->UpdateStorageImageBinding(ds, m_SpdDepthBinding, depthTex);
-            dev->UpdateStorageImageBinding(ds, m_SpdMip0Binding, mip0View);
+            DescriptorWrite writes[2u + kSpdTileMipArrayCount] = {
+                {.Binding = m_SpdDepthBinding, .Type = DescriptorType::StorageImage, .Texture = depthTex},
+                {.Binding = m_SpdMip0Binding, .Type = DescriptorType::StorageImage, .View = mip0View}};
             for (uint32_t i = 0; i < kSpdTileMipArrayCount; ++i)
             {
                 // Slots past the real chain re-bind the deepest mip: a valid
                 // descriptor the shader never addresses (mipCount clamps).
                 const uint32_t mip = std::min(i + 1u, levels - 1u);
-                dev->UpdateStorageImageBinding(ds, m_SpdMipsBinding,
-                                               ctx.GetOrCreatePooledMipView(hzb, mip), i);
+                writes[2u + i] = {.Binding = m_SpdMipsBinding,
+                                  .ArrayElement = i,
+                                  .Type = DescriptorType::StorageImage,
+                                  .View = ctx.GetOrCreatePooledMipView(hzb, mip)};
             }
+            const DescriptorSetHandle ds = dev->GetOrCreateDescriptorSet(m_SpdSet0Layout, writes, "HZBBuild.SPD.Set0");
+            if (!ds.IsValid())
+                return;
 
             PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_SpdPipelineId);
             if (!pipe.IsValid())
@@ -409,19 +403,19 @@ void HZBBuildNode::DeclareSpdBuild(ViewDeclare& d, RenderGraph::RGTexture depth,
             if (!ctx.GetOrCreatePooledMipView(hzb, 1u).IsValid())
                 return;
 
-            DescriptorSetDesc dsDesc{};
-            dsDesc.layout = m_SpdFinalizeSet0Layout;
-            dsDesc.transient = true;
-            dsDesc.debugName = "HZBBuild.SPDFinalize.Set0";
-            DescriptorSetHandle ds = dev->CreateDescriptorSet(dsDesc);
-            if (!ds.IsValid())
-                return;
+            DescriptorWrite writes[kSpdFinalizeMipArrayCount];
             for (uint32_t i = 0; i < kSpdFinalizeMipArrayCount; ++i)
             {
                 const uint32_t mip = std::min(i + 1u, levels - 1u);
-                dev->UpdateStorageImageBinding(ds, m_SpdFinalizeMipsBinding,
-                                               ctx.GetOrCreatePooledMipView(hzb, mip), i);
+                writes[i] = {.Binding = m_SpdFinalizeMipsBinding,
+                             .ArrayElement = i,
+                             .Type = DescriptorType::StorageImage,
+                             .View = ctx.GetOrCreatePooledMipView(hzb, mip)};
             }
+            const DescriptorSetHandle ds =
+                dev->GetOrCreateDescriptorSet(m_SpdFinalizeSet0Layout, writes, "HZBBuild.SPDFinalize.Set0");
+            if (!ds.IsValid())
+                return;
 
             PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_SpdFinalizePipelineId);
             if (!pipe.IsValid())
@@ -533,7 +527,7 @@ void HZBBuildNode::LoadShaders(IDevice* device)
     auto resolveBinding = [&](const char* name, uint32_t fallback) -> uint32_t {
         uint32_t binding = fallback;
         DescriptorType reflectedType{};
-        if (!Detail::TryGetSet0BindingByName(pkg.meta, name, binding, reflectedType))
+        if (!Rendering::TryGetSet0BindingByName(pkg.meta, name, binding, reflectedType))
         {
             LOG_WARNING("HZBBuildNode: failed to resolve set0 binding '{}' from reflection; "
                         "falling back to literal {}",
@@ -613,7 +607,7 @@ void HZBBuildNode::LoadSpdShader(IDevice* device)
                                    uint32_t fallback) -> uint32_t {
         uint32_t binding = fallback;
         DescriptorType reflectedType{};
-        if (!Detail::TryGetSet0BindingByName(pkg.meta, name, binding, reflectedType))
+        if (!Rendering::TryGetSet0BindingByName(pkg.meta, name, binding, reflectedType))
         {
             LOG_WARNING("HZBBuildNode: failed to resolve set0 binding '{}' from SPD "
                         "reflection; falling back to literal {}",

@@ -1,5 +1,6 @@
 #include "Engine/Build/LinuxRuntimeTemplate.h"
 
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 #include <array>
@@ -70,7 +71,7 @@ bool IsRuntimeTemplateGamePayload(const std::filesystem::path& entry)
 
 bool IsRuntimeTemplateDebugSymbol(const std::filesystem::path& entry)
 {
-    const auto extension = ToLowerAscii(entry.extension().string());
+    const auto extension = LowerCaseExtension(entry);
     return ToLowerAscii(entry.filename().string()) == ".debug" || extension == ".pdb" ||
            extension == ".debug" || extension == ".dwp" || extension == ".dsym";
 }

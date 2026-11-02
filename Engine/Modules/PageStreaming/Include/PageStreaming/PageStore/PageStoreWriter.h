@@ -9,6 +9,11 @@
 #include <string>
 #include <vector>
 
+namespace GameEngine
+{
+class ByteBuffer;
+}
+
 namespace GameEngine::PageStreaming
 {
 
@@ -53,8 +58,9 @@ public:
     bool WritePage(const PageAddress& address, const EncodedPage& page);
 
     /// Reads back the stored bytes and the entry of a present page already written (or kept by a
-    /// patch). False when the page is absent, not written yet (`outEntry.Offset` 0) or the read fails.
-    bool ReadPage(const PageAddress& address, std::vector<uint8>& outBytes, PageIndexEntry& outEntry) const;
+    /// patch). False, with `outBytes` empty, when the page is absent, not written yet
+    /// (`outEntry.Offset` 0) or the read fails.
+    bool ReadPage(const PageAddress& address, ByteBuffer& outBytes, PageIndexEntry& outEntry) const;
 
     /// Writes the header and index and publishes the store at its target. Returns an empty
     /// string, else the reason (the temporary file is removed).

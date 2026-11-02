@@ -51,11 +51,8 @@ class FrameBufferAllocator
 {
   public:
     // Deepest ring any caller can ask for. A RING DEPTH, not the device's pacing:
-    // the two differ by the caller's write phase and by how many frames read a slot
-    // (see BeginFrame). The deepest the rule can demand is the deepest pacing, plus
-    // one for an update-phase write, plus one for a reader that outlives the writing
-    // frame.
-    static constexpr uint32_t kMaxRingSlots = IDevice::kMaxSupportedFramesInFlight + 2;
+    // the deepest pacing plus the margins of BeginFrame's rule (IDevice::FrameRingDepth).
+    static constexpr uint32_t kMaxRingSlots = IDevice::kMaxFrameRingDepth;
 
     struct Allocation
     {

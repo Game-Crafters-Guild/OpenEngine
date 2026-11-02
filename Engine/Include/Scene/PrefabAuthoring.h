@@ -10,11 +10,17 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace GameEngine
+{
+class EventSubscription;
+}
 
 namespace GameEngine::Components
 {
@@ -124,9 +130,19 @@ void GiveCopySceneIdentities(ECS::World& world, std::span<const ECS::EntityHandl
 void RestorePrefabIdentities(ECS::World& world, std::span<const PrefabIdentityBefore> before);
 
 /// Rebuilds, as a new generation, every resident template built from the file of `prefab`, after a
-/// write the file watcher has not reported yet. A template that does not build is logged and keeps its
-/// previous generation. Main thread only.
+/// write the file watcher has not reported yet, and gives the instances of every world that holds it the
+/// new generation. A template that does not build is logged and keeps its previous generation. Main
+/// thread only.
 void RebuildPrefab(const GUID& prefab);
+
+/// While `deferred` is true, a prefab file change does not change the instances in `world`, also after
+/// `world` is cleared. Setting it back to false gives them every change made in the meantime. The editor
+/// defers its scene during Play. Main thread only.
+void SetPrefabPropagationDeferred(ECS::World& world, bool deferred);
+
+/// Calls `onChanged` on the main thread after a prefab file change changed the instances in a world:
+/// their fields, components or entities. The call stops when the returned subscription is destroyed.
+[[nodiscard]] EventSubscription SubscribePrefabInstancesChanged(std::function<void(ECS::World&)> onChanged);
 
 /// Gives the prefab entity `entity` the prefab's value for `prefabOverride`: the field's value, the component
 /// removed when the instance added it, or the component with the prefab's values when the instance
@@ -156,17 +172,16 @@ struct PrefabOverrideTarget
 };
 
 /// Writes each of `targets` into the innermost prefab file that authors its entity, with one write per file, then
-/// rebuilds the written files once and updates the instances in `world` as WritePrefabFileText does. `outEdits` holds
+/// rebuilds the written files once and updates the instances in every open world as WritePrefabFileText does. `outEdits` holds
 /// the text before and after of each written file. False, with the cause in `outError`, when the prefab does not have
 /// a target (then no file is written) or a write fails. Main thread only.
 bool ApplyPrefabOverrides(ECS::World& world, std::span<const PrefabOverrideTarget> targets,
                           std::vector<PrefabFileEdit>& outEdits, std::string& outError);
 
 /// Writes `text` to the prefab file `file`, rebuilds every resident prefab that reads it, and gives each
-/// instance of those prefabs in `world` the new prefab values of every field and component it does not
-/// override. False, with the cause in `outError`, when the file cannot be written. Main thread only.
-bool WritePrefabFileText(ECS::World& world, const std::filesystem::path& file, const std::string& text,
-                         std::string& outError);
+/// instance of those prefabs in every open world the new prefab values of every field, component and entity
+/// it does not override. False, with the cause in `outError`, when the file cannot be written. Main thread only.
+bool WritePrefabFileText(const std::filesystem::path& file, const std::string& text, std::string& outError);
 
 /// An entity field under a prefab's root that names an entity outside the prefab.
 struct OutgoingReference

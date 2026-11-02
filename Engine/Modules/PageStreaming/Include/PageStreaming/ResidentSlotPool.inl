@@ -5,8 +5,8 @@
 namespace GameEngine::PageStreaming
 {
 
-template <typename Key, typename KeyHash>
-void ResidentSlotPool<Key, KeyHash>::Initialize(uint32 slotCount, uint32 framesInFlight)
+template <typename Key>
+void ResidentSlotPool<Key>::Initialize(uint32 slotCount, uint32 framesInFlight)
 {
     m_Slots.assign(slotCount, Slot{});
     m_FreeList.clear();
@@ -14,7 +14,8 @@ void ResidentSlotPool<Key, KeyHash>::Initialize(uint32 slotCount, uint32 framesI
     // Hand out low indices first (deterministic packing for the seam oracles).
     for (uint32 i = slotCount; i > 0; --i)
         m_FreeList.push_back(i - 1);
-    m_KeyToSlot.clear();
+    m_KeyToSlot.Clear();
+    m_KeyToSlot.Reserve(slotCount);
     m_FramesInFlight = framesInFlight;
     m_CurrentFrame = 0;
     m_ResidentCount = 0;
@@ -23,8 +24,8 @@ void ResidentSlotPool<Key, KeyHash>::Initialize(uint32 slotCount, uint32 framesI
     m_EvictionsThisFrame = 0;
 }
 
-template <typename Key, typename KeyHash>
-void ResidentSlotPool<Key, KeyHash>::Reset()
+template <typename Key>
+void ResidentSlotPool<Key>::Reset()
 {
     m_FreeList.clear();
     m_FreeList.reserve(m_Slots.size());
@@ -39,15 +40,15 @@ void ResidentSlotPool<Key, KeyHash>::Reset()
         s.QuarantineUntilFrame = 0;
         m_FreeList.push_back(i - 1);
     }
-    m_KeyToSlot.clear();
+    m_KeyToSlot.Clear();
     m_ResidentCount = 0;
     m_QuarantinedCount = 0;
     m_AssignsThisFrame = 0;
     m_EvictionsThisFrame = 0;
 }
 
-template <typename Key, typename KeyHash>
-void ResidentSlotPool<Key, KeyHash>::BeginFrame(uint64 frameIndex)
+template <typename Key>
+void ResidentSlotPool<Key>::BeginFrame(uint64 frameIndex)
 {
     m_CurrentFrame = frameIndex;
     m_AssignsThisFrame = 0;
@@ -65,30 +66,29 @@ void ResidentSlotPool<Key, KeyHash>::BeginFrame(uint64 frameIndex)
     }
 }
 
-template <typename Key, typename KeyHash>
-ResidentSlotRef ResidentSlotPool<Key, KeyHash>::Find(const Key& key) const
+template <typename Key>
+ResidentSlotRef ResidentSlotPool<Key>::Find(const Key& key) const
 {
-    auto it = m_KeyToSlot.find(key);
-    if (it == m_KeyToSlot.end())
+    const uint32* slot = m_KeyToSlot.Find(key);
+    if (!slot)
         return {};
-    const Slot& s = m_Slots[it->second];
-    return ResidentSlotRef{it->second, s.Generation};
+    return ResidentSlotRef{*slot, m_Slots[*slot].Generation};
 }
 
-template <typename Key, typename KeyHash>
-uint32 ResidentSlotPool<Key, KeyHash>::SlotOf(const Key& key) const
+template <typename Key>
+uint32 ResidentSlotPool<Key>::SlotOf(const Key& key) const
 {
-    auto it = m_KeyToSlot.find(key);
-    return it == m_KeyToSlot.end() ? kNoResidentSlot : it->second;
+    const uint32* slot = m_KeyToSlot.Find(key);
+    return slot ? *slot : kNoResidentSlot;
 }
 
-template <typename Key, typename KeyHash>
-void ResidentSlotPool<Key, KeyHash>::QuarantineSlot(uint32 slotIndex)
+template <typename Key>
+void ResidentSlotPool<Key>::QuarantineSlot(uint32 slotIndex)
 {
     Slot& s = m_Slots[slotIndex];
     if (s.State != SlotState::Live)
         return;
-    m_KeyToSlot.erase(s.Owner);
+    m_KeyToSlot.Erase(s.Owner);
     ++s.Generation;
     --m_ResidentCount;
     if (m_FramesInFlight == 0)
@@ -106,26 +106,26 @@ void ResidentSlotPool<Key, KeyHash>::QuarantineSlot(uint32 slotIndex)
     }
 }
 
-template <typename Key, typename KeyHash>
-void ResidentSlotPool<Key, KeyHash>::Touch(const Key& key, float32 priorityDistanceSq)
+template <typename Key>
+void ResidentSlotPool<Key>::Touch(const Key& key, float32 priorityDistanceSq)
 {
-    auto it = m_KeyToSlot.find(key);
-    if (it == m_KeyToSlot.end())
+    const uint32* slot = m_KeyToSlot.Find(key);
+    if (!slot)
         return;
-    Slot& s = m_Slots[it->second];
+    Slot& s = m_Slots[*slot];
     s.LastTouchFrame = m_CurrentFrame;
     s.LastPriorityDistanceSq = priorityDistanceSq;
 }
 
-template <typename Key, typename KeyHash>
-ResidentSlotRef ResidentSlotPool<Key, KeyHash>::Acquire(const Key& key, float32 priorityDistanceSq)
+template <typename Key>
+ResidentSlotRef ResidentSlotPool<Key>::Acquire(const Key& key, float32 priorityDistanceSq)
 {
-    if (auto it = m_KeyToSlot.find(key); it != m_KeyToSlot.end())
+    if (const uint32* slot = m_KeyToSlot.Find(key))
     {
-        Slot& s = m_Slots[it->second];
+        Slot& s = m_Slots[*slot];
         s.LastTouchFrame = m_CurrentFrame;
         s.LastPriorityDistanceSq = priorityDistanceSq;
-        return ResidentSlotRef{it->second, s.Generation};
+        return ResidentSlotRef{*slot, s.Generation};
     }
 
     // Assign a free slot if one is available.
@@ -138,7 +138,7 @@ ResidentSlotRef ResidentSlotPool<Key, KeyHash>::Acquire(const Key& key, float32 
         s.State = SlotState::Live;
         s.LastTouchFrame = m_CurrentFrame;
         s.LastPriorityDistanceSq = priorityDistanceSq;
-        m_KeyToSlot[key] = slotIndex;
+        m_KeyToSlot.InsertOrAssign(key, slotIndex);
         ++m_ResidentCount;
         ++m_AssignsThisFrame;
         return ResidentSlotRef{slotIndex, s.Generation};
@@ -170,13 +170,13 @@ ResidentSlotRef ResidentSlotPool<Key, KeyHash>::Acquire(const Key& key, float32 
     return {}; // not resident this frame
 }
 
-template <typename Key, typename KeyHash>
-bool ResidentSlotPool<Key, KeyHash>::Release(const Key& key, uint32 generation)
+template <typename Key>
+bool ResidentSlotPool<Key>::Release(const Key& key, uint32 generation)
 {
-    auto it = m_KeyToSlot.find(key);
-    if (it == m_KeyToSlot.end())
+    const uint32* slot = m_KeyToSlot.Find(key);
+    if (!slot)
         return false;
-    const uint32 slotIndex = it->second;
+    const uint32 slotIndex = *slot;
     if (m_Slots[slotIndex].Generation != generation)
         return false; // stale handle — refuse (the current owner keeps its slot)
     QuarantineSlot(slotIndex);

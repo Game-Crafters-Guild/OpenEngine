@@ -145,13 +145,11 @@ void RequestPlanetHeightPages(TerrainService& service, const Rendering::IDevice&
     }
     if (const TerrainService::PlanetPageOverlay* overlay = service.FindPlanetPageOverlay(planet))
     {
-        request.Overlay = overlay->Overlay;
+        request.Overlay = overlay->Layer;
         request.OverlayVersion = overlay->Version;
-        // ChangedSince stays 0: a new overlay is never derived from the held one, so RefreshOverlay
-        // rewrites every page either overlay reaches; for the first overlay that is its own rect.
-        request.OverlayChangedSince = 0;
-        if (overlay->Overlay)
-            request.OverlayChanged = overlay->Overlay->Level0Rect();
+        request.OverlayChangedFace = overlay->ChangedFace;
+        request.OverlayChanged = overlay->Changed;
+        request.OverlayChangedSince = overlay->ChangedSince;
     }
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 2.0f * std::atan(1.0f / focalScale),
                                                  terrain.TargetPixelError);

@@ -872,14 +872,21 @@ private:
     };
 
     // Brings the tiled terrain's height page overlay (TiledTerrainData::PageOverlay) up to
-    // `modifiers` after a bake: the composed height minus the base over the lattice rect the
-    // height modifiers reach, recomputed only over `heightDirty` when the rect still holds it
+    // `modifiers` after a bake: the composed height minus the base under each height modifier's
+    // lattice bounds, written into the layer it holds over `heightDirty` only after an edit
     // (TerrainModifierPageOverlay.cpp). Builds nothing for a terrain with no overlay cap (one that
-    // keeps its height texture) and refuses an overlay over the cap (TiledTerrainData::PageOverlayByteCap).
+    // keeps its height texture) and refuses an overlay whose pages pass the cap (TiledTerrainData::PageOverlayByteCap).
     // `readBakedTiles`: the tiles' CPU heights are current, so the overlay reads them, not composes.
     void BakeHeightPageOverlay(TiledTerrainData& tiled, float32 heightScale, float32 terrainOriginY,
                                const std::vector<ResolvedModifier>& modifiers, bool fullBake,
                                const DirtyUnion& heightDirty, bool readBakedTiles);
+    // The height from `source` minus the composed base over band [x0, x1] x [z0, z1] of lattice rect `write`,
+    // into `deltas` (row-major over `write`). Returns the samples `source` composed; leaves `deltas`
+    // unchanged when the block does not build.
+    static uint64 ComposeLatticeDeltaBand(const TiledTerrainData& tiled, float32 heightScale, float32 terrainOriginY,
+                                          const std::vector<ResolvedModifier>& modifiers,
+                                          const PageStreaming::PageSampleRect& write, int32 x0, int32 x1, int32 z0,
+                                          int32 z1, LatticeBlockSource source, std::span<float32> deltas);
 
     // Publishes the level-0 rect a bake of `tiled` changed on its surface (TiledTerrainData::
     // SurfaceChanged): every sample on a full bake, else the samples the height and splat dirt reach.

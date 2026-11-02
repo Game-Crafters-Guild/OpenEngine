@@ -119,7 +119,7 @@ class ImageBasedLightingFeature final : public IRenderFeature
     // (iblIntensity, the prefilter mip cap, the ambient floor, the source's tint and
     // local box projection) and return the buffer to bind. Those scalars are dynamic —
     // the SkyEnvironment slider and the AmbientLight component drive them — so the UBO
-    // is a kCaptureFrameSlots-deep ring and the GPU never reads the element the CPU is
+    // is an IDevice::GetFrameRingDepth()-deep ring and the GPU never reads the element the CPU is
     // overwriting; the ordering that rests on is stated at the selection site.
     //
     // The element is not nameable from outside: every consumer binds the handle this
@@ -167,17 +167,6 @@ class ImageBasedLightingFeature final : public IRenderFeature
     }
 
     static constexpr uint32_t kNumCaptureFaces = 6;
-    // EnvData ring depth. Sized to IDevice::kMaxSupportedFramesInFlight, the
-    // backend-independent upper bound on frames in flight, so the ring is valid for the
-    // deepest-pacing backend. On a backend that paces fewer frames than that (Vulkan: 3)
-    // the surplus element is the write-after-fence margin stated in UploadEnvData.
-    static constexpr uint32_t kCaptureFrameSlots =
-        GameEngine::Rendering::IDevice::kMaxSupportedFramesInFlight;
-    // A power-of-two ring divides 2^32 evenly, so the frame counter's own wrap keeps the
-    // rotation seamless rather than replaying an element early.
-    static_assert((kCaptureFrameSlots & (kCaptureFrameSlots - 1u)) == 0u,
-                  "kCaptureFrameSlots must be a power of two for the EnvData ring to "
-                  "survive the frame counter's 2^32 wrap");
     // Digest of the source inputs the irradiance/prefilter cubes were last baked
     // from. The IBL gen node skips the rebake while this matches the source's
     // current InputDigest() (static sky in an idle editor bakes once).
@@ -217,8 +206,9 @@ class ImageBasedLightingFeature final : public IRenderFeature
     GameEngine::Rendering::SamplerHandle m_CubeSampler{};  // trilinear, clamp (cube)
     GameEngine::Rendering::SamplerHandle m_LutSampler{};   // bilinear, clamp, no mips (BRDF LUT)
     // EnvData UBO ring, one element per device frame (the scalars in it are dynamic).
-    GameEngine::Rendering::BufferHandle m_EnvDataBuffer[kCaptureFrameSlots]{};
-    // Unwraps the device's frame index so all kCaptureFrameSlots elements rotate. Lives
+    // The first IDevice::GetFrameRingDepth() elements are in use.
+    GameEngine::Rendering::BufferHandle m_EnvDataBuffer[GameEngine::Rendering::IDevice::kMaxFrameRingDepth]{};
+    // Unwraps the device's frame index so every element of the ring rotates. Lives
     // with the ring it indexes; UploadEnvData is its only ticker.
     GameEngine::Rendering::DeviceFrameCounter m_EnvDataFrameCounter;
 

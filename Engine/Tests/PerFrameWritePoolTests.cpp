@@ -595,15 +595,32 @@ TEST_F(PerFrameWritePoolTest, BonePalette_CarriesAnExtraSlotForPreviousFrameRead
 
     pool.BeginFrame(1);
     EXPECT_TRUE(pool.HasPreviousFrameBuffer(FrameWriteUsage::BonePalette))
-        << "BonePalette declares one extra reader frame, so the prior slot is still live";
+        << "the frame ring depth has a slot for a previous-frame reader, so the prior slot is still live";
     EXPECT_TRUE(pool.GetPreviousBuffer(FrameWriteUsage::BonePalette).IsValid());
     EXPECT_FALSE(pool.GetPreviousBuffer(FrameWriteUsage::BonePalette) ==
                  pool.GetBuffer(FrameWriteUsage::BonePalette));
 
-    // Classes without the extra slot must refuse: reading their previous slot
-    // would race the CPU write that reuses it while the GPU is still in flight.
-    EXPECT_FALSE(pool.HasPreviousFrameBuffer(FrameWriteUsage::MaterialParams))
-        << "a class sized at the device's pacing has no safe previous slot";
+    // Every class rotates at the shared frame ring depth, so every class keeps its previous slot.
+    EXPECT_TRUE(pool.HasPreviousFrameBuffer(FrameWriteUsage::MaterialParams))
+        << "MaterialParams rotates at the frame ring depth, which has a slot for a previous-frame reader";
+
+    pool.Shutdown();
+}
+
+TEST_F(PerFrameWritePoolTest, ARingWithoutTheReaderSlotRefusesItsPreviousSlot)
+{
+    // At a pacing past the deepest a backend reports, kMaxRingSlots clamps the ring to the pacing
+    // plus the update-phase slot. Reading the previous slot would then race the CPU write that
+    // reuses it while the GPU still reads it.
+    PerFrameWritePoolConfig config;
+    config.FramesInFlight = Rendering::IDevice::kMaxSupportedFramesInFlight + 1u;
+    PerFrameWritePool pool;
+    ASSERT_TRUE(pool.Initialize(m_device.get(), config));
+
+    pool.BeginFrame(0);
+    pool.BeginFrame(1);
+    EXPECT_FALSE(pool.HasPreviousFrameBuffer(FrameWriteUsage::BonePalette))
+        << "a ring of the pacing plus one slot has no safe previous slot";
 
     pool.Shutdown();
 }

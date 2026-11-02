@@ -246,15 +246,16 @@ TEST_F(NavigationSurfaceOwnershipTest, ActualDiskLoadOmitsRuntimeBindingAndRebak
     const auto path = std::filesystem::temp_directory_path() /
         ("navigation-surface-owner-" + std::to_string(world->GetWorldId()) + ".scene");
     struct FileCleanup { std::filesystem::path Path; ~FileCleanup() { std::error_code error; std::filesystem::remove(Path, error); } } cleanup{path};
-    ASSERT_TRUE(Scene::SaveSceneToFile(*world, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(*world, path));
     std::ifstream input(path);
     const std::string text{std::istreambuf_iterator<char>(input), {}};
     EXPECT_EQ(text.find("NavMap"), std::string::npos);
     EXPECT_EQ(text.find("OwnerWorld"), std::string::npos);
     EXPECT_EQ(text.find("Bake"), std::string::npos);
-    Scene::SceneLoadDegradation degradation;
-    Scene::LoadOptions options; options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(*world, path, options));
+    Scene::SceneDegradation degradation;
+    Scene::SceneReadOptions options;
+    options.outDegradation = &degradation;
+    ASSERT_TRUE(Scene::ReadSceneInto(*world, path, options));
     ASSERT_FALSE(degradation.IsDegraded());
     EXPECT_EQ(NavigationService::Get().GetGridMap(old), nullptr);
     EXPECT_EQ(world->Query<ECS::Read<Surface>>().Count(), 1u);

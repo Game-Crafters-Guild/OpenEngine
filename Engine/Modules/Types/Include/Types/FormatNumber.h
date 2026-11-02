@@ -1,6 +1,8 @@
 #pragma once
 
 #include <charconv>
+#include <cstdint>
+#include <span>
 #include <string>
 #include <system_error>
 
@@ -77,6 +79,17 @@ inline std::string FormatFixed(double value, int decimals)
 inline std::string FormatMeters(double meters, int decimals)
 {
     return FormatFixed(meters, decimals) + " m";
+}
+
+// Each byte as two lowercase hex digits, in order: {0x0a, 0xff} appends "0aff".
+inline void AppendHexBytes(std::string& out, std::span<const std::uint8_t> bytes)
+{
+    constexpr char kHexDigits[] = "0123456789abcdef";
+    for (const std::uint8_t byte : bytes)
+    {
+        out += kHexDigits[byte >> 4];
+        out += kHexDigits[byte & 0x0F];
+    }
 }
 
 } // namespace GameEngine

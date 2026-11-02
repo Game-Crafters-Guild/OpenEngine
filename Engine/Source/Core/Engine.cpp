@@ -1,6 +1,7 @@
 #include "EngineShaderPath.h"
 #include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
 
 #include "EngineShaderHookState.h"
 #include "Logger/Logger.h"
@@ -430,6 +431,7 @@ EngineCore::EngineCore()
         Logger::Log::Critical("Engine instance already exists!");
     }
     s_Instance = this;
+    m_SceneLoadTracker = MakeUnique<SceneLoadTracker>();
 }
 
 EngineCore::~EngineCore()
@@ -1289,6 +1291,9 @@ void EngineCore::Update(float64 deltaTime)
         return;
     }
 
+    // The frame boundary of the load snapshot: it reads what the previous frame left pending.
+    m_SceneLoadTracker->Tick(std::chrono::steady_clock::now());
+
     // Update asset manager (process loading queue, check for file changes)
     if (m_AssetManager)
     {
@@ -1477,6 +1482,12 @@ bool EngineCore::EnableRenderingLoop(Engine::Renderer::RenderServices* renderSer
             m_RenderingLoopEnabled = false;
             m_RenderServices = nullptr;
             return false;
+        }
+        m_RenderingLoop->GetSceneResolveService().ReportLoadingWork(*m_SceneLoadTracker);
+        if (renderServices)
+        {
+            renderServices->Materials().ReportLoadingWork(*m_SceneLoadTracker);
+            renderServices->Textures().ReportLoadingWork(*m_SceneLoadTracker);
         }
         m_RenderingLoopEnabled = true;
         (void)EnsurePrimaryWorld();

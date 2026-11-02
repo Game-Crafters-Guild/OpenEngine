@@ -149,7 +149,7 @@ export class EntityImpl implements Entity, FieldAccess {
     private readParent(): Entity | null {
         const parent = this.component('Parent');
         if (!this.hasInfo(parent)) return null;
-        return this.readField(parent, 'parent') as Entity | null;
+        return this.readField(parent, 'entity') as Entity | null;
     }
 
     private readChildren(): Entity[] {

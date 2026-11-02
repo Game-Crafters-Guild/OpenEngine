@@ -354,18 +354,12 @@ class PassTypeSearchProvider final : public ISearchProvider
     void BeginSearch(const std::string& query, ResultSink sink) override
     {
         std::vector<SearchResultItem> results;
-        std::string lowerQuery;
-        lowerQuery.reserve(query.size());
-        for (char c : query)
-            lowerQuery += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const std::string lowerQuery = ToLowerAscii(query);
 
         SearchItemId nextId = 1;
         for (const auto& typeName : m_Types)
         {
-            std::string lowerType;
-            lowerType.reserve(typeName.size());
-            for (char c : typeName)
-                lowerType += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const std::string lowerType = ToLowerAscii(typeName);
 
             if (!lowerQuery.empty() && lowerType.find(lowerQuery) == std::string::npos)
                 continue;

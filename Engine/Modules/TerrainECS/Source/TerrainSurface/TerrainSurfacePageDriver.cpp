@@ -20,6 +20,7 @@
 #include "PageStreaming/PageSampleRect.h"
 #include "PageStreaming/PageStore/PageStoreAccess.h"
 #include "PageStreaming/PageStore/PageStoreReader.h"
+#include "Types/ByteBuffer.h"
 #include "Types/FlatMap.h"
 
 #include <algorithm>
@@ -47,7 +48,7 @@ struct SurfaceHeightSource
 };
 
 // What the modifier overlay adds to each height page a job reads: the page's samples, -0.0 where the
-// overlay adds nothing, so a base page plus it is the base page plus HeightPageOverlay::ApplyToPage
+// overlay adds nothing, so a base page plus it is the base page plus HeightPageLayer::ApplyToPage
 // bit for bit. A page the overlay does not reach has no entry.
 using OverlayPages = FlatMap<PageAddress, std::vector<float32>>;
 
@@ -76,7 +77,7 @@ SurfaceHeightSource ResolveHeightSource(TerrainService& service, const TiledTerr
 }
 
 // The overlay of every page of `read` that `overlay` reaches.
-std::shared_ptr<const OverlayPages> MakeOverlayPages(const PageStreaming::HeightPageOverlay* overlay,
+std::shared_ptr<const OverlayPages> MakeOverlayPages(const PageStreaming::HeightPageLayer* overlay,
                                                      std::span<const PageAddress> read)
 {
     auto pages = std::make_shared<OverlayPages>();
@@ -104,7 +105,7 @@ SurfaceHeightPageFetch MakeHeightFetch(const SurfaceHeightSource& source, std::s
         }
         else
         {
-            std::vector<uint8> stored;
+            ByteBuffer stored;
             std::vector<uint8> payload;
             if (!source.Store->ReadPageBytes(address, stored) ||
                 !source.Store->DecodePayload(address, stored, payload))

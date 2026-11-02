@@ -50,8 +50,12 @@ class ElementIdIndex
     /// Returns nullptr for id 0: an empty id is never registered.
     UIElement* Find(const UIElement& subtree, StringId id) const;
 
+    /// Increments each time an element enters or leaves the index (a new owner, a new id).
+    uint64_t Generation() const { return m_Generation; }
+
   private:
     FastHashMap<StringId, std::vector<UIElement*>> m_Elements;
+    uint64_t m_Generation = 0;
 };
 
 } // namespace UI

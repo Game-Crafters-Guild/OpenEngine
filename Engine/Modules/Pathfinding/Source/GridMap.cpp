@@ -553,10 +553,11 @@ PathStatus GridMap::FindPath(const PathRequest& request, AStarSolver& solver, Pa
                              PathHandle& outPath) const
 {
     std::vector<PathPoint> worldPoints;
+    GridSolveRecord record;
     PathStatus status = PathStatus::Failed;
     {
         const ScopedPathSolveWindow window(*this);
-        status = FindPathPoints(request, solver, worldPoints);
+        status = FindPathPoints(request, solver, worldPoints, record);
     }
     if (status == PathStatus::Complete)
         outPath = pathBuffer.AllocatePath(worldPoints.data(), static_cast<uint32>(worldPoints.size()));
@@ -564,9 +565,10 @@ PathStatus GridMap::FindPath(const PathRequest& request, AStarSolver& solver, Pa
 }
 
 PathStatus GridMap::FindPathPoints(const PathRequest& request, AStarSolver& solver,
-                                   std::vector<PathPoint>& outPoints) const
+                                   std::vector<PathPoint>& outPoints, GridSolveRecord& outRecord) const
 {
     outPoints.clear();
+    outRecord = GridSolveRecord{};
     const ReadView view = View();
     uint32 startCellX = 0, startCellZ = 0;
     uint32 endCellX = 0, endCellZ = 0;
@@ -585,9 +587,16 @@ PathStatus GridMap::FindPathPoints(const PathRequest& request, AStarSolver& solv
     {
         agentCellRadius = static_cast<uint32>(std::ceil(request.AgentRadius / cellSize));
     }
+    outRecord.StartX = startCellX;
+    outRecord.StartZ = startCellZ;
+    outRecord.GoalX = endCellX;
+    outRecord.GoalZ = endCellZ;
+    outRecord.AgentCellRadius = agentCellRadius;
 
     std::vector<uint32> cellPath;
-    if (!solver.Solve(view, startIndex, endIndex, request.ExcludeAgentId, request.CurrentTime, agentCellRadius, cellPath))
+    outRecord.End = solver.Solve(view, startIndex, endIndex, request.ExcludeAgentId, request.CurrentTime,
+                                 agentCellRadius, cellPath, outRecord.Expansions);
+    if (outRecord.End != GridSolveEnd::Reached)
         return PathStatus::Failed;
 
     outPoints.reserve(cellPath.size());

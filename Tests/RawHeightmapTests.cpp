@@ -2,6 +2,7 @@
 
 #include "Terrain/Heightfield.h"
 #include "TerrainECS/RawHeightmap.h"
+#include "TestTempDir.h"
 
 #include <filesystem>
 #include <fstream>
@@ -16,9 +17,8 @@ using namespace GameEngine::TerrainECS;
 
 // A .r32 of `width` x `height` samples whose value names its own position: row * width + column.
 // Read on the wrong grid, a sample reports the position it was really written at.
-std::filesystem::path WriteIndexedR32(const std::string& name, uint32 width, uint32 height)
+void WriteIndexedR32(const std::filesystem::path& path, uint32 width, uint32 height)
 {
-    const std::filesystem::path path = std::filesystem::temp_directory_path() / name;
     std::vector<float32> row(width);
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     for (uint32 z = 0; z < height; ++z)
@@ -27,7 +27,6 @@ std::filesystem::path WriteIndexedR32(const std::string& name, uint32 width, uin
             row[x] = static_cast<float32>(static_cast<uint64>(z) * width + x);
         file.write(reinterpret_cast<const char*>(row.data()), static_cast<std::streamsize>(width * sizeof(float32)));
     }
-    return path;
 }
 
 // The user's case: a 16384 x 4096 DEM holds 8192^2 samples, so with no declared grid it decodes as
@@ -38,13 +37,14 @@ TEST(RawHeightmap, ANonSquareGridDecodesOnTheGridItsImportSettingsDeclare)
 {
     constexpr uint32 kWidth = 16384;
     constexpr uint32 kHeight = 4096;
-    const std::filesystem::path path = WriteIndexedR32("ge_raw_heightmap_16384x4096.r32", kWidth, kHeight);
+    const TestUtils::ScopedTempDir dir(TestUtils::MakeUniqueTempDirectory("ge_raw_heightmap"));
+    const std::filesystem::path path = dir.Path() / "16384x4096.r32";
+    WriteIndexedR32(path, kWidth, kHeight);
 
     Terrain::HeightfieldData declared;
     const std::string declaredError = DecodeRawHeightmap(path, kWidth, kHeight, declared);
     Terrain::HeightfieldData undeclared;
     const std::string undeclaredError = DecodeRawHeightmap(path, 0, 0, undeclared);
-    std::filesystem::remove(path);
 
     ASSERT_TRUE(declaredError.empty()) << declaredError;
     ASSERT_EQ(declared.GetWidth(), kWidth);
@@ -156,7 +156,9 @@ TEST(RawHeightmap, StoredSettingsReachTheDecode)
 {
     constexpr uint32 kWidth = 256;
     constexpr uint32 kHeight = 64; // 128^2 samples: square-shaped by count
-    const std::filesystem::path path = WriteIndexedR32("ge_raw_heightmap_settings_256x64.r32", kWidth, kHeight);
+    const TestUtils::ScopedTempDir dir(TestUtils::MakeUniqueTempDirectory("ge_raw_heightmap_settings"));
+    const std::filesystem::path path = dir.Path() / "256x64.r32";
+    WriteIndexedR32(path, kWidth, kHeight);
 
     RawHeightmapLayout declared;
     ASSERT_TRUE(ResolveDeclaredRawHeightmapLayout({std::string("256"), std::string("64")}, declared).empty());
@@ -166,7 +168,6 @@ TEST(RawHeightmap, StoredSettingsReachTheDecode)
     RawHeightmapLayout malformed;
     const std::string malformedError =
         ResolveDeclaredRawHeightmapLayout({std::string("256px"), std::string("64")}, malformed);
-    std::filesystem::remove(path);
 
     ASSERT_TRUE(decodeError.empty()) << decodeError;
     EXPECT_EQ(decoded.GetWidth(), kWidth);

@@ -35,6 +35,7 @@
 #include "ECS/Component/ComponentFieldRegistry.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
+#include "Events/Event.h"
 #include "Logger/Logger.h"
 #include "Scene/PrefabAuthoring.h"
 #include "Scene/SceneSchemaRegistry.h"
@@ -543,6 +544,22 @@ PrefabHierarchyMenu& Menu()
     return s_Menu;
 }
 
+// Turns a prefab file change of a world's instances into a structure change of that world.
+EventSubscription& InstancesChangedSubscription()
+{
+    static EventSubscription s_Subscription;
+    return s_Subscription;
+}
+
+// A prefab file change is no edit of the scene: the panels read the world again and the scene stays clean.
+void RefreshViewsOf(EditorChangeNotifications& notifications, ECS::World& world)
+{
+    EditorChangeNotifications::WorldStructureChangedEvent change{};
+    change.world = &world;
+    change.kind = EditorChangeNotifications::ChangeKind::InspectorRebuild;
+    notifications.NotifyWorldStructureChanged(change);
+}
+
 } // namespace
 
 void RegisterPrefabEditor(EditorChangeNotifications& notifications, IThumbnailProvider* thumbnails,
@@ -551,6 +568,8 @@ void RegisterPrefabEditor(EditorChangeNotifications& notifications, IThumbnailPr
     OverridesListReopen() = {};
     OverridesListContext() = {std::move(document), isInPlayMode, &OverridesListReopen()};
     PrefabInstanceDescriptions::Get().Track(notifications);
+    InstancesChangedSubscription() = Scene::SubscribePrefabInstancesChanged(
+        [&notifications](ECS::World& world) { RefreshViewsOf(notifications, world); });
     EditorComponentTraits traits;
     traits.HierarchyRowClass = "hierarchy-entity-prefab";
     traits.IsPickClimbRoot = true;

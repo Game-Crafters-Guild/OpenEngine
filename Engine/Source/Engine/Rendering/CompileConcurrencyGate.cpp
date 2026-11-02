@@ -25,6 +25,8 @@ namespace
 // streaming workers so a compile burst can never pin every core.
 constexpr uint32_t kReservedCoresForFrame = 2;
 constexpr uint32_t kMinCompileCap = 2;
+// Pool workers the gate never fills, so the frame's fork-join jobs run while compiles hold the rest.
+constexpr size_t kReservedWorkersForFrame = 2;
 
 uint32_t QueryPhysicalCoreCount()
 {
@@ -58,9 +60,9 @@ uint32_t QueryPhysicalCoreCount()
     return logical > 1 ? logical / 2 : logical;
 #endif
 }
-} // namespace
 
-uint32_t ComputeShaderCompileConcurrencyCap()
+// The cap from the cores: the env override, else the physical cores minus the frame's reserve.
+uint32_t ComputeCoreBoundCompileCap()
 {
     if (const char* env = std::getenv("GE_SHADER_COMPILE_CAP"))
     {
@@ -81,11 +83,24 @@ uint32_t ComputeShaderCompileConcurrencyCap()
                     physical > kReservedCoresForFrame ? physical - kReservedCoresForFrame
                                                       : kMinCompileCap);
 }
+} // namespace
+
+uint32_t ComputeShaderCompileConcurrencyCap(size_t workerCount)
+{
+    const uint32_t coreCap = ComputeCoreBoundCompileCap();
+    if (workerCount == 0)
+        return coreCap;
+    const size_t poolCap = workerCount > kReservedWorkersForFrame ? workerCount - kReservedWorkersForFrame : 1;
+    return static_cast<uint32_t>(std::min<size_t>(coreCap, poolCap));
+}
 
 void CompileConcurrencyGate::Submit(std::function<void()> work, JobSystem::JobPriority priority)
 {
     {
         std::lock_guard lock(m_Mutex);
+        // Closed: `work` is destroyed unrun when this function returns, after the unlock.
+        if (m_Closed)
+            return;
         // A slot is free only when running < cap; the pump keeps running == cap
         // while either lane is non-empty, so a free slot here implies both lanes
         // empty and admitting directly cannot reorder ahead of queued work.
@@ -116,6 +131,20 @@ void CompileConcurrencyGate::Submit(std::function<void()> work, JobSystem::JobPr
         OnJobFinished();
         throw;
     }
+}
+
+size_t CompileConcurrencyGate::Close()
+{
+    std::deque<std::function<void()>> canceledBackground;
+    std::deque<std::function<void()>> canceledNormal;
+    {
+        std::lock_guard lock(m_Mutex);
+        m_Closed = true;
+        canceledBackground.swap(m_PendingBackground);
+        canceledNormal.swap(m_PendingNormal);
+    }
+    // The closures are destroyed here, outside the lock: their guards can take other locks.
+    return canceledBackground.size() + canceledNormal.size();
 }
 
 void CompileConcurrencyGate::DispatchTracked(std::function<void()> work,

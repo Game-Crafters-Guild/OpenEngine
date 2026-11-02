@@ -5,7 +5,7 @@
 #include "Platform/ContextMenu.h"
 #include "Platform/Clipboard.h"
 #include "EditorContextMenu/UIContextMenu.h"
-#include "Types/StringUtils.h"
+#include "Types/PathUtils.h"
 #include "Platform/Shell.h"
 #include "Platform/Window.h"
 #include "Scripting/EditorScriptMenuRegistry.h"
@@ -769,7 +769,7 @@ void EditorContextMenu::ShowAssetMenu(const std::filesystem::path& assetPath,
     // This sets ProjectSettings.json + updates RenderServices live.
     if (!isDirectory)
     {
-        std::string ext = ToLowerAscii(assetPath.extension().string());
+        std::string ext = LowerCaseExtension(assetPath);
         if (ext == ".rendergraph" || ext == ".renderpipeline")
         {
             builder.AddItem("Render Pipeline", 0, MenuItemFlag_None, -500, EditorIcons::kSettings);
@@ -780,7 +780,7 @@ void EditorContextMenu::ShowAssetMenu(const std::filesystem::path& assetPath,
     // If a handler is provided, allow opening C# scripts in the internal Script Editor.
     if (!isDirectory && m_OnEditAction)
     {
-        std::string ext = ToLowerAscii(assetPath.extension().string());
+        std::string ext = LowerCaseExtension(assetPath);
         if (ext == ".cs" || ext == ".rendergraph" || ext == ".renderpipeline" || ext == ".glsl" || ext == ".hlsl")
         {
             builder.AddItem("Edit (Internal)", kCmdAssetEditInternal, MenuItemFlag_None, kPriorityOpenRows + 1,

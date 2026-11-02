@@ -99,6 +99,47 @@ TEST(DescriptorSetAllocator, StatsGrowAndReset) {
     for (auto h : persistent) devBase->DestroyDescriptorSet(h);
 }
 
+// A destroyed persistent set goes back to its pool after the GPU is past the frames that
+// could read it. A device that never frees them uses up one set per destroy until teardown.
+TEST(DescriptorSetAllocator, DestroyedPersistentSetsReturnToTheirPool) {
+    DeviceDesc dd{}; dd.preferredAPI = GraphicsAPI::Vulkan;
+    dd.descriptorBuffers = DescriptorBufferMode::Disabled;
+    auto devBase = DeviceFactory::CreateDevice(dd);
+    ASSERT_TRUE(devBase && devBase->Initialize(dd));
+    auto* vk = dynamic_cast<GameEngine::Rendering::VulkanDevice*>(devBase.get());
+    ASSERT_NE(vk, nullptr);
+    ASSERT_FALSE(vk->IsDescriptorBufferEnabled());
+
+    vk->FinalizeFrame();
+    ASSERT_TRUE(vk->BeginFrame());
+    const uint32_t before = vk->GetDescriptorSetAllocator().GetStats().PersistentAllocated;
+
+    constexpr uint32_t kSets = 128;
+    std::vector<DescriptorSetHandle> sets;
+    for (uint32_t i = 0; i < kSets; ++i) {
+        DescriptorSetDesc ds{}; ds.layout = UniformBufferLayout(); ds.debugName = "StatsPersistentFreed";
+        sets.push_back(devBase->CreateDescriptorSet(ds));
+        ASSERT_TRUE(sets.back().IsValid());
+    }
+    ASSERT_EQ(vk->GetDescriptorSetAllocator().GetStats().PersistentAllocated, before + kSets);
+    for (DescriptorSetHandle set : sets) devBase->DestroyDescriptorSet(set);
+    // A frame in flight can still read the sets, so the destroy itself frees none.
+    EXPECT_EQ(vk->GetDescriptorSetAllocator().GetStats().PersistentAllocated, before + kSets);
+
+    // WaitForIdle frees every deferred set at once. The loop does not call it, so the
+    // BeginFrame drain must do the free.
+    for (uint32_t f = 0; f < IDevice::kMaxSupportedFramesInFlight + 1; ++f) {
+        auto cl = devBase->CreateCommandList(IDevice::QueueType::Graphics);
+        cl->Begin();
+        cl->End();
+        std::vector<CommandList*> lists{cl.get()};
+        devBase->ExecuteCommandLists(lists);
+        vk->FinalizeFrame();
+        ASSERT_TRUE(vk->BeginFrame());
+    }
+    EXPECT_EQ(vk->GetDescriptorSetAllocator().GetStats().PersistentAllocated, before);
+}
+
 // The same allocations on the other binding model. A descriptor-buffer device serves them
 // from VulkanDescriptorBufferPool, a separate allocator, so the pool allocator's counters
 // must not move at all. That pool publishes no statistics of its own; the descriptor-buffer

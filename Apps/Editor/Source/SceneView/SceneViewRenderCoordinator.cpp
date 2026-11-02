@@ -113,7 +113,7 @@ SceneViewPanel* SceneViewRenderCoordinator::SyncMountedPanelControllers(EditorWi
     if (!ctx)
         return nullptr;
 
-    SceneViewPanel* svPanel = MountedViewPanels::SceneView(ctx->ui.get());
+    SceneViewPanel* svPanel = ctx->mountedViewPanels.SceneView(ctx->ui.get());
     if (!svPanel)
         return nullptr;
 
@@ -394,7 +394,7 @@ void SceneViewRenderCoordinator::DeclareOverlaysRG(
     if (!rs)
         return;
 
-    SceneViewPanel* svPanel = MountedViewPanels::SceneView(ctx->ui.get());
+    SceneViewPanel* svPanel = ctx->mountedViewPanels.SceneView(ctx->ui.get());
     if (!svPanel)
         return;
     SceneViewController* activeController =
@@ -442,7 +442,7 @@ void SceneViewRenderCoordinator::BindRG(EditorWindowContext* ctx, Rendering::Ren
     if (!device)
         return;
 
-    SceneViewPanel* svPanel = MountedViewPanels::SceneView(ctx->ui.get());
+    SceneViewPanel* svPanel = ctx->mountedViewPanels.SceneView(ctx->ui.get());
     if (!svPanel)
         return;
 

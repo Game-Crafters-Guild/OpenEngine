@@ -1,5 +1,6 @@
 #include "Startup/BuiltinAssetSync.h"
 
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h" // ToLowerAscii (header-only; keeps this TU Engine-link-free)
 
 #include <algorithm>
@@ -163,7 +164,7 @@ bool RefreshOwnedTree(const fs::path& srcRoot,
 
         if (!extensionsLower.empty())
         {
-            const std::string ext = ToLowerAscii(entry.path().extension().string());
+            const std::string ext = LowerCaseExtension(entry.path());
             if (std::find(extensionsLower.begin(), extensionsLower.end(), ext) == extensionsLower.end())
                 continue;
         }

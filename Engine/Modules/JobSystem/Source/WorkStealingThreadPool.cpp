@@ -290,13 +290,13 @@ WorkStealingThreadPool::~WorkStealingThreadPool() {
     Shutdown();
 }
 
-TaskHandle WorkStealingThreadPool::Submit(UniquePtr<Task> task) {
+TaskHandle WorkStealingThreadPool::SubmitToGraph(UniquePtr<TaskBase> task,
+                                                  std::span<const TaskId> dependencies) {
     if (shutdown_requested.load()) {
         return TaskHandle(); // Return invalid handle
     }
 
-    // Use the task's existing ID to maintain dependency relationships
-    TaskId taskId = task->GetTaskId();
+    const TaskId taskId = task->GetTaskId();
 
     // The TaskData must exist before the task is published: completion on a
     // worker bridges status into it via ProcessGraphActions.
@@ -310,9 +310,8 @@ TaskHandle WorkStealingThreadPool::Submit(UniquePtr<Task> task) {
         data->GraphManaged.store(true, std::memory_order_relaxed);
     }
 
-    // Slice 6: every Task subclass is graph-managed by construction —
-    // dependency-exempt envelope types derive from TaskBase and never reach
-    // this API (Submit(F&&) / EnqueueWork own those paths).
+    // Only Detail::SubmitGraphTask reaches this path; the other envelope
+    // types never enter the graph (Submit(F&&) / EnqueueWork own them).
 
     // F9 submit-side critical section: node creation, edge registration
     // (absent dependency = already terminal, F8), readiness check, and
@@ -321,7 +320,7 @@ TaskHandle WorkStealingThreadPool::Submit(UniquePtr<Task> task) {
     // as ready — either Register returns it here, or the completer's
     // MarkCompleted extracts the parked payload (closes the B8
     // submit-vs-complete TOCTOU without any rescan).
-    if (UniquePtr<Task> ready = m_DependencyGraph->Register(std::move(task))) {
+    if (UniquePtr<TaskBase> ready = m_DependencyGraph->Register(std::move(task), dependencies)) {
         EnqueueTask(std::move(ready));
     }
 
@@ -386,7 +385,7 @@ bool WorkStealingThreadPool::CancelPendingArbitrated(TaskId taskId,
 
 bool WorkStealingThreadPool::LinkSubmitDependency(const TaskHandle& dependency) {
     if (!dependency.IsValid()) {
-        return false; // matches Task::AddDependency(const TaskHandle&): invalid = no edge
+        return false; // an invalid handle adds no edge
     }
     // A foreign pool's id can never complete in THIS graph — an edge to it
     // would park the dependent forever. Contract violation; skip the edge.
@@ -406,7 +405,7 @@ bool WorkStealingThreadPool::LinkSubmitDependency(const TaskHandle& dependency) 
     }
 
     const TaskId depId = dependency.GetId();
-    // GRAPH task (branded at Submit(UniquePtr<Task>)): add a plain edge and
+    // GRAPH task (branded in SubmitToGraph): add a plain edge and
     // never touch the mirror machinery — its completion reaches the graph
     // natively (CompleteGraphTask), and a bridged completion would steal the
     // executing worker's own MarkCompleted, muting its handle events. The
@@ -419,8 +418,7 @@ bool WorkStealingThreadPool::LinkSubmitDependency(const TaskHandle& dependency) 
     // that window would create a mirror for a task whose completion path is
     // already spent, and the parked dependent would strand forever (nothing
     // ever completes a graph task's mirror). In the window, Register's
-    // absent=terminal reading runs the dependent (identical to the subclass
-    // AddDependency path's pre-existing semantics for this exact window).
+    // absent=terminal reading runs the dependent.
     if (data->GraphManaged.load(std::memory_order_relaxed)) {
         return true;
     }

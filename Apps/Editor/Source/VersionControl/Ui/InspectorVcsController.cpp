@@ -470,7 +470,7 @@ void InspectorVcsController::RevertProperty(const ScenePropertyDiff& property)
     // A baseline line naming a field the component does not have reverts nothing, as a scene load
     // applies nothing for it.
     std::vector<std::string> unknownFields;
-    Scene::SceneLoadContext loadContext{};
+    Scene::SceneReadContext loadContext{};
     loadContext.TargetWorld = m_Panel.m_World;
     loadContext.UnknownFields = &unknownFields;
     std::string error;

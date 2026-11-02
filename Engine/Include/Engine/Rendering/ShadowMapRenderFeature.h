@@ -705,12 +705,12 @@ class ShadowMapRenderFeature : public IRenderFeature
     const CascadeFrameData* GetCachedFrameData(Rendering::ViewId viewId) const;
 
     // Camera-motion round-robin cap (GE_SHADOW_MOTION_CAP, default 2; 0 = off):
-    // at most this many motion-class cascade renders PER (VIEW, FRAME) — each
-    // shadow-casting view plans independently, so a frame's total motion
-    // renders is cap × active cascade views. The rest keep their retained
-    // layer for up to MotionMaxAge consecutive frames
-    // (GE_SHADOW_MOTION_MAX_AGE, default 2) and receivers sample it through
-    // the content fit. Correctness-class causes always render immediately and
+    // at most this many unforced motion-class cascade renders PER (VIEW,
+    // FRAME), nearest-first — each shadow-casting view plans independently.
+    // The rest keep their retained layer for up to MotionMaxAge consecutive
+    // frames (GE_SHADOW_MOTION_MAX_AGE, default 2) and receivers sample it
+    // through the content fit; a layer past that bound renders on top of the
+    // cap. Correctness-class causes always render immediately and
     // never count against the cap. Requires the static shadow cache lane
     // (GE_SHADOW_STATIC_CACHE != 0) — its records define the retained content.
     uint32_t GetMotionCap() const { return m_MotionCap; }

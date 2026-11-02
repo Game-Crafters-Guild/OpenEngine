@@ -60,6 +60,11 @@ private:
     bool CollectRequests(ECS::World& world);
     void PrepareBodies(ECS::World& world);
     void SolveOldestRequests(ECS::World& world);
+    // Adds one grid solve to the newest Update's grid solve counters, the
+    // totals and WorstGridSolves.
+    void RecordGridSolve(const Pathfinding::GridSolveRecord& record);
+    // Drops the WorstGridSolves entries older than kWorstGridSolveSeconds.
+    void ExpireWorstGridSolves();
     uint32 IssueSequence();
     std::size_t FindIssue(uint32 sequence) const;
     // How long the request holding `sequence` has waited; 0 when no issue is kept.

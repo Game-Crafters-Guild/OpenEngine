@@ -288,6 +288,8 @@ struct SceneTlasImpl
     // nothing changed, where every leaf must be current).
     uint32                                                   ValidateCounter = 0u;
     uint64                                                   ValidateCursor = 0u;
+    // Diagnostic: RequestCurrent calls, its own retries and WaitCurrent's included.
+    uint64                                                   RequestCount = 0u;
 
     // True while the published task has not finished. No handle: nothing is
     // in flight.

@@ -8,70 +8,172 @@
 #include "AssetCore/Asset.h"
 #include "Assets/AssetIOService.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Memory/ObjectPool.h"
+#include "Types/ByteBuffer.h"
 
 #include <algorithm>
 #include <cassert>
+#include <mutex>
+#include <string_view>
 
 namespace GameEngine::PageStreaming
 {
 namespace
 {
 
-// One load in flight, shared by the read's decode continuation and its failure callback. The
-// first of Load and Fail resolves it; a load destroyed unresolved (its decode cancelled without
-// running, as a pool shutdown does to queued work) fails as cancelled when the last holder lets
-// go, on that holder's thread. So exactly one of OnLoaded and OnFailed runs, whatever happens.
-class PendingPageLoad
+struct FetchState;
+
+// One fetch in flight. Its outcome is written once, by the first End or Take.
+struct PendingPageFetch
+{
+    std::shared_ptr<FetchState> State; // keeps the fetcher's state alive while the fetch is in flight
+    PageSource Source;                 // a store fetch holds only the store
+    PageAddress Address;
+    std::shared_ptr<std::atomic<bool>> Cancel;
+    PageFetchTag Tag;
+    PageFetchOutcome Outcome;
+    std::atomic<bool> Ended{false};
+    std::atomic<uint32> Holders{0};
+};
+
+// The fetches of one fetcher, kept alive by the fetcher and by every fetch in flight.
+struct FetchState
+{
+    std::mutex Mutex;
+    std::vector<PendingPageFetch*> Ended;  // under Mutex: the fetches whose last holder let go
+    std::vector<PendingPageFetch*> Taking; // the owner's thread: swapped with Ended by Finished
+    // Under Mutex: the buffers Reuse gave back, reserved to SpareLimit so a push never allocates.
+    std::vector<std::shared_ptr<std::vector<uint8>>> Spares;
+    uint32 SpareLimit = 0;
+    // New and Delete run on the owner's thread. The pool destroys the fetches nobody took.
+    Memory::ObjectPool<PendingPageFetch> Fetches{"PageStreaming.PageFetches"};
+};
+
+// A spare buffer that holds `bytes` bytes, or a new empty one.
+std::shared_ptr<std::vector<uint8>> TakeSpare(FetchState& state, std::size_t bytes)
+{
+    std::lock_guard lock(state.Mutex);
+    for (std::shared_ptr<std::vector<uint8>>& spare : state.Spares)
+        if (spare->size() == bytes)
+        {
+            std::shared_ptr<std::vector<uint8>> taken = std::move(spare);
+            spare = std::move(state.Spares.back());
+            state.Spares.pop_back();
+            return taken;
+        }
+    return std::make_shared<std::vector<uint8>>();
+}
+
+bool IsSet(const std::shared_ptr<std::atomic<bool>>& cancel)
+{
+    return cancel && cancel->load(std::memory_order_acquire);
+}
+
+// One reference to a fetch in flight, held by each callback that can end it. It is one pointer, so a
+// callback that holds only this fits in std::function's own storage. The last holder to go queues the
+// fetch for Finished, ended as cancelled if nothing ended it (a decode job dropped without running).
+class PageFetchHolder
 {
 public:
-    explicit PendingPageLoad(PageLoadRequest request)
-        : m_Request(std::move(request))
+    explicit PageFetchHolder(PendingPageFetch& fetch) noexcept
+        : m_Fetch(&fetch)
     {
+        m_Fetch->Holders.fetch_add(1, std::memory_order_relaxed);
     }
 
-    ~PendingPageLoad() { Fail("the page load was cancelled"); }
-
-    PendingPageLoad(const PendingPageLoad&) = delete;
-    PendingPageLoad& operator=(const PendingPageLoad&) = delete;
-
-    const PageLoadRequest& Request() const { return m_Request; }
-
-    bool IsCancelled() const { return m_Request.Cancel && m_Request.Cancel->load(std::memory_order_acquire); }
-
-    void Load(std::vector<uint8> payload)
+    PageFetchHolder(const PageFetchHolder& other) noexcept
+        : m_Fetch(other.m_Fetch)
     {
-        if (!m_Resolved.exchange(true))
-            m_Request.OnLoaded(m_Request.Address, std::move(payload));
+        m_Fetch->Holders.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void Fail(const std::string& reason)
+    PageFetchHolder& operator=(const PageFetchHolder&) = delete;
+
+    ~PageFetchHolder()
     {
-        if (!m_Resolved.exchange(true))
-            m_Request.OnFailed(m_Request.Address, reason);
+        if (m_Fetch->Holders.fetch_sub(1, std::memory_order_acq_rel) != 1)
+            return;
+        End("the page fetch was cancelled", false);
+        // A queued fetch holds no state: the state may go with the fetcher, and its pool with the fetch.
+        const std::shared_ptr<FetchState> state = std::move(m_Fetch->State);
+        std::lock_guard lock(state->Mutex);
+        state->Ended.push_back(m_Fetch);
+    }
+
+    PendingPageFetch& Fetch() const { return *m_Fetch; }
+
+    void End(std::string_view error, bool absent) const
+    {
+        if (m_Fetch->Ended.exchange(true))
+            return;
+        m_Fetch->Outcome.Error = error;
+        m_Fetch->Outcome.Absent = absent;
+    }
+
+    void Take(PageFetchOutcome outcome) const
+    {
+        if (!m_Fetch->Ended.exchange(true))
+            m_Fetch->Outcome = std::move(outcome);
     }
 
 private:
-    PageLoadRequest m_Request;
-    std::atomic<bool> m_Resolved{false};
+    PendingPageFetch* m_Fetch;
 };
 
-// The decode continuation: the page's stored bytes to its loaded bytes. A page is not an asset, so the
-// continuation's own result is always null.
-SharedPtr<Asset> DecodeLoadedPage(PendingPageLoad& load, Vector<uint8> bytes)
+// The decode continuation of a store page: its stored bytes to its loaded bytes.
+void DecodeStorePage(const PageFetchHolder& holder, const Vector<uint8>& bytes)
 {
-    if (load.IsCancelled())
+    PendingPageFetch& fetch = holder.Fetch();
+    if (IsSet(fetch.Cancel))
     {
-        load.Fail("the page load was cancelled");
-        return nullptr;
+        holder.End("the page load was cancelled", false);
+        return;
     }
-    std::vector<uint8> payload;
-    if (!load.Request().Store->DecodePayload(load.Request().Address, bytes, payload))
+    std::shared_ptr<std::vector<uint8>> payload = TakeSpare(*fetch.State, fetch.Source.PayloadBytes());
+    if (!fetch.Source.Store->DecodePayload(fetch.Address, bytes, *payload))
     {
-        load.Fail("the page's bytes are not its stored size");
-        return nullptr;
+        holder.End("the page's bytes are not its stored size", false);
+        return;
     }
-    load.Load(std::move(payload));
-    return nullptr;
+    holder.Take(PageFetchOutcome{fetch.Address, std::move(payload), {}, false});
+}
+
+// Reads the store page of `holder`'s fetch on the reader threads and decodes it on a Background job.
+// A page that is not in the store ends the fetch here.
+void ReadStorePage(AssetIOService& io, const PageFetchHolder& holder)
+{
+    PendingPageFetch& fetch = holder.Fetch();
+    const PageStoreReader& store = *fetch.Source.Store;
+    const PageIndexEntry* entry = store.Layout().FindPresent(fetch.Address);
+    if (!entry)
+    {
+        holder.End("the page is not in the store", true);
+        return;
+    }
+    AssetIOService::ReadRequest read;
+    read.Metadata.Path = store.File();
+    read.Priority = AssetLoadPriority::High;
+    read.RangeOffset = store.BaseOffset() + entry->Offset;
+    read.RangeBytes = store.Layout().StoredBytes(*entry);
+    read.CancelRequested = fetch.Cancel;
+    read.ProcessData = [holder](Vector<uint8> bytes) {
+        DecodeStorePage(holder, bytes);
+        return SharedPtr<Asset>(); // a page is not an asset
+    };
+    read.OnFailure = [holder](const String& error) { holder.End(error, false); };
+    io.SubmitRead(std::move(read));
+}
+
+// A generated or plane page, or a store page without the reader threads, on the calling thread.
+void RunFetch(const PageFetchHolder& holder)
+{
+    PendingPageFetch& fetch = holder.Fetch();
+    if (IsSet(fetch.Cancel))
+    {
+        holder.End("the stream was restarted", false);
+        return;
+    }
+    holder.Take(FetchPage(fetch.Source, fetch.Address));
 }
 
 // Page `address` of every plane of `source`, the planes' bytes one after the other. A single plane's
@@ -100,27 +202,71 @@ PageFetchOutcome FetchPlanes(const PageSource& source, const PageAddress& addres
 
 } // namespace
 
-void SubmitPageLoad(AssetIOService& io, PageLoadRequest request)
+struct PageFetcher::Shared : FetchState
 {
-    const PageIndexEntry* entry = request.Store ? request.Store->Layout().FindPresent(request.Address) : nullptr;
-    if (!entry)
+};
+
+PageFetcher::PageFetcher(JobSystem::WorkStealingThreadPool* pool, AssetIOService* io, uint32 loadsInFlight)
+    : m_Pool(pool)
+    , m_Io(io)
+    , m_Shared(std::make_shared<Shared>())
+{
+    m_Shared->Ended.reserve(loadsInFlight);
+    m_Shared->Taking.reserve(loadsInFlight);
+    m_Shared->Spares.reserve(loadsInFlight);
+    m_Shared->SpareLimit = loadsInFlight;
+}
+
+PageFetcher::~PageFetcher() = default;
+
+void PageFetcher::Fetch(const PageSource& source, const PageAddress& address,
+                        std::shared_ptr<std::atomic<bool>> cancel, const PageFetchTag& tag)
+{
+    PendingPageFetch& fetch = *m_Shared->Fetches.New();
+    fetch.State = m_Shared;
+    fetch.Address = address;
+    fetch.Cancel = std::move(cancel);
+    fetch.Tag = tag;
+    fetch.Outcome.Address = address;
+    const PageFetchHolder holder(fetch);
+    if (source.Store && m_Io)
     {
-        request.OnFailed(request.Address, "the page is not in the store");
+        fetch.Source.Store = source.Store;
+        ReadStorePage(*m_Io, holder);
         return;
     }
+    fetch.Source = source;
+    if (m_Pool)
+        m_Pool->Submit([holder]() { RunFetch(holder); }, JobSystem::JobPriority::Background);
+    else
+        RunFetch(holder);
+}
 
-    auto load = std::make_shared<PendingPageLoad>(std::move(request));
-    const PageLoadRequest& pending = load->Request();
-    AssetIOService::ReadRequest read;
-    read.AssetGuid = pending.StoreAsset;
-    read.Metadata.Path = pending.Store->File();
-    read.Priority = pending.Priority;
-    read.RangeOffset = pending.Store->BaseOffset() + entry->Offset;
-    read.RangeBytes = pending.Store->Layout().StoredBytes(*entry);
-    read.CancelRequested = pending.Cancel;
-    read.ProcessData = [load](Vector<uint8> bytes) { return DecodeLoadedPage(*load, std::move(bytes)); };
-    read.OnFailure = [load](const String& error) { load->Fail(error); };
-    io.SubmitRead(std::move(read));
+void PageFetcher::Finished(std::vector<FinishedPageFetch>& finished)
+{
+    finished.clear();
+    FetchState& state = *m_Shared;
+    {
+        std::lock_guard lock(state.Mutex);
+        state.Taking.swap(state.Ended);
+    }
+    for (PendingPageFetch* fetch : state.Taking)
+    {
+        finished.push_back(FinishedPageFetch{fetch->Tag, std::move(fetch->Outcome)});
+        state.Fetches.Delete(fetch);
+    }
+    state.Taking.clear();
+}
+
+void PageFetcher::Reuse(std::shared_ptr<const std::vector<uint8>> bytes)
+{
+    if (!bytes || bytes.use_count() != 1)
+        return;
+    FetchState& state = *m_Shared;
+    std::lock_guard lock(state.Mutex);
+    // Every fetch makes its bytes as a mutable vector, so a later decode may write them again.
+    if (state.Spares.size() < state.SpareLimit)
+        state.Spares.push_back(std::const_pointer_cast<std::vector<uint8>>(std::move(bytes)));
 }
 
 uint32 PageSource::PayloadBytes() const
@@ -169,48 +315,13 @@ PageFetchOutcome FetchPage(const PageSource& source, const PageAddress& address)
             outcome.Absent = true; // outside the generated pyramid
         return outcome;
     }
-    std::vector<uint8> stored;
+    ByteBuffer stored;
     if (source.Store && source.Store->ReadPageBytes(address, stored) &&
         source.Store->DecodePayload(address, stored, *payload))
         outcome.Bytes = std::move(payload);
     else
         outcome.Error = "the page store could not be read";
     return outcome;
-}
-
-void SubmitPageFetch(JobSystem::WorkStealingThreadPool* pool, AssetIOService* io, const PageSource& source,
-                     const PageAddress& address, std::shared_ptr<std::atomic<bool>> cancel,
-                     std::function<void(PageFetchOutcome)> done)
-{
-    if (source.Store && io)
-    {
-        auto shared = std::make_shared<std::function<void(PageFetchOutcome)>>(std::move(done));
-        PageLoadRequest request;
-        request.Store = source.Store;
-        request.Address = address;
-        request.Priority = AssetLoadPriority::High;
-        request.Cancel = std::move(cancel);
-        request.OnLoaded = [shared](const PageAddress& page, std::vector<uint8> payload) {
-            (*shared)(PageFetchOutcome{page, std::make_shared<const std::vector<uint8>>(std::move(payload)), {}, false});
-        };
-        request.OnFailed = [shared, store = source.Store](const PageAddress& page, const std::string& error) {
-            (*shared)(PageFetchOutcome{page, nullptr, error, !store->Layout().FindPresent(page)});
-        };
-        SubmitPageLoad(*io, std::move(request));
-        return;
-    }
-    auto fetch = [source, address, cancel = std::move(cancel), done = std::move(done)]() {
-        if (cancel && cancel->load())
-        {
-            done(PageFetchOutcome{address, nullptr, "the stream was restarted", false});
-            return;
-        }
-        done(FetchPage(source, address));
-    };
-    if (pool)
-        pool->Submit(std::move(fetch), JobSystem::JobPriority::Background);
-    else
-        fetch();
 }
 
 } // namespace GameEngine::PageStreaming

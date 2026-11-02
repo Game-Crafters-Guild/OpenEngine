@@ -1348,13 +1348,11 @@ void RenderServices::RaiseAnimatedVertexModifierContentSignals(Rendering::ViewId
     if (castsShadows)
     {
         entry->CastsShadows = true;
-        // Same argument one step further: the shadow caches would retain a
-        // cascade layer rasterized at an older deformation, and the canopy
-        // would sway while its shadow held still. The advance is unattributed:
-        // the deforming casters are not named by a sphere set here, so the
-        // atlas planner treats every light in the world as dirty.
-        NotifyShadowCasterContentChanged(
-            view->worldId, std::span<const ShadowCasterChangeSphere>{}, /*unattributed=*/true);
+        // Without this advance the shadow caches keep a layer at an older
+        // deformation. It names no caster spheres, so every point light
+        // refreshes; the cascade cache defers it as CasterDeformed.
+        NotifyShadowCasterContentChanged(view->worldId, {},
+                                         ShadowCasterChangeScope::VertexDeformation);
     }
 }
 

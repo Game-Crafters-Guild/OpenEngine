@@ -2970,7 +2970,7 @@ void RenderExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             worldId,
             unattributed ? std::span<const ShadowCasterChangeSphere>{}
                          : std::span<const ShadowCasterChangeSphere>(m_ChangedCasterSpheres),
-            unattributed);
+            unattributed ? ShadowCasterChangeScope::Unbounded : ShadowCasterChangeScope::Bounded);
     }
     // Idle-recompute-elision content version: the same lane verdict. The
     // animated-vertex term that also belongs here is raised by the batch-key

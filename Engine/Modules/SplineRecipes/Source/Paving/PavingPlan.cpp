@@ -63,7 +63,7 @@ uint32 FirstByRank(std::span<const PavingSource> sources, std::span<const uint32
 {
     uint32 best = candidates.front();
     for (const uint32 candidate : candidates)
-        if (RanksBefore(sources[candidate], sources[best]))
+        if (RanksBefore(sources[candidate].Rank, sources[best].Rank))
             best = candidate;
     return best;
 }
@@ -206,7 +206,7 @@ SG::PavedArm BuildPavedArm(const PavingRoadCurve& road, float32 nodeArcLength, i
     return arm;
 }
 
-bool RanksBefore(const PavingSource& a, const PavingSource& b)
+bool RanksBefore(const PavingRank& a, const PavingRank& b)
 {
     if (std::fabs(a.LengthMeters - b.LengthMeters) > kRankLengthResolutionMeters)
         return a.LengthMeters > b.LengthMeters;
@@ -216,7 +216,7 @@ bool RanksBefore(const PavingSource& a, const PavingSource& b)
         return a.FirstPoint.y < b.FirstPoint.y;
     if (!a.SceneId.empty() && !b.SceneId.empty() && a.SceneId != b.SceneId)
         return a.SceneId < b.SceneId;
-    return a.Entity.id < b.Entity.id;
+    return a.Entity < b.Entity;
 }
 
 PavingPlan PlanPavings(std::span<const PavingSource> sources)
@@ -290,6 +290,7 @@ PavingPlan PlanPavings(std::span<const PavingSource> sources)
     for (const SG::PavedArm& arm : arms)
         plan.ArmRoads.push_back(arm.Road);
     plan.Arms = std::move(arms);
+    plan.Outlines = std::move(outlines);
 
     // The sources each region holds: its outlines' and its arms'.
     std::vector<std::vector<uint32>> regionSources(plan.Footprint.Regions.size());

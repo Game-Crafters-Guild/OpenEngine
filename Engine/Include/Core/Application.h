@@ -85,8 +85,8 @@ struct ApplicationConfig {
     // simulation runs; the host brings up no window or device of its own either.
     bool Headless = false;
     // Where the engine's audio goes (Audio/AudioTypes.h). Value-initialized to
-    // AudioOutput::Device; AudioOutput::Silent mixes with no output device, for
-    // isolated and automated runs. Ignored under Headless, which opens no audio.
+    // AudioOutput::Silent, which mixes with no output device; an application that
+    // plays sound sets AudioOutput::Device. Ignored under Headless, which opens no audio.
     Audio::AudioOutput AudioOutput{};
     // Set only by the scripting ABI's bootstrap (DllBootstrap::EnsureEngineInitialized),
     // which initializes an engine for a host that has no frame loop of its own (a
@@ -205,6 +205,10 @@ public:
     bool IsFixedFrameRateEnabled() const { return m_FixedDeltaTime > 0.0; }
     double GetFixedFrameRate() const { return m_FixedDeltaTime > 0.0 ? (1.0 / m_FixedDeltaTime) : 0.0; }
 
+    /// @brief Hold each frame to at most `fps` with the GE_FRAME_CAP wait; 0 removes the cap. Main thread only.
+    /// When GE_FRAME_CAP or a headless fixed frame rate also holds the frame, the lower rate applies.
+    void SetFrameRateCap(double fps);
+
     // Coarse per-frame phase timings (CPU), captured once per frame from the main loop.
     struct FramePhaseTimings
     {
@@ -322,6 +326,7 @@ private:
 	    float64 m_TotalTime;
 	    uint64 m_FrameCount;
         float64 m_FixedDeltaTime = 0.0;
+        float64 m_FrameRateCap = 0.0; // 0: no cap from SetFrameRateCap
 
 	    // Sliding-window FPS state. Fixed-size ring instead of std::deque to
 	    // avoid per-block bookkeeping in Debug builds and per-frame heap

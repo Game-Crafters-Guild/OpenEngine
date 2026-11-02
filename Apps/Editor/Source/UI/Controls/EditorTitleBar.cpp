@@ -112,7 +112,9 @@ void EditorTitleBar::Bind(INativeToolbar* toolbar, Platform::Window* window)
     }
     if (!LoadAssets())
     {
-        Logger::Log::Error("EditorTitleBar: failed to load UI/controls/EditorTitleBar.uxml or .css; the window keeps its system title bar");
+        Logger::Log::Error("EditorTitleBar: failed to load UI/controls/EditorTitleBar.uxml or .css; the window shows its system title bar");
+        // Height 0 removes the custom frame that the toolbar installed.
+        toolbar->SetTitleBarLayout(0, {});
         m_Toolbar = nullptr;
         m_Window = nullptr;
     }

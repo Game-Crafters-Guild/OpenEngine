@@ -260,9 +260,9 @@ private:
     // when nothing is selected. Hits behind the ray origin are rejected.
     bool RaycastEditingPlane(const GizmoRay& ray, Mathematics::Vector3& outHit);
 
-    // Raycast against terrain heightfield and scene meshes.
-    // When hitEntityId is non-null, receives the ECS entity id of the mesh hit
-    // (0 if the hit came from terrain or the fallback plane).
+    // Casts the ray onto the terrain and the scene meshes. The ray passes through generator output
+    // and takes no box hit. When hitEntityId is not null, it receives the entity id of the mesh hit
+    // (0 for the terrain or the fallback plane).
     bool RaycastScene(const GizmoRay& ray,
                       Mathematics::Vector3& outHit,
                       uint32* hitEntityId = nullptr);

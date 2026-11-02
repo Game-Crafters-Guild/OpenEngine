@@ -2,6 +2,7 @@
 
 #include "ECS/Entity.h"
 #include "Scene/PrefabAuthoring.h"
+#include "Scene/SceneIO.h"
 #include "Types/Color.h"
 
 #include <cstddef>
@@ -13,11 +14,6 @@
 namespace GameEngine::ECS
 {
 class World;
-}
-
-namespace GameEngine::Scene
-{
-struct SceneLoadSkip;
 }
 
 namespace GameEngine::Editor
@@ -85,11 +81,11 @@ struct PrefabOverridesListModel
     /// The overrides of the outermost instance that holds `entity`. `loadSkips` is the scene's load report: each
     /// orphaned override that the load recorded on the instance's root is a stale row.
     static PrefabOverridesListModel Describe(ECS::World& world, ECS::EntityHandle entity,
-                                             std::span<const Scene::SceneLoadSkip> loadSkips);
+                                             std::span<const Scene::SceneDegradation::Skip> loadSkips);
 
     /// The row counts that Describe gives for the same arguments, without the labels and the prefab values.
     static PrefabOverrideCounts Count(ECS::World& world, ECS::EntityHandle entity,
-                                      std::span<const Scene::SceneLoadSkip> loadSkips);
+                                      std::span<const Scene::SceneDegradation::Skip> loadSkips);
 };
 
 } // namespace GameEngine::Editor

@@ -61,32 +61,33 @@ void AStarSolver::ReleaseScratchAbove(uint32 maxCells)
     FreeBuffer(m_VisitStamp);
 }
 
-bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32 endIndex,
-                         uint32 excludeAgentId, float32 currentTime,
-                         uint32 agentCellRadius,
-                         std::vector<uint32>& outPathCellIndices)
+GridSolveEnd AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32 endIndex,
+                                 uint32 excludeAgentId, float32 currentTime,
+                                 uint32 agentCellRadius,
+                                 std::vector<uint32>& outPathCellIndices, uint32& outExpansions)
 {
     outPathCellIndices.clear();
+    outExpansions = 0;
 
     if (startIndex == endIndex)
     {
         outPathCellIndices.push_back(startIndex);
-        return true;
+        return GridSolveEnd::Reached;
     }
 
     const uint32 cellCount = grid.GetCellCount();
     if (startIndex >= cellCount || endIndex >= cellCount)
-        return false;
+        return GridSolveEnd::Refused;
 
     uint32 startX = 0, startZ = 0, endX = 0, endZ = 0;
     grid.CellFromIndex(startIndex, startX, startZ);
     grid.CellFromIndex(endIndex, endX, endZ);
     if (grid.IsCellBlocked(startX, startZ) || grid.IsCellBlocked(endX, endZ))
-        return false;
+        return GridSolveEnd::Refused;
     // A goal outside the start's region cannot be reached: fail here, before the scratch is sized,
     // instead of expanding every cell the start reaches.
     if (!grid.InSameRegion(startIndex, endIndex))
-        return false;
+        return GridSolveEnd::OtherRegion;
 
     // Every cell is expanded at most once (the closed set), so a path that exists is found however
     // far it detours. The worst case is a goal in the start's region that the agent still cannot
@@ -115,6 +116,7 @@ bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32
     m_GScore[startIndex] = 0.0f;
     openList.push_back({startIndex, Heuristic(grid, startIndex, endIndex)});
 
+    // A local counter: m_Closed is a uint8 buffer, so its stores may alias a counter behind a reference.
     uint32 expansions = 0;
     while (!openList.empty() && expansions < maxExpansions)
     {
@@ -133,7 +135,8 @@ bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32
                 idx = m_Parent[idx];
             }
             std::reverse(outPathCellIndices.begin(), outPathCellIndices.end());
-            return true;
+            outExpansions = expansions;
+            return GridSolveEnd::Reached;
         }
 
         if (m_Closed[current.CellIndex])
@@ -229,7 +232,8 @@ bool AStarSolver::Solve(const GridMap::ReadView& grid, uint32 startIndex, uint32
         }
     }
 
-    return false;
+    outExpansions = expansions;
+    return GridSolveEnd::Unreachable;
 }
 
 void AStarSolver::BeginGeneration()

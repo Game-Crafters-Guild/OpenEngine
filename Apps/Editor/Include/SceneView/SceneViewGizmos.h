@@ -547,6 +547,9 @@ void AppendThickWireCircleTriangles(const GizmoRenderContext& context,
 			const std::vector<GizmoLineGroup>* GetGizmoLineGroups(Rendering::ViewId viewId);
 			void ResetGizmoTriangleGroups(Rendering::ViewId viewId);
 			const std::vector<GizmoTriangleGroup>* GetGizmoTriangleGroups(Rendering::ViewId viewId);
+			// Frees the line and triangle groups of a closed view and the vertex streams they keep.
+			// The groups are per thread: call it on the thread that records the view's gizmos.
+			void ReleaseGizmoGroups(Rendering::ViewId viewId);
 
 			// Utility used by interactive gizmos for picking/dragging. Projects a
 			// world-space ray onto an infinite line defined by an origin and

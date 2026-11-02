@@ -84,6 +84,8 @@ A Player whose `game.config` turns `window.vsync` off runs uncapped. To cap it, 
 
 To run a Player without sound, for example an automated test or a timing run on a shared machine, pass `--silent-audio` or set the environment variable `GE_AUDIO_OUTPUT=silent`. The flag wins when both are given. The game's audio is mixed as usual, so voices start, finish, and meter exactly as with sound, but no audio device is opened. The editor reads `GE_AUDIO_OUTPUT` the same way. Any value other than `silent` or `device` is ignored with a warning in the log.
 
+The editor and the Player ask for the audio device. A program that starts the engine itself, through its own `ApplicationConfig`, opens no audio device by default: set `AudioOutput` to `Audio::AudioOutput::Device` to play sound on the system's default playback device. Tests and tools keep the default and mix on the Silent output.
+
 ## SteamPipe
 
 Install the Steamworks SDK's SteamCMD/ContentBuilder for your platform. Log in interactively once with your build account and complete Steam Guard. Pass the executable or the `steamcmd.sh` wrapper with `--steamcmd`, or set `STEAMCMD`. Pass `--username`, or set `STEAM_BUILD_USER`. Passwords and tokens do not belong in the project configuration. SteamCMD owns the authenticated session.

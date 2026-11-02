@@ -4,6 +4,7 @@
 
 #include "PageStreaming/PageLoader.h"
 #include "PageStreaming/PageStore/PageStoreReader.h"
+#include "Types/ByteBuffer.h"
 
 #include <mutex>
 
@@ -29,7 +30,7 @@ PageFetchOutcome PageStoreAccess::Fetch(const PageAddress& address) const
 {
     PageFetchOutcome outcome;
     outcome.Address = address;
-    std::vector<uint8> stored;
+    ByteBuffer stored;
     auto payload = std::make_shared<std::vector<uint8>>();
     std::shared_lock lock(m_Mutex);
     if (m_Writing)

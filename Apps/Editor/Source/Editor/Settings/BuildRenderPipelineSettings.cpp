@@ -3,9 +3,7 @@
 #include "Editor/Settings/BuildSettingsStore.h"
 #include "Editor/Settings/Render/RenderPipelineSettings.h"
 #include "Core/Engine.h"
-
-#include <algorithm>
-#include <cctype>
+#include "Types/StringUtils.h"
 
 namespace GameEngine {
 namespace {
@@ -14,14 +12,6 @@ using Editor::LoadBuildBoolSetting;
 using Editor::LoadBuildStringSetting;
 using Editor::SaveBuildBoolSetting;
 using Editor::SaveBuildStringSetting;
-
-std::string ToLowerAsciiCopy(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
 
 constexpr const char* kGlobalBuildRenderPipelinePrefKey = "build.globalRenderPipeline";
 
@@ -91,7 +81,7 @@ std::string ResolveBuildRenderPipelineForPlatform(const std::string& platformNam
     if (!platformPipeline.empty())
         return platformPipeline;
 
-    if (ToLowerAsciiCopy(platformName) == "steam")
+    if (ToLowerAscii(platformName) == "steam")
         return kDefaultBuildRenderPipelinePath;
 
     return ResolveBuildGlobalRenderPipeline();

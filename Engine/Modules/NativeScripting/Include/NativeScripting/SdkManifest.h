@@ -22,8 +22,8 @@ namespace NativeScripting
 {
 
 // Load <sdkRoot>/nativescripting/manifest.txt into outConfig (engine-interface fields:
-// CMakeExe, Config, IncludeDirs, EngineImportLib, EngineBinary, CompileDefinitions, SdkEntrySource,
-// DotnetExe, ComponentScannerExe, DetectBase; plus EditorImportLib/EditorBinary/EditorIncludeDirs
+// CMakeExe, Config, IncludeDirs, EngineImportLib, EngineBinary, MacOSDeploymentTarget, CompileDefinitions,
+// SdkEntrySource, DotnetExe, ComponentScannerExe, DetectBase; plus EditorImportLib/EditorBinary/EditorIncludeDirs
 // when the editor's SDK staged them). Relative manifest paths are resolved
 // against sdkRoot. The user DLL's build config is mapped from the engine's config to a
 // CRT-compatible standalone config (engine Debug → Debug /MDd; anything else → Release

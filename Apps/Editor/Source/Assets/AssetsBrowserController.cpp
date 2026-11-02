@@ -47,6 +47,7 @@
 #include "Thumbnails/ModelThumbnail/ModelThumbnailHandler.h"
 #include "Thumbnails/ThumbnailService.h"
 
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 #include "UI/SmartFolder/SmartFolder.h"
 #include "UI/SmartFolder/SmartFolderController.h"
@@ -1765,8 +1766,7 @@ void AssetsBrowserController::Initialize(TreeView* tree, GridView* grid, ListVie
             bool isVideo = false;
             if (!isDir && filePath.has_extension())
             {
-                auto ext = filePath.extension().string();
-                for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+                const std::string ext = LowerCaseExtension(filePath);
                 isScene = (ext == ".scene");
                 isScript = (ext == ".cs" || GetAssetTypeFromExtension(ext) == AssetType::NativeSource);
                 isVideo = (ext == ".mp4" || ext == ".mov" || ext == ".avi" ||
@@ -2897,8 +2897,7 @@ AssetExtensionKind ClassifyAssetExtension(const std::filesystem::path& path)
     AssetExtensionKind kind;
     if (!path.has_extension())
         return kind;
-    std::string ext = path.extension().string();
-    for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+    const std::string ext = LowerCaseExtension(path);
     kind.IsScene  = (ext == ".scene");
     kind.IsScript = (ext == ".cs" || GetAssetTypeFromExtension(ext) == AssetType::NativeSource);
     kind.IsVideo  = (ext == ".mp4" || ext == ".mov" || ext == ".avi" ||

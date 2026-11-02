@@ -12,9 +12,9 @@
 #include "AssetCore/SharedFileRead.h"
 #include "Terrain/Heightfield.h"
 #include "Types/Fnv1a.h"
+#include "Types/PathUtils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -29,14 +29,6 @@ namespace
 
 // Bytes read per step of the whole-file scan.
 constexpr std::size_t kScanChunkBytes = 64u * 1024u * 1024u;
-
-std::string LowerExtension(const std::filesystem::path& file)
-{
-    std::string ext = file.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext;
-}
 
 std::string ResolveRawSource(const std::filesystem::path& file, HeightSourceFormat format, uint32 samplesX,
                              uint32 samplesZ, HeightCookSource& out)
@@ -142,7 +134,7 @@ std::string StartStore(const HeightCookRequest& request, const PageStoreHeader& 
 std::string ResolveHeightCookSource(const std::filesystem::path& file, uint32 samplesX, uint32 samplesZ,
                                     HeightCookSource& out)
 {
-    const std::string ext = LowerExtension(file);
+    const std::string ext = LowerCaseExtension(file);
     if (ext == ".r32")
         return ResolveRawSource(file, HeightSourceFormat::R32, samplesX, samplesZ, out);
     if (ext == ".r16")

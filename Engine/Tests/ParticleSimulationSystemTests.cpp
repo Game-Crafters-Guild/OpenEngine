@@ -82,15 +82,16 @@ void RegisterLateProcessor(const std::string& id)
 
 // One stack file in a folder of its own, loaded the way the editor and the player load it: through
 // an asset manager over that folder, with no job system, so a load completes inside the request.
+// The root is canonical: the registry keys a file by its root's spelling, and temp can be a symlink.
 class StackFolder
 {
   public:
     StackFolder(const std::string& name, const std::string& json)
-        : m_Root(std::filesystem::temp_directory_path() / name)
+        : m_Root(std::filesystem::canonical(std::filesystem::temp_directory_path()) / name)
     {
         std::filesystem::remove_all(m_Root);
         std::filesystem::create_directories(m_Root);
-        m_File = std::filesystem::canonical(m_Root) / "Stack.particlestack";
+        m_File = m_Root / "Stack.particlestack";
         WriteText(m_File, json);
         EXPECT_TRUE(Assets.Initialize(m_Root));
         Assets.WaitForStartupScan();

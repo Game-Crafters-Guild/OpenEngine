@@ -9,12 +9,13 @@
 #include "ECSModules/Rendering/RenderingLoop.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Mathematics/Geometry.h"
+#include "PavingMesh.h"
+#include "PavingRoadUV.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "SplineGeometry/AreaGround.h"
 #include "SplineGeometry/PavedBorder.h"
 #include "SplineLayout/PieceEntity.h"
 #include "SplineRecipes/GeneratedSplineMesh.h"
-#include "SplineRecipes/Paving/PavingMesh.h"
 #include "SplineRecipes/Paving/SplinePavingSanitize.h"
 #include "SplineRecipes/RecipeBuildStates.h"
 #include "SplineRecipes/RecipeValidation.h"
@@ -346,7 +347,12 @@ bool SplinePavingController::Rebuild(ECS::World& world, Engine::Renderer::Render
 
         const std::string name = "SplinePaving_" + std::to_string(owner.Entity.id) + "_" + std::to_string(r);
         const SG::AreaGround ground = SG::BuildAreaGround(region.Pieces, SG::AreaGroundSettings{}, groundAt);
-        const PavingLidMesh lid = BuildPavingLidMesh(ground, owner.WorldMatrix, PavingPatternPhase(recipe.Seed));
+        const std::vector<PavingRoadUV> roads = RegionRoadUVs(plan, r, paved.Splines, paved.RoadRanks);
+        std::vector<SG::AreaRing> outlines;
+        for (const uint32 outline : region.Outlines)
+            outlines.push_back(plan.Outlines[outline]);
+        const PavingLidMesh lid =
+            BuildPavingLidMesh(ground, roads, outlines, owner.WorldMatrix, PavingPatternPhase(recipe.Seed));
 
         PavingLidMesh border;
         if (recipe.BorderWidth > 0.0f)

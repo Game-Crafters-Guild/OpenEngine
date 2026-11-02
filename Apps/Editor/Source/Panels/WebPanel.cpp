@@ -17,6 +17,7 @@
 #include "Platform/WebView.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <regex>
@@ -40,9 +41,7 @@ bool IsNativeDragAssetSupported(const std::filesystem::path& path)
     if (!std::filesystem::exists(path, ec) || std::filesystem::is_directory(path, ec))
         return false;
 
-    std::string ext = path.extension().string();
-    for (auto& c : ext)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string ext = GameEngine::LowerCaseExtension(path);
 
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
            ext == ".webp" || ext == ".gif" || ext == ".bmp";
@@ -316,9 +315,7 @@ void WebPanel::RefreshElementPointers()
             if (!std::filesystem::exists(droppedPath))
                 return;
 
-            std::string ext = droppedPath.extension().string();
-            for (auto& c : ext)
-                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const std::string ext = LowerCaseExtension(droppedPath);
 
             // Only handle common image formats for now.
             if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" &&

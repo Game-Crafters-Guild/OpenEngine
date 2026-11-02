@@ -2,6 +2,7 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Pipeline/PipelineCache.h"
 #include "Pipeline/PipelineBuildTable.h"
+#include "DescriptorSetCache.h"
 #include "Rendering/Core/Pipeline/PipelineDescTranslator.h"
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/Pipeline/PipelineManager.h"
@@ -20,6 +21,7 @@
 #include "../Metal/MetalDevice.h"
 #endif
 #include "Logger/Logger.h"
+#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <chrono>
@@ -275,11 +277,108 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
 
     IDevice::IDevice()
         : m_PipelineCache(std::make_unique<PipelineCache>()),
-          m_PipelineBuilds(std::make_shared<PipelineBuildTable>())
+          m_PipelineBuilds(std::make_shared<PipelineBuildTable>()),
+          m_DescriptorSetCache(std::make_unique<DescriptorSetCache>())
     {
     }
 
     IDevice::~IDevice() = default;
+
+    namespace
+    {
+    // Fill `update` with one write. The vectors keep their storage from the previous write.
+    void AssignDescriptorWrite(DescriptorSetUpdate& update, const DescriptorWrite& write)
+    {
+        update.binding = write.Binding;
+        update.arrayElement = write.ArrayElement;
+        update.type = write.Type;
+        update.buffers.clear();
+        update.bufferOffsets.clear();
+        update.bufferRanges.clear();
+        update.textures.clear();
+        update.textureViews.clear();
+        update.samplers.clear();
+        if (write.Buffer.IsValid())
+        {
+            update.buffers.push_back(write.Buffer);
+            update.bufferOffsets.push_back(static_cast<size_t>(write.Offset));
+            if (write.Range > 0)
+                update.bufferRanges.push_back(static_cast<size_t>(write.Range));
+        }
+        if (write.View.IsValid())
+            update.textureViews.push_back(write.View);
+        else if (write.Texture.IsValid())
+            update.textures.push_back(write.Texture);
+        if (write.Sampler.IsValid())
+            update.samplers.push_back(write.Sampler);
+    }
+    } // namespace
+
+    DescriptorSetHandle IDevice::GetOrCreateDescriptorSet(const DescriptorSetLayoutDesc& layout,
+                                                          std::span<const DescriptorWrite> writes,
+                                                          const char* debugName)
+    {
+        const bool bindsAccelerationStructure =
+            std::any_of(writes.begin(), writes.end(), [](const DescriptorWrite& write)
+                        { return write.Type == DescriptorType::AccelerationStructure; });
+        if (bindsAccelerationStructure)
+            return {};
+        const uint64_t key = DescriptorSetCache::HashContent(layout, writes);
+        if (const DescriptorSetHandle cached = m_DescriptorSetCache->Find(key, layout, writes); cached.IsValid())
+            return cached;
+
+        // A miss builds through the backend's own create and update, outside the cache lock.
+        DescriptorSetDesc desc{};
+        desc.layout = layout;
+        desc.debugName = debugName;
+        const DescriptorSetHandle built = CreateDescriptorSet(desc);
+        if (!built.IsValid())
+            return {};
+        WriteDescriptorSet(built, writes);
+        const DescriptorSetHandle kept = m_DescriptorSetCache->Insert(key, layout, writes, built);
+        if (kept != built)
+            DestroyDescriptorSet(built);
+        return kept;
+    }
+
+    void IDevice::WriteDescriptorSet(DescriptorSetHandle set, std::span<const DescriptorWrite> writes)
+    {
+        // One list per thread, because parallel recording writes sets concurrently. The updates keep their storage.
+        thread_local std::vector<DescriptorSetUpdate> updates;
+        if (updates.size() < writes.size())
+            updates.resize(writes.size());
+        for (size_t i = 0; i < writes.size(); ++i)
+            AssignDescriptorWrite(updates[i], writes[i]);
+        UpdateDescriptorSetBatch(set, std::span<const DescriptorSetUpdate>(updates.data(), writes.size()));
+    }
+
+    void IDevice::AgeCachedDescriptorSets()
+    {
+        std::vector<DescriptorSetHandle> expired;
+        m_DescriptorSetCache->Age(expired);
+        for (const DescriptorSetHandle set : expired)
+            DestroyDescriptorSet(set);
+    }
+
+    void IDevice::EvictCachedDescriptorSetsUsing(BufferHandle buffer)
+    {
+        m_DescriptorSetCache->EvictUsing(buffer);
+    }
+
+    void IDevice::EvictCachedDescriptorSetsUsing(TextureHandle texture)
+    {
+        m_DescriptorSetCache->EvictUsing(texture);
+    }
+
+    void IDevice::EvictCachedDescriptorSetsUsing(TextureViewHandle view)
+    {
+        m_DescriptorSetCache->EvictUsing(view);
+    }
+
+    void IDevice::EvictCachedDescriptorSetsUsing(SamplerHandle sampler)
+    {
+        m_DescriptorSetCache->EvictUsing(sampler);
+    }
 
     void IDevice::RegisterPerDeviceCacheCleanup(const char* id, std::function<void(IDevice*)> cleanup)
     {
@@ -302,6 +401,11 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         // anything they use is destroyed. Queued ones are cancelled: their jobs
         // find no request and do nothing.
         m_PipelineBuilds->Quiesce();
+
+        std::vector<DescriptorSetHandle> cachedSets;
+        m_DescriptorSetCache->TakeAll(cachedSets);
+        for (const DescriptorSetHandle set : cachedSets)
+            DestroyDescriptorSet(set);
 
         std::vector<std::pair<std::string, std::function<void(IDevice*)>>> cleanups;
         {

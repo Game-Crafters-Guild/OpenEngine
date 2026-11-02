@@ -90,7 +90,8 @@ class CBTResources
     // declaring against one frame selects the same element and agrees with the push constant.
     uint32_t AdvanceFrameCounter(uint32_t deviceFrameIndex)
     {
-        return m_FrameCounter.Tick(deviceFrameIndex);
+        // The push constant is 32-bit; the CPU and the GPU reduce the same low 32 bits.
+        return static_cast<uint32_t>(m_FrameCounter.Tick(deviceFrameIndex));
     }
 
     // C4 per-frame params UBO (binding 14) — camera + terrain params consumed by

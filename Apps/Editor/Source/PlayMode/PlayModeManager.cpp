@@ -21,6 +21,7 @@
 #include "PhysicsECS/PhysicsWorldService.h"
 #include "TerrainECS/TerrainService.h"
 #include "MarkupECS/MarkupService.h"
+#include "Scene/PrefabAuthoring.h"
 #include "Scripting/CoreCLRHost.h"
 #include "Scripting/PathResolver.h"
 #include "Scripting/ScriptManager.h"
@@ -278,6 +279,9 @@ void PlayModeManager::EnterPlayMode()
     if (auto* nativeScripts = EngineCore::GetInstance().GetNativeScriptManager())
         nativeScripts->SetHotReloadDeferred(true);
 
+    // The play session is the scene as it was at Play: a prefab file change reaches the scene at Stop.
+    Scene::SetPrefabPropagationDeferred(*m_World, true);
+
     // User C++ systems begin: OnStart on every registered system. They tick only during play,
     // after the snapshot — so any entities OnStart spawns are cleaned up by the exit restore.
     GameEngine::NativeScripting::StartUserSystems(*m_World);
@@ -400,6 +404,10 @@ void PlayModeManager::ExitPlayMode()
     m_EnteredSnapshot.reset();
     m_EnteredMarkupNotes.reset();
     m_PrePlayEntityIds.clear();
+
+    // The restored scene takes every prefab file change made during Play.
+    if (m_World)
+        Scene::SetPrefabPropagationDeferred(*m_World, false);
 
     // Re-enable native hot-reload and flush any source edit made during play (deferred in
     // EnterPlayMode) now that we're back in edit mode — so the rebuild + re-register happens

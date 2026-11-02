@@ -15,7 +15,7 @@ namespace
 // Applies one kept component through its schema: defaults for a bare line, else each authored
 // property in order. Leaves the error of the first property that does not apply in `error`.
 bool ApplyKeptComponent(ECS::World& world, ECS::EntityHandle entity, const ISceneComponentSchema& schema,
-                        const SceneLoadContext& context, const ECS::PreservedComponent& kept, std::string& error)
+                        const SceneReadContext& context, const ECS::PreservedComponent& kept, std::string& error)
 {
     if (kept.Props.empty())
         return schema.AddDefault(world, entity, &error);
@@ -36,7 +36,7 @@ std::size_t ResolveKeptComponents(ECS::World& world)
         return 0;
     ECS::UnresolvedComponentStore& kept = world.GetUnresolvedComponents();
 
-    SceneLoadContext context{};
+    SceneReadContext context{};
     context.TargetWorld = &world;
     std::size_t applied = 0;
     for (auto entityIt = kept.Map().begin(); entityIt != kept.Map().end();)

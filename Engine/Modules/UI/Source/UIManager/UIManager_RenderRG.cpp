@@ -352,7 +352,7 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
                 {
                     if (run.Count == 0)
                         continue;
-                    const DescriptorSetHandle texSet = m_SdfTextureRegistry->CreateDrawRunSet(run);
+                    const DescriptorSetHandle texSet = m_SdfTextureRegistry->GetDrawRunSet(run);
                     if (!texSet.IsValid())
                         continue;
                     ctx.Cmd->BindDescriptorSet(1, texSet, pipeline);
@@ -370,7 +370,7 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
 
             if (m_SdfTextureRegistry)
             {
-                DescriptorSetHandle texSet = m_SdfTextureRegistry->CreateTransientFrameSet();
+                DescriptorSetHandle texSet = m_SdfTextureRegistry->GetFrameSet();
                 if (texSet.IsValid())
                     ctx.Cmd->BindDescriptorSet(1, texSet, pipeline);
             }

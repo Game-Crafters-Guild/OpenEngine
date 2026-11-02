@@ -61,3 +61,17 @@ TEST(PathUtilsTests, APathBecomesUtf8WithForwardSlashesForAnyCharacters)
     const fs::path path = fs::path(u8"\u65E5\u672C") / u8"caf\u00E9.txt";
     EXPECT_EQ(PathToUtf8(path), "\xE6\x97\xA5\xE6\x9C\xAC/caf\xC3\xA9.txt"); // "日本/café.txt" in UTF-8
 }
+
+TEST(PathUtilsTests, TheLowerCaseExtensionKeepsItsDot)
+{
+    EXPECT_EQ(LowerCaseExtension("Textures/Photo.PNG"), ".png");
+    EXPECT_EQ(LowerCaseExtension("Scene.Scene"), ".scene");
+    EXPECT_EQ(LowerCaseExtension("archive.TAR.GZ"), ".gz") << "only the last extension counts";
+}
+
+TEST(PathUtilsTests, ANameWithNoExtensionHasAnEmptyLowerCaseExtension)
+{
+    EXPECT_EQ(LowerCaseExtension("Folder/Makefile"), "");
+    EXPECT_EQ(LowerCaseExtension("Folder/.gitignore"), "") << "a leading dot starts a name, not an extension";
+    EXPECT_EQ(LowerCaseExtension(""), "");
+}

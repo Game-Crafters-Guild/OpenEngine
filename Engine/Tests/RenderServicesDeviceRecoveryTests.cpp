@@ -30,7 +30,6 @@
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "Rendering/Passes/TonemapPass.h"
 
-#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -304,9 +303,7 @@ TEST(RenderServicesDeviceRecovery, PerViewLightBufferIsForgottenSoItIsRecreatedA
 
     const auto* pv = rs.Views().FindPerView(viewId);
     ASSERT_NE(pv, nullptr);
-    const auto beforeSlot = std::find_if(pv->LightBuffers.begin(), pv->LightBuffers.end(),
-                                         [](const auto& b) { return b.IsValid(); });
-    ASSERT_NE(beforeSlot, pv->LightBuffers.end())
+    ASSERT_TRUE(pv->HasLiveLightBuffer())
         << "the fixture must have created a light buffer, or the test proves nothing";
 
     // Drive the injected loss and the rebuild that follows it. Loop on the
@@ -326,9 +323,8 @@ TEST(RenderServicesDeviceRecovery, PerViewLightBufferIsForgottenSoItIsRecreatedA
     // IsValid(), which is exactly why the lazy create could not re-fire.
     const auto* pvAfter = rs.Views().FindPerView(viewId);
     ASSERT_NE(pvAfter, nullptr);
-    for (const auto& buf : pvAfter->LightBuffers)
-        EXPECT_FALSE(buf.IsValid())
-            << "a handle surviving the rebuild leaves the lazy create permanently inert";
+    EXPECT_FALSE(pvAfter->HasLiveLightBuffer())
+        << "a handle surviving the rebuild leaves the lazy create permanently inert";
 
     // And the lazy path must actually produce a live buffer on the new device.
     // Inside an acquired frame, as production does: the light buffer is one slot
@@ -338,10 +334,7 @@ TEST(RenderServicesDeviceRecovery, PerViewLightBufferIsForgottenSoItIsRecreatedA
     rs.WriteViewLightBuffer(viewId);
     const auto* pvRecreated = rs.Views().FindPerView(viewId);
     ASSERT_NE(pvRecreated, nullptr);
-    const auto afterSlot = std::find_if(pvRecreated->LightBuffers.begin(),
-                                        pvRecreated->LightBuffers.end(),
-                                        [](const auto& b) { return b.IsValid(); });
-    EXPECT_NE(afterSlot, pvRecreated->LightBuffers.end())
+    EXPECT_TRUE(pvRecreated->HasLiveLightBuffer())
         << "forgetting is only half the fix: the write must recreate on the live device";
 
     rs.Shutdown();

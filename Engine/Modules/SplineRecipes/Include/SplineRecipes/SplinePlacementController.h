@@ -6,6 +6,7 @@
 #include "Mathematics/Matrix4x4.h"
 #include "SplineRecipes/SplinePieceMaterial.h"
 #include "SplineRecipes/SplineRebuildGate.h"
+#include "SplineRecipes/SplineSurfaceConform.h"
 #include "Types/FlatMap.h"
 #include "Types/Types.h"
 
@@ -72,6 +73,11 @@ private:
         // The station of each live tile, parallel to Tiles. The mesh pick keys on the station, and dropout
         // can give the same tile count from other stations, so a rebuild compares this sequence, not the count.
         std::vector<uint32> TileStationIndices;
+        // The run's world bounds at RunSpline, read again only when the spline changes.
+        SplineObservedInputs RunSpline{};
+        Mathematics::AABB RunBounds = Mathematics::AABB::Empty();
+        // The meshes under a Scene-conform run, read again only when the scene TLAS or the run changes.
+        SceneConformDigest SceneDigest;
         uint64 VisitStamp = 0;
     };
 

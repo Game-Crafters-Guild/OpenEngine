@@ -6,10 +6,9 @@
 #include "Logger/Logger.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Thumbnails/ModelThumbnail/ModelThumbnailHandler.h"
+#include "Types/StringUtils.h"
 
 #include <fstream>
-#include <algorithm>
-#include <cctype>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -81,14 +80,6 @@ bool WriteMaterialFile(const std::filesystem::path& path, const MaterialDocument
     return static_cast<bool>(out);
 }
 
-std::string LowerAscii(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
-
 } // namespace
 
 std::filesystem::path ResolveMaterialPath(const std::filesystem::path& assetsRoot,
@@ -104,7 +95,7 @@ bool IsDerivedThumbnailMaterialPath(const std::filesystem::path& materialPath)
 {
     if (materialPath.empty())
         return false;
-    const std::string filename = LowerAscii(materialPath.filename().string());
+    const std::string filename = ToLowerAscii(materialPath.filename().string());
     if (filename.size() < 15 || filename.rfind(".thumb.material") != filename.size() - 15)
         return false;
     return IsDerivedThumbnailAssetPath(materialPath);
@@ -114,7 +105,7 @@ bool IsDerivedThumbnailAssetPath(const std::filesystem::path& assetPath)
 {
     if (assetPath.empty())
         return false;
-    const std::string path = LowerAscii(assetPath.generic_string());
+    const std::string path = ToLowerAscii(assetPath.generic_string());
     return path.find("generated/shadergraphthumbnails/") != std::string::npos ||
            path.find("generated\\shadergraphthumbnails\\") != std::string::npos;
 }

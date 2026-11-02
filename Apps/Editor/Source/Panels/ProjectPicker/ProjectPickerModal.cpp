@@ -27,6 +27,7 @@
 #include "Core/Engine.h"
 #include "Input/KeyCodes.h"
 #include "Types/Color.h"
+#include "Types/StringUtils.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -1264,8 +1265,7 @@ std::string ProjectPickerModal::NormalizePathKey(const std::filesystem::path& pa
 {
     std::string key = NormalizePath(path).string();
 #if defined(_WIN32)
-    std::transform(key.begin(), key.end(), key.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    key = ToLowerAscii(key);
 #endif
     return key;
 }
@@ -2658,9 +2658,7 @@ void ProjectPickerModal::RefreshRecentProjectsList()
         m_RecentProjectsContainer->RemoveChild(children.back().get());
     }
     
-    std::string normalizedQuery = m_SearchQuery;
-    std::transform(normalizedQuery.begin(), normalizedQuery.end(), normalizedQuery.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string normalizedQuery = ToLowerAscii(m_SearchQuery);
     m_FilteredProjectCount = 0;
 
     // The New project card is the first card. It opens the create page.
@@ -2686,9 +2684,7 @@ void ProjectPickerModal::RefreshRecentProjectsList()
     {
         const std::string fullPath = projectPath.string();
         const std::string projectName = ReadProjectDisplayName(projectPath);
-        std::string searchable = projectName + " " + fullPath;
-        std::transform(searchable.begin(), searchable.end(), searchable.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string searchable = ToLowerAscii(projectName + " " + fullPath);
         if (!normalizedQuery.empty() && searchable.find(normalizedQuery) == std::string::npos)
             continue;
 

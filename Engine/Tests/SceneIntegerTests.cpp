@@ -302,24 +302,24 @@ TEST_P(SceneUnsigned64RoundTrip, PreservesAllBitsThroughSaveLoadAndResave)
     expected.U32 = std::numeric_limits<std::uint32_t>::max();
     expected.I32 = std::numeric_limits<std::int32_t>::min();
     source.Create(expected);
-    ASSERT_TRUE(Scene::SaveSceneToFile(source, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(source, path));
     const std::string line = "SceneIntegerProbe.Unsigned = " + std::to_string(expected.Unsigned);
     EXPECT_NE(ReadText(path).find(line), std::string::npos);
 
     for (int pass = 0; pass < 2; ++pass)
     {
         ECS::World loaded;
-        Scene::SceneLoadDegradation degradation;
-        Scene::LoadOptions options;
+        Scene::SceneDegradation degradation;
+        Scene::SceneReadOptions options;
         options.outDegradation = &degradation;
-        ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+        ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
         EXPECT_TRUE(degradation.skips.empty());
         const auto actual = OnlyProbe(loaded);
         EXPECT_EQ(actual.Unsigned, expected.Unsigned);
         EXPECT_EQ(actual.Signed, expected.Signed);
         EXPECT_EQ(actual.U32, expected.U32);
         EXPECT_EQ(actual.I32, expected.I32);
-        ASSERT_TRUE(Scene::SaveSceneToFile(loaded, path));
+        ASSERT_TRUE(Scene::WriteSceneFile(loaded, path));
         EXPECT_NE(ReadText(path).find(line), std::string::npos);
     }
 }
@@ -340,17 +340,17 @@ TEST_P(SceneSigned64RoundTrip, PreservesSignedValueOnAdditiveLoad)
     SceneIntegerProbe expected;
     expected.Signed = GetParam();
     source.Create(expected);
-    ASSERT_TRUE(Scene::SaveSceneToFile(source, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(source, path));
 
     ECS::World loaded;
     SceneIntegerProbe prior;
     prior.Unsigned = 123;
     const auto existing = loaded.Create(prior).GetHandle();
-    Scene::SceneLoadDegradation degradation;
-    Scene::LoadOptions options;
-    options.mode = Scene::LoadMode::Additive;
+    Scene::SceneDegradation degradation;
+    Scene::SceneReadOptions options;
+    options.clearWorldFirst = false;
     options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, options));
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options));
     EXPECT_TRUE(degradation.skips.empty());
     ASSERT_NE(loaded.GetComponent<SceneIntegerProbe>(existing), nullptr);
     EXPECT_EQ(loaded.GetComponent<SceneIntegerProbe>(existing)->Unsigned, 123u);
@@ -394,10 +394,10 @@ TEST_P(SceneIntegerDegradation, KeepsDefaultAndPreservesRejectedTextOnSave)
         ASSERT_TRUE(file.good());
     }
     ECS::World loaded;
-    Scene::SceneLoadDegradation degradation;
-    Scene::LoadOptions options;
+    Scene::SceneDegradation degradation;
+    Scene::SceneReadOptions options;
     options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
     ASSERT_EQ(degradation.skips.size(), 1u);
     EXPECT_EQ(degradation.skips[0].field, field);
     EXPECT_TRUE(degradation.skips[0].preserved);
@@ -406,11 +406,11 @@ TEST_P(SceneIntegerDegradation, KeepsDefaultAndPreservesRejectedTextOnSave)
     EXPECT_EQ(actual.Signed, -7);
     EXPECT_EQ(actual.U32, 11u);
     EXPECT_EQ(actual.I32, -42);
-    ASSERT_TRUE(Scene::SaveSceneToFile(loaded, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(loaded, path));
     EXPECT_NE(ReadText(path).find(assignment), std::string::npos);
     ECS::World reloaded;
     degradation.skips.clear();
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded, path, options));
+    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, path, options));
     ASSERT_EQ(degradation.skips.size(), 1u);
     EXPECT_TRUE(degradation.skips[0].preserved);
     const auto again = OnlyProbe(reloaded);

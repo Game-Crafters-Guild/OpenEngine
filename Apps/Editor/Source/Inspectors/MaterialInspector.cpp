@@ -64,6 +64,7 @@
 #include "UI/StyleProperties.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "Types/NearestName.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 #include <nlohmann/json.hpp>
@@ -283,7 +284,7 @@ static void SaveDocToDisk(MaterialAsset* asset, const MaterialDocument& doc)
         const std::filesystem::path path = asset->GetPath();
         // Imported (MaterialX) materials round-trip their supported properties back into the .mtlx
         // in its own format — never overwrite a .mtlx source with engine JSON.
-        if (doc.shaderLocked && ToLowerAscii(path.extension().string()) == ".mtlx")
+        if (doc.shaderLocked && LowerCaseExtension(path) == ".mtlx")
         {
             wrote = WriteMaterialX(path.string(), doc);
         }

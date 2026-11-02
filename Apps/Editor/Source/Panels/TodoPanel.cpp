@@ -17,9 +17,9 @@
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <cmath>
@@ -375,9 +375,7 @@ void TodoPanel::RebuildTodoRows()
         if (m_SearchQuery.empty())
             return true;
         
-        std::string searchLower = m_SearchQuery;
-        std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(),
-            [](unsigned char c) { return std::tolower(c); });
+        const std::string searchLower = ToLowerAscii(m_SearchQuery);
         
         const std::string status = todo.Completed ? "completed" : "pending";
         std::string searchable;
@@ -387,8 +385,7 @@ void TodoPanel::RebuildTodoRows()
             searchable = todo.Text;
         else
             searchable = todo.Text + " " + status;
-        std::transform(searchable.begin(), searchable.end(), searchable.begin(),
-            [](unsigned char c) { return std::tolower(c); });
+        searchable = ToLowerAscii(searchable);
         
         return searchable.find(searchLower) != std::string::npos;
     };

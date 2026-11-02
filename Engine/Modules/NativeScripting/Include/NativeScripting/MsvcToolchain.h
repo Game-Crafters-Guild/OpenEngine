@@ -37,11 +37,10 @@ public:
     MsvcToolchain();
     ~MsvcToolchain();
 
-    // Kick detection as a job of the toolchain's "MSVC detection" channel (cap 1) on the
-    // job system: detection waits on vswhere and vcvars processes, so it holds no compute
-    // worker. No-op without a job system (detection must not run on a caller's thread).
-    // cacheDir is a user-writable directory for the captured env batch; empty → the OS
-    // temp dir. Call once at init.
+    // Start detection. With a job system it is a job of the "MSVC detection" channel (cap 1), so
+    // waits on vswhere and vcvars hold no compute worker. Without one, POSIX detects on the
+    // caller's thread (a PATH scan) and Windows does not detect. cacheDir is a user-writable
+    // directory for the captured env batch; empty → the OS temp dir. Call once at init.
     void WarmAsync(JobSystem::WorkStealingThreadPool* jobSystem, std::filesystem::path cacheDir = {});
 
     // True once detection completed AND a usable Ninja (+ MSVC env on Windows) was found.
@@ -65,7 +64,7 @@ public:
     std::filesystem::path EnvBatch() const; // empty on non-Windows
 
 private:
-    void Detect(std::filesystem::path cacheDir); // the "MSVC detection" job
+    void Detect(std::filesystem::path cacheDir); // the "MSVC detection" job; on POSIX without a job system, the caller's thread
 
     mutable std::mutex m_Mutex;
     std::atomic<bool> m_WarmStarted{false};      // a detection job was submitted

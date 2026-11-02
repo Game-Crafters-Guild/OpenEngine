@@ -275,4 +275,46 @@ TEST(EditorCommandLineTests, SessionLabel_EmptyEqualsValueReported)
     EXPECT_EQ(r.unrecognizedArgs, (std::vector<std::string>{"--session-label="}));
 }
 
+// --- --window ---
+
+TEST(EditorCommandLineTests, Window_SizeAndPosition)
+{
+    const auto r = Parse({"--window", "1920x1080+40+-60"});
+    ASSERT_TRUE(r.windowRect.has_value());
+    EXPECT_EQ(*r.windowRect, (Mathematics::RectInt{40, -60, 1920, 1080}));
+    EXPECT_TRUE(r.windowHasPosition);
+    EXPECT_TRUE(r.refusedArgs.empty());
+}
+
+TEST(EditorCommandLineTests, Window_EqualsFormSizeOnly)
+{
+    const auto r = Parse({"--window=1280x720"});
+    ASSERT_TRUE(r.windowRect.has_value());
+    EXPECT_EQ(r.windowRect->Width, 1280);
+    EXPECT_EQ(r.windowRect->Height, 720);
+    EXPECT_FALSE(r.windowHasPosition);
+    EXPECT_TRUE(r.refusedArgs.empty());
+}
+
+// A malformed value is refused, not ignored: the editor must not open maximized
+// when a recording asked for a fixed size.
+TEST(EditorCommandLineTests, Window_MalformedValuesRefused)
+{
+    for (const char* value : {"1920x1080+40", "1920x1080+40,40", "0x1080", "1920*1080", "1920x1080+40+40+1"})
+    {
+        const auto r = Parse({"--window", value});
+        EXPECT_FALSE(r.windowRect.has_value()) << value;
+        ASSERT_EQ(r.refusedArgs.size(), 1u) << value;
+        EXPECT_NE(r.refusedArgs[0].find("<width>x<height>"), std::string::npos) << value;
+    }
+}
+
+TEST(EditorCommandLineTests, Window_MissingValueDoesNotSwallowNextFlag)
+{
+    const auto r = Parse({"--window", "--project", "X"});
+    EXPECT_FALSE(r.windowRect.has_value());
+    ASSERT_TRUE(r.projectRoot.has_value());
+    EXPECT_EQ(r.refusedArgs.size(), 1u);
+}
+
 } // namespace GameEngine::Editor::Startup

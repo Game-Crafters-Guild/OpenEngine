@@ -14,11 +14,6 @@ std::size_t PageAddressHash::operator()(const PageAddress& address) const noexce
                                     (static_cast<uint64>(address.Face) << 61u));
 }
 
-std::size_t CachedPageHash::operator()(const CachedPage& page) const noexcept
-{
-    return PageAddressHash{}(page.Address) ^ (static_cast<std::size_t>(page.Stream) * 0xC2B2AE3D27D4EB4Full);
-}
-
 void PageCache::Configure(uint32 slotCount, uint32 framesInFlight, float32 fadeSeconds)
 {
     m_Pool.Initialize(slotCount, framesInFlight);
@@ -29,6 +24,9 @@ void PageCache::Configure(uint32 slotCount, uint32 framesInFlight, float32 fadeS
     m_Order.clear();
     m_Uploads.clear();
     m_Transitions.clear();
+    // Sized for every slot once, so a frame that changes each slot once allocates nothing.
+    m_Uploads.reserve(slotCount);
+    m_Transitions.reserve(slotCount);
     m_Rewrites.clear();
     m_FadeChanges.clear();
     m_FadeSeconds = fadeSeconds;

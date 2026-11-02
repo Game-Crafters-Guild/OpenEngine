@@ -112,7 +112,7 @@ TextureHandle CreateDummyTexture1x1(IDevice* device, TextureFormat format,
 // Bindless layout (set 1): two runtime-sized sampled-image arrays plus two
 // fixed samplers, so the layout is not constrained by
 // maxPerStageDescriptorSamplers. PARTIALLY_BOUND lets unused image slots stay
-// untouched; CreateTransientFrameSet writes a fresh set each draw, so
+// untouched; GetFrameSet never writes a set it has returned, so
 // cross-frame writes never happen.
 void UITextureRegistry::BuildBindlessLayoutDesc(const RenderingDeviceCapabilities& caps)
 {
@@ -120,12 +120,8 @@ void UITextureRegistry::BuildBindlessLayoutDesc(const RenderingDeviceCapabilitie
     m_MaxTextures = limits.colorTextures;
     m_MaxBandTextures = limits.bandTextures;
 
-    // PARTIALLY_BOUND permits leaving image slots unwritten, but it does not
-    // make reading them safe: the transient descriptor memory behind this set is
-    // bump-allocated and never zeroed, so an unwritten slot holds a recycled
-    // descriptor rather than a null one. A slot is only safe to leave unwritten
-    // if the shader provably never indexes it. Binding 1 is small and its data
-    // drives a shader loop bound, so CreateTransientFrameSet fills all of it.
+    // PARTIALLY_BOUND does not zero descriptor memory: an unwritten slot holds a stale descriptor.
+    // Binding 1 drives a shader loop bound, so GetFrameSet writes every slot.
 
     m_LayoutDesc.debugName = "UISdfTextureSet";
     m_LayoutDesc.bindings.clear();
@@ -276,12 +272,8 @@ void UITextureRegistry::CreateDeviceResourcesLocked()
         m_NearestSampler = m_Device->CreateSampler(nearestDesc);
     }
 
-    // Slot 0 of each array is reserved as its "no texture" fallback. Both
-    // arrays are PARTIALLY_BOUND and materialised into transient descriptor
-    // memory that is bump-allocated and never zeroed, so a slot left unwritten
-    // exposes whatever descriptor last occupied those bytes. Every slot the
-    // shader can index must therefore resolve to a live image of the right
-    // type, and slot 0 is the one that is always available to resolve to.
+    // Slot 0 of each array is its "no texture" fallback. An unwritten slot holds a stale descriptor,
+    // so every slot that the shader can index must resolve to a live image of the correct type.
     {
         const uint32_t white = 0xFFFFFFFFu;
         m_DummyTexture = CreateDummyTexture1x1(m_Device, TextureFormat::RGBA8_UNORM,
@@ -509,7 +501,7 @@ void UITextureRegistry::FreeSlot(uint32_t index)
 {
     if (index == 0)
         return;
-    // The slot returns to the pool at once: each in-flight frame's transient set
+    // The slot returns to the pool at once: each in-flight frame's set
     // holds its own copy of the slot's descriptor. The generation bump ends the
     // reservation that held the slot, if any.
     m_SlotGenerations[index] = NextSlotGeneration(m_SlotGenerations[index]);
@@ -594,10 +586,9 @@ void UITextureRegistry::UnregisterLocked(uint32_t index)
     // A slot is the value of at most one dedup key.
     m_HandleToIndex.EraseIf([index](const auto&, uint32_t slot) { return slot == index; });
 
-    // Replace the slot's state with the dummy before parking it. Previous
-    // frames still in-flight keep reading the transient set they were
-    // materialised from; that set captured the slot's old texture before
-    // Unregister ran and is safely owned by the frame's pool / DB ring.
+    // Write the dummy to the slot before the slot goes back to the pool. Frames in flight read
+    // the set that they bound. That set holds the old texture, and the device keeps the set until
+    // those frames finish.
     if (m_DummyTexture.IsValid())
         m_Binding0Entries.InsertOrAssign(index, { m_DummyTexture, m_DefaultSampler });
     else
@@ -640,7 +631,7 @@ void UITextureRegistry::ReleaseSlot(::GenerationalVector::Handle reservation)
         return;
     const uint32_t slot = reservation.Index();
     // Reserved slots are not part of m_HandleToIndex dedup. Clear their binding
-    // state before recycling so CreateTransientFrameSet never re-emits a stale
+    // state before recycling so GetFrameSet never re-emits a stale
     // texture handle after the source RG texture is retired.
     if (m_DummyTexture.IsValid())
         m_Binding0Entries.InsertOrAssign(slot, { m_DummyTexture, m_DefaultSampler });
@@ -659,7 +650,7 @@ void UITextureRegistry::UpdateSlot(::GenerationalVector::Handle reservation, Tex
     m_Binding0Entries.InsertOrAssign(reservation.Index(), { tex, samp });
 }
 
-DescriptorSetHandle UITextureRegistry::CreateTransientFrameSet()
+DescriptorSetHandle UITextureRegistry::GetFrameSet()
 {
     std::lock_guard<std::mutex> lock(m_Mutex);
     if (!m_Device)
@@ -670,18 +661,11 @@ DescriptorSetHandle UITextureRegistry::CreateTransientFrameSet()
     // path has no dropped write to report for this set.
     HealIfDeviceRebuiltLocked();
 
-    DescriptorSetDesc dsDesc{};
-    dsDesc.layout = m_LayoutDesc;
-    dsDesc.debugName = "UISdfTextureDescSet";
-    dsDesc.transient = true;
-    DescriptorSetHandle set = m_Device->CreateDescriptorSet(dsDesc);
-    if (!set.IsValid())
-        return {};
-
+    m_SetWrites.clear();
     if (m_DefaultSampler.IsValid())
-        m_Device->UpdateSamplerBinding(set, 2, m_DefaultSampler);
+        m_SetWrites.push_back({.Binding = 2, .Type = DescriptorType::Sampler, .Sampler = m_DefaultSampler});
     if (m_NearestSampler.IsValid())
-        m_Device->UpdateSamplerBinding(set, 3, m_NearestSampler);
+        m_SetWrites.push_back({.Binding = 3, .Type = DescriptorType::Sampler, .Sampler = m_NearestSampler});
 
     // Binding 0: sampled-image array of UI textures (icons, atlas pages,
     // Slug curve textures, RG-resolved scene views). Typically <30 active slots.
@@ -695,18 +679,13 @@ DescriptorSetHandle UITextureRegistry::CreateTransientFrameSet()
             e.Sampler = m_DefaultSampler;
         }
         if (texture.IsValid())
-            m_Device->UpdateImageBinding(set, 0, texture, slot);
+            m_SetWrites.push_back(
+                {.Binding = 0, .ArrayElement = slot, .Type = DescriptorType::Texture, .Texture = texture});
     }
 
-    // Binding 1: utexture2D array of Slug band textures (one per font page).
-    // Every slot is written, not just the occupied ones. The array is
-    // PARTIALLY_BOUND over transient descriptor memory that is bump-allocated
-    // and never zeroed, so an unwritten slot hands the shader a recycled
-    // descriptor from whatever previously occupied those bytes — and the shader
-    // turns this data into a loop trip count, so a stale descriptor here is a
-    // GPU hang, not a wrong pixel. Retired textures fall back to the same
-    // zero-filled integer dummy; the RGBA8_UNORM one belongs to binding 0 and
-    // would be a format-class mismatch in an integer array.
+    // Binding 1: one Slug band texture per font page. Every slot gets a write: the shader uses this
+    // data as a loop count, so a stale descriptor in an unwritten slot can hang the GPU. An empty
+    // slot gets the integer dummy, because the RGBA8_UNORM dummy is not an integer format.
     for (uint32_t slot = 0; slot < m_MaxBandTextures; ++slot)
     {
         TextureHandle texture = m_BandDummyTexture;
@@ -722,10 +701,11 @@ DescriptorSetHandle UITextureRegistry::CreateTransientFrameSet()
                 texture = e.Texture;
         }
         if (texture.IsValid())
-            m_Device->UpdateImageBinding(set, 1, texture, slot);
+            m_SetWrites.push_back(
+                {.Binding = 1, .ArrayElement = slot, .Type = DescriptorType::Texture, .Texture = texture});
     }
 
-    return set;
+    return m_Device->GetOrCreateDescriptorSet(m_LayoutDesc, m_SetWrites, "UISdfTextureDescSet");
 }
 
 TextureHandle UITextureRegistry::ResolveSlotTextureLocked(
@@ -745,24 +725,19 @@ TextureHandle UITextureRegistry::ResolveSlotTextureLocked(
     return texture.IsValid() ? texture : m_DummyTexture;
 }
 
-DescriptorSetHandle UITextureRegistry::CreateDrawRunSet(const UICompatDrawRun& run)
+DescriptorSetHandle UITextureRegistry::GetDrawRunSet(const UICompatDrawRun& run)
 {
     std::lock_guard<std::mutex> lock(m_Mutex);
     if (!m_Device)
         return {};
 
-    DescriptorSetDesc dsDesc{};
-    dsDesc.layout = m_LayoutDesc;
-    dsDesc.debugName = "UISdfTextureDescSetCompat";
-    dsDesc.transient = true;
-    DescriptorSetHandle set = m_Device->CreateDescriptorSet(dsDesc);
-    if (!set.IsValid())
-        return {};
-
+    m_SetWrites.clear();
     if (m_DefaultSampler.IsValid())
-        m_Device->UpdateSamplerBinding(set, kCompatLinearSamplerBinding, m_DefaultSampler);
+        m_SetWrites.push_back(
+            {.Binding = kCompatLinearSamplerBinding, .Type = DescriptorType::Sampler, .Sampler = m_DefaultSampler});
     if (m_NearestSampler.IsValid())
-        m_Device->UpdateSamplerBinding(set, kCompatNearestSamplerBinding, m_NearestSampler);
+        m_SetWrites.push_back(
+            {.Binding = kCompatNearestSamplerBinding, .Type = DescriptorType::Sampler, .Sampler = m_NearestSampler});
 
     // Every slot is written, claimed or not: the compat layout has no
     // partially-bound flag to lean on, and an unwritten binding is a validation
@@ -772,7 +747,7 @@ DescriptorSetHandle UITextureRegistry::CreateDrawRunSet(const UICompatDrawRun& r
         const TextureHandle tex = i < run.TextureCount
                                       ? ResolveSlotTextureLocked(m_Binding0Entries, run.Textures[i])
                                       : m_DummyTexture;
-        m_Device->UpdateImageBinding(set, kCompatTextureBinding0 + i, tex, 0);
+        m_SetWrites.push_back({.Binding = kCompatTextureBinding0 + i, .Type = DescriptorType::Texture, .Texture = tex});
     }
     for (uint32_t i = 0; i < kUiCompatGlyphSlots; ++i)
     {
@@ -781,11 +756,12 @@ DescriptorSetHandle UITextureRegistry::CreateDrawRunSet(const UICompatDrawRun& r
             claimed ? ResolveSlotTextureLocked(m_Binding0Entries, run.GlyphCurves[i]) : m_DummyTexture;
         const TextureHandle band =
             claimed ? ResolveSlotTextureLocked(m_Binding1Entries, run.GlyphBands[i]) : m_BandDummyTexture;
-        m_Device->UpdateImageBinding(set, kCompatGlyphCurveBinding0 + i, curve, 0);
-        m_Device->UpdateImageBinding(set, kCompatGlyphBandBinding0 + i, band, 0);
+        m_SetWrites.push_back(
+            {.Binding = kCompatGlyphCurveBinding0 + i, .Type = DescriptorType::Texture, .Texture = curve});
+        m_SetWrites.push_back({.Binding = kCompatGlyphBandBinding0 + i, .Type = DescriptorType::Texture, .Texture = band});
     }
 
-    return set;
+    return m_Device->GetOrCreateDescriptorSet(m_LayoutDesc, m_SetWrites, "UISdfTextureDescSetCompat");
 }
 
 // Helper: upload raw data to a GPU texture via staging buffer.

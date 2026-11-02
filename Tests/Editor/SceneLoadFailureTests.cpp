@@ -533,7 +533,7 @@ constexpr const char* kDropsOneField = "[scene name=\"Dropper\" version=1]\n"
                                        "Transform.noSuchProperty = 7\n";
 
 // Opens kDropsOneField and returns its one row, which must be never preserved and outstanding.
-Scene::SceneLoadSkip OpenTheDroppedRow(Editor::SceneDocumentManager& doc, const fs::path& scene)
+Scene::SceneDegradation::Skip OpenTheDroppedRow(Editor::SceneDocumentManager& doc, const fs::path& scene)
 {
     EXPECT_TRUE(doc.OpenSceneReplace(scene));
     EXPECT_TRUE(doc.GetLastLoadDegraded().has_value());
@@ -542,7 +542,7 @@ Scene::SceneLoadSkip OpenTheDroppedRow(Editor::SceneDocumentManager& doc, const 
         ADD_FAILURE() << "the corpus must load with exactly one row";
         return {};
     }
-    const Scene::SceneLoadSkip skip = doc.GetLastLoadDegraded()->Census.skips[0];
+    const Scene::SceneDegradation::Skip skip = doc.GetLastLoadDegraded()->Census.skips[0];
     EXPECT_FALSE(skip.preserved) << "precondition: the row must be one a save drops";
     EXPECT_EQ(doc.OutstandingDegradedSkipCount(), 1u) << "precondition: the row stands while its entity lives";
     return skip;
@@ -558,7 +558,7 @@ TEST_F(SceneLoadFailureTests, ANeverPreservedRowLeavesWithTheEntityItDescribes)
     World world;
     Editor::SceneDocumentManager doc;
     doc.SetWorld(&world);
-    const Scene::SceneLoadSkip skip = OpenTheDroppedRow(doc, scene);
+    const Scene::SceneDegradation::Skip skip = OpenTheDroppedRow(doc, scene);
     ASSERT_TRUE(world.IsValid(skip.entityHandle)) << "the row must name the entity it describes";
     ASSERT_FALSE(doc.Save()) << "precondition: the guard refuses while the row stands";
 
@@ -581,7 +581,7 @@ TEST_F(SceneLoadFailureTests, ANeverPreservedFieldRowLeavesWithItsComponent)
     World world;
     Editor::SceneDocumentManager doc;
     doc.SetWorld(&world);
-    const Scene::SceneLoadSkip skip = OpenTheDroppedRow(doc, scene);
+    const Scene::SceneDegradation::Skip skip = OpenTheDroppedRow(doc, scene);
 
     const ECS::ComponentTypeId transformType = ECS::GetComponentTypeId<Components::Transform>();
     ASSERT_TRUE(world.RemoveComponentByTypeIdImmediate(skip.entityHandle, transformType));
@@ -599,7 +599,7 @@ TEST_F(SceneLoadFailureTests, AutosaveBacksUpOnceTheDroppedRowsEntityIsGone)
     World world;
     Editor::SceneDocumentManager doc;
     doc.SetWorld(&world);
-    const Scene::SceneLoadSkip skip = OpenTheDroppedRow(doc, scene);
+    const Scene::SceneDegradation::Skip skip = OpenTheDroppedRow(doc, scene);
     doc.MarkDirty();
     ASSERT_FALSE(doc.SaveBackupCopy()) << "precondition: a backup would drop the row's text";
 

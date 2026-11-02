@@ -1,5 +1,6 @@
 #include "Video/VideoWriter.h"
 
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 extern "C"
@@ -136,8 +137,8 @@ bool IsHdr(const VideoWriterOptions& options)
 // container-by-extension rule as the AVFoundation writer.
 const char* ContainerFormatName(const std::string& path)
 {
-    const std::string ext = ToLowerAscii(std::filesystem::path(path).extension().string());
-    if (ext == ".mp4" || ext == ".m4v")
+    const std::string extension = LowerCaseExtension(std::filesystem::path(path));
+    if (extension == ".mp4" || extension == ".m4v")
         return "mp4";
     return "mov";
 }

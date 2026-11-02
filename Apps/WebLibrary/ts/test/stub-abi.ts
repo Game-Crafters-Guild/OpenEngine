@@ -12,14 +12,20 @@ interface StubComponent { name: string; typeId: bigint; fields: StubField[]; off
 const kLightTypes = ['Directional', 'Point', 'Spot', 'Ambient', 'Area', 'Volume'].map((name, value) => ({ name, value }));
 const kLightUnits = ['Unitless', 'Lux', 'Lumen', 'Candela'].map((name, value) => ({ name, value }));
 
-/** The generator's camelCase for these names: the leading capital lowercased. */
+/** The page's name for a field: the leading capitals lowered, but not the last of a run that a lower-case letter follows. */
+function tsName(name: string): string {
+    const run = /^[A-Z]*/.exec(name)![0].length;
+    const lower = run === name.length || run <= 1 ? run : run - 1;
+    return name.slice(0, lower).toLowerCase() + name.slice(lower);
+}
+
 function field(name: string, kind: FieldKind, size: number, count = 1, enumTable?: StubField['enum']): StubField {
-    return { name, tsName: name[0].toLowerCase() + name.slice(1), kind, size, count, enum: enumTable };
+    return { name, tsName: tsName(name), kind, size, count, enum: enumTable };
 }
 
 const kSchema: Array<[string, StubField[]]> = [
     ['Name', [field('value', 'String', 64)]],
-    ['Parent', [field('parent', 'EntityHandle', 4)]],
+    ['Parent', [field('Entity', 'EntityHandle', 4)]],
     ['Transform', [field('matrix', 'Float', 64, 16)]],
     ['Light', [field('Type', 'UInt32', 4, 1, kLightTypes), field('Color', 'Float', 12, 3), field('Intensity', 'Float', 4),
         field('CastsShadows', 'Bool', 1), field('IntensityUnit', 'UInt32', 4, 1, kLightUnits)]],

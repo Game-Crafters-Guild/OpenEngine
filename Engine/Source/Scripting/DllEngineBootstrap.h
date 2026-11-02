@@ -80,6 +80,7 @@ inline GE_Result EnsureEngineInitializedFor(EngineCore& eng)
     if (eng.HasEverInitialized())
         return GE_Result_NotInitialized;
 
+    // A `dotnet test` host plays no sound, so it keeps the default Silent output.
     ApplicationConfig cfg;
     // Nothing else in this process drives the engine: no frame loop, no pump. The caller is the
     // only thread, so the thread predicates answer yes and MainThread.Post runs inline.

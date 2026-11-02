@@ -64,7 +64,8 @@ class INativeToolbar
     using MenuFactory = std::function<std::unique_ptr<INativeContextMenu>()>;
     virtual ~INativeToolbar() = default;
 
-    // Attach to a platform window and create/show a native menu/toolbar
+    /// Attaches to a platform window and creates the menu backend. A WindowTitleBar
+    /// presentation also installs its custom frame here, before the first SetTitleBarLayout.
     virtual bool Install(Platform::Window* window) = 0;
     // Remove the menu and restore any hooks/resources
     virtual void Uninstall() = 0;

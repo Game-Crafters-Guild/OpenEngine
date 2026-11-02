@@ -191,7 +191,7 @@ class SceneStructArray : public testing::Test
     {
         ECS::World source;
         source.Create(probe);
-        EXPECT_TRUE(Scene::SaveSceneToFile(source, path));
+        EXPECT_TRUE(Scene::WriteSceneFile(source, path));
         return ReadText(path);
     }
 };
@@ -228,16 +228,16 @@ TEST_F(SceneStructArray, FilledElementsRoundTripSlotExactAndDefaultElementsWrite
     for (int pass = 0; pass < 2; ++pass)
     {
         ECS::World loaded;
-        Scene::SceneLoadDegradation degradation;
-        Scene::LoadOptions options;
+        Scene::SceneDegradation degradation;
+        Scene::SceneReadOptions options;
         options.outDegradation = &degradation;
-        ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+        ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
         EXPECT_TRUE(degradation.skips.empty());
         const SceneStructArrayProbe actual = OnlyProbe(loaded);
         EXPECT_EQ(actual.Seed, authored.Seed);
         for (std::uint32_t i = 0; i < kSceneStructArrayProbeCapacity; ++i)
             EXPECT_EQ(actual.Entries[i], authored.Entries[i]) << "element " << i;
-        ASSERT_TRUE(Scene::SaveSceneToFile(loaded, path));
+        ASSERT_TRUE(Scene::WriteSceneFile(loaded, path));
         // The entity block, not the whole file: the scene header's spacing is the
         // writer's business and not what this test is about.
         EXPECT_EQ(EntityBlock(ReadText(path)), EntityBlock(text)) << "a resave changed the entity";
@@ -272,7 +272,7 @@ TEST_F(SceneStructArray, OutOfRangeIndexAndUnknownSubFieldAreSkippedWithoutTouch
     WriteText(path, text);
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path)) << Scene::GetLastSceneIOError().message;
     const SceneStructArrayProbe actual = OnlyProbe(loaded);
     EXPECT_EQ(actual.Entries[0], authored.Entries[0]);
     EXPECT_EQ(actual.Entries[1].Point, 0u) << "the out-of-range line landed on a real element";
@@ -294,10 +294,10 @@ TEST_F(SceneStructArray, MalformedSubFieldValueIsReportedAsADegradedLoad)
     WriteText(path, text);
 
     ECS::World loaded;
-    Scene::SceneLoadDegradation degradation;
-    Scene::LoadOptions options;
+    Scene::SceneDegradation degradation;
+    Scene::SceneReadOptions options;
     options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
     EXPECT_TRUE(degradation.IsDegraded()) << "a malformed element value loaded silently";
 }
 
@@ -312,14 +312,14 @@ TEST_F(SceneStructArray, ElementsAreComparedWithTheOwnersDefaultNotTheirStructs)
     const auto path = directory / "owner_default.scene";
     ECS::World source;
     source.Create(authored);
-    ASSERT_TRUE(Scene::SaveSceneToFile(source, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(source, path));
     const std::string text = ReadText(path);
     EXPECT_NE(text.find("SceneStructArrayOwnerDefaultProbe.Entries1.Point = 0"), std::string::npos) << text;
     EXPECT_EQ(text.find("Entries0."), std::string::npos)
         << "an element equal to the owner's default wrote a line:\n" << text;
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path)) << Scene::GetLastSceneIOError().message;
     int count = 0;
     loaded.Query<ECS::Read<SceneStructArrayOwnerDefaultProbe>>().Each(
         [&](const SceneStructArrayOwnerDefaultProbe& value)
@@ -333,7 +333,7 @@ TEST_F(SceneStructArray, ElementsAreComparedWithTheOwnersDefaultNotTheirStructs)
     // The untouched owner default writes nothing at all.
     ECS::World untouched;
     untouched.Create(SceneStructArrayOwnerDefaultProbe{});
-    ASSERT_TRUE(Scene::SaveSceneToFile(untouched, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(untouched, path));
     EXPECT_EQ(ReadText(path).find("SceneStructArrayOwnerDefaultProbe.Entries"), std::string::npos) << ReadText(path);
 }
 
@@ -346,7 +346,7 @@ TEST_F(SceneStructArray, ATableInsideATableRoundTrips)
     const auto path = directory / "nested.scene";
     ECS::World source;
     source.Create(authored);
-    ASSERT_TRUE(Scene::SaveSceneToFile(source, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(source, path));
     const std::string text = ReadText(path);
     EXPECT_NE(text.find("SceneStructArrayTree.Branches1.Id = 3"), std::string::npos) << text;
     EXPECT_NE(text.find("SceneStructArrayTree.Branches1.Leaves1.A = 4"), std::string::npos) << text;
@@ -355,10 +355,10 @@ TEST_F(SceneStructArray, ATableInsideATableRoundTrips)
     EXPECT_EQ(text.find("Branches0."), std::string::npos) << text;
 
     ECS::World loaded;
-    Scene::SceneLoadDegradation degradation;
-    Scene::LoadOptions options;
+    Scene::SceneDegradation degradation;
+    Scene::SceneReadOptions options;
     options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
     EXPECT_TRUE(degradation.skips.empty());
     int count = 0;
     loaded.Query<ECS::Read<SceneStructArrayTree>>().Each(

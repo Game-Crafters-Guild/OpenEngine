@@ -31,8 +31,8 @@
 #include "Logger/Logger.h"
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
+#include "Types/StringUtils.h"
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -422,8 +422,7 @@ void HideTooltip(GraphCanvas* canvas)
 
 std::string NormalizedPortType(std::string type)
 {
-    std::transform(type.begin(), type.end(), type.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    type = ToLowerAscii(type);
     if (type == "float2")
         return "vec2";
     if (type == "float3")
@@ -1076,16 +1075,9 @@ bool GraphCanvas::NodeMatchesSearch(const Graph::Node& node) const
     if (m_NodeSearchFilter.empty() || !m_Model)
         return false;
     const NodeTypeMeta* meta = GraphNodeRegistry::Get().FindNodeMeta(m_Model->KindId, node.TypeId);
-    std::string displayName = meta ? meta->DisplayName : node.TypeId;
-    std::string query = m_NodeSearchFilter;
-    std::string typeId = node.TypeId;
-    auto toLower = [](std::string& s) {
-        std::transform(s.begin(), s.end(), s.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    };
-    toLower(query);
-    toLower(displayName);
-    toLower(typeId);
+    const std::string displayName = ToLowerAscii(meta ? meta->DisplayName : node.TypeId);
+    const std::string query = ToLowerAscii(m_NodeSearchFilter);
+    const std::string typeId = ToLowerAscii(node.TypeId);
     if (m_NodeSearchField == "name")
         return displayName.find(query) != std::string::npos;
     if (m_NodeSearchField == "type")

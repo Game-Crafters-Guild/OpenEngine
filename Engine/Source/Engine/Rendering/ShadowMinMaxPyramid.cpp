@@ -3,7 +3,6 @@
 #include "Engine/Rendering/Pipeline/Nodes/PipelineNodeUtils.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
-#include "Rendering/Core/NamedDescriptorWriter.h"
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/Materials/MaterialHelper.h"
@@ -226,29 +225,34 @@ void ShadowMinMaxPyramid::DeclareLevelPass(Rendering::RenderGraph::RGFrame& fram
             if (!dstView.IsValid() || !srcTex.IsValid())
                 return;
 
-            Rendering::DescriptorSetDesc dsDesc{};
-            dsDesc.layout = m_Set0Layout;
-            dsDesc.transient = true;
-            dsDesc.debugName = "ShadowMinMaxPyramid.Set0";
-            auto ds = dev->CreateDescriptorSet(dsDesc);
-            if (!ds.IsValid())
-                return;
-
             // Both sampled bindings exist in the layout whichever mode runs, and
             // an unwritten descriptor is undefined behaviour on a device without
             // nullDescriptor — so the idle one binds the same texture as the
             // live one rather than being left empty. texelFetch ignores sampler
             // state; the point-clamp sampler is only there to complete the
             // combined-image-sampler descriptors. LoadShader already proved both
-            // names resolve, so a placement failure here means the set is not
+            // names resolve, so a resolve failure here means the meta is not
             // the one the shader was reflected from: dispatching would be the UB
             // the paragraph above exists to avoid.
-            Rendering::NamedDescriptorWriter wd(dev, ds, *m_Meta, 0);
-            if (!wd.TryAddCombinedImageSampler("uSrcDepth", srcTex, m_Sampler) ||
-                !wd.TryAddCombinedImageSampler("uSrcLevel", srcTex, m_Sampler))
+            uint32_t srcDepthBinding = 0;
+            uint32_t srcLevelBinding = 0;
+            Rendering::DescriptorType reflectedType{};
+            if (!Rendering::TryGetSet0BindingByName(*m_Meta, "uSrcDepth", srcDepthBinding, reflectedType) ||
+                !Rendering::TryGetSet0BindingByName(*m_Meta, "uSrcLevel", srcLevelBinding, reflectedType))
                 return;
-            wd.Flush();
-            dev->UpdateStorageImageBinding(ds, m_DstBinding, dstView);
+            const Rendering::DescriptorWrite writes[] = {
+                {.Binding = srcDepthBinding,
+                 .Type = Rendering::DescriptorType::CombinedImageSampler,
+                 .Texture = srcTex,
+                 .Sampler = m_Sampler},
+                {.Binding = srcLevelBinding,
+                 .Type = Rendering::DescriptorType::CombinedImageSampler,
+                 .Texture = srcTex,
+                 .Sampler = m_Sampler},
+                {.Binding = m_DstBinding, .Type = Rendering::DescriptorType::StorageImage, .View = dstView}};
+            const auto ds = dev->GetOrCreateDescriptorSet(m_Set0Layout, writes, "ShadowMinMaxPyramid.Set0");
+            if (!ds.IsValid())
+                return;
 
             const Rendering::PipelineHandle pipe = ctx.GetOrCreatePipelineVariant(m_PipelineId);
             if (!pipe.IsValid())
@@ -287,17 +291,16 @@ void ShadowMinMaxPyramid::LoadShader(IDevice* device)
     // Every binding the dispatch writes must resolve, and it must resolve NOW:
     // a name that goes missing here is a shader-side layout change, and the
     // per-dispatch alternative is either an arbitrary index corrupting a live
-    // descriptor (uDst, which is bound by view and so has no
-    // NamedDescriptorWriter path) or an unwritten descriptor sampled as UB on a
-    // device without nullDescriptor (the two sampled sources).
+    // descriptor (uDst, which is bound by view) or an unwritten descriptor
+    // sampled as UB on a device without nullDescriptor (the two sampled sources).
     Rendering::DescriptorType reflectedType{};
     uint32_t sourceBinding = 0;
     const bool bindingsResolved =
-        Pipeline::Nodes::Detail::TryGetSet0BindingByName(*m_Meta, "uDst", m_DstBinding,
+        Rendering::TryGetSet0BindingByName(*m_Meta, "uDst", m_DstBinding,
                                                          reflectedType) &&
-        Pipeline::Nodes::Detail::TryGetSet0BindingByName(*m_Meta, "uSrcDepth", sourceBinding,
+        Rendering::TryGetSet0BindingByName(*m_Meta, "uSrcDepth", sourceBinding,
                                                          reflectedType) &&
-        Pipeline::Nodes::Detail::TryGetSet0BindingByName(*m_Meta, "uSrcLevel", sourceBinding,
+        Rendering::TryGetSet0BindingByName(*m_Meta, "uSrcLevel", sourceBinding,
                                                          reflectedType);
     if (!bindingsResolved)
     {

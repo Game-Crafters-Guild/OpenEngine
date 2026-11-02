@@ -1734,7 +1734,7 @@ void TerrainRenderFeature::UploadTerrainParamsArray(const Terrain::TerrainGPUPar
     // reuse-distance argument on the declaration. The unwrapped counter doubles as the
     // extraction clock the bindless gate dates the upload pass against: published here, at the
     // END of the tick, so the registrars earlier in the same tick still read the previous value.
-    const uint32 extractionFrame = m_ParamsFrameCounter.Tick(deviceFrameIndex);
+    const uint32 extractionFrame = static_cast<uint32>(m_ParamsFrameCounter.Tick(deviceFrameIndex));
     m_ExtractionFrame.store(extractionFrame, std::memory_order_relaxed);
     const uint32 fi = extractionFrame % kMaxFrames;
     m_TerrainParamsCount[fi] = count;

@@ -6,6 +6,7 @@
 
 #include "Core/Engine.h"
 #include "Input/KeyCodes.h"
+#include "Types/PathUtils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -68,9 +69,7 @@ bool IsImageExtension(const std::filesystem::path& path)
 {
     if (!path.has_extension())
         return false;
-    std::string ext = path.extension().string();
-    for (auto& ch : ext)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const std::string ext = LowerCaseExtension(path);
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga" ||
         ext == ".gif" || ext == ".hdr" || ext == ".ktx" || ext == ".ktx2" || ext == ".dds";
 }

@@ -35,7 +35,7 @@ TEST(RGUploadRing, RingBuffersCarryVertexUsage)
 TEST(RGUploadRing, SubAllocationsAreAlignedDistinctAndShareSlotBuffer)
 {
     RG_REQUIRE_DEVICE(dev);
-    RGUploadRing ring(dev.get(), /*framesInFlight=*/2, /*cap=*/4096);
+    RGUploadRing ring(dev.get(), /*slotCount=*/2, /*cap=*/4096);
     ring.BeginFrame(0);
     auto a = ring.Allocate(100, 256);
     auto b = ring.Allocate(50, 256);
@@ -53,7 +53,7 @@ TEST(RGUploadRing, SubAllocationsAreAlignedDistinctAndShareSlotBuffer)
 TEST(RGUploadRing, RotationUsesDistinctSlotsAndDoesNotClobberInFlight)
 {
     RG_REQUIRE_DEVICE(dev);
-    RGUploadRing ring(dev.get(), /*framesInFlight=*/2, /*cap=*/1024);
+    RGUploadRing ring(dev.get(), /*slotCount=*/2, /*cap=*/1024);
 
     ring.BeginFrame(0);
     auto a0 = ring.Allocate(64);
@@ -94,7 +94,7 @@ TEST(RGUploadRing, BeginFrameRewindsUsage)
 TEST(RGUploadRing, OverflowChainsAndConvergesToHighWater)
 {
     RG_REQUIRE_DEVICE(dev);
-    RGUploadRing ring(dev.get(), /*framesInFlight=*/2, /*cap=*/256);
+    RGUploadRing ring(dev.get(), /*slotCount=*/2, /*cap=*/256);
     ring.BeginFrame(0);
     auto small = ring.Allocate(64);
     ASSERT_TRUE(small.Valid());
@@ -129,7 +129,7 @@ TEST(RGUploadRing, OverflowChainsAndConvergesToHighWater)
 TEST(RGUploadRing, ReprovisionRecreatesSlotBuffersAndStaysWritable)
 {
     RG_REQUIRE_DEVICE(dev);
-    RGUploadRing ring(dev.get(), /*framesInFlight=*/2, /*cap=*/4096);
+    RGUploadRing ring(dev.get(), /*slotCount=*/2, /*cap=*/4096);
 
     ring.BeginFrame(0);
     auto before = ring.Allocate(64);

@@ -33,6 +33,7 @@
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/TextField.h"
 #include "UI/Controls/Toggle.h"
+#include "Types/StringUtils.h"
 #include <string_view>
 #include "EditorContextMenu/UIContextMenu.h"
 #include "UI/PanelSearchBar.h"
@@ -879,10 +880,7 @@ std::string NormalizeGraphVariableValue(const std::string& type, const std::stri
     const std::string normalized = NormalizeGraphVariableType(type);
     if (normalized == "bool")
     {
-        std::string lower = TrimCopy(value);
-        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
+        const std::string lower = ToLowerAscii(TrimCopy(value));
         return (lower == "true" || lower == "1" || lower == "yes" || lower == "on") ? "true" : "false";
     }
     if (normalized == "int")
@@ -953,14 +951,6 @@ bool LoadGraphModelFromPath(const std::filesystem::path& path, Graph::Model& out
         return false;
     GraphNodeRegistry::Get().HydrateGraphModelPorts(outModel);
     return true;
-}
-
-std::string LowerAsciiCopy(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
 }
 
 } // namespace
@@ -1541,12 +1531,9 @@ bool GraphPanel::MatchSearch(const std::string& displayName, const std::string& 
 {
     if (search.empty())
         return true;
-    std::string q = search;
-    std::transform(q.begin(), q.end(), q.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    std::string d = displayName;
-    std::transform(d.begin(), d.end(), d.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    std::string t = typeId;
-    std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string q = ToLowerAscii(search);
+    const std::string d = ToLowerAscii(displayName);
+    const std::string t = ToLowerAscii(typeId);
     return d.find(q) != std::string::npos || t.find(q) != std::string::npos;
 }
 
@@ -1963,8 +1950,8 @@ std::vector<Graph::Variable> GraphPanel::CollectVariablesForDisplay() const
     if (m_VariablesSortMode == VariablesSortMode::Name)
     {
         std::sort(variables.begin(), variables.end(), [](const Graph::Variable& a, const Graph::Variable& b) {
-            const std::string aName = LowerAsciiCopy(a.Name);
-            const std::string bName = LowerAsciiCopy(b.Name);
+            const std::string aName = ToLowerAscii(a.Name);
+            const std::string bName = ToLowerAscii(b.Name);
             return aName == bName ? a.Name < b.Name : aName < bName;
         });
     }

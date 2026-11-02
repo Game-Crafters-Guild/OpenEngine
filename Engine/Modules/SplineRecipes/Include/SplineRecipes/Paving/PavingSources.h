@@ -55,6 +55,8 @@ struct PavingWorld
     // Every spline a source read (its own, the roads of its junctions, its Exclude members), by
     // entity id, each once: what a rebuild depends on besides the recipes and the ground.
     std::vector<PavingSplineObservation> Splines;
+    // The rank keys of every road a junction arm reads, each once; read at Full depth only.
+    std::vector<PavingRank> RoadRanks;
     // Every junction a source read, as (id << 8) | (kind << 1) | split level, in reading order: a
     // junction gained, lost or split changes it.
     std::vector<uint64> Junctions;

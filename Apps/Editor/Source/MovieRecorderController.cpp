@@ -13,6 +13,7 @@
 #include "PlayMode/PlayModeManager.h"
 #include "Platform/Shell.h"
 #include "Rendering/Passes/TemporalDither.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 #include "Video/VideoWriter.h"
 
@@ -584,7 +585,7 @@ bool MovieRecorderController::StartPlayModeRecording()
         return true;
     }
 
-    if ((settings.Codec == "prores" || settings.Codec == "prores4444") && ToLowerAscii(requestedOutput.extension().string()) != ".mov")
+    if ((settings.Codec == "prores" || settings.Codec == "prores4444") && LowerCaseExtension(requestedOutput) != ".mov")
     {
         return fail("ProRes output must be saved as a .mov file.");
     }
@@ -682,7 +683,7 @@ void MovieRecorderController::StartStandaloneRecording(const Settings& settings,
         EmitStatus("HDR recording is available in play-mode recording only.");
         return;
     }
-    if ((settings.Codec == "prores" || settings.Codec == "prores4444") && ToLowerAscii(requestedOutput.extension().string()) != ".mov")
+    if ((settings.Codec == "prores" || settings.Codec == "prores4444") && LowerCaseExtension(requestedOutput) != ".mov")
     {
         EmitStatus("ProRes output must be saved as a .mov file.");
         return;

@@ -14,6 +14,8 @@
 // instances alike — so these pin the term there rather than per producer:
 // submit, derive with BuildWorldBatchKeys, then read the versions.
 
+#include "Engine/Rendering/CascadeMotionScheduler.h"
+#include "Engine/Rendering/CascadeShadowCache.h"
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/WorldDrawTypes.h"
@@ -22,6 +24,11 @@
 
 #include <span>
 
+using GameEngine::Engine::Renderer::CascadeCacheDirtyCause;
+using GameEngine::Engine::Renderer::CascadeRenderInputs;
+using GameEngine::Engine::Renderer::CascadeShadowCache;
+using GameEngine::Engine::Renderer::CascadeUpdateClass;
+using GameEngine::Engine::Renderer::ClassifyCascadeDirtyCause;
 using GameEngine::Engine::Renderer::Material;
 using GameEngine::Engine::Renderer::RenderServices;
 using GameEngine::Engine::Renderer::WorldSubmissionRecord;
@@ -142,6 +149,51 @@ TEST(VertexModifierContentInvalidation, RigidSubmissionAdvancesNeither)
     rs.SubmitWorldSubmissions(std::span<const WorldSubmissionRecord>(&windRec, 1u));
     rs.BuildWorldBatchKeys();
     EXPECT_GT(rs.ShadowCasterContentVersion(kWorld), casterBefore);
+}
+
+// One cascade evaluation the way the declare site runs it: track this frame's
+// caster change set, evaluate, commit when it renders.
+CascadeShadowCache::Decision EvaluateCascade(RenderServices& rs, CascadeShadowCache& cache,
+                                             Rendering::ViewId view, CascadeRenderInputs& in,
+                                             uint64_t frame)
+{
+    const CascadeShadowCache::CasterEpochs epochs = cache.TrackCasterChanges(
+        view, 0u, kWorld, rs.GetShadowCasterChanges(kWorld), in.LightVP, in.Resolution);
+    in.CasterEpoch = epochs.Content;
+    in.DeformationEpoch = epochs.Deformation;
+    const CascadeShadowCache::Decision decision =
+        cache.Evaluate(view, 0u, frame, in, /*enabled=*/true, /*includeCameraInSettle=*/false);
+    if (!decision.Skip)
+        cache.OnRendered(view, 0u, in);
+    return decision;
+}
+
+// A swaying canopy is the only change at a static camera. The cascade must stay
+// in the motion budget (stale by a bounded drift), not render every frame as a
+// correctness change.
+TEST(VertexModifierContentInvalidation, SwayAloneLeavesASettledCascadeDeferrable)
+{
+    RenderServices rs;
+    const Rendering::ViewId view = MakeView(rs, kWorld);
+    CascadeShadowCache cache;
+    CascadeRenderInputs in{};
+    in.LightVP[0] = in.LightVP[5] = 0.1f;
+    in.LightVP[10] = 0.01f;
+    in.LightVP[15] = 1.0f;
+    in.WorldId = kWorld;
+    in.Resolution = 2048;
+    for (uint64_t frame = 1; frame <= 3; ++frame)
+        EvaluateCascade(rs, cache, view, in, frame);
+    ASSERT_TRUE(EvaluateCascade(rs, cache, view, in, 4).Skip) << "the static cascade settles";
+
+    const Material wind = MakeMaterial(Rendering::MaterialKeyword::HasVertexMod);
+    const WorldSubmissionRecord rec = MakeRecord(view, wind, /*castsShadows=*/true);
+    rs.SubmitWorldSubmissions(std::span<const WorldSubmissionRecord>(&rec, 1u));
+    rs.BuildWorldBatchKeys();
+
+    const CascadeCacheDirtyCause cause = EvaluateCascade(rs, cache, view, in, 5).Cause;
+    EXPECT_EQ(cause, CascadeCacheDirtyCause::CasterDeformed);
+    EXPECT_EQ(ClassifyCascadeDirtyCause(cause), CascadeUpdateClass::Motion);
 }
 
 TEST(VertexModifierContentInvalidation, DeformerIsScopedToItsWorld)

@@ -7,11 +7,14 @@
 #include "SceneView/SplineTool/SplineDrapePolylines.h"
 #include "SceneView/SplineTool/SplineJunctionMarkers.h"
 #include "Spline/SplineTypes.h"
+#include "SplineRecipes/SplineSurfaceConform.h"
+#include "Types/FlatMap.h"
 
 #include <cstdint>
 #include <functional>
-#include <unordered_map>
 #include <vector>
+
+namespace GameEngine::Components { struct SplineComponent; struct WorldTransform; }
 
 namespace GameEngine::Editor::SceneTools
 {
@@ -42,6 +45,9 @@ public:
 
     // IGizmo
     void Render(GizmoRenderContext& context) override;
+
+    /// Test seam: the reads of the meshes under a draped spline since construction.
+    uint64_t GetSceneDigestRefreshCountForTesting() const { return m_SceneDigestRefreshCount; }
 
 private:
     std::shared_ptr<SplineInteractionState> m_State;
@@ -75,6 +81,15 @@ private:
         // centerline must not disagree with where the placement controllers put
         // the pieces, which observe the same revision.
         uint64_t SurfaceRevision = 0;
+        // The run's world bounds at the keys above.
+        Mathematics::AABB RunBounds = Mathematics::AABB::Empty();
+        // The meshes under the run the drape can land on. A mesh that arrives, moves or leaves
+        // there changes SceneDigest.Value, and the drape is rebuilt when it differs from SceneRevision.
+        SplineRecipes::SceneConformDigest SceneDigest;
+        uint64_t SceneRevision = 0;
+        // A ray crossed a mesh whose picking data was not ready, so the drape missed that mesh.
+        // The entry is rebuilt on the next frame until no ray waits.
+        bool OverPendingMesh = false;
         SplineDrapedPolylines Polylines;
         // Each knot's draped height (the surface under it plus the drape's lift), NaN where the
         // conform ray missed: the foot of the knot's stem.
@@ -85,8 +100,24 @@ private:
     std::function<ECS::EntityHandle()> m_SelectionQuery;
     std::function<bool(ECS::EntityHandle)> m_IsEntitySelectedQuery;
     mutable uint64_t m_CacheEpoch = 0;
-    mutable std::unordered_map<uint32_t, PassiveLineCache> m_PassiveLineCache;
-    mutable std::unordered_map<uint32_t, DrapeCache> m_DrapeCache;
+    uint64_t m_SceneDigestRefreshCount = 0;
+    mutable FlatMap<uint32_t, PassiveLineCache> m_PassiveLineCache;
+    mutable FlatMap<uint32_t, DrapeCache> m_DrapeCache;
+
+    // What one Render pass reads for all its drapes, once and only when a spline is draped.
+    struct DrapePassState;
+    // Refreshes (and rebuilds when dirty) the drape cache entry of one spline; wantEdges adds the
+    // ±width envelope edges. The reference is valid until the next call or the end of Render,
+    // because an insert or an eviction moves the entries.
+    const DrapeCache& RefreshDrapeCache(ECS::World& world,
+                                        const SplineECS::SplineService& splineService,
+                                        DrapePassState& pass,
+                                        ECS::EntityHandle e,
+                                        const Components::SplineComponent& comp,
+                                        const Spline::SplineData& data,
+                                        const Components::WorldTransform& xf,
+                                        const Mathematics::Matrix4x4& worldM,
+                                        bool wantEdges);
 
     // The vertex lists one Render fills and flushes. Render clears them and keeps their
     // capacity, so a frame that draws what the frame before drew allocates nothing.

@@ -23,6 +23,7 @@
 #include "ECS/Component/ComponentFactory.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
+#include "Types/FormatNumber.h"
 
 #include <gtest/gtest.h>
 
@@ -37,6 +38,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <span>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -1669,6 +1671,7 @@ TEST(PostProcessDofControls, LowerFNumberNarrowsPhysicalFocusRange)
 namespace BlendLock
 {
 
+using GameEngine::AppendHexBytes;
 using GameEngine::float32;
 using GameEngine::int32;
 using GameEngine::uint32;
@@ -2304,15 +2307,8 @@ const char* FirstMismatch(const PostProcessSettings& x, const PostProcessSetting
 
 std::string HexBytes(const void* p, std::size_t n)
 {
-    static const char* kDigits = "0123456789abcdef";
-    const auto* bytes = static_cast<const unsigned char*>(p);
     std::string out;
-    out.reserve(n * 2);
-    for (std::size_t i = 0; i < n; ++i)
-    {
-        out.push_back(kDigits[bytes[i] >> 4]);
-        out.push_back(kDigits[bytes[i] & 0xF]);
-    }
+    AppendHexBytes(out, std::span<const std::uint8_t>(static_cast<const std::uint8_t*>(p), n));
     return out;
 }
 

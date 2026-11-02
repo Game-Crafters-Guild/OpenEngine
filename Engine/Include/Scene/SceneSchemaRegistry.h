@@ -47,11 +47,11 @@ class ISceneComponentSchema
 
     // Append 0+ lines (without trailing '\n') for this component if present on entity.
     // The save context exposes asset resolver / asset root state needed by
-    // helpers like FormatAssetReferenceForSave; pass an empty SceneSaveContext
-    // when calling outside SaveSceneToFile (e.g. presence probes).
+    // helpers like FormatAssetReferenceForSave; pass an empty SceneWriteContext
+    // when calling outside WriteSceneFile (e.g. presence probes).
     virtual void Serialize(const ECS::World& world,
                            ECS::EntityHandle entity,
-                           const SceneSaveContext& ctx,
+                           const SceneWriteContext& ctx,
                            std::vector<std::string>& outLines) const = 0;
 
     // Returns whether the component exists on the entity.
@@ -59,7 +59,7 @@ class ISceneComponentSchema
     // Schemas for "tag" components (no properties) should override this to avoid false negatives.
     virtual bool IsPresent(const ECS::World& world, ECS::EntityHandle entity) const
     {
-        SceneSaveContext stubCtx{};
+        SceneWriteContext stubCtx{};
         std::vector<std::string> tmp;
         Serialize(world, entity, stubCtx, tmp);
         return !tmp.empty();
@@ -69,11 +69,11 @@ class ISceneComponentSchema
     // Returns false if the value is invalid.
     // The load context exposes [resource]/[embed] tables and the asset
     // resolver needed by helpers like TryResolveAssetReference; pass an
-    // empty SceneLoadContext when calling outside LoadSceneFromFile (e.g.
+    // empty SceneReadContext when calling outside ReadSceneInto (e.g.
     // tools that clear an asset slot via the integer-zero sentinel).
     virtual bool ApplyProperty(ECS::World& world,
                                ECS::EntityHandle entity,
-                               const SceneLoadContext& ctx,
+                               const SceneReadContext& ctx,
                                std::string_view property,
                                std::string_view value,
                                std::string* outError) const = 0;
@@ -95,7 +95,7 @@ class ISceneComponentSchema
     // then records the halves as degradation skips instead of installing half a value.
     virtual bool ApplyProperties(ECS::World& world,
                                  ECS::EntityHandle entity,
-                                 const SceneLoadContext& ctx,
+                                 const SceneReadContext& ctx,
                                  std::span<const std::pair<std::string_view, std::string_view>> props,
                                  std::string* outError,
                                  std::size_t* outFailedIndex) const
@@ -162,7 +162,7 @@ std::string UnknownFieldMessage(std::string_view component, std::string_view fie
 // for. In a scene load (ctx.UnknownFields set) it puts the name in ctx.UnknownFields and returns
 // true, so the loader records the line in the load report and applies the rest of the block.
 // Outside a load it sets *outError to UnknownFieldMessage and returns false.
-bool ReportUnknownField(const SceneLoadContext& ctx, std::string_view component, std::string_view field,
+bool ReportUnknownField(const SceneReadContext& ctx, std::string_view component, std::string_view field,
                         std::string* outError);
 
 // Global registry of component schemas (module-extensible).

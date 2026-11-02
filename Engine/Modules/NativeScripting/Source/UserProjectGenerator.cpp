@@ -145,6 +145,16 @@ std::string UserProjectGenerator::BuildCMakeListsContent(const NativeBuildConfig
         out << "endif()\n";
     }
 
+    // CMake reads the deployment target only before project() configures the toolchain.
+    if (!config.MacOSDeploymentTarget.empty())
+    {
+        out << "\n";
+        out << "# The oldest macOS the engine SDK runs on. The module loads only where the engine\n";
+        out << "# loads, so the SDK's value replaces a cached one.\n";
+        out << "set(CMAKE_OSX_DEPLOYMENT_TARGET \"" << config.MacOSDeploymentTarget
+            << "\" CACHE STRING \"Minimum macOS version the module runs on\" FORCE)\n";
+    }
+
     out << "\n";
     out << "project(" << config.ModuleName << " LANGUAGES CXX C)\n\n";
     out << "set(CMAKE_CXX_STANDARD 20)\n";

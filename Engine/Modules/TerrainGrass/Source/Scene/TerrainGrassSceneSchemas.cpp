@@ -178,7 +178,7 @@ public:
     std::string_view GetComponentName() const override { return "TerrainGrass"; }
 
     void Serialize(const ECS::World& world, ECS::EntityHandle entity,
-                   [[maybe_unused]] const SceneSaveContext& ctx,
+                   [[maybe_unused]] const SceneWriteContext& ctx,
                    std::vector<std::string>& outLines) const override
     {
         const auto* c = world.GetComponent<Components::TerrainGrass>(entity);
@@ -247,7 +247,7 @@ public:
 
     bool ApplyProperty(ECS::World& world,
                        ECS::EntityHandle entity,
-                       const SceneLoadContext& ctx,
+                       const SceneReadContext& ctx,
                        std::string_view property,
                        std::string_view value,
                        std::string* outError) const override

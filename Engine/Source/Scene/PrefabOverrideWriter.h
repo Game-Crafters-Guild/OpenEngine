@@ -35,14 +35,14 @@ struct PrefabTemplates
         FlatMap<std::string, ECS::EntityHandle> byAddress;
     };
 
-    explicit PrefabTemplates(const SaveOptions& saveOptions)
+    explicit PrefabTemplates(const SceneWriteOptions& saveOptions)
     {
-        loadOptions.mode = LoadMode::Additive;
+        loadOptions.clearWorldFirst = false;
         loadOptions.assetResolver = saveOptions.assetResolver;
         loadOptions.assetRootOverride = saveOptions.assetRootOverride;
     }
 
-    LoadOptions loadOptions;
+    SceneReadOptions loadOptions;
     std::unique_ptr<ECS::World> world;
     std::unique_ptr<PrefabPlacement> placement;
     FlatMap<std::string, std::unique_ptr<Template>> byPath;
@@ -70,7 +70,7 @@ void AssignSceneLevelIdIfNeeded(ECS::World& world, ECS::EntityHandle h,
 
 // Sorts the scene's entities into prefab instances and the rest.
 bool CollectPrefabInstances(ECS::World& world, const std::vector<ECS::EntityHandle>& entities,
-                            const SaveOptions& options, const SceneSaveContext& saveCtx,
+                            const SceneWriteOptions& options, const SceneWriteContext& saveCtx,
                             const std::filesystem::path& sceneFilePath,
                             std::unordered_map<ECS::EntityId, std::string>& tagByEntity,
                             std::unordered_set<ECS::EntityId>& excluded, PrefabTemplates& templates,
@@ -85,7 +85,7 @@ struct ComponentText
 };
 
 // The lines the scene saver writes for `entity`, grouped by component.
-void CollectComponentText(ECS::World& world, ECS::EntityHandle entity, const SceneSaveContext& context,
+void CollectComponentText(ECS::World& world, ECS::EntityHandle entity, const SceneWriteContext& context,
                           const std::vector<const ISceneComponentSchema*>& schemas, std::vector<ComponentText>& out);
 
 // True for a component of an instance's root that places it in the scene: never an override.
@@ -99,7 +99,7 @@ void DescribePrefabInstanceAgainst(ECS::World& world, ECS::EntityHandle root, Pr
 
 // Writes the body of one instance's [prefab] section.
 void WritePrefabInstanceBody(ECS::World& world, const SavedPrefabInstance& instance,
-                             const PrefabTemplates& templates, const SceneSaveContext& saveCtx,
+                             const PrefabTemplates& templates, const SceneWriteContext& saveCtx,
                              const std::vector<const ISceneComponentSchema*>& schemas, std::string& out);
 
 } // namespace GameEngine::Scene

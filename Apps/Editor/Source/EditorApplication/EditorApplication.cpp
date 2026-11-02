@@ -12,10 +12,11 @@
 #include "UI/BuiltInViewOverlays.h"
 #include "UI/ViewOverlayHost.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cctype>
 #include <ctime>
 #include <cmath>
 #include <cstdio>
@@ -616,9 +617,7 @@ void ConfigureEditorUiFonts(UIManager* ui, AssetManager* assetManager, const std
     {
         if (!entry.is_regular_file())
             continue;
-        std::string ext = entry.path().extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string ext = LowerCaseExtension(entry.path());
         if (ext != ".ttf" && ext != ".otf")
             continue;
         if (!reg.IsAssetRegistered(entry.path()))
@@ -1648,9 +1647,7 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
     const char* env = std::getenv("EDITOR_DISABLE_NATIVE_TOOLBAR");
     if (env)
     {
-        std::string v(env);
-        for (auto& c : v)
-            c = (char)std::tolower((unsigned char)c);
+        const std::string v = ToLowerAscii(env);
         if (v == "1" || v == "true" || v == "yes" || v == "on")
         {
             m_EnableNativeToolbar = false;
@@ -1741,6 +1738,8 @@ void EditorApplication::ConfigureFromCommandLine(const GameEngine::Editor::Start
     m_ExitFrameCounter = 0;
     m_BenchRgCsvPath = args.benchRgCsv;
     m_DebugPortOverride = args.debugPort;
+    m_WindowRectOverride = args.windowRect;
+    m_WindowHasPosition = args.windowHasPosition;
 
     // Stamp session provenance here, before Initialize(), so the branch recorded is the
     // one this binary was built from. The worktree comes from the executable directory,
@@ -1765,8 +1764,8 @@ void EditorApplication::BeginMainWindowAndDevice(JobSystem::JobChannel& startupC
     int windowWidth = static_cast<int>(GetConfig().WindowWidth);
     int windowHeight = static_cast<int>(GetConfig().WindowHeight);
 
-    // Only the work-area size feeds the initial window bounds; the window opens
-    // maximized on the default monitor, so its origin is the OS's to pick.
+    // Without --window, the window opens maximized on the default monitor: only the
+    // work-area size feeds its bounds, and the OS picks its origin.
     int workW = 0;
     int workH = 0;
     {
@@ -1775,12 +1774,17 @@ void EditorApplication::BeginMainWindowAndDevice(JobSystem::JobChannel& startupC
         Platform::GetPrimaryMonitorWorkArea(workOriginX, workOriginY, workW, workH);
     }
     const std::filesystem::path startupSettingsRoot = ResolveStartupProjectSettingsRoot(GetConfig());
-    // The main window always opens on the default monitor: rendering.hdr.targetDisplay
-    // gates whether HDR engages there, it does not place the window. The saved HDR mode
-    // itself reaches the swapchain below, via ConfigureStartupDeviceDesc.
+    // rendering.hdr.targetDisplay gates whether HDR engages on the window's monitor, it
+    // does not place the window. The saved HDR mode itself reaches the swapchain below,
+    // via ConfigureStartupDeviceDesc.
     // The window size is the larger of the configured size and the work area.
     windowWidth = std::max(windowWidth, static_cast<int>(workW));
     windowHeight = std::max(windowHeight, static_cast<int>(workH));
+    if (m_WindowRectOverride)
+    {
+        windowWidth = m_WindowRectOverride->Width;
+        windowHeight = m_WindowRectOverride->Height;
+    }
 
     mainCtx->width = windowWidth;
     mainCtx->height = windowHeight;
@@ -1794,11 +1798,13 @@ void EditorApplication::BeginMainWindowAndDevice(JobSystem::JobChannel& startupC
                                   .Width = mainCtx->width,
                                   .Height = mainCtx->height,
                                   .StartHidden = true,
-                                  .StartMaximized = true}))
+                                  .StartMaximized = !m_WindowRectOverride}))
     {
         Logger::Log::Error("Editor: Failed to create main window");
         return;
     }
+    if (m_WindowRectOverride && m_WindowHasPosition)
+        mainCtx->window->SetPosition(m_WindowRectOverride->X, m_WindowRectOverride->Y);
     {
         const auto monitors = Platform::EnumerateMonitors();
         Logger::Log::Info("Editor: detected {} monitor(s)", monitors.size());
@@ -2436,6 +2442,16 @@ bool EditorApplication::Initialize()
         Logger::Log::Info("[Startup] UI pre-load dispatched to background: {:.1f}ms", MsSince(tPreload));
     }
 
+    // Attach the main window's platform menu backend before the swapchain reads the
+    // client size: on Windows it installs the custom frame, which changes the client rect.
+    tPhase = std::chrono::high_resolution_clock::now();
+    if (m_EnableNativeToolbar)
+    {
+        m_EditorToolbar = std::make_unique<EditorToolbar>();
+        m_EditorToolbar->Install(mainCtx->window.get(), this);
+    }
+    Logger::Log::Info("[Startup] Toolbar install: {:.1f}ms", MsSince(tPhase));
+
     // Join the device creation that BeginMainWindowAndDevice started, then create the
     // swapchain and RenderServices on this thread.
     tPhase = std::chrono::high_resolution_clock::now();
@@ -2720,18 +2736,7 @@ bool EditorApplication::Initialize()
         }
     }
 
-    // Attach the main window's platform menu backend.
-    if (m_EnableNativeToolbar)
-    {
-        auto* main = m_Windows[0].get();
-        if (main && main->window)
-        {
-            m_EditorToolbar = std::make_unique<EditorToolbar>();
-            m_EditorToolbar->Install(main->window.get(), this);
-        }
-    }
-
-    Logger::Log::Info("[Startup] RenderLoop+Thumbnails+Toolbar setup: {:.1f}ms", MsSince(tPhase));
+    Logger::Log::Info("[Startup] RenderLoop+Thumbnails setup: {:.1f}ms", MsSince(tPhase));
 
     // Stage a data-driven UI layout for the Editor (now with device wired)
     tPhase = std::chrono::high_resolution_clock::now();
@@ -3727,9 +3732,7 @@ bool EditorApplication::Initialize()
             if (path.empty())
                 return;
 
-            std::string ext = path.extension().string();
-            for (auto& ch : ext)
-                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            const std::string ext = LowerCaseExtension(path);
 
             Editor::AssetOpenRoutingInputs inputs;
             inputs.OpenCSharpInScriptEditor = Editor::ScriptEditorSettings::Get().GetOpenInScriptInspector();
@@ -3860,9 +3863,7 @@ bool EditorApplication::Initialize()
                                         {
                                             if (path.empty())
                                                 return;
-                                            std::string ext = path.extension().string();
-                                            for (auto& ch : ext)
-                                                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                                            const std::string ext = LowerCaseExtension(path);
                                             const bool scriptOrPipeline =
                                                 ext == ".cs" || ext == ".rendergraph" ||
                                                 ext == ".renderpipeline" || ext == ".hlsl";
@@ -6031,9 +6032,7 @@ bool EditorApplication::OpenGraphAsset(const std::filesystem::path& path)
         return false;
 
     EditorWindowContext* ctx = m_Windows[0].get();
-    std::string ext = path.extension().string();
-    for (char& ch : ext)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const std::string ext = LowerCaseExtension(path);
 
     std::string kind;
     if (!GraphPanel::TryReadKindId(path, kind) || kind.empty())
@@ -6122,9 +6121,7 @@ void EditorApplication::OpenDeferredInternalFile()
     const std::filesystem::path path = *m_DeferredOpenInternalFile;
     m_DeferredOpenInternalFile.reset();
 
-    std::string ext = path.extension().string();
-    for (auto& ch : ext)
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const std::string ext = LowerCaseExtension(path);
     if (ExtensionOpensInGraphPanel(ext))
     {
         const bool openAsScriptGlsl =
@@ -6469,7 +6466,7 @@ void EditorApplication::Update(float64 deltaTime)
 
                     // Keep the panel's temporary yaw/pitch in sync so the next
                     // input tick does not overwrite the restored camera orientation.
-                    if (SceneViewPanel* svPanel = Editor::MountedViewPanels::SceneView(targetWindow->ui.get()))
+                    if (SceneViewPanel* svPanel = targetWindow->mountedViewPanels.SceneView(targetWindow->ui.get()))
                     {
                         svPanel->SetYawPitch(pose.YawDeg, pose.PitchDeg);
                     }
@@ -7916,6 +7913,14 @@ void EditorApplication::Render()
             if ((sceneWarm || fallbackWarm) && ctx->window)
             {
                 m_PendingWindowShow = false;
+                int clientX = 0;
+                int clientY = 0;
+                int clientWidth = 0;
+                int clientHeight = 0;
+                ctx->window->GetPosition(clientX, clientY);
+                ctx->window->GetWindowSize(clientWidth, clientHeight);
+                Logger::Log::Info("Editor: main window {}x{} at {},{} ({})", clientWidth, clientHeight, clientX,
+                                  clientY, m_WindowRectOverride ? "from --window" : "maximized");
                 ctx->window->Show();
             }
         }
@@ -8503,7 +8508,7 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
     const bool idleWorldForPicker = m_WorldPathIdledForProjectPicker;
     routing.rg2Scene = useRGFrame && ctx->RenderGraphStream.Frame && ctx->scene != nullptr && !idleWorldForPicker;
     routing.gvPanel =
-        ctx->gameView ? Editor::MountedViewPanels::GameView(ctx->ui.get()) : nullptr;
+        ctx->gameView ? ctx->mountedViewPanels.GameView(ctx->ui.get()) : nullptr;
     // An inactive dock tab's panel is unmounted, but its viewport element keeps
     // the layout box from its last visible frame — the mounted resolve, not the
     // size probe, is what says the tab is actually on screen. The unmounted
@@ -8541,7 +8546,7 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
             // already has a complete frame to present if input arrives after
             // extraction. The inactive Game panel has no measured viewport yet;
             // the visible Scene viewport is the closest matching content extent.
-            if (auto* scenePanel = Editor::MountedViewPanels::SceneView(ctx->ui.get()))
+            if (auto* scenePanel = ctx->mountedViewPanels.SceneView(ctx->ui.get()))
             {
                 (void)Editor::SceneViewRenderCoordinator::TryResolveRenderableViewportSize(
                     ctx, scenePanel->GetViewportElement(), routing.gvW, routing.gvH);

@@ -21,7 +21,7 @@ add_library(PageStreaming OBJECT
     Source/PageCache.cpp
     Source/PageResidency.cpp
     Source/GeneratedHeightPageProvider.cpp
-    Source/Height/HeightPageOverlay.cpp
+    Source/Height/HeightPageLayer.cpp
     Source/Height/HeightStoreKey.cpp
     Source/Height/HeightStoreCache.cpp
     Source/Height/HeightSourceRows.cpp
@@ -58,6 +58,8 @@ target_link_libraries(PageStreaming
         # The loader's reader threads (Assets/AssetIOService.h); objects link once into Engine.
         AssetRuntime
         JobSystem
+        # The page fetcher's pool of fetch states (Memory/ObjectPool.h).
+        Memory
         FileSystem
         FileWatcher
         Terrain

@@ -23,6 +23,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <map>
 #include <vector>
 
@@ -611,4 +613,60 @@ TEST_F(NavigationSolveBudgetTest, TimerRefreshOnAnInvalidMapWaitsAsAPendingReque
     m_World->ProcessCommands();
     Step(pathSystem);
     EXPECT_TRUE(HasPath(*agent.Get<Components::NavigationAgentState>()));
+}
+
+// Agent i walks 3 (i + 1) cells along its own row, so the four shortest walks fall out of the
+// worst list. One more agent's goal is walled in, so its solve ends OtherRegion with no search.
+// An entry leaves the list kWorstGridSolveSeconds after its Update.
+TEST_F(NavigationSolveBudgetTest, StatisticsKeepTheGridSolvesThatClosedTheMostCells)
+{
+    using Stats = NavigationPathfindingStatistics;
+    using Pathfinding::GridSolveEnd;
+    constexpr uint32 kWalkers = Stats::kWorstGridSolveCount + 4;
+    constexpr uint32 kWidth = 48;
+    const auto map = CreateGrid(kWidth, kWalkers + 2);
+    for (uint32 i = 0; i < kWalkers; ++i)
+    {
+        const float32 z = 0.5f + static_cast<float32>(i);
+        CreateAgent(map, 1.5f, z, 1.5f + 3.0f * static_cast<float32>(i + 1), z);
+    }
+    // The walled goal is cell (kWidth - 2, kWalkers), inside its eight blocked neighbours.
+    Pathfinding::GridMap& grid = *NavigationService::Get().GetGridMap(map);
+    for (uint32 z = kWalkers - 1; z <= kWalkers + 1; ++z)
+        for (uint32 x = kWidth - 3; x <= kWidth - 1; ++x)
+            grid.SetCellBlocked(x, z, x != kWidth - 2 || z != kWalkers);
+    CreateAgent(map, 1.5f, 0.5f + kWalkers, kWidth - 1.5f, 0.5f + kWalkers);
+
+    NavigationPathfindingSystem pathSystem;
+    Step(pathSystem);
+    const Stats& stats = pathSystem.GetStatistics();
+    const auto byEnd = [&stats](GridSolveEnd end) { return stats.GridSolvesByEnd[static_cast<std::size_t>(end)]; };
+    EXPECT_EQ(stats.GridSolves, kWalkers + 1);
+    EXPECT_EQ(byEnd(GridSolveEnd::Reached), kWalkers);
+    EXPECT_EQ(byEnd(GridSolveEnd::OtherRegion), 1u);
+    EXPECT_EQ(stats.TotalGridSolvesByEnd[static_cast<std::size_t>(GridSolveEnd::OtherRegion)], 1u);
+    EXPECT_EQ(stats.TotalGridSolveExpansions, stats.GridSolveExpansions);
+
+    ASSERT_EQ(stats.WorstGridSolveCount, Stats::kWorstGridSolveCount);
+    EXPECT_EQ(stats.WorstGridSolves[0].Record.Expansions, stats.MostGridSolveExpansions);
+    EXPECT_EQ(stats.WorstGridSolves[0].Record.GoalX, 1u + 3u * kWalkers) << "the longest walk";
+    uint64 kept = 0;
+    for (uint32 i = 0; i < stats.WorstGridSolveCount; ++i)
+    {
+        const Stats::RankedGridSolve& ranked = stats.WorstGridSolves[i];
+        EXPECT_EQ(ranked.Frame, stats.Frames);
+        EXPECT_EQ(ranked.Record.End, GridSolveEnd::Reached);
+        EXPECT_GE(ranked.Record.GoalX, 1u + 3u * 5u) << "one of the four shortest walks is kept";
+        if (i > 0)
+            EXPECT_GE(stats.WorstGridSolves[i - 1].Record.Expansions, ranked.Record.Expansions);
+        kept += ranked.Record.Expansions;
+    }
+    const uint32 leastKept = stats.WorstGridSolves[Stats::kWorstGridSolveCount - 1].Record.Expansions;
+    EXPECT_LE(stats.GridSolveExpansions - kept, 4ull * leastKept);
+
+    pathSystem.Update(*m_World, Stats::kWorstGridSolveSeconds + 1.0f);
+    m_World->ProcessCommands();
+    EXPECT_EQ(stats.WorstGridSolveCount, std::min(stats.GridSolves, Stats::kWorstGridSolveCount));
+    for (uint32 i = 0; i < stats.WorstGridSolveCount; ++i)
+        EXPECT_EQ(stats.WorstGridSolves[i].Frame, stats.Frames) << "an entry of the first Update outlived its time";
 }

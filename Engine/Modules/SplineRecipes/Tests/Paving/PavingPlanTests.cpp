@@ -100,8 +100,8 @@ PavingSource MarketSquare(const PavingRoadCurve& millLane, const PavingRoadCurve
 {
     PavingSource square;
     square.Entity = ECS::EntityHandle{1, 1};
-    square.LengthMeters = 8.0f * kSquareHalfSize;
-    square.FirstPoint = Vector2(-kSquareHalfSize, -kSquareHalfSize);
+    square.Rank.LengthMeters = 8.0f * kSquareHalfSize;
+    square.Rank.FirstPoint = Vector2(-kSquareHalfSize, -kSquareHalfSize);
     square.Outline = Square(kSquareHalfSize);
     AddBothArms(square, millLane, 30.0f);
     AddBothArms(square, fordRoad, 30.0f);
@@ -247,7 +247,7 @@ TEST(PavingPlanTests, AnIgnoredRoadAcrossARoadsPavingIsCutOutAlongItsStripAndMee
     const PavingRoadCurve fordRoad = StraightRoad(6, Vector3(0.0f, 0.0f, -30.0f), Vector3(0.0f, 0.0f, 30.0f));
     PavingSource onHighStreet;
     onHighStreet.Entity = highStreet.Road;
-    onHighStreet.LengthMeters = highStreet.Length;
+    onHighStreet.Rank.LengthMeters = highStreet.Length;
     onHighStreet.BorderWidth = kBorderWidth;
     AddBothArms(onHighStreet, highStreet, 50.0f);
     AddBothArms(onHighStreet, fordRoad, 30.0f);
@@ -314,10 +314,10 @@ TEST(PavingPlanTests, TwoRoadsPavingTheCrossingTheyShareBuildItOnceUnderTheLonge
     const PavingRoadCurve fordRoad = StraightRoad(6, Vector3(0.0f, 0.0f, -30.0f), Vector3(0.0f, 0.0f, 30.0f));
     PavingSource onHighStreet;
     onHighStreet.Entity = highStreet.Road;
-    onHighStreet.LengthMeters = highStreet.Length;
+    onHighStreet.Rank.LengthMeters = highStreet.Length;
     PavingSource onFordRoad;
     onFordRoad.Entity = fordRoad.Road;
-    onFordRoad.LengthMeters = fordRoad.Length;
+    onFordRoad.Rank.LengthMeters = fordRoad.Length;
     for (PavingSource* source : {&onFordRoad, &onHighStreet})
     {
         AddBothArms(*source, highStreet, 50.0f);

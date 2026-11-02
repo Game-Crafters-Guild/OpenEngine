@@ -39,9 +39,9 @@
 #include "Panels/ConfirmActionModal.h"
 #include "ECS/ECS.h"
 #include "Editor/Hierarchy/HierarchyEntity/HierarchyEntityIcon.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <cmath>
@@ -484,9 +484,7 @@ void BookmarksPanel::RebuildBookmarkRows()
     else
     {
         // Filter by the selected bookmark field.
-        std::string searchLower = m_SearchQuery;
-        std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(),
-            [](unsigned char c) { return std::tolower(c); });
+        const std::string searchLower = ToLowerAscii(m_SearchQuery);
         
         for (size_t i = 0; i < m_Bookmarks.size(); ++i)
         {
@@ -502,8 +500,7 @@ void BookmarksPanel::RebuildBookmarkRows()
                 searchable = bm.Reference;
             else
                 searchable = bm.Name + " " + typeName + " " + bm.Reference;
-            std::transform(searchable.begin(), searchable.end(), searchable.begin(),
-                [](unsigned char c) { return std::tolower(c); });
+            searchable = ToLowerAscii(searchable);
             
             if (searchable.find(searchLower) != std::string::npos)
             {

@@ -10,7 +10,6 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 
-#include <cctype>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -23,10 +22,7 @@ namespace
 
 bool IsMaterialPath(const std::filesystem::path& path)
 {
-    std::string ext = path.extension().string();
-    for (char& c : ext)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return GetAssetTypeFromExtension(ext) == AssetType::Material;
+    return GetAssetTypeFromExtension(path.extension().string()) == AssetType::Material;
 }
 
 // std::filesystem::rename silently replaces an existing destination (POSIX

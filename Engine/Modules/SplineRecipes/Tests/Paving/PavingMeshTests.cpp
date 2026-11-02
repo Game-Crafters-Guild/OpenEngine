@@ -1,4 +1,4 @@
-#include "SplineRecipes/Paving/PavingMesh.h"
+#include "Paving/PavingMesh.h"
 
 #include "SplineGeometry/AreaBoolean.h"
 #include "SplineGeometry/AreaGround.h"
@@ -35,7 +35,8 @@ SG::AreaGround SlopedSquare()
 
 TEST(PavingMeshTests, OnASlopedRimThePavingFollowsTheGroundWithNoCrease)
 {
-    const PavingLidMesh lid = BuildPavingLidMesh(SlopedSquare(), Mathematics::Matrix4x4::Identity(), Vector2(0.0f, 0.0f));
+    const PavingLidMesh lid =
+        BuildPavingLidMesh(SlopedSquare(), {}, {}, Mathematics::Matrix4x4::Identity(), Vector2(0.0f, 0.0f));
 
     ASSERT_GT(lid.Indices.size(), 6u);
     // Every point, on the rim and inside, stands on the ground: the rim's height at the rim.
@@ -58,15 +59,17 @@ TEST(PavingMeshTests, OnASlopedRimThePavingFollowsTheGroundWithNoCrease)
 TEST(PavingMeshTests, TheSeedMovesThePatternAndTheOwnerTurnsIt)
 {
     const SG::AreaGround ground = SlopedSquare();
-    const PavingLidMesh plain = BuildPavingLidMesh(ground, Mathematics::Matrix4x4::Identity(), PavingPatternPhase(0));
-    const PavingLidMesh seeded = BuildPavingLidMesh(ground, Mathematics::Matrix4x4::Identity(), PavingPatternPhase(3));
+    const PavingLidMesh plain =
+        BuildPavingLidMesh(ground, {}, {}, Mathematics::Matrix4x4::Identity(), PavingPatternPhase(0));
+    const PavingLidMesh seeded =
+        BuildPavingLidMesh(ground, {}, {}, Mathematics::Matrix4x4::Identity(), PavingPatternPhase(3));
     // An owner turned a quarter turn about +Y: its x axis lies along world -Z.
     Mathematics::Matrix4x4 turned = Mathematics::Matrix4x4::Identity();
     turned.Data()[0] = 0.0f;
     turned.Data()[2] = -1.0f;
     turned.Data()[8] = 1.0f;
     turned.Data()[10] = 0.0f;
-    const PavingLidMesh rotated = BuildPavingLidMesh(ground, turned, PavingPatternPhase(0));
+    const PavingLidMesh rotated = BuildPavingLidMesh(ground, {}, {}, turned, PavingPatternPhase(0));
 
     ASSERT_EQ(plain.Vertices.size(), seeded.Vertices.size());
     EXPECT_GT((seeded.Vertices[0].UV - plain.Vertices[0].UV).Length(), 0.01f);

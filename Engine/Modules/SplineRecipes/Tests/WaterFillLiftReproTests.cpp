@@ -359,9 +359,9 @@ class WaterFillLiftRepro : public ::testing::Test
         if (!std::filesystem::exists(path))
             return false;
 
-        GameEngine::Scene::LoadOptions options;
-        options.mode = GameEngine::Scene::LoadMode::Replace;
-        if (!GameEngine::Scene::LoadSceneFromFile(m_World, path, options))
+        GameEngine::Scene::SceneReadOptions options;
+        options.clearWorldFirst = true;
+        if (!GameEngine::Scene::ReadSceneInto(m_World, path, options))
         {
             const auto& err = GameEngine::Scene::GetLastSceneIOError();
             ADD_FAILURE() << "scene load failed: " << scenePath << " line " << err.line << ": "

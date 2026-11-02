@@ -52,12 +52,14 @@ struct SwapchainLogCounts
 {
     std::atomic<int> Created{0};
     std::atomic<int> ForcedAcquires{0};
+    std::atomic<int> ImageLinesWithPresentMode{0};
 };
 
 struct CountsSnapshot
 {
     int Created = 0;
     int ForcedAcquires = 0;
+    int ImageLinesWithPresentMode = 0;
 };
 
 void CountSwapchainLogLine(SwapchainLogCounts& counts, const Logger::LogMessage& msg)
@@ -66,13 +68,16 @@ void CountSwapchainLogLine(SwapchainLogCounts& counts, const Logger::LogMessage&
         counts.Created.fetch_add(1);
     else if (msg.Message.find("[fault-injection] forcing VK_SUBOPTIMAL_KHR on acquire") != std::string::npos)
         counts.ForcedAcquires.fetch_add(1);
+    else if (msg.Message.find("VulkanDevice: Swapchain images=") != std::string::npos &&
+             msg.Message.find(" presentMode=") != std::string::npos)
+        counts.ImageLinesWithPresentMode.fetch_add(1);
 }
 
 // Delivery to sinks is asynchronous; the flush makes the snapshot current.
 CountsSnapshot Snapshot(const SwapchainLogCounts& counts)
 {
     Logger::Log::Flush();
-    return CountsSnapshot{counts.Created.load(), counts.ForcedAcquires.load()};
+    return CountsSnapshot{counts.Created.load(), counts.ForcedAcquires.load(), counts.ImageLinesWithPresentMode.load()};
 }
 
 uint64_t VuidCount(const IDevice& device, const char* vuid)
@@ -166,6 +171,11 @@ void RunForcedSuboptimalFrames(const char* forcing)
     }
     // A forcing that never fired would pass every check above without testing anything.
     EXPECT_EQ(forcedFrames, kForcedFrames) << "the forced SUBOPTIMAL acquire fired on too few of " << kMaxFrames << " frames";
+
+    // A timing window reads the present mode from the swapchain Info line of every creation and recreation.
+    const CountsSnapshot afterRun = Snapshot(*counts);
+    EXPECT_EQ(afterRun.ImageLinesWithPresentMode, afterRun.Created)
+        << "a swapchain creation logged its Info line without the present mode";
 
     if (validationActive)
     {

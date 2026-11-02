@@ -546,11 +546,11 @@ TEST(SkyLinkedSun, ASceneSavedAtNightReloadsWithItsDaySun)
         saved.SetHours(kMidnightHours);
         saved.Tick();
         saved.Tick();
-        ASSERT_TRUE(Scene::SaveSceneToFile(saved.Rig.World, scenePath));
+        ASSERT_TRUE(Scene::WriteSceneFile(saved.Rig.World, scenePath));
     }
 
     LinkedSunHarness reloaded;
-    ASSERT_TRUE(Scene::LoadSceneFromFile(reloaded.Rig.World, scenePath));
+    ASSERT_TRUE(Scene::ReadSceneInto(reloaded.Rig.World, scenePath));
     std::filesystem::remove(scenePath);
     reloaded.AdoptLoadedScene();
     ASSERT_TRUE(reloaded.Rig.World.IsValid(reloaded.Sun)) << "the sky's link to its sun must reload";

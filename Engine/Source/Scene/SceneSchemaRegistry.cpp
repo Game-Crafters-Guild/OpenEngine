@@ -262,7 +262,7 @@ std::string UnknownFieldMessage(std::string_view component, std::string_view fie
            "': delete the line or correct the spelling";
 }
 
-bool ReportUnknownField(const SceneLoadContext& ctx, std::string_view component, std::string_view field,
+bool ReportUnknownField(const SceneReadContext& ctx, std::string_view component, std::string_view field,
                         std::string* outError)
 {
     if (ctx.UnknownFields)

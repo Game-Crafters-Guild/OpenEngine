@@ -67,6 +67,7 @@ namespace GameEngine
 // GUID, MaterialDocument, AssetEventDispatcher come in fully via the includes
 // above (MaterialRegistry.h -> GUID.h / MaterialDocument.h; AssetReloadInvalidator.h
 // -> AssetEvents.h).
+class SceneLoadTracker;
 
 namespace Engine::Renderer
 {
@@ -250,6 +251,12 @@ class MaterialSystem
     };
     PrewarmProgress GetPrewarmProgress() const { return m_OnDemandPrewarm.Read(); }
     PrewarmProgress GetProjectWarmUpProgress() const { return m_ProjectWarmUp.Read(); }
+
+    /// Report each compile task as a ticket: base compiles and variant-set prewarms in
+    /// shader.base-compile (the project warm-up as Background work), the device's pipeline
+    /// builds in gpu.pipeline, and the variant cache's draw compiles in shader.variant.
+    /// Owner thread, before the first submit.
+    void ReportLoadingWork(SceneLoadTracker& tracker);
 
     // --- per-frame ---
     void FinalizeFrameBuffers();
@@ -500,6 +507,16 @@ class MaterialSystem
     void SubmitTrackedPrewarm(std::function<void()> work,
                               JobSystem::JobPriority priority = JobSystem::JobPriority::Normal,
                               PrewarmOrigin origin = PrewarmOrigin::OnDemand);
+    // The load category of a compile task that the material system submits.
+    enum class LoadWork : uint8_t
+    {
+        BaseCompile,
+        PipelineBuild,
+    };
+    // `work` wrapped in a ticket of `kind` named `name`, Background for the project warm-up;
+    // `work` as is before ReportLoadingWork and from ShutdownPhaseA on. Any thread.
+    std::function<void()> TrackLoadWork(LoadWork kind, std::string_view name, PrewarmOrigin origin,
+                                        std::function<void()> work);
     void DrainPrewarmJobs();
     // The device's pipeline build dispatcher (IDevice::SetPipelineBuildDispatcher).
     void DispatchPipelineBuild(std::function<void()> build);
@@ -597,7 +614,9 @@ class MaterialSystem
     // under it, so a shutdown (flag set under the same mutex) can never miss a
     // racing submit when it drains.
     JobSystem::JobCounter m_PrewarmCounter;
-    bool m_PrewarmShutdown = false;      // guarded by m_PrewarmDrainMutex
+    // Written under m_PrewarmDrainMutex. A running variant-set prewarm reads it without
+    // the lock between variants and stops, so shutdown waits for one compile, not a set.
+    std::atomic<bool> m_PrewarmShutdown{false};
     bool m_PrewarmEverSubmitted = false; // guarded by m_PrewarmDrainMutex
     std::mutex m_PrewarmDrainMutex;
 
@@ -636,6 +655,11 @@ class MaterialSystem
     };
     PrewarmCounters m_OnDemandPrewarm;
     PrewarmCounters m_ProjectWarmUp;
+    // The load categories of the compile tasks, guarded by m_PrewarmDrainMutex. ReportLoadingWork
+    // sets them once; ShutdownPhaseA revokes them before it cancels the queued tasks. While
+    // null, a submitted task carries no ticket.
+    struct LoadReport;
+    std::shared_ptr<LoadReport> m_LoadReport;
 
     // Materials whose Mask demotion has been logged this session (main thread,
     // like registration).

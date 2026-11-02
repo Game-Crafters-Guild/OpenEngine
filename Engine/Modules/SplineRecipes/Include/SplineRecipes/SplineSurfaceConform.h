@@ -18,6 +18,7 @@ namespace GameEngine::Mathematics
 {
 struct Matrix4x4;
 }
+namespace GameEngine::Scene { class SceneTlas; }
 namespace GameEngine::SplineECS { class SplineService; }
 namespace GameEngine::TerrainECS { class TerrainModifierSystem; }
 
@@ -107,10 +108,10 @@ struct SceneConformDigest
     uint64 Value = 0u;
 };
 
-// Folds the scene's pickable meshes whose XZ bounds meet `runBounds` into `digest.Value` by entity, model, transform
-// version and bounds; a runtime-only entity never counts. Walks the scene TLAS only when it is ready and its version
-// or the bounds changed. Returns true when it walked.
-bool RefreshSceneConformDigest(ECS::World& world, const Mathematics::AABB& runBounds,
+// Folds the pickable meshes a conform ray from `runBounds` can reach into `digest.Value` by entity, model, transform
+// version and bounds; a runtime-only entity never counts. Call `tlas.RequestCurrent` first. Walks `tlas` only when no
+// work is in flight and its version or the bounds changed. Returns true when it walked. Main thread only.
+bool RefreshSceneConformDigest(ECS::World& world, Scene::SceneTlas& tlas, const Mathematics::AABB& runBounds,
                                SceneConformDigest& digest);
 
 // Whether the ground of a conforming recipe exists yet. A ray miss is an authoring fact; a terrain that is not

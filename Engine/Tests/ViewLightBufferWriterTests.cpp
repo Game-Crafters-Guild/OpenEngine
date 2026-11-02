@@ -7,7 +7,8 @@
 // frame, or one mesh drew at two wind offsets at once.
 //
 // BeginWorldDrawFrame is that update-phase caller. This pins that it leaves the
-// buffer alone.
+// buffer alone. The ring rotates at IDevice::GetFrameRingDepth(), the depth of
+// every per-frame ring, so a set that binds it repeats with the other rings.
 
 #include <gtest/gtest.h>
 
@@ -17,6 +18,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <vector>
 
 using namespace GameEngine;
 using GameEngine::Engine::Renderer::ForwardLightUBO;
@@ -45,9 +47,7 @@ TEST(ViewLightBufferWriter, BeginWorldDrawFrameDoesNotTouchThePerViewLightBuffer
 
     const auto* perView = rs.Views().FindPerView(viewId);
     ASSERT_NE(perView, nullptr);
-    const uint32_t slot =
-        device->GetFrameIndex();
-    const Rendering::BufferHandle lightBuffer = perView->LightBuffers[slot];
+    const Rendering::BufferHandle lightBuffer = perView->CurrentLightBuffer();
     ASSERT_TRUE(lightBuffer.IsValid()) << "setup: the writer must have allocated this slot";
 
     const float sentinel[4] = {kClockSentinel, kClockSentinel, kClockSentinel, kClockSentinel};
@@ -70,6 +70,43 @@ TEST(ViewLightBufferWriter, BeginWorldDrawFrameDoesNotTouchThePerViewLightBuffer
             << " changed: BeginWorldDrawFrame wrote the per-view light buffer, which it reaches "
                "from the application update phase, before the frame that last bound this slot is "
                "fenced";
+
+    rs.Shutdown();
+    device->Shutdown();
+}
+
+TEST(ViewLightBufferWriter, TheCurrentLightBufferRepeatsAtTheFrameRingDepth)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+
+    RenderServices rs;
+    ASSERT_TRUE(rs.Initialize(device.get()));
+
+    const Rendering::ViewId viewId =
+        rs.Views().AllocateView("LightBufferRingTestView", Rendering::CameraId{});
+
+    const uint32_t depth = device->GetFrameRingDepth();
+    std::vector<Rendering::BufferHandle> bound;
+    for (uint32_t frame = 0; frame < 2u * depth; ++frame)
+    {
+        ASSERT_TRUE(device->BeginFrame());
+        rs.WriteViewLightBuffer(viewId);
+        const auto* perView = rs.Views().FindPerView(viewId);
+        ASSERT_NE(perView, nullptr);
+        bound.push_back(perView->CurrentLightBuffer());
+        ASSERT_TRUE(bound.back().IsValid()) << "frame " << frame;
+        device->Present();
+    }
+
+    for (uint32_t frame = 1; frame < 2u * depth; ++frame)
+        EXPECT_NE(bound[frame], bound[frame - 1])
+            << "frame " << frame << " binds the light buffer of the frame before, which the GPU may still read";
+    for (uint32_t frame = depth; frame < 2u * depth; ++frame)
+        EXPECT_EQ(bound[frame], bound[frame - depth])
+            << "frame " << frame << " binds another light buffer than frame " << frame - depth
+            << ": the ring does not rotate at the frame ring depth, so the per-pass sets that bind it never repeat";
 
     rs.Shutdown();
     device->Shutdown();

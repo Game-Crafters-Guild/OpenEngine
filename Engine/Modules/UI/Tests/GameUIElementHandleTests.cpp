@@ -33,6 +33,7 @@
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Checkbox.h"
 #include "UI/Controls/Dropdown.h"
+#include "UI/Controls/MarkdownText.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/Slider.h"
 #include "UI/Controls/Toggle.h"
@@ -775,6 +776,59 @@ TEST(GameUIElementHandleTests, TypedValueAccessorsRoundTripThroughTheRealExports
 
     // A dead handle is NotFound everywhere in the element ABI.
     EXPECT_EQ(GE_UIElement_GetValueFloat(0xFFFFFFFFFFFFull, &f), GE_Result_NotFound);
+}
+
+TEST(GameUIElementHandleTests, MarkdownTextSetterUsesTheControlAndRejectsInvalidHandles)
+{
+    auto device = MakeHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    HudFixture hud(device.get(), "gameui_handle_markdown",
+                   "<uielement class='hud-root'><MarkdownText id='notes' /><label id='plain' /></uielement>");
+    ASSERT_TRUE(hud.Ok);
+    auto* notes = dynamic_cast<MarkdownText*>(hud.Find("notes"_sid));
+    UIElement* plain = hud.Find("plain"_sid);
+    ASSERT_NE(notes, nullptr);
+    ASSERT_NE(plain, nullptr);
+    uint64_t instanceId = 0;
+    ASSERT_EQ(GE_GameUI_FindElement(hud.Entity, "notes", &instanceId), GE_Result_Ok);
+    ASSERT_EQ(instanceId, notes->GetInstanceId());
+
+    ASSERT_EQ(GE_UIElement_SetMarkdownText(instanceId, "## Lanterns\n\n**caf\xC3\xA9**"), GE_Result_Ok);
+    hud.Pump();
+    ASSERT_EQ(notes->GetChildren().size(), 2u);
+    const UIElement& heading = *notes->GetChildren()[0];
+    EXPECT_TRUE(heading.HasClass("markdown-heading-2"));
+    ASSERT_EQ(heading.GetChildren().size(), 1u);
+    const auto* title = dynamic_cast<const Label*>(heading.GetChildren()[0].get());
+    ASSERT_NE(title, nullptr);
+    EXPECT_EQ(title->GetText(), "Lanterns");
+    const UIElement& paragraph = *notes->GetChildren()[1];
+    ASSERT_EQ(paragraph.GetChildren().size(), 1u);
+    const auto* text = dynamic_cast<const Label*>(paragraph.GetChildren()[0].get());
+    ASSERT_NE(text, nullptr);
+    EXPECT_EQ(text->GetText(), "caf\xC3\xA9");
+    EXPECT_TRUE(text->HasClass("markdown-strong"));
+
+    EXPECT_EQ(GE_UIElement_SetMarkdownText(plain->GetInstanceId(), "wrong type"), GE_Result_InvalidArg);
+    EXPECT_EQ(GE_UIElement_SetMarkdownText(0, "invalid handle"), GE_Result_NotFound);
+    EXPECT_EQ(GE_UIElement_SetMarkdownText(instanceId, ""), GE_Result_Ok);
+    EXPECT_TRUE(notes->GetChildren().empty());
+    EXPECT_EQ(GE_UIElement_SetMarkdownText(instanceId, "restored"), GE_Result_Ok);
+    EXPECT_FALSE(notes->GetChildren().empty());
+    EXPECT_EQ(GE_UIElement_SetMarkdownText(instanceId, nullptr), GE_Result_Ok);
+    EXPECT_TRUE(notes->GetChildren().empty());
+
+    hud.HotReload("<uielement class='hud-root'><label id='notes' /></uielement>");
+    EXPECT_EQ(GE_UIElement_SetMarkdownText(instanceId, "stale handle"), GE_Result_NotFound);
+    UIElement* replacement = hud.Find("notes"_sid);
+    ASSERT_NE(replacement, nullptr);
+    const uint64_t replacementId = replacement->GetInstanceId();
+    EXPECT_EQ(GE_UIElement_SetMarkdownText(replacementId, "wrong type"), GE_Result_InvalidArg);
+    GameUI::SetHost(nullptr);
+    EXPECT_EQ(GE_UIElement_SetMarkdownText(replacementId, "no host"), GE_Result_NotFound);
 }
 
 namespace

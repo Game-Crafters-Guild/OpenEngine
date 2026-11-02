@@ -3,38 +3,27 @@
 #include "EditorPanelIds.h"
 #include "Panels/GameViewPanel.h"
 #include "SceneView/SceneViewPanel.h"
-#include "UI/Controls/Mount.h"
-#include "UI/UIElement.h"
-#include "UI/UIManager.h"
 
 namespace GameEngine::Editor
 {
 namespace
 {
 
-template <typename TPanel>
-TPanel* MountedPanel(UIManager* ui, const char* mountId)
-{
-    if (!ui)
-        return nullptr;
-    UIElement* root = ui->GetRootElement();
-    if (!root)
-        return nullptr;
-    if (auto* mount = dynamic_cast<Mount*>(root->FindById(HashStringId(mountId))))
-        return dynamic_cast<TPanel*>(mount->GetTarget());
-    return nullptr;
-}
+constexpr StringId kSceneViewMountId = HashStringId(EditorPanelIds::MountSceneView);
+constexpr StringId kGameViewMountId = HashStringId(EditorPanelIds::MountGameView);
 
 } // namespace
 
 SceneViewPanel* MountedViewPanels::SceneView(UIManager* ui)
 {
-    return MountedPanel<SceneViewPanel>(ui, EditorPanelIds::MountSceneView);
+    Mount* mount = m_SceneViewMount.Find(ui, kSceneViewMountId);
+    return mount ? dynamic_cast<SceneViewPanel*>(mount->GetTarget()) : nullptr;
 }
 
 GameViewPanel* MountedViewPanels::GameView(UIManager* ui)
 {
-    return MountedPanel<GameViewPanel>(ui, EditorPanelIds::MountGameView);
+    Mount* mount = m_GameViewMount.Find(ui, kGameViewMountId);
+    return mount ? dynamic_cast<GameViewPanel*>(mount->GetTarget()) : nullptr;
 }
 
 } // namespace GameEngine::Editor

@@ -302,13 +302,13 @@ class RenderPipelineInstance
     // RenderGraph path: the per-frame blackboard (reset at the top of every Declare).
     PipelineFrameResources m_FrameResources;
 
-    // Copies of each "perFrameCopies" buffer: one per frame the device can keep in flight.
-    static constexpr uint32_t kBufferCopies = Rendering::IDevice::kMaxSupportedFramesInFlight;
     // The copy a view's buffer used in the last frame that declared it, and the names built once
     // when the buffer is first declared: each copy's pool name and the two passes' names.
+    // A "perFrameCopies" buffer has IDevice::GetFrameRingDepth() copies, CopyCount.
     struct BufferCopiesState
     {
-        std::array<std::string, kBufferCopies> CopyNames;
+        std::array<std::string, Rendering::IDevice::kMaxFrameRingDepth> CopyNames;
+        uint32_t CopyCount = 0;
         std::string CarryPassName;
         std::string ZeroInitPassName;
         uint64_t Frame = 0;

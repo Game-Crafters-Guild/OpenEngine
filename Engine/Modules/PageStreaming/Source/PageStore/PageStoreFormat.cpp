@@ -348,6 +348,35 @@ PageFaceEdge PageFaceNeighbor(uint8 face, PageFaceSide side)
     return edge;
 }
 
+PageFaceSample PageCubeSampleAt(uint8 face, int64 x, int64 z, uint32 samples)
+{
+    const int64 last = static_cast<int64>(samples) - 1;
+    x = std::clamp<int64>(x, -1, last + 1);
+    z = std::clamp<int64>(z, -1, last + 1);
+    const bool outsideX = x < 0 || x > last;
+    const bool outsideZ = z < 0 || z > last;
+    if (outsideX == outsideZ)
+        return {face, static_cast<uint32>(std::clamp<int64>(x, 0, last)), static_cast<uint32>(std::clamp<int64>(z, 0, last))};
+    const PageFaceSide side = outsideX ? (x < 0 ? PageFaceSide::MinX : PageFaceSide::MaxX)
+                                       : (z < 0 ? PageFaceSide::MinZ : PageFaceSide::MaxZ);
+    const int64 along = outsideX ? z : x;
+    const PageFaceEdge edge = PageFaceNeighbor(face, side);
+    const uint32 t = static_cast<uint32>(edge.Reversed ? last - along : along);
+    const uint32 inner = static_cast<uint32>(last - 1);
+    switch (edge.Side)
+    {
+    case PageFaceSide::MinX:
+        return {edge.Face, 1u, t};
+    case PageFaceSide::MaxX:
+        return {edge.Face, inner, t};
+    case PageFaceSide::MinZ:
+        return {edge.Face, t, 1u};
+    case PageFaceSide::MaxZ:
+        return {edge.Face, t, inner};
+    }
+    return {face, 0u, 0u};
+}
+
 float64 EqualAngleFaceCoordinate(float64 gnomonic)
 {
     const float64 t = gnomonic * gnomonic;

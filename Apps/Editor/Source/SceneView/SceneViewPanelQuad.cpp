@@ -4,8 +4,8 @@
 #include "UI/UIEvents.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Button.h"
-#include "UI/Controls/Widgets/SceneViewMeasureOverlay.h"
-#include "UI/Controls/Widgets/SceneViewRulerOverlay.h"
+#include "UI/Controls/Widgets/SceneView/SceneViewMeasureOverlay.h"
+#include "UI/Controls/Widgets/SceneView/SceneViewRulerOverlay.h"
 #include "UI/Controls/Widgets/ViewportRotationGizmo.h"
 #include "UI/EditorIcons.h"
 #include "UI/StyleProperties.h"
@@ -60,11 +60,11 @@ T* HeldViewportOverlay(UIElement::WeakRef<T>& held, UIElement* viewport, UIEleme
     return overlay;
 }
 
-constexpr const char* kSharedViewportOverlayIds[] = {
-    "SceneToolOverlay",
-    "SceneViewFpsLabel",
-    "SceneViewHoverHighlightLabel",
-    "SceneAssetPreview",
+constexpr StringId kSharedViewportOverlayIds[] = {
+    "SceneToolOverlay"_sid,
+    "SceneViewFpsLabel"_sid,
+    "SceneViewHoverHighlightLabel"_sid,
+    "SceneAssetPreview"_sid,
 };
 } // namespace
 
@@ -543,9 +543,9 @@ void SceneViewPanel::RefreshViewportRotationGizmos()
 
 void SceneViewPanel::RefreshOverlayElementPointers()
 {
-    m_FpsLabel = dynamic_cast<Label*>(FindViewportOverlayById("SceneViewFpsLabel"));
+    m_FpsLabel = dynamic_cast<Label*>(FindViewportOverlayById("SceneViewFpsLabel"_sid));
     m_HoverHighlightLabel =
-        dynamic_cast<Label*>(FindViewportOverlayById("SceneViewHoverHighlightLabel"));
+        dynamic_cast<Label*>(FindViewportOverlayById("SceneViewHoverHighlightLabel"_sid));
 
     RefreshViewportRotationGizmos();
     RefreshViewportRulerOverlays();
@@ -594,14 +594,14 @@ void SceneViewPanel::RefreshViewportMeasureOverlays()
     m_MeasureOverlay = activeIndex < m_MeasureOverlays.size() ? m_MeasureOverlays[activeIndex] : nullptr;
 }
 
-UIElement* SceneViewPanel::FindViewportOverlayById(const char* id) const
+UIElement* SceneViewPanel::FindViewportOverlayById(StringId id) const
 {
-    if (!id)
+    if (id == 0)
         return nullptr;
 
     const auto findIn = [id](UIElement* root) -> UIElement*
     {
-        return root ? root->FindById(HashStringId(id)) : nullptr;
+        return root ? root->FindById(id) : nullptr;
     };
 
     if (UIElement* element = findIn(m_OverlayViewport))
@@ -624,7 +624,23 @@ UIElement* SceneViewPanel::FindViewportOverlayById(const char* id) const
             return element;
     }
 
-    return const_cast<SceneViewPanel*>(this)->FindById(HashStringId(id));
+    return const_cast<SceneViewPanel*>(this)->FindById(id);
+}
+
+UIElement* SceneViewPanel::HeldSharedViewportOverlay(StringId id) const
+{
+    static_assert(std::size(kSharedViewportOverlayIds) == std::tuple_size_v<decltype(m_HeldSharedViewportOverlays)>,
+                  "m_HeldSharedViewportOverlays has one hold for each id in kSharedViewportOverlayIds");
+    const auto it = std::find(std::begin(kSharedViewportOverlayIds), std::end(kSharedViewportOverlayIds), id);
+    if (it == std::end(kSharedViewportOverlayIds))
+        return FindViewportOverlayById(id);
+    UIElement::WeakRef<UIElement>& held =
+        m_HeldSharedViewportOverlays[static_cast<size_t>(it - std::begin(kSharedViewportOverlayIds))];
+    if (UIElement* overlay = held.Get())
+        return overlay;
+    UIElement* overlay = FindViewportOverlayById(id);
+    held = UIElement::MakeWeakRef(overlay);
+    return overlay;
 }
 
 bool SceneViewPanel::ViewportOverlaysNeedSync() const
@@ -636,9 +652,9 @@ bool SceneViewPanel::ViewportOverlaysNeedSync() const
     if (m_OverlayViewport != target)
         return true;
 
-    for (const char* id : kSharedViewportOverlayIds)
+    for (StringId id : kSharedViewportOverlayIds)
     {
-        UIElement* element = FindViewportOverlayById(id);
+        UIElement* element = HeldSharedViewportOverlay(id);
         if (element && element->GetParent() != target)
             return true;
     }
@@ -672,9 +688,9 @@ void SceneViewPanel::SyncViewportOverlays()
 
     // Shared editor chrome follows the active pane (Maya: tools apply to the focused view).
     // Orientation gizmos stay parented to each viewport (Maya: view cube per pane).
-    for (const char* id : kSharedViewportOverlayIds)
+    for (StringId id : kSharedViewportOverlayIds)
     {
-        UIElement* element = FindViewportOverlayById(id);
+        UIElement* element = HeldSharedViewportOverlay(id);
         if (!element || element->GetParent() == target)
             continue;
         UIElement* parent = element->GetParent();

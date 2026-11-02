@@ -35,8 +35,8 @@
 #include "SceneView/TransformTool.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Widgets/CameraBookmarksWidget.h"
-#include "UI/Controls/Widgets/SceneViewMeasureOverlay.h"
-#include "UI/Controls/Widgets/SceneViewRulerOverlay.h"
+#include "UI/Controls/Widgets/SceneView/SceneViewMeasureOverlay.h"
+#include "UI/Controls/Widgets/SceneView/SceneViewRulerOverlay.h"
 #include "UI/Controls/Widgets/ViewportRotationGizmo.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "Thumbnails/IThumbnailProvider.h"
@@ -3341,12 +3341,16 @@ void SceneViewPanel::UpdateFPS(float deltaTime)
         PublishOverlayLayer(*viewport);
 
     // Update camera bookmarks widget (poll readback requests, etc.)
-    // IMPORTANT: do not keep raw UIElement* pointers across UXML hot reload.
-    // Layout reconciliation can destroy/recreate elements, so reacquire by id and
-    // rebind controller hookups when the instance changes.
+    // UXML hot reload can destroy and recreate the widget. Hold it weakly, find it
+    // again by id once it is destroyed, and rebind when the instance changes.
     if (m_Controller)
     {
-        auto* bookmarks = dynamic_cast<CameraBookmarksWidget*>(FindById("CameraBookmarks"_sid));
+        auto* bookmarks = m_HeldCameraBookmarks.Get();
+        if (!bookmarks)
+        {
+            bookmarks = dynamic_cast<CameraBookmarksWidget*>(FindById("CameraBookmarks"_sid));
+            m_HeldCameraBookmarks = UIElement::MakeWeakRef(bookmarks);
+        }
         if (bookmarks)
         {
             const uint64_t inst = bookmarks->GetInstanceId();
@@ -3431,7 +3435,7 @@ void SceneViewPanel::UpdateFPS(float deltaTime)
             const bool activeRulersOn =
                 m_Controller && m_Controller->Is2DMode() &&
                 Editor::SceneViewSettings::Get().GetShowRulers();
-            if (UIElement* overlay = FindViewportOverlayById("SceneToolOverlay"))
+            if (UIElement* overlay = HeldSharedViewportOverlay("SceneToolOverlay"_sid))
                 applyRulersClass(overlay, activeRulersOn);
         }
 
@@ -3440,7 +3444,7 @@ void SceneViewPanel::UpdateFPS(float deltaTime)
         // scene views without bespoke broadcast plumbing.
         if (m_Viewport)
         {
-            if (UIElement* overlay = FindById("SceneToolOverlay"_sid))
+            if (UIElement* overlay = HeldSharedViewportOverlay("SceneToolOverlay"_sid))
             {
                 const bool borderless = Editor::SceneViewSettings::Get().GetToolOverlayBorderless();
                 if (borderless && !overlay->HasClass("borderless"))

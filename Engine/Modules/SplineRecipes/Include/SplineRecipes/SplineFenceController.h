@@ -10,6 +10,7 @@
 #include "SplineRecipes/SplineChunkCommit.h"
 #include "SplineRecipes/SplinePieceMaterial.h"
 #include "SplineRecipes/SplineRebuildGate.h"
+#include "SplineRecipes/SplineSurfaceConform.h"
 #include "Types/FlatMap.h"
 #include "Types/ScopedSubscription.h"
 #include "Types/Types.h"
@@ -107,6 +108,11 @@ private:
         // so it is re-read only after the registry reports a reload.
         uint64 PoolContent = 0;
         uint64 PoolContentReloads = ~0ull;
+        // The run's world bounds at RunSpline, read again only when the spline changes.
+        SplineObservedInputs RunSpline{};
+        Mathematics::AABB RunBounds = Mathematics::AABB::Empty();
+        // The meshes under a Scene-conform run, read again only when the scene TLAS or the run changes.
+        SceneConformDigest SceneDigest;
         std::vector<std::string> LoggedValidation;
         uint64 VisitStamp = 0;
     };

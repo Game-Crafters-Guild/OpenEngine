@@ -12,9 +12,8 @@
 #include "EditorChangeNotifications.h"
 #include "EditorContext.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
 
-#include <algorithm>
-#include <cctype>
 #include <cstring>
 #include <string>
 
@@ -97,9 +96,7 @@ ECS::EntityHandle CreatePendingHDRISkybox(ECS::World& world,
 
 bool IsHdriPath(const std::filesystem::path& path)
 {
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string ext = LowerCaseExtension(path);
     return ext == ".hdr";
 }
 

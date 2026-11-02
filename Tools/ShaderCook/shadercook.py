@@ -100,6 +100,22 @@ kDecorationOpcodes = frozenset({71, 72, 73, 74, 75})
 kOpTypeLast = 39
 
 
+def SpirvInstructions(words: memoryview) -> list[tuple[int, int, int]] | None:
+    """Return (start word, word count, opcode) for each instruction after the header.
+
+    Returns None when an instruction has a word count of zero, which a valid module never has.
+    """
+    instructions: list[tuple[int, int, int]] = []
+    index = 5  # past the SPIR-V header
+    while index < len(words):
+        count = words[index] >> 16
+        if count == 0:
+            return None
+        instructions.append((index, count, words[index] & 0xFFFF))
+        index += count
+    return instructions
+
+
 def HoistSamplerTypes(spv: bytes) -> bytes:
     """Move OpTypeSampler and its UniformConstant pointer ahead of their uses.
 
@@ -115,16 +131,9 @@ def HoistSamplerTypes(spv: bytes) -> bytes:
     use is always legal.
     """
     words = memoryview(spv).cast("I")
-    total = len(words)
-
-    instructions: list[tuple[int, int, int]] = []  # (start word, word count, opcode)
-    index = 5  # past the SPIR-V header
-    while index < total:
-        count = words[index] >> 16
-        if count == 0:
-            return spv
-        instructions.append((index, count, words[index] & 0xFFFF))
-        index += count
+    instructions = SpirvInstructions(words)
+    if instructions is None:
+        return spv
 
     sampler_types = {words[start + 1] for start, _, opcode in instructions
                      if opcode == kOpTypeSampler}
@@ -182,16 +191,9 @@ def HoistForwardReferencedPointers(spv: bytes) -> bytes:
     the validator to report.
     """
     words = memoryview(spv).cast("I")
-    total = len(words)
-
-    instructions: list[tuple[int, int, int]] = []  # (start word, word count, opcode)
-    index = 5  # past the SPIR-V header
-    while index < total:
-        count = words[index] >> 16
-        if count == 0:
-            return spv
-        instructions.append((index, count, words[index] & 0xFFFF))
-        index += count
+    instructions = SpirvInstructions(words)
+    if instructions is None:
+        return spv
 
     body = next((i for i, ins in enumerate(instructions) if ins[2] == kOpFunction), len(instructions))
     order = list(range(len(instructions)))
@@ -251,14 +253,10 @@ def RenumberSamplerBindings(spv: bytes) -> tuple[bytes, list[dict]]:
     binding_decorations: dict[int, int] = {}  # target id -> word index of value
     set_decorations: dict[int, int] = {}      # target id -> word index of value
 
-    index = 5  # past the SPIR-V header
-    total = len(words) // 4
-    while index < total:
-        first = ReadWord(index)
-        opcode = first & 0xFFFF
-        count = first >> 16
-        if count == 0:
-            break
+    instructions = SpirvInstructions(memoryview(spv).cast("I"))
+    if instructions is None:
+        return spv, []
+    for index, count, opcode in instructions:
         if opcode == kOpTypeSampler:
             sampler_types.add(ReadWord(index + 1))
         elif opcode in (kOpTypeImage, kOpTypeSampledImage):
@@ -281,7 +279,6 @@ def RenumberSamplerBindings(spv: bytes) -> tuple[bytes, list[dict]]:
                 binding_decorations[ReadWord(index + 1)] = index + 3
             elif decoration == kDecorationDescriptorSet:
                 set_decorations[ReadWord(index + 1)] = index + 3
-        index += count
 
     def SlotOf(variable: int) -> tuple[int, int] | None:
         value_index = binding_decorations.get(variable)
@@ -304,6 +301,43 @@ def RenumberSamplerBindings(spv: bytes) -> tuple[bytes, list[dict]]:
                       "imageBinding": original,
                       "samplerBinding": original + kSamplerBindingOffset})
     return bytes(words), remap
+
+
+# WGSL storage buffers are read or read_write only, so naga refuses a buffer
+# variable that SPIR-V marks NonReadable (GLSL `writeonly buffer`). A write-only
+# storage texture is legal WGSL, so image variables keep the decoration.
+kDecorationNonReadable = 25
+kStorageClassUniform = 2
+kStorageClassStorageBuffer = 12
+
+
+def StripStorageBufferNonReadable(spv: bytes) -> bytes:
+    """Drop NonReadable from storage buffers so a GLSL `writeonly buffer` cooks as read_write.
+
+    Removes the decoration from Uniform or StorageBuffer variables (an image is
+    UniformConstant). naga reads the access from the variable, not from the block members.
+    A `readonly writeonly` buffer keeps NonWritable and cooks as read.
+    """
+    words = memoryview(spv).cast("I")
+    instructions = SpirvInstructions(words)
+    if instructions is None:
+        return spv
+
+    buffer_variables = {words[start + 2] for start, count, opcode in instructions
+                        if opcode == kOpVariable and count >= 4
+                        and words[start + 3] in (kStorageClassUniform, kStorageClassStorageBuffer)}
+
+    def IsBufferNonReadable(start: int, count: int, opcode: int) -> bool:
+        return (opcode == kOpDecorate and count >= 3 and words[start + 2] == kDecorationNonReadable
+                and words[start + 1] in buffer_variables)
+
+    kept = [instruction for instruction in instructions if not IsBufferNonReadable(*instruction)]
+    if len(kept) == len(instructions):
+        return spv
+    out = bytearray(spv[:5 * 4])
+    for start, count, _ in kept:
+        out += spv[start * 4:(start + count) * 4]
+    return bytes(out)
 
 
 class CookError(RuntimeError):
@@ -372,7 +406,8 @@ def CookFile(source: Path, stage: str, glslc: Path, naga: Path, tint: Path | Non
         raise CookError(f"spirv-opt split failed for {source}:\n{result.stderr}")
 
     patched, remap = RenumberSamplerBindings(
-        HoistForwardReferencedPointers(HoistSamplerTypes(split.read_bytes())))
+        StripStorageBufferNonReadable(
+            HoistForwardReferencedPointers(HoistSamplerTypes(split.read_bytes()))))
     split.write_bytes(patched)
     if remap:
         (out_wgsl.with_suffix(".remap.json")).write_text(

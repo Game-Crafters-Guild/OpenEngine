@@ -151,10 +151,10 @@ class SplineSceneSerialization : public testing::Test
 
     bool Load(ECS::World& world, const std::filesystem::path& path)
     {
-        Scene::SceneLoadDegradation degradation;
-        Scene::LoadOptions options;
+        Scene::SceneDegradation degradation;
+        Scene::SceneReadOptions options;
         options.outDegradation = &degradation;
-        const bool loaded = Scene::LoadSceneFromFile(world, path, options);
+        const bool loaded = Scene::ReadSceneInto(world, path, options);
         EXPECT_TRUE(loaded) << Scene::GetLastSceneIOError().message;
         EXPECT_FALSE(degradation.IsDegraded());
         SplineECS::SplineExtractionSystem{}.Update(world, 0);
@@ -169,7 +169,7 @@ TEST_F(SplineSceneSerialization, SaveIsPortableAndReloadOwnsIndependentGeometry)
     const auto originalEntity = Attach(original, originalHandle);
     const auto expected = Portable(original, originalEntity);
     const auto path = directory / "saved.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
     const auto saved = Read(path);
     EXPECT_EQ(saved.find("SplineComponent."), std::string::npos) << saved;
     EXPECT_NE(saved.find("Spline.point1.position"), std::string::npos);
@@ -219,7 +219,7 @@ TEST_F(SplineSceneSerialization, AWallsSavedCornerWinsOverTheOneItsSplineWouldGi
     wall.Corner = Components::SplineWallCorner::Round;
     original.AddComponentImmediate(entity, wall);
     const auto path = directory / "wall.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
 
     ECS::World loaded;
     ASSERT_TRUE(Load(loaded, path));
@@ -250,7 +250,7 @@ TEST_F(SplineSceneSerialization, AWallSavedWithoutACornerTakesTheOneItsSplineGiv
     const auto entity = Attach(original, handle);
     original.AddComponentImmediate(entity, Components::SplineWall{});
     const auto path = directory / "wall-no-corner.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
     std::string text = Read(path);
     const size_t line = text.find("SplineWall.Corner = ");
     ASSERT_NE(line, std::string::npos) << text;
@@ -296,7 +296,7 @@ TEST_F(SplineSceneSerialization, StaleReflectedBlockIsDroppedWithAWarningInEithe
         ASSERT_FALSE(Stored(loaded, entity) == originalHandle);
         EXPECT_EQ(Portable(loaded, entity), portable);
         const auto resaved = directory / "canonical.scene";
-        ASSERT_TRUE(Scene::SaveSceneToFile(loaded, resaved));
+        ASSERT_TRUE(Scene::WriteSceneFile(loaded, resaved));
         EXPECT_EQ(Read(resaved).find("SplineComponent."), std::string::npos);
         EXPECT_EQ(Portable(original, originalEntity), portable);
     }
@@ -363,7 +363,7 @@ TEST_F(SplineSceneSerialization, NetworkMemberAndOverridesRoundTripWithTheirPart
     original.Create(Components::SceneEntityTag{"lane"},
         Components::SplineNetworkMember{Components::SplineNetworkMemberKind::Road}, overrides);
     const auto path = directory / "network.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
     const auto saved = Read(path);
     EXPECT_NE(saved.find("SplineNetworkMember."), std::string::npos) << saved;
     EXPECT_NE(saved.find("SplineNetworkOverrides."), std::string::npos) << saved;
@@ -422,7 +422,7 @@ TEST_F(SplineSceneSerialization, PavingRoundTripsItsFieldsAndMembers)
     original.Create(Components::SceneEntityTag{"square"},
         Components::SplineNetworkMember{Components::SplineNetworkMemberKind::Area}, paved);
     const auto path = directory / "paved.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
     const std::string saved = Read(path);
     EXPECT_NE(saved.find("SplinePaving."), std::string::npos) << saved;
 
@@ -467,7 +467,7 @@ TEST_F(SplineSceneSerialization, ARoadsVergeRoundTripsAndASceneWithoutItLoadsWit
     road.VergeMaterial.Set(GUID::Derive(GUID::Null(), "verge-test-material"));
     original.AddComponentImmediate(entity, road);
     const auto path = directory / "verge.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(original, path));
+    ASSERT_TRUE(Scene::WriteSceneFile(original, path));
 
     ECS::World loaded;
     ASSERT_TRUE(Load(loaded, path));

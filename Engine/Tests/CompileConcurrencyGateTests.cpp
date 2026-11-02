@@ -1,7 +1,6 @@
-// Stress + invariant tests for CompileConcurrencyGate: the admission gate must
-// never let more than `cap` compile tasks run concurrently, must drain every
-// submitted task (Background lane before Normal), must never run work inline on
-// the submitting thread, and must not leak/strand work when a dispatch throws.
+// CompileConcurrencyGate: at most `cap` tasks run at once, every submitted task drains (Background
+// before Normal), no work runs inline on the submitter, a throwing dispatch leaks or strands
+// nothing, and Close destroys the queued work unrun.
 
 #include "Engine/Rendering/CompileConcurrencyGate.h"
 
@@ -286,6 +285,67 @@ TEST(CompileConcurrencyGate, DestroyWithPendingDoesNotCrash)
     EXPECT_EQ(destroyed.load(), 10) << "every closure destroyed exactly once, none leaked/crashed";
 }
 
+// Shutdown: Close destroys every queued task unrun (its guard fires), so a drain
+// waits only for the running ones. cap 2, 10 submitted: 2 running, 8 canceled.
+TEST(CompileConcurrencyGate, CloseCancelsQueuedTasksUnrun)
+{
+    ManualExecutor executor;
+    CompileConcurrencyGate gate(2, [&executor](std::function<void()> work, JobPriority priority)
+                                { executor.Dispatch(std::move(work), priority); });
+
+    std::atomic<int> destroyed{0};
+    std::atomic<int> ran{0};
+    for (int i = 0; i < 10; ++i)
+        gate.Submit([&ran, guard = MakeDestroyGuard(destroyed)]() { ran.fetch_add(1); },
+                    i % 2 == 0 ? JobPriority::Normal : JobPriority::Background);
+
+    EXPECT_EQ(gate.Close(), 8u);
+    EXPECT_EQ(destroyed.load(), 8) << "every queued closure is destroyed by Close";
+    EXPECT_EQ(ran.load(), 0) << "no queued task runs";
+    EXPECT_EQ(gate.PendingCount(), 0u);
+    EXPECT_EQ(gate.Running(), 2u) << "the admitted tasks are still running";
+}
+
+// A Submit after Close destroys its work unrun and dispatches nothing.
+TEST(CompileConcurrencyGate, SubmitAfterCloseDestroysWorkUnrun)
+{
+    ManualExecutor executor;
+    CompileConcurrencyGate gate(2, [&executor](std::function<void()> work, JobPriority priority)
+                                { executor.Dispatch(std::move(work), priority); });
+    EXPECT_EQ(gate.Close(), 0u);
+
+    std::atomic<int> destroyed{0};
+    std::atomic<int> ran{0};
+    gate.Submit([&ran, guard = MakeDestroyGuard(destroyed)]() { ran.fetch_add(1); }, JobPriority::Background);
+    executor.RunAll();
+
+    EXPECT_EQ(destroyed.load(), 1) << "the refused closure is destroyed once";
+    EXPECT_EQ(ran.load(), 0) << "a task submitted after Close never runs";
+    EXPECT_EQ(gate.Running(), 0u);
+    EXPECT_EQ(gate.PendingCount(), 0u);
+}
+
+// The tasks running at Close finish exactly once and promote nothing.
+TEST(CompileConcurrencyGate, RunningTasksFinishOnceAfterClose)
+{
+    ManualExecutor executor;
+    CompileConcurrencyGate gate(2, [&executor](std::function<void()> work, JobPriority priority)
+                                { executor.Dispatch(std::move(work), priority); });
+
+    std::atomic<int> destroyed{0};
+    std::atomic<int> ran{0};
+    for (int i = 0; i < 10; ++i)
+        gate.Submit([&ran, guard = MakeDestroyGuard(destroyed)]() { ran.fetch_add(1); }, JobPriority::Normal);
+
+    gate.Close();
+    executor.RunAll();
+
+    EXPECT_EQ(ran.load(), 2) << "only the two admitted tasks run";
+    EXPECT_EQ(destroyed.load(), 10) << "every closure destroyed exactly once";
+    EXPECT_EQ(gate.Running(), 0u) << "the running tasks release their slots";
+    EXPECT_EQ(gate.PendingCount(), 0u);
+}
+
 // Background-lane jobs (user-visible variant misses) drain before Normal-lane
 // prewarm even when queued after it.
 TEST(CompileConcurrencyGate, BackgroundLaneDrainsBeforeNormal)
@@ -368,9 +428,30 @@ TEST(CompileConcurrencyGate, ConcurrentMultiSubmitterStress)
     EXPECT_EQ(gate.PendingCount(), 0u) << "gate leaked a pending job";
 }
 
+// The cap leaves two pool workers to the frame's own jobs: over the Player's 8-worker pool the gate
+// admits at most 6 compiles at once, whatever the core count or the env override.
+TEST(CompileConcurrencyGate, CapOverAnEightWorkerPoolAdmitsAtMostSix)
+{
+    constexpr size_t kPoolWorkers = 8;
+    constexpr uint32_t kFrameWorkers = 2;
+    constexpr int kSubmitted = 16;
+    const uint32_t cap = ComputeShaderCompileConcurrencyCap(kPoolWorkers);
+    ManualExecutor executor;
+    CompileConcurrencyGate gate(cap, [&executor](std::function<void()> work, JobPriority priority)
+                                { executor.Dispatch(std::move(work), priority); });
+    for (int i = 0; i < kSubmitted; ++i)
+        gate.Submit([] {}, JobPriority::Background);
+    EXPECT_GE(gate.HighWater(), 1u);
+    EXPECT_LE(gate.HighWater(), kPoolWorkers - kFrameWorkers) << "the gate admitted compiles into the frame's workers";
+    executor.RunAll();
+    EXPECT_EQ(gate.Running(), 0u);
+    EXPECT_EQ(gate.PendingCount(), 0u);
+    EXPECT_EQ(ComputeShaderCompileConcurrencyCap(2), 1u) << "a pool of two workers still admits one compile";
+}
+
 TEST(CompileConcurrencyGate, ComputedCapIsSane)
 {
-    const uint32_t cap = ComputeShaderCompileConcurrencyCap();
+    const uint32_t cap = ComputeShaderCompileConcurrencyCap(0);
     EXPECT_GE(cap, 2u) << "cap must leave at least a minimum of parallelism";
     if (std::getenv("GE_SHADER_COMPILE_CAP") == nullptr)
     {

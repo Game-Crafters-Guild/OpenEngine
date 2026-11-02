@@ -1393,8 +1393,8 @@ TEST_F(SplineRecipeInspectorTest, ASavedFenceWithThreePartsLoadsWithThreePartRow
     saved.AddComponentImmediate(savedEntity, fence);
     const std::filesystem::path scenePath =
         std::filesystem::temp_directory_path() / "spline_recipe_inspector_three_parts.scene";
-    ASSERT_TRUE(Scene::SaveSceneToFile(saved, scenePath, Scene::SaveOptions{}));
-    ASSERT_TRUE(Scene::LoadSceneFromFile(world, scenePath, Scene::LoadOptions{Scene::LoadMode::Replace}));
+    ASSERT_TRUE(Scene::WriteSceneFile(saved, scenePath, Scene::SceneWriteOptions{}));
+    ASSERT_TRUE(Scene::ReadSceneInto(world, scenePath, Scene::SceneReadOptions{}));
     std::filesystem::remove(scenePath);
 
     ECS::EntityHandle loaded{};

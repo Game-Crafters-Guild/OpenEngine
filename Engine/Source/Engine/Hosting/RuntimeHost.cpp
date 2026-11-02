@@ -338,11 +338,11 @@ bool RuntimeHost::OpenScene(const std::filesystem::path& scenePath)
     Scene::AssetManagerSceneResolver assetResolver(engine.GetAssetManager(), assetRoot,
                                                    Scene::AssetManagerSceneResolver::UnknownFile::AssignGuid);
 
-    Scene::LoadOptions opts{};
-    opts.mode = Scene::LoadMode::Replace;
+    Scene::SceneReadOptions opts{};
+    opts.clearWorldFirst = true;
     opts.assetResolver = &assetResolver;
     opts.assetRootOverride = assetRoot;
-    if (!Scene::LoadSceneFromFile(*world, sceneFile, opts))
+    if (!Scene::ReadSceneInto(*world, sceneFile, opts))
     {
         // The loader reports through its error record and does not log the
         // reason itself; this is the one line that carries it.
