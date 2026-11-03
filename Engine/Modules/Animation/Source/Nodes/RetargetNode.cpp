@@ -349,6 +349,7 @@ void RetargetNode::ExportForGPU(GPUExport& out) const
     out.TargetParent = m_TargetParent;
     out.TargetTopo   = m_TargetTopo;
     out.TargetRestPos = m_TargetRestPos;
+    out.TargetRestScale = m_TargetRestScale;
 
     // TargetBindLocal: the authored bind local rotation per tgt bone. For
     // non-canonical bones m_TargetRetargetPoseLocal already holds bind_local;

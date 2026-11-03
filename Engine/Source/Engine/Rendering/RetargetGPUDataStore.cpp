@@ -432,11 +432,11 @@ uint32_t RetargetGPUDataStore::EnsureRigPairUploaded(const GUID& mapGuid,
     built.ExportForGPU(ex);
     if (ex.SourceBoneCount == 0 || ex.TargetBoneCount == 0) return kRetargetInvalidIndex;
 
-    // Header reservation. GPURigPairHeader is 80 bytes = 5 vec4. We push it
+    // Header reservation. GPURigPairHeader is 96 bytes = 6 vec4. We push it
     // last (after data is written and we know all the offsets), so reserve
     // the slot first by inserting placeholder zeros.
     constexpr uint32_t kHeaderVec4Size = sizeof(GPURigPairHeader) / 16;
-    static_assert(sizeof(GPURigPairHeader) == 80);
+    static_assert(sizeof(GPURigPairHeader) == 96);
     const uint32_t headerVec4Off = static_cast<uint32_t>(m_RigData.size() / 4);
     for (uint32_t i = 0; i < kHeaderVec4Size * 4; ++i) m_RigData.push_back(0);
 
@@ -478,6 +478,10 @@ uint32_t RetargetGPUDataStore::EnsureRigPairUploaded(const GUID& mapGuid,
         const uint32_t restPosOff = static_cast<uint32_t>(m_RigData.size() / 4);
         for (const auto& v : ex.TargetRestPos) PushVec3AsVec4(m_RigData, v);
         hdr.tgtRestPos = restPosOff;
+
+        const uint32_t restScaleOff = static_cast<uint32_t>(m_RigData.size() / 4);
+        for (const auto& v : ex.TargetRestScale) PushVec3AsVec4(m_RigData, v);
+        hdr.tgtRestScale = restScaleOff;
     }
 
     // Per-target-bone canonical routing.

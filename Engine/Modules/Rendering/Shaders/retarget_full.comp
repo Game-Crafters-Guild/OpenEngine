@@ -13,8 +13,9 @@
 //   Phase 1c: sample clip hip translation (single thread).
 //   Phase 1d: crossfade only — slerp previous → current by blendAlpha.
 //   Phase 2:  source FK walk (lane 0 serial; topo-ordered).
-//   Phase 3:  target FK walk + translation (lane 0 serial; canonical
-//             routing branch; non-canonical bones use bind local).
+//   Phase 3:  target FK walk (lane 0 serial; canonical routing branch;
+//             non-canonical bones use bind local). Bone world transforms
+//             compose translation, rotation and rest scale.
 //   Phase 4:  parallel build skin mat4s, write into SkinPaletteAtlas.
 //
 // All intermediate state lives in LDS — no global SSBO roundtrip between
@@ -26,7 +27,7 @@
 //
 // Push constant: characterCount (the dispatch's gl_WorkGroupID.x bound).
 //
-// LDS budget: 4 × 256-bone vec4 arrays = 16 KB / workgroup.
+// LDS budget: 6 × 256-bone vec4 arrays = 24 KB / workgroup.
 
 layout(local_size_x = 64) in;
 
@@ -47,7 +48,7 @@ layout(set = 0, binding = 1, std430) restrict readonly buffer Rig {
 } rig;
 
 struct CharacterParams {
-    uint  rigPairHeaderIdx;     // vec4 offset into rig.data of the GPURigPairHeader (5 vec4)
+    uint  rigPairHeaderIdx;     // vec4 offset into rig.data of the GPURigPairHeader (6 vec4)
     uint  clipHeaderIdx;        // vec4 offset into clip.data of the GPURetargetClipHeader (2 vec4)
     float clipTime;
     uint  paletteOffset;        // bone-slot offset into atlas (1 slot = 3 vec4 rows)
@@ -81,8 +82,11 @@ shared vec4 s_srcWorld[kMaxBones];    // src bone world rotations (Phase 2 outpu
                                       // crossfade, Phase 1 holds the previous clip's local
                                       // rotations here first
 shared vec4 s_tgtWorldRot[kMaxBones]; // tgt bone world rotations (Phase 3 output)
-shared vec3 s_tgtWorldPos[kMaxBones]; // tgt bone world positions (Phase 3 output)
-shared vec4 s_tgtLocalRot[kMaxBones]; // tgt bone local rotations (Phase 3 output, for IK consumers)
+// Tgt bone world transforms (Phase 3 output): rows 0..2 of the affine mat4.
+// Row 3 is always (0, 0, 0, 1).
+shared vec4 s_tgtWorldRow0[kMaxBones];
+shared vec4 s_tgtWorldRow1[kMaxBones];
+shared vec4 s_tgtWorldRow2[kMaxBones];
 shared vec3 s_hipTrans;               // sampled hip translation (Phase 1c output)
 
 // ---------------------------------------------------------------------------
@@ -118,7 +122,7 @@ uvec4 readClipBoneRec(uint vec4Off) {
     return floatBitsToUint(clip.data[vec4Off]);
 }
 
-// Rig header (matches GPURigPairHeader, 5 vec4 = 20 uints).
+// Rig header (matches GPURigPairHeader, 6 vec4 = 24 uints).
 struct RigHeader {
     uint  srcBoneCount;
     uint  tgtBoneCount;
@@ -140,6 +144,7 @@ struct RigHeader {
     uint  tgtInverseBind;
     uint  tgtJointNodes;
     uint  tgtMeshRootInverse;
+    uint  tgtRestScale;
 };
 
 RigHeader readRigHeader(uint hOff) {
@@ -148,6 +153,7 @@ RigHeader readRigHeader(uint hOff) {
     vec4 v2 = rig.data[hOff + 2u];
     vec4 v3 = rig.data[hOff + 3u];
     vec4 v4 = rig.data[hOff + 4u];
+    vec4 v5 = rig.data[hOff + 5u];
     RigHeader r;
     r.srcBoneCount             = floatBitsToUint(v0.x);
     r.tgtBoneCount             = floatBitsToUint(v0.y);
@@ -169,6 +175,7 @@ RigHeader readRigHeader(uint hOff) {
     r.tgtInverseBind           = floatBitsToUint(v4.y);
     r.tgtJointNodes            = floatBitsToUint(v4.z);
     r.tgtMeshRootInverse       = floatBitsToUint(v4.w);
+    r.tgtRestScale             = floatBitsToUint(v5.x);
     return r;
 }
 
@@ -220,19 +227,27 @@ vec4 qslerp(vec4 a, vec4 b, float t) {
     float angle = acos(c);
     return (sin((1.0 - t) * angle) * a + sin(t * angle) * b) / sin(angle);
 }
-vec3 qrotate(vec4 q, vec3 v) {
-    vec3 t = 2.0 * cross(q.xyz, v);
-    return v + q.w * t + cross(q.xyz, t);
-}
-mat4 quatPosToMat(vec4 q, vec3 p) {
+// T(p) * R(q) * S(s), the local transform BuildPoseToSkinMatrices composes.
+mat4 trsToMat(vec3 p, vec4 q, vec3 s) {
     float xx = q.x*q.x, yy = q.y*q.y, zz = q.z*q.z;
     float xy = q.x*q.y, xz = q.x*q.z, yz = q.y*q.z;
     float wx = q.w*q.x, wy = q.w*q.y, wz = q.w*q.z;
     return mat4(
-        vec4(1.0 - 2.0*(yy + zz),   2.0*(xy + wz),       2.0*(xz - wy),       0.0),
-        vec4(2.0*(xy - wz),         1.0 - 2.0*(xx + zz), 2.0*(yz + wx),       0.0),
-        vec4(2.0*(xz + wy),         2.0*(yz - wx),       1.0 - 2.0*(xx + yy), 0.0),
+        vec4(1.0 - 2.0*(yy + zz),   2.0*(xy + wz),       2.0*(xz - wy),       0.0) * s.x,
+        vec4(2.0*(xy - wz),         1.0 - 2.0*(xx + zz), 2.0*(yz + wx),       0.0) * s.y,
+        vec4(2.0*(xz + wy),         2.0*(yz - wx),       1.0 - 2.0*(xx + yy), 0.0) * s.z,
         vec4(p, 1.0));
+}
+
+mat4 loadTgtWorld(uint b) {
+    return transpose(mat4(s_tgtWorldRow0[b], s_tgtWorldRow1[b], s_tgtWorldRow2[b], vec4(0.0, 0.0, 0.0, 1.0)));
+}
+
+void storeTgtWorld(uint b, mat4 world) {
+    mat4 rows = transpose(world);
+    s_tgtWorldRow0[b] = rows[0];
+    s_tgtWorldRow1[b] = rows[1];
+    s_tgtWorldRow2[b] = rows[2];
 }
 
 // Where clip time lands in a clip's 30 Hz sample table.
@@ -381,9 +396,11 @@ void main() {
     barrier();
 
     // -----------------------------------------------------------------------
-    // Phase 3 — single-thread target FK walk + translation. Canonical bones
-    // apply the precomputed BindCorrection; non-canonical fall back to bind
-    // local. Translation: hip uses sampled+scaled, others get rest.
+    // Phase 3 — single-thread target FK walk. Canonical bones apply the
+    // precomputed BindCorrection; non-canonical fall back to bind local. The
+    // retarget works on rotations alone; the world transform also composes
+    // the local translation (hip: sampled and scaled, others: rest) and the
+    // rest scale, as the CPU palette does.
     // -----------------------------------------------------------------------
     if (tid == 0u) {
         vec3 scaledHip = s_hipTrans * rh.hipScale;
@@ -391,7 +408,7 @@ void main() {
             uint b = readRigU32Packed(rh.tgtDepthSortedTopo, i);
             uint p = readRigU32Packed(rh.tgtParentIndices, b);
             vec4 pwR = (p == kInvalid) ? vec4(0,0,0,1) : s_tgtWorldRot[p];
-            vec3 pwP = (p == kInvalid) ? vec3(0)       : s_tgtWorldPos[p];
+            mat4 pw  = (p == kInvalid) ? mat4(1.0)     : loadTgtWorld(p);
 
             uint srcIdx = readRigU32Packed(rh.tgtSrcIdx, b);
             vec4 tgtL, tgtW;
@@ -405,15 +422,13 @@ void main() {
                 tgtW = qnorm(qmul(pwR, tgtL));
             }
 
-            // Translation: hip gets sampled+scaled, others rest pos.
             vec3 localPos = (b == rh.tgtHipBoneIndex)
                 ? scaledHip
                 : rig.data[rh.tgtRestPos + b].xyz;
-            vec3 worldPos = pwP + qrotate(pwR, localPos);
+            vec3 localScale = rig.data[rh.tgtRestScale + b].xyz;
 
-            s_tgtLocalRot[b] = tgtL;
             s_tgtWorldRot[b] = tgtW;
-            s_tgtWorldPos[b] = worldPos;
+            storeTgtWorld(b, pw * trsToMat(localPos, tgtL, localScale));
         }
     }
     barrier();
@@ -425,7 +440,7 @@ void main() {
     for (uint j = tid; j < rh.skinJointCount; j += WG) {
         uint b = readRigU32Packed(rh.tgtJointNodes, j);
         if (b >= rh.tgtBoneCount) continue;
-        mat4 worldTRS = quatPosToMat(s_tgtWorldRot[b], s_tgtWorldPos[b]);
+        mat4 worldTRS = loadTgtWorld(b);
         mat4 invBind  = readRigMat4(rh.tgtInverseBind + b * 4u);
         // Pack as mat3x4 rows in the shared bone palette layout.
 #if defined(GE_COMPAT_PROFILE)
