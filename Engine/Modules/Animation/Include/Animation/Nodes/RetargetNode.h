@@ -107,6 +107,7 @@ public:
         std::vector<uint32>                  TargetTopo;
         std::vector<Mathematics::Quaternion> TargetBindLocal;     // authored local bind per tgt bone
         std::vector<Mathematics::Vector3>    TargetRestPos;       // rest local translation per tgt bone
+        std::vector<Mathematics::Vector3>    TargetRestScale;     // rest local scale per tgt bone
         // Per-target-bone canonical routing (sized = TargetBoneCount).
         // SourceIdx == ~0u for non-canonical bones; BindCorrection is identity.
         std::vector<uint32>                  TargetSourceIdx;

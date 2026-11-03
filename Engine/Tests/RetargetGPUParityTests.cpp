@@ -34,6 +34,7 @@
 #include "Rendering/Core/Device.h"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/quaternion.hpp>
 
@@ -136,6 +137,31 @@ protected:
         glm::mat4 m = glm::mat4_cast(g);
         if (b > 0) m[3].y = 1.0f;
         std::memcpy(&s.RestLocalMatrix[b * 16], glm::value_ptr(m), 64);
+    }
+
+    // Set the root bone's rest rotation and uniform rest scale, then rebuild the
+    // bind pose and inverse bind from the rest pose. The child offsets stay at
+    // Y=1 in the scaled space of the root.
+    static void SetScaledRootRest(AAnim::SkeletonData& s, const Mathematics::Quaternion& rotation, float scale)
+    {
+        SetRestRotation(s, 0, rotation);
+        for (uint32_t i = 0; i < 3; ++i)
+            s.RestScale[i] = scale;
+        glm::mat4 world(1.0f);
+        for (uint32_t b = 0; b < s.BoneCount; ++b)
+        {
+            const glm::vec3 t(s.RestTranslation[b * 3 + 0], s.RestTranslation[b * 3 + 1], s.RestTranslation[b * 3 + 2]);
+            const glm::quat r(s.RestRotation[b * 4 + 3], s.RestRotation[b * 4 + 0], s.RestRotation[b * 4 + 1],
+                              s.RestRotation[b * 4 + 2]);
+            const glm::vec3 sc(s.RestScale[b * 3 + 0], s.RestScale[b * 3 + 1], s.RestScale[b * 3 + 2]);
+            const glm::mat4 local =
+                glm::translate(glm::mat4(1.0f), t) * glm::mat4_cast(r) * glm::scale(glm::mat4(1.0f), sc);
+            std::memcpy(&s.RestLocalMatrix[b * 16], glm::value_ptr(local), 64);
+            world = world * local;
+            const glm::mat4 inverseBind = glm::inverse(world);
+            std::memcpy(&s.BindPose[b * 16], glm::value_ptr(world), 64);
+            std::memcpy(&s.InverseBind[b * 16], glm::value_ptr(inverseBind), 64);
+        }
     }
 
     // Build a single-channel rotation animation clip on bone `boneIdx`.
@@ -384,7 +410,9 @@ protected:
                                       tgtLocalPose.Positions[b].y,
                                       tgtLocalPose.Positions[b].z);
             ws.Pose[b].r = tgtLocalPose.Rotations[b].GetGLM();
-            ws.Pose[b].s = glm::vec3(1, 1, 1);
+            ws.Pose[b].s = glm::vec3(tgtLocalPose.Scales[b].x,
+                                      tgtLocalPose.Scales[b].y,
+                                      tgtLocalPose.Scales[b].z);
         }
         ws.ChangedTranslation.assign(tgtSkel.BoneCount, 1u);
         ws.ChangedRotation.assign(tgtSkel.BoneCount, 1u);
@@ -722,6 +750,43 @@ TEST_F(RetargetGPUParityTest, ShortClipRestFallback)
 
     auto cpu = ComputeCPUReference(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 1.0f);
     auto gpu = DispatchGPU(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 1.0f, 3);
+
+    ExpectAtlasMatches(cpu, gpu);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 3b — scaled root.
+// The target root has the rest pose of an FBX centimeter rig: scale 100 and
+// -90° on X. The inverse bind includes the scale, so the skin matrices only
+// stay at full size when the kernel composes the rest scale into the bone
+// world transforms as the CPU path does.
+// ---------------------------------------------------------------------------
+
+TEST_F(RetargetGPUParityTest, ScaledRootSkinsAtFullSize)
+{
+    if (!HasDevice()) GTEST_SKIP() << "No Vulkan device available";
+    if (!HasShader()) GTEST_SKIP() << "retarget_full.comp.spv not found";
+
+    const Mathematics::Quaternion centimeterRoot(glm::angleAxis(glm::radians(-90.0f), glm::vec3(1, 0, 0)));
+
+    auto srcSkel = MakeChainSkeleton(3);
+    auto tgtSkel = MakeChainSkeleton(3);
+    SetScaledRootRest(tgtSkel, centimeterRoot, 100.0f);
+
+    const std::vector<AAnim::HumanBone> canon = {
+        AAnim::HumanBone::Hips, AAnim::HumanBone::Spine, AAnim::HumanBone::Head };
+    const std::vector<Mathematics::Quaternion> Q(3, Mathematics::Quaternion::Identity());
+    auto srcRig = MakeRig(canon, Q);
+    auto tgtRig = MakeRig(canon, Q);
+    auto map = MakeMap();
+
+    auto clip = MakeRotationClip(1,
+        Mathematics::Quaternion::Identity(),
+        Mathematics::Quaternion(glm::angleAxis(glm::radians(30.0f), glm::vec3(1, 0, 0))),
+        1.0f);
+
+    auto cpu = ComputeCPUReference(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 0.5f);
+    auto gpu = DispatchGPU(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 0.5f, 3);
 
     ExpectAtlasMatches(cpu, gpu);
 }
