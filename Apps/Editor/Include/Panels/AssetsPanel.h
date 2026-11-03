@@ -193,7 +193,6 @@ private:
     void LoadListColumnLayout();
     void SaveListColumnLayout();
     void HandleSelectionChanged(const std::vector<std::filesystem::path>& paths);
-    void ApplySelectionFromUndo(const std::vector<std::filesystem::path>& paths);
     void UpdateAssetPreview();
     bool IsImageAssetPath(const std::filesystem::path& path) const;
 

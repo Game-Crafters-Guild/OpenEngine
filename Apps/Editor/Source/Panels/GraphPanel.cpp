@@ -1,4 +1,5 @@
 #include "Panels/GraphPanel.h"
+#include "Types/Fnv1a.h"
 #include "Platform/SystemMetrics.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Assets/AssetManager.h"
@@ -266,28 +267,27 @@ public:
                          std::vector<std::uint8_t> before,
                          std::vector<std::uint8_t> after,
                          std::string name)
-        : m_Panel(panel), m_Before(std::move(before)), m_After(std::move(after)), m_Name(std::move(name))
+        : m_Panel(UIElement::MakeWeakRef(panel)), m_Path(panel->GetCurrentGraphPath()),
+          m_Before(std::move(before)), m_After(std::move(after)), m_Name(std::move(name))
     {
     }
 
     const char* GetName() const override { return m_Name.c_str(); }
 
-    void Do() override
-    {
-        if (m_Panel && !m_After.empty())
-            m_Panel->ApplyGraphSnapshot(m_After);
-    }
-
-    void Undo() override
-    {
-        if (m_Panel && !m_Before.empty())
-            m_Panel->ApplyGraphSnapshot(m_Before);
-    }
-
-    void Redo() override { Do(); }
+    void Do() override { TryRedo(); }
+    void Undo() override { TryUndo(); }
+    void Redo() override { TryRedo(); }
+    bool TryUndo() override { return Apply(m_Before); }
+    bool TryRedo() override { return Apply(m_After); }
 
 private:
-    GraphPanel* m_Panel = nullptr;
+    bool Apply(const std::vector<std::uint8_t>& bytes)
+    {
+        auto* panel = m_Panel.Get();
+        return panel && panel->GetCurrentGraphPath() == m_Path && panel->ApplyGraphSnapshot(bytes);
+    }
+    UIElement::WeakRef<GraphPanel> m_Panel;
+    std::filesystem::path m_Path;
     std::vector<std::uint8_t> m_Before;
     std::vector<std::uint8_t> m_After;
     std::string m_Name;
@@ -4160,13 +4160,16 @@ void GraphPanel::SetupUI()
             return;
         Editor::UndoRedoService::SnapshotTarget target;
         target.debugLabel = "Graph";
-        target.Capture = [this](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+        target.Identity = {reinterpret_cast<std::uintptr_t>(this), Hashing::Fnv1a64(m_CurrentPath.generic_string())};
+        target.Capture = [panel = UIElement::MakeWeakRef(this), path = m_CurrentPath](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
         {
-            return CaptureGraphSnapshot(out);
+            auto* owner = panel.Get();
+        return owner && owner->m_CurrentPath == path && owner->CaptureGraphSnapshot(out);
         };
-        target.Apply = [this](const Editor::UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
+        target.Apply = [panel = UIElement::MakeWeakRef(this), path = m_CurrentPath](const Editor::UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
         {
-            return ApplyGraphSnapshot(in);
+            auto* owner = panel.Get();
+        return owner && owner->m_CurrentPath == path && owner->ApplyGraphSnapshot(in);
         };
         m_GraphDragEdit = m_Undo->BeginInteractiveEdit("Move Nodes", std::move(target));
     });
@@ -4787,13 +4790,17 @@ Editor::UndoRedoService::InteractiveEdit GraphPanel::BeginGraphParameterEdit(con
 
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = "Graph";
-    target.Capture = [this](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+    target.Identity = {reinterpret_cast<std::uintptr_t>(this), Hashing::Fnv1a64(m_CurrentPath.generic_string()),
+        Hashing::Fnv1a64(m_GraphParameterEditNodeId + ":" + m_GraphParameterEditKey + ":" + m_GraphTransitionEditLinkId)};
+    target.Capture = [panel = UIElement::MakeWeakRef(this), path = m_CurrentPath](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
     {
-        return CaptureGraphSnapshot(out);
+        auto* owner = panel.Get();
+        return owner && owner->m_CurrentPath == path && owner->CaptureGraphSnapshot(out);
     };
-    target.Apply = [this](const Editor::UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
+    target.Apply = [panel = UIElement::MakeWeakRef(this), path = m_CurrentPath](const Editor::UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
     {
-        return ApplyGraphSnapshot(in);
+        auto* owner = panel.Get();
+        return owner && owner->m_CurrentPath == path && owner->ApplyGraphSnapshot(in);
     };
     return m_Undo->BeginInteractiveEdit(actionName ? actionName : "Edit Node Parameter", std::move(target));
 }
@@ -4805,13 +4812,17 @@ Editor::UndoRedoService::InteractiveEdit GraphPanel::BeginGraphVariableEdit(cons
 
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = "Graph";
-    target.Capture = [this](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+    target.Identity = {reinterpret_cast<std::uintptr_t>(this), Hashing::Fnv1a64(m_CurrentPath.generic_string()),
+        Hashing::Fnv1a64(m_GraphVariableEditName)};
+    target.Capture = [panel = UIElement::MakeWeakRef(this), path = m_CurrentPath](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
     {
-        return CaptureGraphSnapshot(out);
+        auto* owner = panel.Get();
+        return owner && owner->m_CurrentPath == path && owner->CaptureGraphSnapshot(out);
     };
-    target.Apply = [this](const Editor::UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
+    target.Apply = [panel = UIElement::MakeWeakRef(this), path = m_CurrentPath](const Editor::UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
     {
-        return ApplyGraphSnapshot(in);
+        auto* owner = panel.Get();
+        return owner && owner->m_CurrentPath == path && owner->ApplyGraphSnapshot(in);
     };
     return m_Undo->BeginInteractiveEdit(actionName ? actionName : "Edit Graph Variable", std::move(target));
 }
@@ -5575,6 +5586,8 @@ void GraphPanel::OnCanvasWireDropMenu(float screenX, float screenY,
 
 bool GraphPanel::OpenGraph(const std::filesystem::path& path)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
     if (path.empty())
         return false;
     Graph::Model loaded;
@@ -5663,6 +5676,8 @@ std::filesystem::path GraphPanel::PromptSaveAsPath()
 
 bool GraphPanel::SaveGraph()
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
     if (m_CurrentPath.empty())
     {
         const std::filesystem::path chosen = PromptSaveAsPath();

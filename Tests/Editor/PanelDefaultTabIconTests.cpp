@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "Panels/UIDemoPanel.h"
-#include "Panels/UndoHistoryPanel.h"
+#include "Panels/UndoHistory/UndoHistoryPanel.h"
 #include "UI/ClassBackgroundImageQuery.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/UIStyle.h"

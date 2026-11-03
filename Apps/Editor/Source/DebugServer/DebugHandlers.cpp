@@ -5434,6 +5434,15 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         result["nextRedo"] = nr ? std::string(nr) : std::string();
         result["undo"] = std::move(undo);
         result["redo"] = std::move(redo);
+        result["currentNodeId"] = svc->GetCurrentNodeId();
+        result["rootNodeId"] = svc->GetRootNodeId();
+        result["pendingActionId"] = svc->GetPendingActionId();
+        result["pendingLabel"] = svc->GetPendingName() ? svc->GetPendingName() : "";
+        result["lastError"] = svc->GetLastError();
+        result["nodes"] = json::array();
+        for (const auto& node : svc->GetHistoryNodes())
+            result["nodes"].push_back({{"id", node.Id}, {"parentId", node.Parent},
+                {"label", node.GetName()}, {"type", node.GetTypeName()}, {"timestampMs", epochMs(node.Timestamp)}});
         return result; });
 
     // 11. select_entity

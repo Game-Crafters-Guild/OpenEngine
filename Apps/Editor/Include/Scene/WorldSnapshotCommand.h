@@ -35,24 +35,30 @@ class WorldSnapshotCommand final : public IEditorCommand
 
     void Do() override { Redo(); }
 
-    void Undo() override { Apply(m_Before); }
-    void Redo() override { Apply(m_After); }
+    void Undo() override { if (TryUndo()) NotifyReplay(); }
+    void Redo() override { if (TryRedo()) NotifyReplay(); }
+    bool TryUndo() override { return Apply(m_Before); }
+    bool TryRedo() override { return Apply(m_After); }
 
-  private:
-    void Apply(const std::vector<std::uint8_t>& snapshot)
+    void NotifyReplay() override
     {
-        if (!m_World)
-            return;
-        m_World->DeserializeWorld(snapshot);
-        m_World->ProcessCommands();
-
         if (m_Notifications)
         {
             EditorChangeNotifications::WorldStructureChangedEvent e{};
             e.world = m_World;
-            e.kind = EditorChangeNotifications::ChangeKind::Commit;
+            e.kind = EditorChangeNotifications::ChangeKind::UndoRedo;
             m_Notifications->NotifyWorldStructureChanged(e);
         }
+    }
+
+  private:
+    bool Apply(const std::vector<std::uint8_t>& snapshot)
+    {
+        if (!m_World)
+            return false;
+        m_World->DeserializeWorld(snapshot);
+        m_World->ProcessCommands();
+        return true;
     }
 
     std::string m_Name;

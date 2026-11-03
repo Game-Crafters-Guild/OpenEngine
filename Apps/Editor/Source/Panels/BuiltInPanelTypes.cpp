@@ -27,7 +27,7 @@
 #include "Panels/ShaderErrors/ShaderErrorsPanel.h"
 #include "Panels/TodoPanel.h"
 #include "Panels/UIDemoPanel.h"
-#include "Panels/UndoHistoryPanel.h"
+#include "Panels/UndoHistory/UndoHistoryPanel.h"
 #include "Panels/VisualProfilerPanel.h"
 #include "Panels/VramPanel.h"
 #include "Panels/WebPanel.h"

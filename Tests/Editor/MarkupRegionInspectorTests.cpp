@@ -230,7 +230,8 @@ TEST_F(MarkupRegionInspectorTest, TheHeightPreviewsWhileDraggedAndCommitsOneUndo
         height->NotifyValueChanging();
         EXPECT_FLOAT_EQ(RegionOf(forest).ExtrudeHeight, value) << "the drag does not preview";
     }
-    EXPECT_FALSE(Undo.CanUndo()) << "a preview made an undo step";
+    EXPECT_TRUE(Undo.GetHistoryNodes().empty()) << "a preview published a revision";
+    EXPECT_TRUE(Undo.CanUndo()) << "the live preview must be reversible";
     height->SetValueWithoutNotify(24.0f);
     height->NotifyValueChanged();
     EXPECT_FLOAT_EQ(RegionOf(forest).ExtrudeHeight, 24.0f);

@@ -23,7 +23,11 @@
 #include "Inspectors/AnimatorInspector.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/TransformInspector.h"
+#include "Panels/UndoHistory/UndoHistoryPanel.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
+#include "Scene/SceneDocumentManager.h"
+#include "Inspectors/InspectorComponent/InspectorComponentColorRow.h"
 
 #include "Components/Animation/Animator.h"
 #include "Components/Audio/AudioEmitter.h"
@@ -1674,3 +1678,124 @@ TEST_F(UndoRedoServiceTests, AnInteractiveEditIsOpenUntilItCommitsCancelsOrIsDes
 }
 
 } // namespace
+
+TEST_F(UndoRedoServiceTests, MultiTargetRestoreValidatesBeforeAnyWrite)
+{
+    World* world = GetWorld();
+    const auto first = world->CreateEntity();
+    const auto second = world->CreateEntity();
+    world->AddComponentImmediate(first, Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion::Identity(), {1.0f, 1.0f, 1.0f}));
+    world->AddComponentImmediate(second, Transform::FromTRS({2.0f, 0.0f, 0.0f}, Quaternion::Identity(), {1.0f, 1.0f, 1.0f}));
+    auto target = GameEngine::Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        world, {first, second}, GameEngine::ECS::GetComponentTypeId<Transform>(), nullptr, "Position");
+    UndoRedoService::SnapshotTarget::Snapshot before;
+    ASSERT_TRUE(target.Capture(before));
+    world->AddComponentImmediate(first, Transform::FromTRS({10.0f, 0.0f, 0.0f}, Quaternion::Identity(), {1.0f, 1.0f, 1.0f}));
+    before.pop_back();
+    EXPECT_FALSE(target.Apply(before));
+    EXPECT_FLOAT_EQ(world->GetComponent<Transform>(first)->GetPosition().x, 10.0f);
+}
+
+TEST_F(UndoRedoServiceTests, ScenePreviewsAreDirtyAndUndoToTheSavedStateIsClean)
+{
+    World* world = GetWorld();
+    const auto entity = world->CreateEntity();
+    world->AddComponentImmediate(entity, Transform{});
+    UndoRedoService history;
+    GameEngine::Editor::EditorChangeNotifications notifications;
+    GameEngine::Editor::SceneDocumentManager document;
+    document.SetWorld(world);
+    document.SetUndoRedoService(&history);
+    document.SetChangeNotifications(&notifications);
+    document.MarkClean();
+    auto target = GameEngine::Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        world, {entity}, GameEngine::ECS::GetComponentTypeId<Transform>(), &notifications, "Position");
+    auto edit = history.BeginInteractiveEdit("Position", target);
+    edit.Preview([world, entity]
+    {
+        world->AddComponentImmediate(entity, Transform::FromTRS({3.0f, 0.0f, 0.0f}, Quaternion::Identity(), {1.0f, 1.0f, 1.0f}));
+    });
+    EXPECT_TRUE(document.IsDirty());
+    EXPECT_TRUE(history.GetHistoryNodes().empty());
+    edit.Commit();
+    history.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    history.Redo();
+    EXPECT_TRUE(document.IsDirty());
+}
+
+TEST_F(UndoRedoServiceTests, ColorPickerEditsTheFixedSelectionAsOnePendingAction)
+{
+    using namespace GameEngine;
+    using ColorComponent = Components::TerrainColorEffect;
+    World* world = GetWorld();
+    const auto primary = world->CreateEntity();
+    const auto secondary = world->CreateEntity();
+    ColorComponent first{};
+    first.Color = ColorLinear(0.1f, 0.2f, 0.3f, 0.25f);
+    ColorComponent second{};
+    second.Color = ColorLinear(0.4f, 0.5f, 0.6f, 0.75f);
+    world->AddComponentImmediate(primary, first);
+    world->AddComponentImmediate(secondary, second);
+    UndoRedoService history;
+    ColorPickerCallbacks callbacks;
+    auto binding = std::make_shared<InspectorUI::ComponentColorBinding<ColorComponent>>();
+    binding->World = world;
+    binding->Entity = primary;
+    binding->AdditionalEntities = {secondary};
+    binding->Undo = &history;
+    binding->Color = &ColorComponent::Color;
+    binding->ChangeLabel = "Terrain color";
+    binding->OpenPicker = [&callbacks](std::uint32_t, float, ColorPickerCallbacks opened)
+    {
+        callbacks = std::move(opened);
+    };
+    InspectorUI::OpenComponentColorPicker(binding);
+    ASSERT_TRUE(static_cast<bool>(callbacks.onValueChanging));
+    callbacks.onValueChanging(0xff88aa44u, 1.0f);
+    callbacks.onApply(0xff88aa44u, 1.0f);
+    EXPECT_FLOAT_EQ(world->GetComponent<ColorComponent>(primary)->Color.r,
+                    world->GetComponent<ColorComponent>(secondary)->Color.r);
+    EXPECT_FLOAT_EQ(world->GetComponent<ColorComponent>(primary)->Color.a, 0.25f);
+    EXPECT_FLOAT_EQ(world->GetComponent<ColorComponent>(secondary)->Color.a, 0.75f);
+    EXPECT_TRUE(history.GetHistoryNodes().empty());
+    history.Undo();
+    EXPECT_FLOAT_EQ(world->GetComponent<ColorComponent>(primary)->Color.r, first.Color.r);
+    EXPECT_FLOAT_EQ(world->GetComponent<ColorComponent>(secondary)->Color.r, second.Color.r);
+    EXPECT_EQ(history.GetHistoryNodes().size(), 1u);
+}
+
+TEST_F(UndoRedoServiceTests, HistoryPanelKeepsRevisionsInsideItsScrollViewport)
+{
+    using namespace GameEngine;
+    Editor::UndoRedoService undo;
+    UndoHistoryPanel panel;
+    panel.SetUndoRedoService(&undo);
+    UIElement* list = panel.FindById(HashStringId("HistoryList"));
+    ASSERT_NE(list, nullptr);
+    ASSERT_NE(list->GetParent(), nullptr);
+    EXPECT_TRUE(list->GetParent()->HasClass("scroll-content"));
+    EXPECT_NE(list->FindById(HashStringId("HistoryNode0")), nullptr);
+}
+
+TEST_F(UndoRedoServiceTests, DetachedHistoryPanelDoesNotAccumulateRowsDuringEvents)
+{
+    using namespace GameEngine;
+    UndoHistoryPanel panel;
+    UIElement* list = panel.FindById(HashStringId("HistoryList"));
+    ASSERT_NE(list, nullptr);
+    ASSERT_EQ(list->GetChildren().size(), 0u);
+    Editor::UndoRedoService undo;
+    panel.SetUndoRedoService(&undo);
+    ASSERT_EQ(list->GetChildren().size(), 1u);
+    UIElement source;
+    source.RegisterEventHandler(kEventButtonClick, [&panel](UIEvent&)
+    {
+        panel.Rebuild();
+        panel.Rebuild();
+    });
+    UIElement::SetInEventDispatch(true);
+    SendMouse(source, kEventButtonClick);
+    UIElement::SetInEventDispatch(false);
+    EXPECT_EQ(list->GetChildren().size(), 1u);
+}

@@ -500,6 +500,7 @@ static Editor::UndoRedoService::SnapshotTarget MakeMaterialSnapshotTarget(Materi
 {
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
+    target.Identity = {reinterpret_cast<std::uintptr_t>(mat)};
 
     // The file as it is on disk, not the loaded document: the document carries the defaults
     // filled in at load, which undo would otherwise write into the author's file.

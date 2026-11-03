@@ -26,8 +26,8 @@ class UndoRedoService;
 // announces the components it wrote as an UndoRedo change. The edit's own writes are the caller's
 // to announce.
 //
-// Returns what `edit` returned. The step covers whatever landed, so an edit refused (false) after
-// it wrote is still recorded; an edit that changed nothing, or a null `undo`, records no step.
+// A refused or throwing edit restores the starting components. A successful edit records only
+// changed components; an unchanged edit or a null `undo` records no step.
 bool CommitEntityComponentsEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedoService* undo,
                                 EditorChangeNotifications* notifications, const std::string& label,
                                 const std::function<bool()>& edit);

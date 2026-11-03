@@ -1,5 +1,8 @@
 #include "Scene/SceneDocumentManager.h"
 
+#include "UndoRedo/UndoRedoService.h"
+#include "UndoRedo/EntityComponentsEdit.h"
+
 #include "Diagnostics/MainThreadHangWatchdog.h"
 #include "Scene/DefaultSceneEntities.h"
 
@@ -67,6 +70,7 @@ void SceneDocumentManager::SetChangeNotifications(EditorChangeNotifications* not
 
 void SceneDocumentManager::MarkDirty()
 {
+    m_DirtyRevisionKnown = false;
     if (!m_Dirty)
         Logger::Log::Debug("SceneDocumentManager: scene marked dirty");
     m_Dirty = true;
@@ -77,7 +81,46 @@ void SceneDocumentManager::MarkClean()
     if (m_Dirty)
         Logger::Log::Debug("SceneDocumentManager: scene marked clean");
     m_Dirty = false;
-    m_BaselineSnapshot = CaptureWorldSnapshot();
+    m_BaselineSnapshot = CaptureSceneContent();
+    if (m_History)
+        m_History->MarkSaved(this);
+    m_DirtyRevision = m_History ? m_History->GetCurrentNodeId() : 0;
+    m_DirtyRevisionKnown = true;
+}
+
+void SceneDocumentManager::RefreshDirtyAfterReplay()
+{
+    const std::uint64_t revision = m_History ? m_History->GetCurrentNodeId() : 0;
+    if (m_History && m_DirtyRevisionKnown && revision == m_DirtyRevision)
+        return;
+    m_Dirty = !(m_History && m_History->IsAtSavedRevision(this)) && CaptureSceneContent() != m_BaselineSnapshot;
+    m_DirtyRevision = revision;
+    m_DirtyRevisionKnown = true;
+}
+
+std::vector<std::uint8_t> SceneDocumentManager::CaptureSceneContent() const
+{
+    std::vector<std::uint8_t> content;
+    if (!m_World)
+        return content;
+    for (const auto entity : m_World->GetAliveEntitiesSnapshot())
+    {
+        const auto components = CaptureEntityComponents(*m_World, entity);
+        const auto append = [&content](const auto& value)
+        {
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(&value);
+            content.insert(content.end(), bytes, bytes + sizeof(value));
+        };
+        append(entity.id);
+        append(static_cast<std::uint32_t>(components.size()));
+        for (const auto& [type, bytes] : components)
+        {
+            append(type);
+            append(static_cast<std::uint32_t>(bytes.size()));
+            content.insert(content.end(), bytes.begin(), bytes.end());
+        }
+    }
+    return content;
 }
 
 void SceneDocumentManager::SetHierarchyUiCaptureForSave(std::function<Scene::SceneHierarchyUi()> capture)
@@ -830,6 +873,8 @@ bool SceneDocumentManager::RefuseSaveWrite(const std::filesystem::path& targetPa
 
 bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
 {
+    if (m_History && !m_History->CommitPendingEdit())
+        return false;
     if (!m_World)
         return false;
     if (!m_ScenePath.has_value())
@@ -911,6 +956,8 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
 
 bool SceneDocumentManager::SaveAs(const std::filesystem::path& scenePath, DegradedSavePolicy degradedPolicy)
 {
+    if (m_History && !m_History->CommitPendingEdit())
+        return false;
     if (!m_World)
         return false;
     // Save As to a DIFFERENT path is the sanctioned escape for a degraded document: the source file
@@ -1121,10 +1168,12 @@ void SceneDocumentManager::Subscribe()
         {
             if (!m_World || e.world != m_World)
                 return;
-            if (e.kind == EditorChangeNotifications::ChangeKind::Preview ||
-                e.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
+            if (e.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
-            MarkDirty();
+            if (e.kind == EditorChangeNotifications::ChangeKind::UndoRedo)
+                RefreshDirtyAfterReplay();
+            else
+                MarkDirty();
         });
 
     m_SubStructure = m_Notifications->SubscribeWorldStructureChanged(
@@ -1132,9 +1181,12 @@ void SceneDocumentManager::Subscribe()
         {
             if (!m_World || e.world != m_World)
                 return;
-            if (e.kind != EditorChangeNotifications::ChangeKind::Commit)
+            if (e.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
-            MarkDirty();
+            if (e.kind == EditorChangeNotifications::ChangeKind::UndoRedo)
+                RefreshDirtyAfterReplay();
+            else
+                MarkDirty();
         });
 }
 

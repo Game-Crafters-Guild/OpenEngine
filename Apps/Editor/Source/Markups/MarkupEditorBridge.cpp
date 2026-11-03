@@ -1,5 +1,7 @@
 #include "Markups/MarkupEditorBridge.h"
 
+#include "UndoRedo/History/HistoryReplayScope.h"
+
 #include "Components/Name.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/Spline/SplineComponent.h"
@@ -748,6 +750,11 @@ void MarkupEditorBridge::OnComponentChanged(const EditorChangeNotifications::Com
     if (const auto seen = state.Seen.find(event.entity);
         seen != state.Seen.end() && seen->second.RevisionKnown && seen->second.EntryCount > notes->Entries.size())
         seen->second.EntryCount = notes->Entries.size();
+    if (HistoryReplayScope::IsActive())
+    {
+        (void)TakeEditChanges(*event.world, event.entity);
+        return;
+    }
     if (const uint8 changes = TakeEditChanges(*event.world, event.entity); changes != 0)
         (void)service->RecordEdit(*event.world, event.entity, changes, CurrentAuthor(), Now());
     else

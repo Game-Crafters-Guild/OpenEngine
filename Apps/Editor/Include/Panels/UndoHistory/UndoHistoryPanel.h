@@ -1,7 +1,9 @@
 #pragma once
 
 #include "UI/Controls/DockPanel.h"
+#include "Events/Event.h"
 #include <cstddef>
+#include <cstdint>
 
 namespace GameEngine {
 
@@ -22,11 +24,15 @@ class UndoHistoryPanel : public DockPanel
 
     void SetUndoRedoService(Editor::UndoRedoService* undo);
     void Rebuild();
+    void OnOwnerManagerChanged(UIManager* owner) override;
 
   private:
     void BuildUI();
+    void AddRevision(std::uint64_t id, const std::string& label, std::size_t depth, const std::string& tooltip);
 
     Editor::UndoRedoService* m_Undo = nullptr;
+    EventSubscription m_HistoryChanged;
+    bool m_RebuildQueued = false;
 
     ScrollView* m_ScrollView = nullptr;
     UIElement* m_List = nullptr;

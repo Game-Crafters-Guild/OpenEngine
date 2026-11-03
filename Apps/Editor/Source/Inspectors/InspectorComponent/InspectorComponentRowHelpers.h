@@ -7,6 +7,7 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Mathematics/Interpolation.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -43,240 +44,59 @@ inline std::vector<ECS::EntityHandle> GetAdditionalEntities(const InspectorConte
     return extras;
 }
 
-/// Build a SnapshotTarget that captures/restores a raw ECS component by value.
-/// Apply writes bytes only (no notification); Notify fires the change event.
+/// Component snapshots share the same fixed-target transaction format for every value type.
 template<typename TComponent>
 inline Editor::UndoRedoService::SnapshotTarget MakeComponentSnapshotTarget(
-    std::function<ECS::World*()> resolveWorld, ECS::EntityHandle e,
-    Editor::EditorChangeNotifications* n,
-    const std::string& label)
+    std::function<ECS::World*()> resolveWorld, ECS::EntityHandle entity,
+    Editor::EditorChangeNotifications* notifications, const std::string& label)
 {
-    Editor::UndoRedoService::SnapshotTarget target;
-    target.debugLabel = label;
-
-    target.Capture = [resolveWorld, e](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
-    {
-        ECS::World* w = resolveWorld ? resolveWorld() : nullptr;
-        if (!w)
-            return false;
-        auto* comp = w->GetComponent<TComponent>(e);
-        if (!comp)
-            return false;
-        out.resize(sizeof(TComponent));
-        std::memcpy(out.data(), comp, sizeof(TComponent));
-        return true;
-    };
-
-    target.Apply = [resolveWorld, e](const Editor::UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
-    {
-        ECS::World* w = resolveWorld ? resolveWorld() : nullptr;
-        if (snap.size() != sizeof(TComponent))
-            return false;
-        if (!w || !e.IsValid() || !w->IsValid(e))
-            return false;
-        TComponent comp{};
-        std::memcpy(&comp, snap.data(), sizeof(TComponent));
-        w->AddComponentImmediate(e, comp);
-        return true;
-    };
-
-    target.Notify = [resolveWorld, e, n](Editor::EditorChangeNotifications::ChangeKind kind)
-    {
-        ECS::World* w = resolveWorld ? resolveWorld() : nullptr;
-        if (n && w)
-            n->NotifyComponentChange<TComponent>(w, e, kind);
-    };
-
-    return target;
+    return Editor::MultiEntityUndo::MakeComponentSnapshotTarget(std::move(resolveWorld), {entity},
+        ECS::GetComponentTypeId<TComponent>(), notifications, label);
 }
 
 template<typename TComponent>
 inline Editor::UndoRedoService::SnapshotTarget MakeComponentSnapshotTarget(
-    ECS::World* w, ECS::EntityHandle e,
-    Editor::EditorChangeNotifications* n,
+    ECS::World* world, ECS::EntityHandle entity, Editor::EditorChangeNotifications* notifications,
     const std::string& label)
 {
-    return MakeComponentSnapshotTarget<TComponent>([w]() { return w; }, e, n, label);
+    return MakeComponentSnapshotTarget<TComponent>([world] { return world; }, entity, notifications, label);
 }
 
-/// Type-erased SnapshotTarget for a component identified only by its runtime
-/// ComponentTypeId (no compile-time T). Captures/restores via the World's
-/// byte-level component I/O; Notify fires the by-typeId change event. Used by the
-/// reflection-driven default inspector.
 inline Editor::UndoRedoService::SnapshotTarget MakeComponentSnapshotTargetById(
-    ECS::World* w, ECS::EntityHandle e, ECS::ComponentTypeId typeId,
-    Editor::EditorChangeNotifications* n, const std::string& label)
+    ECS::World* world, ECS::EntityHandle entity, ECS::ComponentTypeId typeId,
+    Editor::EditorChangeNotifications* notifications, const std::string& label)
 {
-    Editor::UndoRedoService::SnapshotTarget target;
-    target.debugLabel = label;
-
-    target.Capture = [w, e, typeId](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool {
-        return w && w->CaptureComponentBytes(e, typeId, out);
-    };
-    target.Apply = [w, e, typeId](const Editor::UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool {
-        return w && w->ApplyComponentBytesImmediate(e, typeId, snap);
-    };
-    target.Notify = [w, e, typeId, n](Editor::EditorChangeNotifications::ChangeKind kind) {
-        if (n)
-            n->NotifyComponentChanged({w, e, typeId, kind});
-    };
-
-    return target;
+    return Editor::MultiEntityUndo::MakeComponentSnapshotTarget(world, {entity}, typeId, notifications, label);
 }
 
-/// Type-erased multi-entity SnapshotTarget (primary + extras) for a component
-/// identified only by its runtime ComponentTypeId. The blob concatenates each
-/// entity's component bytes; one snapshot = one undo entry covering every edited
-/// entity. The by-typeId analogue of MakeMultiComponentSnapshotTarget<T>, used by
-/// the reflection-driven default inspector for multi-selection edits.
 inline Editor::UndoRedoService::SnapshotTarget MakeMultiComponentSnapshotTargetById(
-    ECS::World* w, ECS::EntityHandle primary,
-    const std::vector<ECS::EntityHandle>& additionalEntities, ECS::ComponentTypeId typeId,
-    Editor::EditorChangeNotifications* n, const std::string& label)
+    ECS::World* world, ECS::EntityHandle primary, const std::vector<ECS::EntityHandle>& additionalEntities,
+    ECS::ComponentTypeId typeId, Editor::EditorChangeNotifications* notifications, const std::string& label)
 {
-    auto allEntities = std::make_shared<std::vector<ECS::EntityHandle>>();
-    allEntities->push_back(primary);
-    for (auto& ex : additionalEntities)
-        allEntities->push_back(ex);
-
-    Editor::UndoRedoService::SnapshotTarget target;
-    target.debugLabel = label;
-
-    using Snapshot = Editor::UndoRedoService::SnapshotTarget::Snapshot;
-
-    // Each entity's blob is length-prefixed (uint32 byte count; 0 = absent). A
-    // missing/destroyed entity contributes a zero-length entry instead of aborting
-    // the whole capture, so an edit across a selection where one entity later loses
-    // the component (or is deleted) still records a working undo entry for the rest.
-    target.Capture = [w, allEntities, typeId](Snapshot& out) -> bool {
-        if (!w)
-            return false;
-        out.clear();
-        for (ECS::EntityHandle ent : *allEntities)
-        {
-            Snapshot one;
-            const std::uint32_t len = w->CaptureComponentBytes(ent, typeId, one)
-                                        ? static_cast<std::uint32_t>(one.size()) : 0u;
-            const std::size_t at = out.size();
-            out.resize(at + sizeof(len));
-            std::memcpy(out.data() + at, &len, sizeof(len));
-            out.insert(out.end(), one.begin(), one.end());
-        }
-        return true;
-    };
-    target.Apply = [w, allEntities, typeId](const Snapshot& snap) -> bool {
-        if (!w)
-            return false;
-        std::size_t cursor = 0;
-        for (ECS::EntityHandle ent : *allEntities)
-        {
-            if (cursor + sizeof(std::uint32_t) > snap.size())
-                return false;
-            std::uint32_t len = 0;
-            std::memcpy(&len, snap.data() + cursor, sizeof(len));
-            cursor += sizeof(len);
-            if (len == 0)
-                continue;  // entity was absent at capture time
-            if (cursor + len > snap.size())
-                return false;
-            Snapshot one(snap.begin() + static_cast<std::ptrdiff_t>(cursor),
-                         snap.begin() + static_cast<std::ptrdiff_t>(cursor + len));
-            cursor += len;
-            if (ent.IsValid() && w->IsValid(ent))
-                w->ApplyComponentBytesImmediate(ent, typeId, one);
-        }
-        return true;
-    };
-    target.Notify = [w, allEntities, typeId, n](Editor::EditorChangeNotifications::ChangeKind kind) {
-        if (!n)
-            return;
-        for (auto ent : *allEntities)
-            n->NotifyComponentChanged({w, ent, typeId, kind});
-    };
-
-    return target;
+    auto entities = additionalEntities;
+    entities.push_back(primary);
+    return Editor::MultiEntityUndo::MakeComponentSnapshotTarget(world, std::move(entities), typeId, notifications, label);
 }
 
-/// Build a SnapshotTarget that captures/restores a component across multiple entities.
-/// The snapshot blob stores each entity's component data concatenated.
 template<typename TComponent>
 inline Editor::UndoRedoService::SnapshotTarget MakeMultiComponentSnapshotTarget(
     std::function<ECS::World*()> resolveWorld, ECS::EntityHandle primary,
     const std::vector<ECS::EntityHandle>& additionalEntities,
-    Editor::EditorChangeNotifications* n,
-    const std::string& label)
+    Editor::EditorChangeNotifications* notifications, const std::string& label)
 {
-    // Build the full list from entities that actually carry the component.
-    // InspectorContext::Entities may contain a heterogeneous selection, while
-    // the component section is rendered from the primary entity. Including a
-    // peer without TComponent would make Capture fail and silently disable undo
-    // for the peers that are editable.
-    auto allEntities = std::make_shared<std::vector<ECS::EntityHandle>>();
-    allEntities->push_back(primary);
-    ECS::World* initialWorld = resolveWorld ? resolveWorld() : nullptr;
-    for (auto& ex : additionalEntities)
-    {
-        if (initialWorld && initialWorld->GetComponent<TComponent>(ex))
-            allEntities->push_back(ex);
-    }
-
-    Editor::UndoRedoService::SnapshotTarget target;
-    target.debugLabel = label;
-
-    target.Capture = [resolveWorld, allEntities](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
-    {
-        ECS::World* w = resolveWorld ? resolveWorld() : nullptr;
-        if (!w)
-            return false;
-        out.resize(allEntities->size() * sizeof(TComponent));
-        for (std::size_t i = 0; i < allEntities->size(); ++i)
-        {
-            auto* comp = w->GetComponent<TComponent>((*allEntities)[i]);
-            if (!comp)
-                return false;
-            std::memcpy(out.data() + i * sizeof(TComponent), comp, sizeof(TComponent));
-        }
-        return true;
-    };
-
-    target.Apply = [resolveWorld, allEntities](const Editor::UndoRedoService::SnapshotTarget::Snapshot& snap) -> bool
-    {
-        ECS::World* w = resolveWorld ? resolveWorld() : nullptr;
-        if (snap.size() != allEntities->size() * sizeof(TComponent))
-            return false;
-        for (std::size_t i = 0; i < allEntities->size(); ++i)
-        {
-            auto ent = (*allEntities)[i];
-            if (!w || !ent.IsValid() || !w->IsValid(ent))
-                continue;
-            TComponent comp{};
-            std::memcpy(&comp, snap.data() + i * sizeof(TComponent), sizeof(TComponent));
-            w->AddComponentImmediate(ent, comp);
-        }
-        return true;
-    };
-
-    target.Notify = [resolveWorld, allEntities, n](Editor::EditorChangeNotifications::ChangeKind kind)
-    {
-        ECS::World* w = resolveWorld ? resolveWorld() : nullptr;
-        if (!n || !w)
-            return;
-        for (auto& ent : *allEntities)
-            n->NotifyComponentChange<TComponent>(w, ent, kind);
-    };
-
-    return target;
+    auto entities = additionalEntities;
+    entities.push_back(primary);
+    return Editor::MultiEntityUndo::MakeComponentSnapshotTarget(std::move(resolveWorld), std::move(entities),
+        ECS::GetComponentTypeId<TComponent>(), notifications, label);
 }
 
 template<typename TComponent>
 inline Editor::UndoRedoService::SnapshotTarget MakeMultiComponentSnapshotTarget(
-    ECS::World* w, ECS::EntityHandle primary,
-    const std::vector<ECS::EntityHandle>& additionalEntities,
-    Editor::EditorChangeNotifications* n,
-    const std::string& label)
+    ECS::World* world, ECS::EntityHandle primary, const std::vector<ECS::EntityHandle>& additionalEntities,
+    Editor::EditorChangeNotifications* notifications, const std::string& label)
 {
-    return MakeMultiComponentSnapshotTarget<TComponent>(
-        [w]() { return w; }, primary, additionalEntities, n, label);
+    return MakeMultiComponentSnapshotTarget<TComponent>([world] { return world; }, primary, additionalEntities,
+        notifications, label);
 }
 
 /// One-shot commit with undo support. Captures before state, applies the lambda,
@@ -297,6 +117,8 @@ inline void CommitComponentWithUndo(ECS::World* w, ECS::EntityHandle e,
 
     if (undo)
     {
+        if (!undo->CommitPendingEdit())
+            return;
         auto target = MakeComponentSnapshotTarget<TComponent>(w, e, n, name);
         auto edit = undo->BeginInteractiveEdit(name, std::move(target));
         w->AddComponentImmediate(e, updated);
@@ -334,6 +156,8 @@ inline void CommitComponentsWithUndo(ECS::World* w, ECS::EntityHandle primary,
                                      const std::string& name, ApplyFn&& apply)
 {
     std::optional<Editor::UndoRedoService::InteractiveEdit> edit;
+    if (undo && !undo->CommitPendingEdit())
+        return;
     if (undo)
         edit.emplace(undo->BeginInteractiveEdit(
             name, MakeMultiComponentSnapshotTarget<TComponent>(w, primary, additionalEntities, n, name)));
@@ -399,7 +223,7 @@ MakeComponentInteractiveHandlers(ECS::World* w, ECS::EntityHandle e,
             if (!comp)
                 return;
 
-            if (!editPtr->has_value() && undo)
+            if ((!editPtr->has_value() || !editPtr->value()) && undo)
             {
                 auto target = extras->empty()
                     ? MakeComponentSnapshotTarget<TComponent>(activeWorld, e, n, name)
@@ -407,6 +231,11 @@ MakeComponentInteractiveHandlers(ECS::World* w, ECS::EntityHandle e,
                 editPtr->emplace(undo->BeginInteractiveEdit(name, std::move(target)));
             }
 
+            if (undo && (!editPtr->has_value() || !editPtr->value()))
+                return;
+            comp = activeWorld->GetComponent<TComponent>(e);
+            if (!comp)
+                return;
             TComponent updated = *comp;
             apply(updated, v);
 
@@ -490,6 +319,8 @@ MakeComponentInteractiveHandlers(ECS::World* w, ECS::EntityHandle e,
                     oneShot.emplace(undo->BeginInteractiveEdit(name, std::move(target)));
                 }
 
+                if (undo && (!oneShot || !*oneShot))
+                    return;
                 activeWorld->AddComponentImmediate(e, updated);
                 for (auto& ex : *extras)
                 {

@@ -1,4 +1,5 @@
 #include "Inspectors/Physics/PhysicsBodyInspector.h"
+#include "UndoRedo/History/HistoryComponentTargets.h"
 
 #include "InspectorRegistry.h"
 #include "Inspectors/InspectorUIHelpers.h"
@@ -295,15 +296,23 @@ class PhysicsBodyInspectorSection final : public UIElement
         for (auto& ex : m_AdditionalEntities)
             allEntities.push_back(ex);
 
+        ECS::World* world = m_World;
+        Editor::EditorChangeNotifications* notifications = m_Changes;
         UndoRedoService::SnapshotTarget t{};
+        auto targets = std::make_shared<Editor::HistoryComponentTargets>([world] { return world; }, allEntities,
+            ECS::GetComponentTypeId<Components::PhysicsBody>(), notifications);
+        t.Identity = targets->GetIdentity();
+        t.Validate = [targets] { return targets->IsValid(); };
         t.debugLabel = "PhysicsBody";
-        t.Capture = [this, allEntities](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+        t.Capture = [world, targets, allEntities](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
         {
             constexpr std::size_t kSize = sizeof(PhysicsBodyAuthoringSnapshot);
+            if (!targets->IsValid())
+                return false;
             out.resize(allEntities.size() * kSize);
             for (std::size_t i = 0; i < allEntities.size(); ++i)
             {
-                auto* body = m_World->GetComponent<Components::PhysicsBody>(allEntities[i]);
+                auto* body = world->GetComponent<Components::PhysicsBody>(allEntities[i]);
                 if (!body)
                     return false;
                 const PhysicsBodyAuthoringSnapshot s = CaptureAuthoring(*body);
@@ -311,32 +320,39 @@ class PhysicsBodyInspectorSection final : public UIElement
             }
             return true;
         };
-        t.Apply = [this, allEntities](const UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
+        t.Apply = [world, targets, allEntities](const UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
         {
             constexpr std::size_t kSize = sizeof(PhysicsBodyAuthoringSnapshot);
-            if (in.size() != allEntities.size() * kSize)
+            if (!targets->IsValid() || in.size() != allEntities.size() * kSize)
                 return false;
+            if (!targets->IsValid())
+                return false;
+            for (const auto entity : allEntities)
+            {
+                if (!world->IsValid(entity) || !world->GetComponent<Components::PhysicsBody>(entity))
+                    return false;
+            }
             for (std::size_t i = 0; i < allEntities.size(); ++i)
             {
                 auto ent = allEntities[i];
-                if (!m_World || !ent.IsValid() || !m_World->IsValid(ent))
+                if (!world || !ent.IsValid() || !world->IsValid(ent))
                     continue;
-                auto* body = m_World->GetComponentForWrite<Components::PhysicsBody>(ent);
+                auto* body = world->GetComponentForWrite<Components::PhysicsBody>(ent);
                 if (!body)
                     continue;
                 PhysicsBodyAuthoringSnapshot s{};
                 std::memcpy(&s, in.data() + i * kSize, kSize);
                 ApplyAuthoring(*body, s);
-                MarkPhysicsBodyNeedsRebuild(m_World, ent);
+                MarkPhysicsBodyNeedsRebuild(world, ent);
             }
             return true;
         };
-        t.Notify = [this, allEntities](Editor::EditorChangeNotifications::ChangeKind kind)
+        t.Notify = [world, targets, notifications, allEntities](Editor::EditorChangeNotifications::ChangeKind kind)
         {
-            if (!m_Changes)
+            if (!targets->IsValid() || !notifications)
                 return;
             for (auto& ent : allEntities)
-                m_Changes->NotifyComponentChange<Components::PhysicsBody>(m_World, ent, kind);
+                notifications->NotifyComponentChange<Components::PhysicsBody>(world, ent, kind);
         };
         return t;
     }

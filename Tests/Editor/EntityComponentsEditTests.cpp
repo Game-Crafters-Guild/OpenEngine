@@ -62,9 +62,8 @@ TEST(EntityComponentsEditTest, AChangedAndAnAddedComponentAreOneStep)
     EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Tower");
 }
 
-// A write that changed nothing records no step, refused or not; a refused write that changed
-// something before it refused records that change, so undo takes it back.
-TEST(EntityComponentsEditTest, AStepCoversWhatLandedRefusedOrNot)
+// A refused write restores the starting state and records no step.
+TEST(EntityComponentsEditTest, ARefusedEditRestoresItsStartingState)
 {
     ECS::World world;
     Editor::UndoRedoService undo;
@@ -79,8 +78,7 @@ TEST(EntityComponentsEditTest, AStepCoversWhatLandedRefusedOrNot)
         world.AddComponentImmediate(entity, MakeName("Keep"));
         return false;
     }));
-    ASSERT_EQ(undo.GetUndoCount(), 1u);
-    undo.Undo();
+    EXPECT_EQ(undo.GetUndoCount(), 0u);
     EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Tower");
 }
 

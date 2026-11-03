@@ -211,6 +211,8 @@ void PlayModeManager::EnterPlayMode()
     if (m_EntryGate.Hold([this]() { EnterPlayMode(); }))
         return;
 
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return;
     SetState(PlayModeState::EnteringPlay);
 
     // Isolate undo history for play mode.
@@ -337,6 +339,8 @@ void PlayModeManager::ExitPlayMode()
     if (m_State == PlayModeState::ChangeReview)
         return;
 
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        m_UndoRedo->DiscardPendingEdit();
     m_ExitRequested = false;
     SetState(PlayModeState::ExitingPlay);
 
@@ -435,8 +439,9 @@ void PlayModeManager::ExitPlayMode()
 
         // Convert play undo history into pending changes (in chronological order).
         m_PendingChanges.clear();
-        m_PendingChanges.reserve(m_UndoStash->playHistory.undo.size());
-        for (auto& cmd : m_UndoStash->playHistory.undo)
+        auto commands = m_UndoStash->playHistory.Graph.TakeActiveCommands();
+        m_PendingChanges.reserve(commands.size());
+        for (auto& cmd : commands)
         {
             if (cmd)
             {

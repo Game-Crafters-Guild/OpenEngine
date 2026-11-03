@@ -28,6 +28,7 @@ class RenderServices;
 
 namespace Editor
 {
+class UndoRedoService;
 
 // Refusal text shared by every manual-save entry point that declines while play
 // mode is active. It has to read correctly in all four non-Edit states, so it
@@ -53,6 +54,7 @@ class SceneDocumentManager
     ~SceneDocumentManager();
 
     void SetWorld(ECS::World* world);
+    void SetUndoRedoService(UndoRedoService* history) { m_History = history; }
     void SetChangeNotifications(EditorChangeNotifications* notifications);
 
     ECS::World* GetWorld() const { return m_World; }
@@ -300,7 +302,12 @@ class SceneDocumentManager
     std::optional<SceneLoadFailure> m_LastLoadFailure;
     std::optional<std::filesystem::path> m_PartialLoadDocument;
     std::optional<SceneLoadDegraded> m_LastLoadDegraded;
+    UndoRedoService* m_History = nullptr;
+    void RefreshDirtyAfterReplay();
+    std::vector<std::uint8_t> CaptureSceneContent() const;
     bool m_Dirty = false;
+    bool m_DirtyRevisionKnown = false;
+    std::uint64_t m_DirtyRevision = 0;
     std::vector<uint8_t> m_BaselineSnapshot;
 
     std::optional<Scene::SceneHierarchyUiFromFile> m_PendingHierarchyUiFromLoad;

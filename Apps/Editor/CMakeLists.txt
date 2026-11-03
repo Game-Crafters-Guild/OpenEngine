@@ -94,7 +94,7 @@ set(EDITOR_SOURCES
     Source/Panels/AssetsPanel.cpp
     Source/Panels/TodoPanel.cpp
     Source/Panels/BookmarksPanel.cpp
-    Source/Panels/UndoHistoryPanel.cpp
+    Source/Panels/UndoHistory/UndoHistoryPanel.cpp
     Source/Panels/BuildPanel.cpp
     Source/Panels/BuiltInPanelTypes.cpp
     Source/Panels/MovieRecorderPanel.cpp
@@ -860,7 +860,7 @@ set(EDITOR_HEADERS
     Include/Panels/TodoPanel.h
     Include/Panels/BookmarksPanel.h
     Include/Panels/BuiltInPanelTypes.h
-    Include/Panels/UndoHistoryPanel.h
+    Include/Panels/UndoHistory/UndoHistoryPanel.h
 		Include/Panels/HierarchyPanel.h
 		Include/Editor/Entities/CopiedEntityRuntimeRefs.h
 		Include/Editor/Entities/EntityDuplicate.h

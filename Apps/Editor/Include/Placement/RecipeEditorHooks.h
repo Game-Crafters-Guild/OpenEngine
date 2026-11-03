@@ -5,8 +5,9 @@
 #include "SplineRecipes/RecipeEditJournal.h"
 
 #include <memory>
+#include <cstdint>
 
-namespace GameEngine::SplineRecipes { class SplineRecipeSystem; }
+namespace GameEngine::SplineRecipes { class SplineRecipeSystem; class SplineGroundAuthorityController; }
 
 namespace GameEngine::Editor
 {
@@ -30,12 +31,18 @@ public:
     RecipeEditorHooks& operator=(const RecipeEditorHooks&) = delete;
 
     void RecordGroundEdit(ECS::World& world, const SplineRecipes::SplineGroundEdit& edit) override;
+    void BeginGroundUpdate(ECS::World& world, SplineRecipes::SplineGroundAuthorityController& controller) override;
+    void EndGroundUpdate() override;
     void ReleaseSceneScoped(ECS::World& world) override;
 
 private:
     UndoRedoService* m_Undo = nullptr;
     SplineRecipes::SplineRecipeSystem& m_Recipes;
     EventSubscription m_PointEditSubscription;
+    ECS::World* m_World = nullptr;
+    SplineRecipes::SplineGroundAuthorityController* m_GroundController = nullptr;
+    std::uint64_t m_ActionId = 0;
+    bool m_UpdatingGround = false;
 };
 
 } // namespace GameEngine::Editor

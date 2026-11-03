@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include "UI/Controls/DockPanel.h"
+#include "Events/Event.h"
 
 namespace GameEngine {
 
@@ -18,7 +19,7 @@ class Label;
 class TextField;
 class CompletionPopup;
 class SaveSceneChangesModal;
-namespace Editor { class UndoRedoService; }
+namespace Editor { class UndoRedoService; class ScriptHistoryDocument; }
 
 /**
  * @brief Represents a variable/field extracted from a C# script.
@@ -234,6 +235,9 @@ private:
     std::string m_CurrentSearchText;
 
     // Undo/Redo service (not owned)
+    void RefreshFromHistoryDocument();
+    std::shared_ptr<Editor::ScriptHistoryDocument> m_HistoryDocument;
+    EventSubscription m_HistoryDocumentSubscription;
     Editor::UndoRedoService* m_UndoRedo = nullptr;
 
     // Parsed script variables
