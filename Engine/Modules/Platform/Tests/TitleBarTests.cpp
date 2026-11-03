@@ -59,6 +59,18 @@ class TitleBarTests : public testing::Test
         m_Toolbar->SetTitleBarLayout(48, {{1, {32, 12, 80, 36}}});
     }
 
+    std::shared_ptr<GameEngine::Tests::PopupRecord> PrepareMenus()
+    {
+        auto record = std::make_shared<GameEngine::Tests::PopupRecord>();
+        m_Toolbar->SetMenuFactory([record] { return std::make_unique<GameEngine::Tests::RecordingPopup>(record); });
+        m_FileMenu = m_Toolbar->AddMenu("File");
+        m_EditMenu = m_Toolbar->AddMenu("Edit");
+        m_Toolbar->AddItem(m_FileMenu, "Save Scene", 0x4001);
+        m_Toolbar->AddItem(m_EditMenu, "Undo", 0x4002);
+        m_Toolbar->SetTitleBarLayout(48, {{m_FileMenu, {32, 12, 80, 36}}, {m_EditMenu, {112, 12, 80, 36}}});
+        return record;
+    }
+
     void RecordClientSize(int width, int height)
     {
         if (width == m_ClientWidth && height == m_ClientHeight)
@@ -78,6 +90,8 @@ class TitleBarTests : public testing::Test
     int m_ClientHeight = 0;
     // Client size changes the window reported since the fixture created it.
     int m_ClientSizeChanges = 0;
+    uint32_t m_FileMenu = 0;
+    uint32_t m_EditMenu = 0;
     std::unique_ptr<GameEngine::INativeToolbar> m_Toolbar;
 };
 
@@ -189,6 +203,96 @@ TEST_F(TitleBarTests, OnlyMenuHeadingsReceiveClientInputInTheCaption)
     EXPECT_EQ(Hit(180, 24), HTCAPTION);
     EXPECT_EQ(Hit(180, 70), HTCLIENT);
     EXPECT_EQ(Hit(180, 0), HTTOP);
+}
+
+TEST_F(TitleBarTests, HoveringAnotherHeadingSwitchesTheOpenMenu)
+{
+    auto record = PrepareMenus();
+    m_Toolbar->ShowTitleBarMenu(m_FileMenu);
+
+    SendMessageW(m_Handle, WM_MOUSEMOVE, 0, MAKELPARAM(150, 24));
+
+    EXPECT_EQ(m_Toolbar->GetOpenMenu(), m_EditMenu);
+    EXPECT_EQ(record->Shows, 2);
+    ASSERT_EQ(record->Rows.size(), 1u);
+    EXPECT_EQ(record->Rows[0].Command, 0x4002u);
+    SendMessageW(m_Handle, WM_MOUSEMOVE, 0, MAKELPARAM(150, 24));
+    SendMessageW(m_Handle, WM_MOUSEMOVE, 0, MAKELPARAM(220, 24));
+    EXPECT_EQ(record->Shows, 2);
+    EXPECT_EQ(m_Toolbar->GetOpenMenu(), m_EditMenu);
+}
+
+TEST_F(TitleBarTests, PressingAnotherHeadingSwitchesTheOpenMenu)
+{
+    auto record = PrepareMenus();
+    m_Toolbar->ShowTitleBarMenu(m_FileMenu);
+
+    SendMessageW(m_Handle, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(150, 24));
+    SendMessageW(m_Handle, WM_LBUTTONUP, 0, MAKELPARAM(150, 24));
+
+    EXPECT_EQ(m_Toolbar->GetOpenMenu(), m_EditMenu);
+    EXPECT_EQ(record->Shows, 2);
+}
+
+TEST_F(TitleBarTests, PressingTheOpenHeadingClosesItsMenu)
+{
+    auto record = PrepareMenus();
+    m_Toolbar->ShowTitleBarMenu(m_FileMenu);
+
+    SendMessageW(m_Handle, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(60, 24));
+    SendMessageW(m_Handle, WM_LBUTTONUP, 0, MAKELPARAM(60, 24));
+
+    EXPECT_FALSE(m_Toolbar->GetOpenMenu());
+    EXPECT_EQ(record->Shows, 1);
+    EXPECT_EQ(record->Clears, 1);
+}
+
+TEST_F(TitleBarTests, HoveringAHeadingWithNoOpenMenuDoesNotOpenOne)
+{
+    auto record = PrepareMenus();
+    SendMessageW(m_Handle, WM_MOUSEMOVE, 0, MAKELPARAM(150, 24));
+    EXPECT_FALSE(m_Toolbar->GetOpenMenu());
+    EXPECT_EQ(record->Shows, 0);
+}
+
+TEST_F(TitleBarTests, PressingEmptyCaptionClosesTheMenuAndKeepsNativeHandling)
+{
+    constexpr LRESULT kForwardedCaptionResult = 123;
+    m_Toolbar->Uninstall();
+    // The native handler records the press without starting an OS move loop.
+    const auto previous = SetWindowLongPtrW(m_Handle, GWLP_WNDPROC,
+        reinterpret_cast<LONG_PTR>(+[](HWND window, UINT message, WPARAM wParam, LPARAM lParam) -> LRESULT {
+            if (message == WM_NCLBUTTONDOWN)
+                return kForwardedCaptionResult;
+            return DefWindowProcW(window, message, wParam, lParam);
+        }));
+    ASSERT_TRUE(m_Toolbar->Install(&m_Window));
+    auto record = PrepareMenus();
+    m_Toolbar->ShowTitleBarMenu(m_FileMenu);
+    POINT point{220, 24};
+    ClientToScreen(m_Handle, &point);
+
+    EXPECT_EQ(SendMessageW(m_Handle, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(point.x, point.y)), kForwardedCaptionResult);
+    EXPECT_FALSE(m_Toolbar->GetOpenMenu());
+    EXPECT_EQ(record->Clears, 1);
+
+    m_Toolbar->Uninstall();
+    SetWindowLongPtrW(m_Handle, GWLP_WNDPROC, previous);
+}
+
+TEST_F(TitleBarTests, HoveringTheOverflowSwitchesToItsMenuTree)
+{
+    auto record = PrepareMenus();
+    m_Toolbar->SetTitleBarLayout(48, {{m_FileMenu, {32, 12, 80, 36}}, {0, {112, 12, 40, 36}}});
+    m_Toolbar->ShowTitleBarMenu(m_FileMenu);
+
+    SendMessageW(m_Handle, WM_MOUSEMOVE, 0, MAKELPARAM(130, 24));
+
+    EXPECT_EQ(m_Toolbar->GetOpenMenu(), 0u);
+    EXPECT_EQ(record->Shows, 2);
+    ASSERT_EQ(record->Rows.size(), 4u);
+    EXPECT_EQ(record->Rows[0].Title, "File");
+    EXPECT_EQ(record->Rows[2].Title, "Edit");
 }
 
 TEST_F(TitleBarTests, MovingAHeadingReplacesItsHitRegion)
