@@ -30,7 +30,9 @@ struct WindowDesc
 
     // When true, the window is created hidden and must be shown explicitly
     // via Show(). Use this to render one frame before making the window
-    // visible, avoiding a flash of empty/gray content.
+    // visible, avoiding a flash of empty/gray content. Ignored on Wayland:
+    // there the window is shown at creation, and it stays off screen until
+    // its first frame.
     bool StartHidden = false;
 
     // Request that the platform opens the window in its maximized state.
