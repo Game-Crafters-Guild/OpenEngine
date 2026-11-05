@@ -50,6 +50,7 @@ set(EDITOR_TEST_SOURCES
 	SplineConformHoldTests.cpp
 	TerrainBrushPlanetCastTests.cpp
 	UndoRedoServiceTests.cpp
+	GraphSelectionHistoryTests.cpp
 	SceneDocumentHistoryTests.cpp
 	PlayModeChangeReviewTests.cpp
 	PlayModeMarkupNotesTests.cpp

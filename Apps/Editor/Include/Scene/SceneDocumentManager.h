@@ -117,7 +117,9 @@ class SceneDocumentManager
                                       DegradedSavePolicy policy) const;
 
     bool IsDirty() const { return m_Dirty; }
+    /// Changes outside the attached history remain dirty until MarkClean.
     void MarkDirty();
+    /// Accept the current scene as the clean baseline.
     void MarkClean();
 
     // Replace the world contents with the given scene.
@@ -302,10 +304,9 @@ class SceneDocumentManager
     std::optional<std::filesystem::path> m_PartialLoadDocument;
     std::optional<SceneLoadDegraded> m_LastLoadDegraded;
     UndoRedoService* m_History = nullptr;
-    void RefreshDirtyAfterReplay();
+    void RefreshDirtyState();
     bool m_Dirty = false;
-    bool m_DirtyRevisionKnown = false;
-    std::uint64_t m_DirtyRevision = 0;
+    bool m_UntrackedDirty = false;
 
     std::optional<Scene::SceneHierarchyUiFromFile> m_PendingHierarchyUiFromLoad;
     std::function<Scene::SceneHierarchyUi()> m_HierarchyUiCaptureForSave;

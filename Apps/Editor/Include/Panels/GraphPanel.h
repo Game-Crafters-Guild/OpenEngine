@@ -2,6 +2,7 @@
 
 #include "Events/Event.h"
 #include "Graph/GraphModel.h"
+#include "Graph/GraphSelectionHistory.h"
 #include "Graph/GraphCanvas.h"
 #include "Graph/GraphNest.h"
 #include "Graph/GraphTransitionStore.h"
@@ -318,6 +319,7 @@ private:
 
     const EditorContext* m_Context = nullptr;
     Editor::UndoRedoService* m_Undo = nullptr;
+    Editor::GraphSelectionHistory m_SelectionHistory;
     OpenColorPickerWindowFn m_OpenColorPickerWindow;
     std::function<void(const std::filesystem::path&)> m_PingAsset;
     // A changed-file batch that names an asset a node references rebinds the bound nodes once.

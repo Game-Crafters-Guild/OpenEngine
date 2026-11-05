@@ -4158,6 +4158,8 @@ void GraphPanel::SetupUI()
         m_NodeDragInProgress = true;
         if (!m_Undo || !m_Canvas)
             return;
+        if (!m_SelectionHistory.UpdateSelection(m_Canvas->GetSelectedNodeIds(), m_Undo))
+            return;
         Editor::UndoRedoService::SnapshotTarget target;
         target.debugLabel = "Graph";
         target.Identity = {reinterpret_cast<std::uintptr_t>(this), Hashing::Fnv1a64(m_CurrentPath.generic_string())};
@@ -4787,6 +4789,8 @@ Editor::UndoRedoService::InteractiveEdit GraphPanel::BeginGraphParameterEdit(con
 {
     if (!m_Undo)
         return {};
+    if (m_Canvas && !m_SelectionHistory.UpdateSelection(m_Canvas->GetSelectedNodeIds(), m_Undo))
+        return {};
 
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = "Graph";
@@ -4808,6 +4812,8 @@ Editor::UndoRedoService::InteractiveEdit GraphPanel::BeginGraphParameterEdit(con
 Editor::UndoRedoService::InteractiveEdit GraphPanel::BeginGraphVariableEdit(const char* actionName)
 {
     if (!m_Undo)
+        return {};
+    if (m_Canvas && !m_SelectionHistory.UpdateSelection(m_Canvas->GetSelectedNodeIds(), m_Undo))
         return {};
 
     Editor::UndoRedoService::SnapshotTarget target;
@@ -5219,6 +5225,8 @@ void GraphPanel::OnCanvasSelectionChanged(const std::string& nodeId)
         Logger::Log::Warning("GraphPanel: m_Canvas is null");
         return;
     }
+    if (!m_SelectionHistory.UpdateSelection(m_Canvas->GetSelectedNodeIds(), m_Undo))
+        return;
     
     if (!m_Canvas->GetModel()) {
         Logger::Log::Warning("GraphPanel: m_Canvas->GetModel() is null");
@@ -5318,6 +5326,8 @@ void GraphPanel::OnCanvasSelectionChanged(const std::string& nodeId)
 
 void GraphPanel::OnCanvasLinkSelected(const std::string& linkId)
 {
+    if (m_Canvas && !m_SelectionHistory.UpdateSelection(m_Canvas->GetSelectedNodeIds(), m_Undo))
+        return;
     g_InspectorGraphPanel = this;
     if (!m_OnTransitionSelected)
         return;

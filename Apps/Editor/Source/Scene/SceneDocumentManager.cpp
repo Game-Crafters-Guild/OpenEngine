@@ -1,5 +1,6 @@
 #include "Scene/SceneDocumentManager.h"
 
+#include "UndoRedo/History/HistoryMutationScope.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Diagnostics/MainThreadHangWatchdog.h"
@@ -69,7 +70,13 @@ void SceneDocumentManager::SetChangeNotifications(EditorChangeNotifications* not
 
 void SceneDocumentManager::MarkDirty()
 {
-    m_DirtyRevisionKnown = false;
+    if (HistoryMutationScope::IsRestoringFor(m_History))
+    {
+        RefreshDirtyState();
+        return;
+    }
+    if (!HistoryMutationScope::IsActiveFor(m_History))
+        m_UntrackedDirty = true;
     if (!m_Dirty)
         Logger::Log::Debug("SceneDocumentManager: scene marked dirty");
     m_Dirty = true;
@@ -80,20 +87,14 @@ void SceneDocumentManager::MarkClean()
     if (m_Dirty)
         Logger::Log::Debug("SceneDocumentManager: scene marked clean");
     m_Dirty = false;
+    m_UntrackedDirty = false;
     if (m_History)
         m_History->MarkSaved(this);
-    m_DirtyRevision = m_History ? m_History->GetCurrentNodeId() : 0;
-    m_DirtyRevisionKnown = true;
 }
 
-void SceneDocumentManager::RefreshDirtyAfterReplay()
+void SceneDocumentManager::RefreshDirtyState()
 {
-    const std::uint64_t revision = m_History ? m_History->GetCurrentNodeId() : 0;
-    if (m_History && m_DirtyRevisionKnown && revision == m_DirtyRevision)
-        return;
-    m_Dirty = !m_History || !m_History->IsAtSavedRevision(this);
-    m_DirtyRevision = revision;
-    m_DirtyRevisionKnown = true;
+    m_Dirty = m_UntrackedDirty || !m_History || !m_History->IsAtSavedRevision(this);
 }
 
 void SceneDocumentManager::SetHierarchyUiCaptureForSave(std::function<Scene::SceneHierarchyUi()> capture)
@@ -1137,27 +1138,29 @@ void SceneDocumentManager::Subscribe()
         return;
 
     m_SubComponent = m_Notifications->SubscribeComponentChanged(
-        [this](const EditorChangeNotifications::ComponentChangedEvent& e)
+        [this](const EditorChangeNotifications::ComponentChangedEvent& event)
         {
-            if (!m_World || e.world != m_World)
+            if (!m_World || event.world != m_World)
                 return;
-            if (e.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
+            if (event.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
-            if (e.kind == EditorChangeNotifications::ChangeKind::UndoRedo)
-                RefreshDirtyAfterReplay();
+            if (event.kind == EditorChangeNotifications::ChangeKind::UndoRedo &&
+                HistoryMutationScope::IsRestoringFor(m_History))
+                RefreshDirtyState();
             else
                 MarkDirty();
         });
 
     m_SubStructure = m_Notifications->SubscribeWorldStructureChanged(
-        [this](const EditorChangeNotifications::WorldStructureChangedEvent& e)
+        [this](const EditorChangeNotifications::WorldStructureChangedEvent& event)
         {
-            if (!m_World || e.world != m_World)
+            if (!m_World || event.world != m_World)
                 return;
-            if (e.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
+            if (event.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
-            if (e.kind == EditorChangeNotifications::ChangeKind::UndoRedo)
-                RefreshDirtyAfterReplay();
+            if (event.kind == EditorChangeNotifications::ChangeKind::UndoRedo &&
+                HistoryMutationScope::IsRestoringFor(m_History))
+                RefreshDirtyState();
             else
                 MarkDirty();
         });

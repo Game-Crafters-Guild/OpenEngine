@@ -5,6 +5,7 @@
 #include "Types/FlatMap.h"
 #include "UndoRedo/History/CompoundHistoryCommand.h"
 #include "UndoRedo/History/HistoryGraph.h"
+#include "UndoRedo/History/HistoryMutationScope.h"
 #include "UndoRedo/History/HistoryReplayScope.h"
 #include "UndoRedo/History/HistorySnapshotCommand.h"
 
@@ -169,6 +170,7 @@ public:
         m_LastError.clear();
         if (m_BeforeCommit && !m_Settling && GetPendingActionId() != 0)
         {
+            const HistoryMutationScope mutationScope(this);
             m_Settling = true;
             m_BeforeCommit();
             m_Settling = false;
@@ -254,7 +256,10 @@ public:
         FireBeforeMutation();
         m_PendingCommandId = m_NextEntryId++;
         m_PendingCommand = std::move(command);
-        m_PendingCommand->Do();
+        {
+            const HistoryMutationScope mutationScope(this);
+            m_PendingCommand->Do();
+        }
         CommitPendingEdit();
     }
     void CommitAlreadyApplied(std::unique_ptr<IEditorCommand> command)
@@ -283,6 +288,7 @@ public:
             return false;
         FireBeforeMutation();
         const HistoryReplayScope replayScope;
+        const HistoryMutationScope mutationScope(this, HistoryMutationScope::Phase::Restore);
         m_Replaying = true;
         const bool success = m_Graph.Checkout(destination);
         m_Replaying = false;
@@ -297,6 +303,7 @@ public:
             return;
         FireBeforeMutation();
         const HistoryReplayScope replayScope;
+        const HistoryMutationScope mutationScope(this, HistoryMutationScope::Phase::Restore);
         m_Replaying = true;
         if (!m_Graph.Undo() && CanUndo())
             m_LastError = "Undo failed. The current revision was kept.";
@@ -309,6 +316,7 @@ public:
             return;
         FireBeforeMutation();
         const HistoryReplayScope replayScope;
+        const HistoryMutationScope mutationScope(this, HistoryMutationScope::Phase::Restore);
         m_Replaying = true;
         if (!m_Graph.Redo() && CanRedo())
             m_LastError = "Redo failed. The current revision was kept.";
@@ -361,6 +369,7 @@ public:
             UndoRedoService* service = m_Service;
             if (edit->Target.Validate && !edit->Target.Validate())
                 return;
+            const HistoryMutationScope mutationScope(service);
             const bool firstPreview = !edit->Previewed;
             apply();
             edit->Previewed = true;
@@ -380,6 +389,8 @@ public:
             edit->GestureOpen = false;
             edit->Previewed = edit->Before != edit->After;
             m_Edit.reset();
+            const HistoryMutationScope mutationScope(service, edit->Previewed
+                ? HistoryMutationScope::Phase::Edit : HistoryMutationScope::Phase::Restore);
             if (edit->Target.Notify)
                 edit->Target.Notify(edit->Previewed ? EditChangeKind::Commit : EditChangeKind::UndoRedo);
             service->NotifyHistoryChanged();
@@ -393,6 +404,7 @@ public:
             }
             const auto edit = m_Edit;
             UndoRedoService* service = m_Service;
+            const HistoryMutationScope mutationScope(service, HistoryMutationScope::Phase::Restore);
             std::size_t undone = 0;
             for (auto command = edit->Consequences.rbegin(); command != edit->Consequences.rend(); ++command)
             {
