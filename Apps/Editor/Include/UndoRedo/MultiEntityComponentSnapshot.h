@@ -25,6 +25,7 @@ inline UndoRedoService::SnapshotTarget MakeComponentSnapshotTarget(
     target.Capture = [targets](auto& output) { return targets->Capture(output); };
     target.Apply = [targets](const auto& input) { return targets->Restore(input); };
     target.Notify = [targets](EditChangeKind kind) { targets->Notify(kind); };
+    target.Describe = [targets](const auto& before, const auto& after) { return targets->Describe(before, after); };
     return target;
 }
 

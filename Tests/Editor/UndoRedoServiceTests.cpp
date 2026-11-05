@@ -13,6 +13,10 @@
 
 #include "Core/Application.h"
 #include "Core/Engine.h"
+#include "Assets/AssetManager.h"
+#include "Assets/AssetRegistry.h"
+#include "Assets/MaterialAsset.h"
+#include <nlohmann/json.hpp>
 
 #include "EditorChangeNotifications.h"
 #include "EditorContextMenu/InterceptableContextMenu.h"
@@ -26,6 +30,8 @@
 #include "Panels/UndoHistory/UndoHistoryPanel.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "UndoRedo/MultiEntityComponentSnapshot.h"
+#include "UndoRedo/EntityComponentsEdit.h"
+#include "UndoRedo/History/HistoryValueFormatter.h"
 #include "Scene/SceneDocumentManager.h"
 #include "Inspectors/InspectorComponent/InspectorComponentColorRow.h"
 
@@ -34,6 +40,9 @@
 #include "Components/Audio/AudioListener.h"
 #include "Components/Terrain/TerrainModifierEffects.h"
 #include "Components/Transform.h"
+#include "Components/Name.h"
+#include "Components/Rendering/Light.h"
+#include "Components/Rendering/MeshRenderer.h"
 #include "Components/Hierarchy.h"
 #include "ECS/Component/ComponentRegistry.h"
 #include "ECS/ECSTemplates.h"
@@ -41,8 +50,11 @@
 #include "ECS/World.h"
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
+#include "UI/Controls/Button.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Label.h"
+#include "UI/Controls/Mount.h"
+#include "UI/UIManager.h"
 #include "UI/Controls/Slider.h"
 #include "UI/Controls/TextField.h"
 #include "UI/Controls/Vector3Field.h"
@@ -1798,4 +1810,435 @@ TEST_F(UndoRedoServiceTests, DetachedHistoryPanelDoesNotAccumulateRowsDuringEven
     SendMouse(source, kEventButtonClick);
     UIElement::SetInEventDispatch(false);
     EXPECT_EQ(list->GetChildren().size(), 1u);
+}
+
+namespace
+{
+GameEngine::UIElement* FindHistoryBranches(GameEngine::UIElement& row)
+{
+    for (const auto& child : row.GetChildren())
+    {
+        if (child->HasClass("history-branches"))
+            return child.get();
+    }
+    return nullptr;
+}
+}
+
+TEST_F(UndoRedoServiceTests, HistoryPanelKeepsLongLinearChainsInOneLane)
+{
+    using namespace GameEngine;
+    UndoRedoService undo;
+    constexpr int kChainLength = 128;
+    for (int action = 0; action < kChainLength; ++action)
+        undo.Execute(std::make_unique<NoOpCommand>());
+    UndoHistoryPanel panel;
+    panel.SetUndoRedoService(&undo);
+    UIElement* list = panel.FindById(HashStringId("HistoryList"));
+    ASSERT_NE(list, nullptr);
+    ASSERT_EQ(list->GetChildren().size(), kChainLength + 1u);
+    for (const auto& row : list->GetChildren())
+    {
+        auto* button = dynamic_cast<Button*>(row.get());
+        ASSERT_NE(button, nullptr);
+        EXPECT_NE(button->GetText().front(), ' ');
+        ASSERT_FALSE(row->GetChildren().empty());
+        auto* gutter = FindHistoryBranches(*row);
+        ASSERT_NE(gutter, nullptr);
+        EXPECT_EQ(gutter->GetChildren().size(), 1u);
+    }
+}
+
+TEST_F(UndoRedoServiceTests, HistoryPanelCarriesAncestorGuidesThroughNestedBranches)
+{
+    using namespace GameEngine;
+    UndoRedoService undo;
+    undo.Execute(std::make_unique<NoOpCommand>()); // 1: shared ancestor
+    undo.Execute(std::make_unique<NoOpCommand>()); // 2: first branch
+    undo.Execute(std::make_unique<NoOpCommand>()); // 3: nested branch
+    undo.Undo();
+    undo.Execute(std::make_unique<NoOpCommand>()); // 4: nested sibling
+    undo.Execute(std::make_unique<NoOpCommand>()); // 5: sibling continuation
+    ASSERT_TRUE(undo.Checkout(1));
+    undo.Execute(std::make_unique<NoOpCommand>()); // 6: final outer branch
+    UndoHistoryPanel panel;
+    panel.SetUndoRedoService(&undo);
+    UIElement* list = panel.FindById(HashStringId("HistoryList"));
+    ASSERT_NE(list, nullptr);
+    const std::uint64_t expectedOrder[] = {0, 1, 2, 3, 4, 5, 6};
+    ASSERT_EQ(list->GetChildren().size(), std::size(expectedOrder));
+    for (std::size_t index = 0; index < std::size(expectedOrder); ++index)
+        EXPECT_EQ(list->GetChildren()[index]->GetId(), "HistoryNode" + std::to_string(expectedOrder[index]));
+
+    UIElement* nested = panel.FindById(HashStringId("HistoryNode4"));
+    ASSERT_NE(nested, nullptr);
+    auto* nestedBranches = FindHistoryBranches(*nested);
+    ASSERT_NE(nestedBranches, nullptr);
+    const auto& nestedLanes = nestedBranches->GetChildren();
+    ASSERT_EQ(nestedLanes.size(), 3u);
+    EXPECT_TRUE(nestedLanes[0]->HasClass("history-branch-continues"));
+    EXPECT_TRUE(nestedLanes[1]->HasClass("history-branch-elbow"));
+    EXPECT_FALSE(nestedLanes[1]->HasClass("history-branch-continues"));
+
+    UIElement* continuation = panel.FindById(HashStringId("HistoryNode5"));
+    ASSERT_NE(continuation, nullptr);
+    auto* continuationBranches = FindHistoryBranches(*continuation);
+    ASSERT_NE(continuationBranches, nullptr);
+    const auto& continuationLanes = continuationBranches->GetChildren();
+    ASSERT_EQ(continuationLanes.size(), 3u);
+    EXPECT_TRUE(continuationLanes[0]->HasClass("history-branch-continues"));
+    EXPECT_FALSE(continuationLanes[1]->HasClass("history-branch-continues"));
+    EXPECT_FALSE(continuationLanes[1]->HasClass("history-branch-elbow"));
+
+    UIElement* last = panel.FindById(HashStringId("HistoryNode6"));
+    ASSERT_NE(last, nullptr);
+    auto* lastBranches = FindHistoryBranches(*last);
+    ASSERT_NE(lastBranches, nullptr);
+    const auto& lastLanes = lastBranches->GetChildren();
+    ASSERT_EQ(lastLanes.size(), 2u);
+    EXPECT_TRUE(lastLanes[0]->HasClass("history-branch-elbow"));
+    EXPECT_FALSE(lastLanes[0]->HasClass("history-branch-continues"));
+}
+
+TEST_F(UndoRedoServiceTests, HistoryPanelMarksTheCurrentRevisionAfterSwitchingBranches)
+{
+    using namespace GameEngine;
+    UndoRedoService undo;
+    undo.Execute(std::make_unique<NoOpCommand>());
+    undo.Undo();
+    undo.Execute(std::make_unique<NoOpCommand>());
+    UndoHistoryPanel panel;
+    panel.SetUndoRedoService(&undo);
+    auto* first = dynamic_cast<Button*>(panel.FindById(HashStringId("HistoryNode1")));
+    ASSERT_NE(first, nullptr);
+    first->TriggerClick();
+    panel.Rebuild();
+    EXPECT_EQ(undo.GetCurrentNodeId(), 1u);
+    UIElement* current = panel.FindById(HashStringId("HistoryNode1"));
+    ASSERT_NE(current, nullptr);
+    EXPECT_TRUE(current->HasClass("history-current"));
+    auto* badge = dynamic_cast<Label*>(panel.FindById(HashStringId("HistoryCurrent")));
+    ASSERT_NE(badge, nullptr);
+    EXPECT_EQ(badge->GetText(), "Current");
+    EXPECT_EQ(badge->GetParent(), current);
+    UIElement* other = panel.FindById(HashStringId("HistoryNode2"));
+    ASSERT_NE(other, nullptr);
+    EXPECT_FALSE(other->HasClass("history-current"));
+}
+
+TEST_F(UndoRedoServiceTests, HistoryRowsShowOriginalTransformValuesAcrossBranches)
+{
+    using namespace GameEngine;
+    World* world = GetWorld();
+    const auto entity = world->CreateEntity();
+    world->AddComponentImmediate(entity, Transform{});
+    UndoRedoService undo;
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        world, {entity}, ECS::GetComponentTypeId<Transform>(), nullptr, "Move");
+    auto edit = undo.BeginInteractiveEdit("Move", target);
+    edit.Preview([world, entity] { world->GetComponentForWrite<Transform>(entity)->Translate(2.0f, 3.0f, 4.0f); });
+    edit.Commit();
+    ASSERT_TRUE(undo.CommitPendingEdit());
+    undo.Undo();
+    auto branch = undo.BeginInteractiveEdit("Move", target);
+    branch.Preview([world, entity] { world->GetComponentForWrite<Transform>(entity)->Translate(8.0f, 0.0f, 0.0f); });
+    branch.Commit();
+    ASSERT_TRUE(undo.CommitPendingEdit());
+    UndoHistoryPanel panel;
+    panel.SetUndoRedoService(&undo);
+    auto* first = panel.FindById(HashStringId("HistoryNode1"));
+    auto* second = panel.FindById(HashStringId("HistoryNode2"));
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    auto* firstDetails = dynamic_cast<Label*>(first->FindById(HashStringId("HistoryDetails")));
+    auto* secondDetails = dynamic_cast<Label*>(second->FindById(HashStringId("HistoryDetails")));
+    ASSERT_NE(firstDetails, nullptr);
+    ASSERT_NE(secondDetails, nullptr);
+    EXPECT_EQ(firstDetails->GetText(), "Position: (0, 0, 0) -> (2, 3, 4)");
+    EXPECT_EQ(secondDetails->GetText(), "Position: (0, 0, 0) -> (8, 0, 0)");
+    ASSERT_TRUE(undo.Checkout(1));
+    EXPECT_EQ(undo.GetHistoryNodes()[1].GetDescription(), "Position: (0, 0, 0) -> (8, 0, 0)");
+}
+
+TEST_F(UndoRedoServiceTests, HistoryDescribesNamesAndReflectedColorsAndToggles)
+{
+    using namespace GameEngine;
+    World* world = GetWorld();
+    const auto entity = world->CreateEntity();
+    Components::Name name{};
+    std::memcpy(name.value, "Cube", 5);
+    world->AddComponentImmediate(entity, name);
+    world->AddComponentImmediate(entity, Components::Light{});
+    UndoRedoService undo;
+    ASSERT_TRUE(Editor::CommitEntityComponentsEdit(*world, entity, &undo, nullptr, "Rename Entity", [&]
+    {
+        Components::Name renamed{};
+        std::memcpy(renamed.value, "Key Light", 10);
+        world->AddComponentImmediate(entity, renamed);
+        return true;
+    }));
+    ASSERT_TRUE(Editor::CommitEntityComponentsEdit(*world, entity, &undo, nullptr, "Light", [&]
+    {
+        auto* light = world->GetComponentForWrite<Components::Light>(entity);
+        light->Color[0] = 0.5f;
+        light->CastsShadows = true;
+        return true;
+    }));
+    ASSERT_EQ(undo.GetHistoryNodes().size(), 2u);
+    EXPECT_EQ(undo.GetHistoryNodes()[0].GetDescription(), "Name: \"Cube\" -> \"Key Light\"");
+    const std::string details = undo.GetHistoryNodes()[1].GetDescription();
+    EXPECT_NE(details.find("Color: (1, 1, 1) -> (0.5, 1, 1)"), std::string::npos);
+    EXPECT_NE(details.find("Casts Shadows: false -> true"), std::string::npos);
+    EXPECT_EQ(details.find("Intensity"), std::string::npos);
+    undo.Undo();
+    undo.Undo();
+    EXPECT_EQ(undo.GetHistoryNodes()[1].GetDescription(), details);
+}
+
+TEST_F(UndoRedoServiceTests, HistoryDescriptionsDistinguishSelectedEntitiesAndValidatePayloads)
+{
+    using namespace GameEngine;
+    World* world = GetWorld();
+    const auto first = world->CreateEntity();
+    const auto second = world->CreateEntity();
+    world->AddComponentImmediate(first, Transform{});
+    world->AddComponentImmediate(second, Transform::FromTRS({4, 0, 0}, Quaternion::Identity(), {1, 1, 1}));
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        world, {first, second}, ECS::GetComponentTypeId<Transform>(), nullptr, "Move");
+    UndoRedoService::SnapshotTarget::Snapshot before;
+    UndoRedoService::SnapshotTarget::Snapshot after;
+    ASSERT_TRUE(target.Capture(before));
+    world->GetComponentForWrite<Transform>(first)->Translate(2, 0, 0);
+    world->GetComponentForWrite<Transform>(second)->Translate(2, 0, 0);
+    ASSERT_TRUE(target.Capture(after));
+    const std::string details = target.Describe(before, after);
+    EXPECT_NE(details.find("Entity #" + std::to_string(first.id) + ": Position: (0, 0, 0) -> (2, 0, 0)"), std::string::npos);
+    EXPECT_NE(details.find("Entity #" + std::to_string(second.id) + ": Position: (4, 0, 0) -> (6, 0, 0)"), std::string::npos);
+    after.pop_back();
+    EXPECT_TRUE(target.Describe(before, after).empty());
+}
+
+TEST_F(UndoRedoServiceTests, HistoryFormatsMaterialPropertiesAndIgnoresUnchangedValues)
+{
+    using GameEngine::Editor::HistoryValueFormatter;
+    const std::string before = R"({"schemaVersion":3,"materialName":"Paint","properties":{"baseColor":[1,1,1,1],"roughness":0.5}})";
+    const std::string after = R"({"schemaVersion":3,"materialName":"Paint","properties":{"baseColor":[0.5,0.25,1,1],"roughness":0.5}})";
+    const auto bytes = [](const std::string& text)
+    {
+        return std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(text.data()), text.size());
+    };
+    EXPECT_EQ(HistoryValueFormatter::DescribeMaterial(bytes(before), bytes(after), "Paint.material"),
+        "Value.Properties.Base Color: (1, 1, 1, 1) -> (0.5, 0.25, 1, 1)");
+    EXPECT_TRUE(HistoryValueFormatter::DescribeMaterial(bytes(before), bytes(before), "Paint.material").empty());
+    const std::string invalid = "not JSON";
+    EXPECT_TRUE(HistoryValueFormatter::DescribeMaterial(bytes(invalid), bytes(after), "Paint.material").empty());
+}
+
+TEST_F(UndoRedoServiceTests, HistoryShowsTheLatestPendingValuesBeforePublishing)
+{
+    using namespace GameEngine;
+    World* world = GetWorld();
+    const auto entity = world->CreateEntity();
+    world->AddComponentImmediate(entity, Transform{});
+    UndoRedoService undo;
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        world, {entity}, ECS::GetComponentTypeId<Transform>(), nullptr, "Move");
+    auto edit = undo.BeginInteractiveEdit("Move", target);
+    edit.Preview([world, entity] { world->GetComponentForWrite<Transform>(entity)->Translate(2, 0, 0); });
+    edit.Commit();
+    UndoHistoryPanel panel;
+    panel.SetUndoRedoService(&undo);
+    auto* pending = dynamic_cast<Label*>(panel.FindById(HashStringId("HistoryPending")));
+    ASSERT_NE(pending, nullptr);
+    EXPECT_EQ(pending->GetText(), "Move (pending)\nPosition: (0, 0, 0) -> (2, 0, 0)");
+    EXPECT_TRUE(undo.GetHistoryNodes().empty());
+}
+
+TEST_F(UndoRedoServiceTests, HistoryTransformDetailsUseDegreesAndScaleInsteadOfMatrixBytes)
+{
+    using namespace GameEngine;
+    World* world = GetWorld();
+    const auto entity = world->CreateEntity();
+    world->AddComponentImmediate(entity, Transform{});
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        world, {entity}, ECS::GetComponentTypeId<Transform>(), nullptr, "Transform");
+    UndoRedoService::SnapshotTarget::Snapshot before;
+    UndoRedoService::SnapshotTarget::Snapshot after;
+    ASSERT_TRUE(target.Capture(before));
+    world->AddComponentImmediate(entity, Transform::FromTRS({0, 0, 0},
+        Components::QuaternionFromEulerXYZDegrees(0, 30, 0), {2, 3, 4}));
+    ASSERT_TRUE(target.Capture(after));
+    const std::string details = target.Describe(before, after);
+    EXPECT_NE(details.find("Rotation (degrees):"), std::string::npos);
+    EXPECT_NE(details.find("30"), std::string::npos) << details;
+    EXPECT_NE(details.find("Scale: (1, 1, 1) -> (2, 3, 4)"), std::string::npos);
+    EXPECT_EQ(details.find("matrix"), std::string::npos);
+}
+
+TEST_F(UndoRedoServiceTests, HistoryOmitsMaterialDefaultsWrittenByAnEdit)
+{
+    using namespace GameEngine;
+    const std::string original = R"({"schemaVersion":3,"materialName":"Paint","lightingModel":"StandardPBR"})";
+    const std::vector<std::uint8_t> before(original.begin(), original.end());
+    MaterialAsset material(GUID::Null(), "Paint.material");
+    ASSERT_TRUE(material.LoadFromData(before));
+    MaterialDocument edited = material.GetDocument();
+    edited.properties["roughness"] = 0.25f;
+    const std::string saved = SerializeMaterialDocument(edited).dump();
+    const std::vector<std::uint8_t> after(saved.begin(), saved.end());
+    EXPECT_EQ(Editor::HistoryValueFormatter::DescribeMaterial(before, after, "Paint.material"),
+        "Value.Properties.Roughness: 0.5 -> 0.25");
+}
+
+TEST_F(UndoRedoServiceTests, HistoryUsesRegisteredAssetNamesForReferences)
+{
+    using namespace GameEngine;
+    auto& registry = EngineCore::GetInstance().GetAssetManager().GetRegistry();
+    AssetMetadata copper{};
+    copper.Guid = GUID::Generate();
+    copper.Name = "History Copper";
+    copper.Type = AssetType::Material;
+    copper.Extension = ".material";
+    copper.Path = registry.GetAssetRoot() / "History Copper.material";
+    AssetMetadata brass = copper;
+    brass.Guid = GUID::Generate();
+    brass.Name = "History Brass";
+    brass.Path = registry.GetAssetRoot() / "History Brass.material";
+    ASSERT_TRUE(registry.RegisterAssetMetadata(copper));
+    ASSERT_TRUE(registry.RegisterAssetMetadata(brass));
+    const auto entity = GetWorld()->CreateEntity();
+    Components::MeshRenderer renderer{};
+    renderer.materialAssetGuid = Components::MaterialRef(copper.Guid);
+    GetWorld()->AddComponentImmediate(entity, renderer);
+    UndoRedoService undo;
+    ASSERT_TRUE(Editor::CommitEntityComponentsEdit(*GetWorld(), entity, &undo, nullptr, "Assign Material", [&]
+    {
+        GetWorld()->GetComponentForWrite<Components::MeshRenderer>(entity)->materialAssetGuid = Components::MaterialRef(brass.Guid);
+        return true;
+    }));
+    ASSERT_EQ(undo.GetHistoryNodes().size(), 1u);
+    const std::string description = undo.GetHistoryNodes().front().GetDescription();
+    EXPECT_EQ(description, "Material: \"History Copper\" -> \"History Brass\"");
+    EXPECT_NE(description.find("\"History Copper\" -> \"History Brass\""), std::string::npos) << description;
+    EXPECT_EQ(description.find(copper.Guid.ToCompactString()), std::string::npos);
+    EXPECT_EQ(description.find(brass.Guid.ToCompactString()), std::string::npos);
+    registry.UnregisterAsset(copper.Guid);
+    registry.UnregisterAsset(brass.Guid);
+    undo.Undo();
+    undo.Redo();
+    EXPECT_EQ(undo.GetHistoryNodes().front().GetDescription(), description);
+}
+
+TEST_F(UndoRedoServiceTests, SavingMaterialDefaultsWithoutChangingValuesHasNoHistoryDetails)
+{
+    using namespace GameEngine;
+    const std::string original = R"({"schemaVersion":3,"materialName":"Paint","lightingModel":"StandardPBR","properties":{"baseColor":[1,0.5,0.25,0.5]}})";
+    const std::vector<std::uint8_t> before(original.begin(), original.end());
+    MaterialAsset material(GUID::Null(), "Paint.material");
+    ASSERT_TRUE(material.LoadFromData(before));
+    const std::string saved = SerializeMaterialDocument(material.GetDocument()).dump();
+    const std::vector<std::uint8_t> after(saved.begin(), saved.end());
+    EXPECT_TRUE(Editor::HistoryValueFormatter::DescribeMaterial(before, after, "Paint.material").empty());
+}
+
+TEST_F(UndoRedoServiceTests, HistoryUsesTextureNamesAndKeepsUnresolvedReferences)
+{
+    using namespace GameEngine;
+    auto& registry = EngineCore::GetInstance().GetAssetManager().GetRegistry();
+    AssetMetadata texture{};
+    texture.Guid = GUID::Generate();
+    texture.Name = "History Detail";
+    texture.Type = AssetType::Texture;
+    texture.Extension = ".png";
+    texture.Path = registry.GetAssetRoot() / "History Detail.png";
+    ASSERT_TRUE(registry.RegisterAssetMetadata(texture));
+    const std::string original = R"({"schemaVersion":3,"materialName":"Paint","lightingModel":"StandardPBR"})";
+    const std::vector<std::uint8_t> before(original.begin(), original.end());
+    nlohmann::json edited = nlohmann::json::parse(original);
+    edited["textures"]["albedoMap"] = texture.Guid.ToString();
+    const std::string saved = edited.dump();
+    const std::vector<std::uint8_t> after(saved.begin(), saved.end());
+    const std::string resolved = Editor::HistoryValueFormatter::DescribeMaterial(before, after, "Paint.material");
+    EXPECT_EQ(resolved, "Value.Textures.Albedo Map: (absent) -> \"History Detail\"");
+    registry.UnregisterAsset(texture.Guid);
+    const std::string missing = Editor::HistoryValueFormatter::DescribeMaterial(before, after, "Paint.material");
+    EXPECT_NE(missing.find(texture.Guid.ToString()), std::string::npos) << missing;
+}
+
+TEST_F(UndoRedoServiceTests, HistoryPanelRefreshesHiddenInspectorEditsWhenItsTabIsReactivated)
+{
+    using namespace GameEngine;
+    UndoRedoService undo;
+    UndoHistoryPanel panel;
+    UIElement inspector;
+    UIManager ui{nullptr};
+    auto root = std::make_unique<Mount>();
+    Mount* mount = root.get();
+    ui.SetRoot(std::move(root));
+    panel.SetUndoRedoService(&undo);
+    mount->SetTarget(&panel);
+    mount->SwapTargetForActivation(&inspector);
+    ASSERT_EQ(panel.GetOwnerManager(), &ui);
+    EXPECT_EQ(ui.FindElementByInstanceId(panel.GetInstanceId()), nullptr);
+    World* world = GetWorld();
+    const auto entity = world->CreateEntity();
+    world->AddComponentImmediate(entity, Transform{});
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        world, {entity}, ECS::GetComponentTypeId<Transform>(), nullptr, "Move");
+    UIElement::SetInEventDispatch(true);
+    auto edit = undo.BeginInteractiveEdit("Move", target);
+    edit.Preview([world, entity] { world->GetComponentForWrite<Transform>(entity)->Translate(2, 0, 0); });
+    edit.Commit();
+    UIElement::SetInEventDispatch(false);
+    ui.DrainDeferredActionsOnce();
+    EXPECT_EQ(panel.FindById(HashStringId("HistoryPending")), nullptr);
+    UIElement::SetInEventDispatch(true);
+    mount->SwapTargetForActivation(&panel);
+    UIElement::SetInEventDispatch(false);
+    ui.DrainDeferredActionsOnce();
+    EXPECT_EQ(panel.GetOwnerManager(), &ui);
+    auto* pending = dynamic_cast<Label*>(panel.FindById(HashStringId("HistoryPending")));
+    ASSERT_NE(pending, nullptr);
+    EXPECT_EQ(pending->GetText(), "Move (pending)\nPosition: (0, 0, 0) -> (2, 0, 0)");
+    auto* back = dynamic_cast<Button*>(panel.FindById(HashStringId("HistoryUndo")));
+    ASSERT_NE(back, nullptr);
+    EXPECT_TRUE(back->IsEnabled());
+}
+
+TEST_F(UndoRedoServiceTests, HistoryPanelAcceptsLaterUpdatesAfterDiscardingAHiddenRebuild)
+{
+    using namespace GameEngine;
+    UndoRedoService undo;
+    UndoHistoryPanel panel;
+    UIElement inspector;
+    UIManager ui{nullptr};
+    auto root = std::make_unique<Mount>();
+    Mount* mount = root.get();
+    ui.SetRoot(std::move(root));
+    panel.SetUndoRedoService(&undo);
+    mount->SetTarget(&panel);
+    mount->SwapTargetForActivation(&inspector);
+    UIElement::SetInEventDispatch(true);
+    undo.Execute(std::make_unique<NoOpCommand>());
+    UIElement::SetInEventDispatch(false);
+    ui.DrainDeferredActionsOnce();
+    mount->SwapTargetForActivation(&panel);
+    ui.DrainDeferredActionsOnce();
+    UIElement::SetInEventDispatch(true);
+    undo.Execute(std::make_unique<NoOpCommand>());
+    UIElement::SetInEventDispatch(false);
+    ui.DrainDeferredActionsOnce();
+    EXPECT_NE(panel.FindById(HashStringId("HistoryNode2")), nullptr);
+    auto* count = dynamic_cast<Label*>(panel.FindById(HashStringId("HistoryCount")));
+    ASSERT_NE(count, nullptr);
+    EXPECT_EQ(count->GetText(), "2 Actions");
+    mount->SwapTargetForActivation(&inspector);
+    UIElement::SetInEventDispatch(true);
+    undo.Clear();
+    UIElement::SetInEventDispatch(false);
+    ui.DrainDeferredActionsOnce();
+    mount->SwapTargetForActivation(&panel);
+    ui.DrainDeferredActionsOnce();
+    EXPECT_EQ(count->GetText(), "0 Actions");
+    EXPECT_EQ(panel.FindById(HashStringId("HistoryNode2")), nullptr);
 }

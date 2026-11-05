@@ -80,6 +80,25 @@ public:
     {
         return HasPendingCommand() ? m_PendingCommand->GetName() : HasPendingEdit() ? m_Pending->Name.c_str() : nullptr;
     }
+    std::string GetPendingDescription() const
+    {
+        if (HasPendingCommand())
+            return m_PendingCommand->GetDescription();
+        if (!HasPendingEdit() || m_Pending->GestureOpen)
+            return {};
+        std::string result = m_Pending->Target.Describe
+            ? m_Pending->Target.Describe(m_Pending->Before, m_Pending->After) : std::string{};
+        for (const auto& command : m_Pending->Consequences)
+        {
+            const std::string description = command->GetDescription();
+            if (description.empty())
+                continue;
+            if (!result.empty())
+                result += '\n';
+            result += description;
+        }
+        return result;
+    }
     NodeId GetPendingActionId() const { return m_Pending ? m_Pending->Id : m_PendingCommandId; }
     void SetBeforeCommit(std::function<void()> callback) { m_BeforeCommit = std::move(callback); }
     bool AppendConsequence(NodeId action, std::unique_ptr<IEditorCommand> command)

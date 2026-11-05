@@ -6,6 +6,7 @@
 #include "ECS/World.h"
 #include "EditorChangeNotifications.h"
 #include "UndoRedo/IEditorCommand.h"
+#include "UndoRedo/History/HistoryValueFormatter.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <algorithm>
@@ -126,9 +127,21 @@ public:
           m_Notifications(notifications),
           m_Changes(std::move(changes))
     {
+        for (const auto& change : m_Changes)
+        {
+            const ComponentBytes empty;
+            const std::string description = HistoryValueFormatter::DescribeComponent(change.TypeId,
+                change.Before ? *change.Before : empty, change.After ? *change.After : empty);
+            if (description.empty())
+                continue;
+            if (!m_Description.empty())
+                m_Description += '\n';
+            m_Description += description;
+        }
     }
 
     const char* GetName() const override { return m_Label.c_str(); }
+    std::string GetDescription() const override { return m_Description; }
     const char* GetTypeName() const override { return "EntityComponentsEditCommand"; }
     void Do() override { if (TryRedo()) NotifyReplay(); }
     void Undo() override { if (TryUndo()) NotifyReplay(); }
@@ -143,6 +156,7 @@ private:
     }
 
     std::string m_Label;
+    std::string m_Description;
     ECS::World& m_World;
     ECS::EntityHandle m_Entity;
     EditorChangeNotifications* m_Notifications;

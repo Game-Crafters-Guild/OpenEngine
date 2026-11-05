@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -173,6 +174,7 @@
 #include "Editor/Entities/EditorComponentTraits.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "Editor/Entities/EntityDisplayName.h"
+#include "Inspectors/EntityHeader/InspectorEntityNameField.h"
 #include "Editor/Entities/EditorInspectorPseudoComponents.h"
 #include "Engine/Rendering/PostProcessEffectRegistry.h"
 #include "TerrainECS/TerrainModifierComponents.h"
@@ -3944,12 +3946,8 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
         RecordInspectorHistory(std::move(entry));
     }
 
-    // Scene entities have no Name until the user renames them. Adding an empty Name here on
-    // every single-entity selection used to trigger an archetype move + a full Hierarchy
-    // rebuild on the first click (~530ms at 100k entities). The Name is now created lazily on
-    // the first keystroke in the header field (applyHeaderNameToWorld, below), which refreshes
-    // m_LastComponentSignature so the self-inflicted structural change does not trip the change
-    // subscription into a field-resetting inspector rebuild.
+    // The name field adds Name on the first edit. Its component-set callback keeps
+    // the tracked signature current so typing does not rebuild the field.
 
     // Track the last component signature so we can rebuild only when the set changes
     // (e.g. component add/remove during undo/redo).
@@ -4128,91 +4126,18 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
                                          m_Context != nullptr && m_Context->UIReplayActive, this);
     }
 
-    // Entity name: editable field when single-select (always) or multi-select with a
-    // Name on the primary entity. The Name component is created lazily on the first edit
-    // (applyHeaderNameToWorld), so single-select entities are editable even before one
-    // exists. Live typing updates come through SetOnValueChanging — not SetOnValueChanged —
-    // because SetOnCommit replaces TextInput's hook and bypasses TextFieldBase::OnTextCommit
-    // (see wiring below).
     const bool isMultiEdit = m_Entities.size() > 1;
-    std::string headerText = Editor::EntityDisplayName(*m_World, entity);
-    auto* nameComponent = m_World->GetComponent<Name>(entity);
-    if (isMultiEdit)
+    if (!isMultiEdit || m_World->HasComponent<Name>(entity))
     {
-        headerText += " (+" + std::to_string(m_Entities.size() - 1) + " more)";
-    }
-
-    const bool headerNameEditable = !isMultiEdit || (nameComponent != nullptr);
-    if (headerNameEditable)
-    {
-        auto headerField = std::make_unique<TextField>();
-        headerField->AddClass("inspector-header");
-        headerField->SetValue(headerText);
-        headerField->SetFocusable(true);
+        InspectorContext nameContext{};
+        nameContext.World = m_World;
+        nameContext.Entity = entity;
+        nameContext.Entities = m_Entities;
+        nameContext.Undo = m_Undo;
+        nameContext.ChangeNotifications = m_ChangeNotifications;
+        auto headerField = std::make_unique<InspectorEntityNameField>(
+            nameContext, [this] { RefreshTrackedComponentSignature(); });
         auto* headerFieldRaw = headerField.get();
-
-        const std::string multiEditSuffix =
-            isMultiEdit ? (" (+" + std::to_string(m_Entities.size() - 1) + " more)") : std::string{};
-
-        auto sanitizeHeaderNameInput = [isMultiEdit, multiEditSuffix](std::string text) -> std::string
-        {
-            if (isMultiEdit && !multiEditSuffix.empty() && text.size() >= multiEditSuffix.size())
-            {
-                if (text.compare(text.size() - multiEditSuffix.size(), multiEditSuffix.size(), multiEditSuffix) ==
-                    0)
-                    text.resize(text.size() - multiEditSuffix.size());
-            }
-            return text;
-        };
-
-        auto applyHeaderNameToWorld = [this, entity, sanitizeHeaderNameInput](const std::string& rawName)
-        {
-            if (!m_World || !entity.IsValid() || !m_World->IsValid(entity))
-                return;
-            const std::string cleaned = sanitizeHeaderNameInput(rawName);
-            constexpr size_t kNameCapacity = 63; // Name::value is char[64]
-            auto* n = m_World->GetComponentForWrite<Name>(entity);
-            if (!n)
-            {
-                Name nm{};
-                std::memset(nm.value, 0, sizeof(nm.value));
-                std::strncpy(nm.value, cleaned.c_str(), kNameCapacity);
-                nm.value[kNameCapacity] = '\0';
-                m_World->AddComponentImmediate(entity, nm);
-                // Lazy Name-add (see ShowEntity): fold this archetype move into the tracked
-                // signature before NotifyComponentCommit fires below, so our own structural
-                // change does not trip the change subscription into rebuilding the inspector
-                // and resetting the header field mid-type.
-                RefreshTrackedComponentSignature();
-            }
-            else
-            {
-                std::strncpy(n->value, cleaned.c_str(), kNameCapacity);
-                n->value[kNameCapacity] = '\0';
-            }
-            if (m_ChangeNotifications)
-                m_ChangeNotifications->NotifyComponentCommit<Name>(m_World, entity);
-        };
-
-        // TextField routes keystrokes through SetOnValueChanging only; SetOnValueChanged runs from the
-        // inner TextInput→OnTextCommit path, which we replace below via SetOnCommit. Sync the ECS on
-        // every edit and again on blur/Enter so names persist and saves see the latest string.
-        headerField->SetOnValueChanging(
-            [applyHeaderNameToWorld](const std::string& newName)
-            { applyHeaderNameToWorld(newName); });
-        headerField->SetOnValueChanged(
-            [applyHeaderNameToWorld](const std::string& newName)
-            { applyHeaderNameToWorld(newName); });
-
-        headerFieldRaw->SetOnCommit([this, entity, headerFieldRaw, applyHeaderNameToWorld]()
-                                    {
-            if (!m_ChangeNotifications || !m_World || !entity.IsValid() || !m_World->IsValid(entity))
-                return;
-            applyHeaderNameToWorld(headerFieldRaw->GetValue());
-            Editor::EditorChangeNotifications::WorldStructureChangedEvent e{};
-            e.world = m_World;
-            e.kind = Editor::EditorChangeNotifications::ChangeKind::Commit;
-            m_ChangeNotifications->NotifyWorldStructureChanged(e); });
         headerContainer->AddChild(std::move(headerField));
         if (!isMultiEdit)
         {
@@ -4224,10 +4149,10 @@ void InspectorPanel::ShowEntity(World* world, EntityHandle entity, bool force, b
     {
         auto header = std::make_unique<Label>();
         header->AddClass("inspector-header");
-        header->SetText(headerText);
+        header->SetText(std::format("{} (+{} more)", Editor::EntityDisplayName(*m_World, entity),
+                                    m_Entities.size() - 1));
         headerContainer->AddChild(std::move(header));
     }
-
     // The badge and the selection history arrows, between the name and the toggle. The mount also sets
     // the name's override mark on the badge.
     MountHeaderTrailingSlot(*headerContainer);

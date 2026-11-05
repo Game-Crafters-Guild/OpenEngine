@@ -505,3 +505,29 @@ TEST(UndoHistory, ClearingHistoryDoesNotSavePendingValues)
     history.Clear();
     EXPECT_TRUE(history.IsAtSavedRevision(&document));
 }
+
+TEST(UndoHistory, ChangeDescriptionsKeepTheirCommittedValues)
+{
+    UndoRedoService history;
+    int value = 1;
+    auto target = IntegerTarget(value);
+    target.Describe = [](const auto& before, const auto& after)
+    {
+        int oldValue = 0;
+        int newValue = 0;
+        std::memcpy(&oldValue, before.data(), sizeof(oldValue));
+        std::memcpy(&newValue, after.data(), sizeof(newValue));
+        return std::to_string(oldValue) + " -> " + std::to_string(newValue);
+    };
+    auto edit = history.BeginInteractiveEdit("Value", target);
+    edit.Preview([&value] { value = 3; });
+    edit.Commit();
+    ASSERT_TRUE(history.CommitPendingEdit());
+    value = 8;
+    EXPECT_EQ(history.GetHistoryNodes().front().GetDescription(), "1 -> 3");
+    history.Undo();
+    EXPECT_EQ(value, 1);
+    history.Redo();
+    EXPECT_EQ(value, 3);
+    EXPECT_EQ(history.GetHistoryNodes().front().GetDescription(), "1 -> 3");
+}

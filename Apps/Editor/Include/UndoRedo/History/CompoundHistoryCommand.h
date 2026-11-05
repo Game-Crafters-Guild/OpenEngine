@@ -14,6 +14,20 @@ class CompoundHistoryCommand final : public IEditorCommand
 public:
     explicit CompoundHistoryCommand(std::string name) : m_Name(std::move(name)) {}
     const char* GetName() const override { return m_Name.c_str(); }
+    std::string GetDescription() const override
+    {
+        std::string result;
+        for (const auto& command : m_Commands)
+        {
+            const std::string description = command->GetDescription();
+            if (description.empty())
+                continue;
+            if (!result.empty())
+                result += '\n';
+            result += description;
+        }
+        return result;
+    }
     const char* GetTypeName() const override { return "Compound"; }
     void Do() override { Redo(); }
     void Undo() override { if (TryUndo()) NotifyReplay(); }

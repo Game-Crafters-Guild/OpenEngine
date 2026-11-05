@@ -25,6 +25,7 @@ public:
         NodeId PreferredChild = 0;
         std::chrono::system_clock::time_point Timestamp;
         const char* GetName() const { return Command->GetName(); }
+        std::string GetDescription() const { return Command->GetDescription(); }
         const char* GetTypeName() const { return Command->GetTypeName(); }
 
     private:

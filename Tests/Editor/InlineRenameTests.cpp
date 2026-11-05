@@ -10,6 +10,8 @@
 #include "Editor/Hierarchy/HierarchyEntity/HierarchyEntityRename.h"
 #include "EditorChangeNotifications.h"
 #include "InspectorLayoutFixture.h"
+#include "InspectorRegistry.h"
+#include "Inspectors/EntityHeader/InspectorEntityNameField.h"
 #include "UI/InlineRenameSession.h"
 #include "UndoRedo/UndoRedoService.h"
 
@@ -196,6 +198,150 @@ TEST(EntityRename, OneUndoStepThatWritesAndAnnouncesTheName)
     undo.Undo();
     EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Cube");
     notifications.Unsubscribe(token);
+}
+
+namespace
+{
+class InspectorEntityNameFieldTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        m_Entity = m_World.CreateEntity();
+        Components::Name name{};
+        std::strcpy(name.value, "Cube");
+        m_World.AddComponentImmediate(m_Entity, name);
+        m_Context.World = &m_World;
+        m_Context.Entity = m_Entity;
+        m_Context.Undo = &m_Undo;
+        m_Context.ChangeNotifications = &m_Notifications;
+    }
+
+    void Mount()
+    {
+        m_Field = std::make_unique<InspectorEntityNameField>(m_Context, [this] { ++m_SignatureChanges; });
+        m_Field->OnFocusChanged(true);
+    }
+
+    void Type(const std::string& text)
+    {
+        TextInput* input = Input();
+        ASSERT_NE(input, nullptr);
+        input->SelectAll();
+        for (const unsigned char character : text)
+            ASSERT_TRUE(input->OnChar(character));
+    }
+
+    void Commit()
+    {
+        EXPECT_TRUE(Input()->OnKey(GameEngine::Input::kKeyCode_Enter, 0, nullptr));
+    }
+
+    TextInput* Input()
+    {
+        UIElement* editor = InspectorLayoutTesting::FindByClass(m_Field.get(), "field-editor");
+        return editor ? editor->GetAsTextInput() : nullptr;
+    }
+
+    ECS::World m_World;
+    ECS::EntityHandle m_Entity;
+    Editor::EditorChangeNotifications m_Notifications;
+    Editor::UndoRedoService m_Undo;
+    InspectorContext m_Context;
+    std::unique_ptr<InspectorEntityNameField> m_Field;
+    int m_SignatureChanges = 0;
+};
+}
+
+TEST_F(InspectorEntityNameFieldTest, LiveTypingAndCommitProduceOneRenameRevision)
+{
+    Mount();
+    Type("Crate");
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Crate");
+    EXPECT_STREQ(m_Undo.GetPendingName(), "Rename Entity");
+    Commit();
+    ASSERT_EQ(m_Undo.GetHistoryNodes().size(), 1u);
+    EXPECT_STREQ(m_Undo.GetHistoryNodes().front().GetName(), "Rename Entity");
+    EXPECT_EQ(m_Undo.GetHistoryNodes().front().GetDescription(), "Name: \"Cube\" -> \"Crate\"");
+    m_Undo.Undo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Cube");
+    m_Undo.Redo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Crate");
+    EXPECT_EQ(m_SignatureChanges, 0);
+}
+
+TEST_F(InspectorEntityNameFieldTest, UndoRemovesTheNameComponentCreatedByRenaming)
+{
+    m_World.RemoveComponentImmediate<Components::Name>(m_Entity);
+    Mount();
+    EXPECT_FALSE(m_World.HasComponent<Components::Name>(m_Entity));
+    Type("Crate");
+    Commit();
+    ASSERT_EQ(m_Undo.GetHistoryNodes().size(), 1u);
+    EXPECT_EQ(m_SignatureChanges, 1);
+    EXPECT_EQ(m_Undo.GetHistoryNodes().front().GetDescription(), "Name: (unnamed) -> \"Crate\"");
+    m_Undo.Undo();
+    EXPECT_FALSE(m_World.HasComponent<Components::Name>(m_Entity));
+    m_Undo.Redo();
+    ASSERT_NE(m_World.GetComponent<Components::Name>(m_Entity), nullptr);
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Crate");
+}
+
+TEST_F(InspectorEntityNameFieldTest, UndoKeepsTheRenameAfterTheFieldCloses)
+{
+    Mount();
+    Type("Crate");
+    m_Field.reset();
+    ASSERT_TRUE(m_Undo.CanUndo());
+    m_Undo.Undo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Cube");
+    m_Undo.Redo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Crate");
+}
+
+TEST_F(InspectorEntityNameFieldTest, SeparateCommitsRetainTheirOwnStartingNames)
+{
+    Mount();
+    Type("Crate");
+    Commit();
+    Type("Barrel");
+    Commit();
+    ASSERT_EQ(m_Undo.GetHistoryNodes().size(), 2u);
+    m_Undo.Undo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Crate");
+    m_Undo.Undo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Cube");
+}
+
+TEST_F(InspectorEntityNameFieldTest, TypingThroughTheOriginalNameDoesNotRequestAReplayRefresh)
+{
+    int replayNotifications = 0;
+    const auto token = m_Notifications.SubscribeComponentChanged([&replayNotifications](const auto& event)
+    {
+        if (event.kind == Editor::EditChangeKind::UndoRedo)
+            ++replayNotifications;
+    });
+    Mount();
+    Type("Cube 2");
+    Commit();
+    EXPECT_EQ(replayNotifications, 0);
+    ASSERT_EQ(m_Undo.GetHistoryNodes().size(), 1u);
+    m_Undo.Undo();
+    EXPECT_EQ(replayNotifications, 1);
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Cube");
+    m_Notifications.Unsubscribe(token);
+}
+
+TEST_F(InspectorEntityNameFieldTest, EscapeRestoresAnAbsentNameWithoutRecordingARevision)
+{
+    m_World.RemoveComponentImmediate<Components::Name>(m_Entity);
+    Mount();
+    Type("Crate");
+    ASSERT_NE(Input(), nullptr);
+    EXPECT_TRUE(Input()->OnKey(GameEngine::Input::kKeyCode_Escape, 0, nullptr));
+    EXPECT_FALSE(m_World.HasComponent<Components::Name>(m_Entity));
+    EXPECT_FALSE(m_Undo.CanUndo());
+    EXPECT_TRUE(m_Undo.GetHistoryNodes().empty());
 }
 
 // The refusal shows while the user types, not only once Enter is pressed.

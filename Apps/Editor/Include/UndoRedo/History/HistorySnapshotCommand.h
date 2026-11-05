@@ -13,9 +13,14 @@ class HistorySnapshotCommand final : public IEditorCommand
 public:
     HistorySnapshotCommand(std::string name, HistorySnapshotTarget target,
                            HistorySnapshotTarget::Snapshot before, HistorySnapshotTarget::Snapshot after)
-        : m_Name(std::move(name)), m_Target(std::move(target)), m_Before(std::move(before)), m_After(std::move(after)) {}
+        : m_Name(std::move(name)), m_Target(std::move(target)), m_Before(std::move(before)), m_After(std::move(after))
+    {
+        if (m_Target.Describe)
+            m_Description = m_Target.Describe(m_Before, m_After);
+    }
 
     const char* GetName() const override { return m_Name.c_str(); }
+    std::string GetDescription() const override { return m_Description; }
     const char* GetTypeName() const override { return "Snapshot"; }
     void Do() override { Redo(); }
     void Undo() override { if (TryUndo()) NotifyReplay(); }
@@ -36,6 +41,7 @@ private:
         return true;
     }
     std::string m_Name;
+    std::string m_Description;
     HistorySnapshotTarget m_Target;
     HistorySnapshotTarget::Snapshot m_Before;
     HistorySnapshotTarget::Snapshot m_After;

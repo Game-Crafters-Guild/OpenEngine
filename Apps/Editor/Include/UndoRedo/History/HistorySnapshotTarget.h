@@ -20,5 +20,6 @@ struct HistorySnapshotTarget
     // Validate every destination before writing. Failure leaves all destinations unchanged.
     std::function<bool(const Snapshot&)> Apply;
     std::function<void(EditChangeKind)> Notify;
+    std::function<std::string(const Snapshot&, const Snapshot&)> Describe;
 };
 } // namespace GameEngine::Editor

@@ -41,6 +41,7 @@ public:
             m_Identity.push_back(entity.id);
     }
     const std::vector<std::uint64_t>& GetIdentity() const { return m_Identity; }
+    std::string Describe(const Snapshot& before, const Snapshot& after) const;
     bool IsValid() const
     {
         ECS::World* world = ResolveWorld();

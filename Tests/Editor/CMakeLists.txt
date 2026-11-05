@@ -749,6 +749,7 @@ set(EDITOR_TEST_SOURCES
 	# Inline rename: the session the Assets browser and the Hierarchy share, and
 	# the Hierarchy's entity rename on it.
 	InlineRenameTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/EntityHeader/InspectorEntityNameField.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/InlineRenameSession.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntity/HierarchyEntityRename.cpp
 	# The wire router: a route that crosses no body, and the short one among those.
@@ -2236,6 +2237,11 @@ if(TARGET EditorTests)
 	ge_stage_test_asset(EditorTests
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/UndoHistory/UndoHistory.uxml"
 	    "Assets/UI/controls/UndoHistory/UndoHistory.uxml")
+	foreach(_layout HistoryRevision HistoryLane)
+	    ge_stage_test_asset(EditorTests
+	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/UndoHistory/${_layout}.uxml"
+	        "Assets/UI/controls/UndoHistory/${_layout}.uxml")
+	endforeach()
 
 	# StagingViewport binds its image from its layout, read from the same install-assets root.
 	ge_stage_test_asset(EditorTests

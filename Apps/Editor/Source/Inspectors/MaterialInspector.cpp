@@ -24,6 +24,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Platform/Shell.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "UndoRedo/History/HistoryValueFormatter.h"
 #include "Editor/Vcs/EditorVcsProviderRegistry.h"
 #include "VCSIntegration/IVCSIntegration.h"
 
@@ -501,6 +502,10 @@ static Editor::UndoRedoService::SnapshotTarget MakeMaterialSnapshotTarget(Materi
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
     target.Identity = {reinterpret_cast<std::uintptr_t>(mat)};
+    target.Describe = [path = mat->GetPath()](const auto& before, const auto& after)
+    {
+        return Editor::HistoryValueFormatter::DescribeMaterial(before, after, path);
+    };
 
     // The file as it is on disk, not the loaded document: the document carries the defaults
     // filled in at load, which undo would otherwise write into the author's file.

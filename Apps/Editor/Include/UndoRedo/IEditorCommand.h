@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace GameEngine::Editor
 {
@@ -13,6 +14,8 @@ public:
 
     // Human-readable label for debugging/UI (ownership stays with command).
     virtual const char* GetName() const = 0;
+    /// Stored before/after values for the history row, independent of the current document state.
+    virtual std::string GetDescription() const { return {}; }
 
     // Stable type identifier for tooling/inspection (e.g. undo-stack dumps).
     // Defaults to a generic label; commands whose identity matters for debugging
