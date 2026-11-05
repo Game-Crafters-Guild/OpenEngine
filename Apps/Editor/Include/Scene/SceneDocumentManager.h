@@ -46,7 +46,6 @@ inline constexpr const char* kSaveBlockedDuringPlayMessage =
 // This tracks:
 // - which .scene file (if any) backs the current world
 // - whether the world has unsaved changes
-// - a baseline ECS snapshot at last save/load (used for fast dirty checking if needed)
 class SceneDocumentManager
 {
   public:
@@ -304,11 +303,9 @@ class SceneDocumentManager
     std::optional<SceneLoadDegraded> m_LastLoadDegraded;
     UndoRedoService* m_History = nullptr;
     void RefreshDirtyAfterReplay();
-    std::vector<std::uint8_t> CaptureSceneContent() const;
     bool m_Dirty = false;
     bool m_DirtyRevisionKnown = false;
     std::uint64_t m_DirtyRevision = 0;
-    std::vector<uint8_t> m_BaselineSnapshot;
 
     std::optional<Scene::SceneHierarchyUiFromFile> m_PendingHierarchyUiFromLoad;
     std::function<Scene::SceneHierarchyUi()> m_HierarchyUiCaptureForSave;
