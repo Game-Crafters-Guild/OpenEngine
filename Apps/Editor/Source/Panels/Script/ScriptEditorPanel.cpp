@@ -91,6 +91,21 @@ ScriptEditorPanel::ScriptEditorPanel()
 ScriptEditorPanel::~ScriptEditorPanel()
 {
     m_HistoryDocumentSubscription.Reset();
+    if (auto* modal = m_DiskConflictModal.Get())
+    {
+        modal->Hide();
+        modal->SetOnSave({});
+        modal->SetOnDontSave({});
+        modal->SetOnCancel({});
+        if (auto* manager = modal->GetOwnerManager())
+        {
+            manager->PostToUI([weakModal = m_DiskConflictModal]
+            {
+                if (auto* pending = weakModal.Get(); pending && pending->GetParent())
+                    pending->GetParent()->RemoveChild(pending);
+            });
+        }
+    }
     if (m_SearchField && m_SearchField->GetParent())
         EditorSearchBars::UnregisterFocusTarget(m_SearchField->GetParent());
 }
@@ -503,14 +518,17 @@ bool ScriptEditorPanel::OpenScript(const std::filesystem::path& scriptPath)
         return false;
     }
 
+    HideCompletions();
+    m_IsLoading = true;
+    if (!LoadScriptFromFile(scriptPath))
+    {
+        m_IsLoading = false;
+        return false;
+    }
+    m_CurrentScriptPath = scriptPath;
     m_IsCSharpScript = (scriptPath.extension() == ".cs");
     if (m_TextArea)
         m_TextArea->SetLanguage(Editor::ScriptLanguageForPath(scriptPath));
-
-    HideCompletions();
-    m_IsLoading = true;
-    LoadScriptFromFile(scriptPath);
-    m_CurrentScriptPath = scriptPath;
     m_HasUnsavedChanges = m_HistoryDocument && m_HistoryDocument->IsDirty();
     m_IsLoading = false;
     
@@ -547,21 +565,11 @@ void ScriptEditorPanel::PromptSaveBeforeQuit(std::function<void()> onProceed)
     }
 
     if (!m_QuitModal)
-    {
-        auto modal = std::make_unique<SaveSceneChangesModal>();
-        m_QuitModal = modal.get();
-        UIManager* ui = GetOwnerManager();
-        UIElement* uiRoot = ui ? ui->GetRootElement() : nullptr;
-        if (uiRoot)
-            uiRoot->AddChild(std::move(modal));
-        else
-            AddChild(std::move(modal));
-    }
+        m_QuitModal = CreateSavePrompt();
 
     m_QuitModal->SetOnSave([this, onProceed]()
     {
-        if (SaveScript())
-            onProceed();
+        SaveScriptAndThen(onProceed);
     });
     m_QuitModal->SetOnDontSave([onProceed]() { onProceed(); });
     m_QuitModal->SetOnCancel([]() {});
@@ -576,15 +584,34 @@ void ScriptEditorPanel::PromptSaveBeforeQuit(std::function<void()> onProceed)
 
 bool ScriptEditorPanel::SaveScript()
 {
+    return SaveScriptAndThen({});
+}
+
+bool ScriptEditorPanel::SaveScriptAndThen(std::function<void()> onSaved)
+{
     if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
         return false;
-    if (m_CurrentScriptPath.empty() || !m_TextArea)
+    if (m_CurrentScriptPath.empty() || !m_TextArea || !m_HistoryDocument)
     {
         Logger::Log::Warning("ScriptEditorPanel: Cannot save - no file is open");
         return false;
     }
 
-    std::string content = m_TextArea->GetValue();
+    String diskText;
+    if (!ReadFileTextShared(m_CurrentScriptPath, diskText))
+    {
+        Logger::Log::Error("ScriptEditorPanel: Cannot save because the current disk contents could not be read: {}",
+                           m_CurrentScriptPath.string());
+        return false;
+    }
+    m_HistoryDocument->ReconcileDiskText(diskText);
+    if (m_HistoryDocument->HasDiskConflict())
+    {
+        PromptDiskConflict(std::move(onSaved));
+        return false;
+    }
+
+    const std::string content = m_TextArea->GetValue();
     if (WriteScriptToFile(m_CurrentScriptPath, content))
     {
         m_LastSavedContent = content;
@@ -602,10 +629,83 @@ bool ScriptEditorPanel::SaveScript()
         }
 
         Logger::Log::Info("ScriptEditorPanel: Saved script: {}", m_CurrentScriptPath.string());
+        if (onSaved)
+            onSaved();
         return true;
     }
 
     return false;
+}
+
+SaveSceneChangesModal* ScriptEditorPanel::CreateSavePrompt()
+{
+    auto modal = std::make_unique<SaveSceneChangesModal>();
+    auto* result = modal.get();
+    UIManager* manager = GetOwnerManager();
+    UIElement* root = manager ? manager->GetRootElement() : nullptr;
+    if (root)
+        root->AddChild(std::move(modal));
+    else
+        AddChild(std::move(modal));
+    return result;
+}
+
+void ScriptEditorPanel::PromptDiskConflict(std::function<void()> onSaved)
+{
+    m_ConflictingDocument = m_HistoryDocument;
+    m_ConflictDiskText = m_HistoryDocument->GetSavedText();
+    m_AfterConflictSave = std::move(onSaved);
+    auto* modal = m_DiskConflictModal.Get();
+    if (!modal)
+    {
+        modal = CreateSavePrompt();
+        m_DiskConflictModal = UIElement::MakeWeakRef(modal);
+        modal->SetId("ScriptDiskConflictModal");
+        modal->SetOnSave([this] { ConfirmDiskOverwrite(); });
+        modal->SetOnDontSave([this] { ReloadConflictingScript(); });
+        modal->SetOnCancel([this]
+        {
+            m_ConflictingDocument.reset();
+            m_AfterConflictSave = {};
+        });
+    }
+    modal->Show("Script Changed on Disk",
+        "\"" + Editor::OnDiskFileName(m_CurrentScriptPath) + "\" changed on disk and has unsaved edits.\n"
+        "Replace the disk version with your edits, reload and discard your edits, or cancel.",
+        {"Replace Disk Version", "Reload from Disk", "Cancel"});
+}
+
+void ScriptEditorPanel::ConfirmDiskOverwrite()
+{
+    const auto document = m_ConflictingDocument.lock();
+    auto onSaved = std::move(m_AfterConflictSave);
+    m_ConflictingDocument.reset();
+    if (!document || document != m_HistoryDocument)
+        return;
+    if (!document->AcceptDiskChanges(m_ConflictDiskText))
+    {
+        PromptDiskConflict(std::move(onSaved));
+        return;
+    }
+    SaveScriptAndThen(std::move(onSaved));
+}
+
+void ScriptEditorPanel::ReloadConflictingScript()
+{
+    const auto document = m_ConflictingDocument.lock();
+    auto onSaved = std::move(m_AfterConflictSave);
+    m_ConflictingDocument.reset();
+    if (!document || document != m_HistoryDocument)
+        return;
+    m_IsLoading = true;
+    const bool loaded = LoadScriptFromFile(m_CurrentScriptPath);
+    m_IsLoading = false;
+    if (!loaded)
+        return;
+    document->SetText(document->GetSavedText());
+    document->Changed().Invoke();
+    if (onSaved)
+        onSaved();
 }
 
 void ScriptEditorPanel::OnTextChanged()
@@ -616,7 +716,7 @@ void ScriptEditorPanel::OnTextChanged()
     std::string currentContent = m_TextArea->GetValue();
     if (m_HistoryDocument)
         m_HistoryDocument->SetText(currentContent);
-    m_HasUnsavedChanges = (currentContent != m_LastSavedContent);
+    m_HasUnsavedChanges = m_HistoryDocument ? m_HistoryDocument->IsDirty() : currentContent != m_LastSavedContent;
     UpdateTitle();
 
     if (m_IsCSharpScript)
@@ -696,6 +796,8 @@ void ScriptEditorPanel::UpdateTitle()
         {
             title += " *";
         }
+        if (m_HistoryDocument && m_HistoryDocument->HasDiskConflict())
+            title += " (disk changed)";
     }
 
     SetTitle(title);
@@ -720,7 +822,7 @@ void ScriptEditorPanel::UpdateTitle()
     }
 }
 
-void ScriptEditorPanel::LoadScriptFromFile(const std::filesystem::path& path)
+bool ScriptEditorPanel::LoadScriptFromFile(const std::filesystem::path& path)
 {
     try
     {
@@ -728,7 +830,7 @@ void ScriptEditorPanel::LoadScriptFromFile(const std::filesystem::path& path)
         if (!GameEngine::ReadFileTextShared(path, content))
         {
             Logger::Log::Error("ScriptEditorPanel: Failed to open file for reading: {}", path.string());
-            return;
+            return false;
         }
 
         m_HistoryDocumentSubscription.Reset();
@@ -739,10 +841,12 @@ void ScriptEditorPanel::LoadScriptFromFile(const std::filesystem::path& path)
             m_TextArea->SetValue(m_HistoryDocument->GetText());
             m_LastSavedContent = m_HistoryDocument->GetSavedText();
         }
+        return true;
     }
-    catch (const std::exception& e)
+    catch (const std::exception& exception)
     {
-        Logger::Log::Error("ScriptEditorPanel: Exception while loading script: {}", e.what());
+        Logger::Log::Error("ScriptEditorPanel: Exception while loading script: {}", exception.what());
+        return false;
     }
 }
 
@@ -751,7 +855,10 @@ void ScriptEditorPanel::RefreshFromHistoryDocument()
     if (!m_HistoryDocument || !m_TextArea)
         return;
     if (m_LastUndoContent == m_HistoryDocument->GetText() && m_LastSavedContent == m_HistoryDocument->GetSavedText())
+    {
+        UpdateTitle();
         return;
+    }
     m_IsUndoRedoOperation = true;
     if (m_TextArea->GetValue() != m_HistoryDocument->GetText())
         m_TextArea->SetValue(m_HistoryDocument->GetText());

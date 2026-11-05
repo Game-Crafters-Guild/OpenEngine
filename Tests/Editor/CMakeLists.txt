@@ -327,6 +327,10 @@ set(EDITOR_TEST_SOURCES
 	# GLSL, everything else as C#; pure over strings, no UI.
 	ScriptSyntaxTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/Script/ScriptSyntax.cpp
+	ScriptDocumentDiskTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/Script/ScriptEditorPanel.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/Script/ScriptTextArea.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/CompletionPopup.cpp
 	# B1: pooled GraphPortedNode slots, BindModel, Display:None surplus.
 	# Leaf TUs over the Graph UI elements (no GraphCanvas.cpp — canvas compile is
 	# gated by Editor; these tests cover pool/node binding without it).

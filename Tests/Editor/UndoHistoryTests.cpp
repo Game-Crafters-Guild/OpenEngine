@@ -443,6 +443,68 @@ TEST(UndoHistory, ScriptHistoryRestoresItsDocumentWithoutAnOpenView)
     EXPECT_EQ(reopened->GetText(), "first edited");
 }
 
+TEST(UndoHistory, ReopeningACleanScriptRetainedByHistoryLoadsExternalChanges)
+{
+    using GameEngine::Editor::ScriptHistoryDocument;
+    UndoRedoService history;
+    auto document = ScriptHistoryDocument::Open("history-external-clean.cs", "original");
+    EditScript(history, document, "saved");
+    ASSERT_TRUE(history.CommitPendingEdit());
+    document->MarkSaved();
+    int changes = 0;
+    auto subscription = document->Changed().Subscribe([&changes] { ++changes; });
+    std::weak_ptr<ScriptHistoryDocument> retained = document;
+    document.reset();
+
+    auto reopened = ScriptHistoryDocument::Open("history-external-clean.cs", "external");
+    EXPECT_EQ(reopened, retained.lock());
+    EXPECT_EQ(reopened->GetText(), "external");
+    EXPECT_EQ(reopened->GetSavedText(), "external");
+    EXPECT_FALSE(reopened->IsDirty());
+    EXPECT_EQ(changes, 1);
+}
+
+TEST(UndoHistory, ReopeningADirtyScriptPreservesEditsAndTracksTheExternalDiskVersion)
+{
+    using GameEngine::Editor::ScriptHistoryDocument;
+    UndoRedoService history;
+    auto document = ScriptHistoryDocument::Open("history-external-dirty.cs", "original");
+    EditScript(history, document, "local");
+    ASSERT_TRUE(history.CommitPendingEdit());
+
+    auto reopened = ScriptHistoryDocument::Open("history-external-dirty.cs", "external");
+    EXPECT_EQ(reopened, document);
+    EXPECT_EQ(reopened->GetText(), "local");
+    EXPECT_EQ(reopened->GetSavedText(), "external");
+    EXPECT_TRUE(reopened->IsDirty());
+    history.Undo();
+    EXPECT_TRUE(reopened->IsDirty());
+    EXPECT_EQ(reopened->GetText(), "original");
+}
+
+TEST(UndoHistory, ReopeningAScriptWhoseEditsMatchDiskMarksItClean)
+{
+    using GameEngine::Editor::ScriptHistoryDocument;
+    UndoRedoService history;
+    auto document = ScriptHistoryDocument::Open("history-external-matching.cs", "original");
+    EditScript(history, document, "matching");
+    auto reopened = ScriptHistoryDocument::Open("history-external-matching.cs", "matching");
+    EXPECT_EQ(reopened, document);
+    EXPECT_EQ(reopened->GetSavedText(), "matching");
+    EXPECT_FALSE(reopened->IsDirty());
+}
+
+TEST(UndoHistory, ReopeningACleanScriptAcceptsAnEmptyDiskFile)
+{
+    using GameEngine::Editor::ScriptHistoryDocument;
+    auto document = ScriptHistoryDocument::Open("history-external-empty.cs", "original");
+    auto reopened = ScriptHistoryDocument::Open("history-external-empty.cs", "");
+    EXPECT_EQ(reopened, document);
+    EXPECT_TRUE(reopened->GetText().empty());
+    EXPECT_TRUE(reopened->GetSavedText().empty());
+    EXPECT_FALSE(reopened->IsDirty());
+}
+
 TEST(UndoHistory, ScriptTypingDoesNotMutateAnAlreadyCommittedNode)
 {
     UndoRedoService history;

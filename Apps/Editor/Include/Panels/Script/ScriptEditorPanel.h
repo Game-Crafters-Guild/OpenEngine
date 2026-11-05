@@ -183,7 +183,12 @@ private:
     void OnTextChanged();
     void OnSaveButtonClicked();
     void UpdateTitle();
-    void LoadScriptFromFile(const std::filesystem::path& path);
+    bool LoadScriptFromFile(const std::filesystem::path& path);
+    bool SaveScriptAndThen(std::function<void()> onSaved);
+    SaveSceneChangesModal* CreateSavePrompt();
+    void PromptDiskConflict(std::function<void()> onSaved);
+    void ConfirmDiskOverwrite();
+    void ReloadConflictingScript();
     bool WriteScriptToFile(const std::filesystem::path& path, const std::string& content);
     void OnSearchTextChanged(const std::string& searchText);
     void FindAllMatches(const std::string& searchText);
@@ -207,6 +212,10 @@ private:
     void AcceptCompletion(const std::string& text);
 
     SaveSceneChangesModal* m_QuitModal = nullptr;
+    UIElement::WeakRef<SaveSceneChangesModal> m_DiskConflictModal;
+    std::weak_ptr<Editor::ScriptHistoryDocument> m_ConflictingDocument;
+    std::string m_ConflictDiskText;
+    std::function<void()> m_AfterConflictSave;
 
     // UI elements (owned by UI tree via DockPanel::AddChild)
     ScrollView* m_ScrollView = nullptr;
