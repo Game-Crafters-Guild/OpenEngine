@@ -52,6 +52,8 @@ set(EDITOR_TEST_SOURCES
 	UndoRedoServiceTests.cpp
 	GraphSelectionHistoryTests.cpp
 	SceneDocumentHistoryTests.cpp
+	MaterialInspectorHistoryTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/MaterialInspector.cpp
 	PlayModeChangeReviewTests.cpp
 	PlayModeMarkupNotesTests.cpp
 	RenderPipelineInspectorTests.cpp

@@ -50,6 +50,19 @@ void SceneDocumentManager::SetWorld(ECS::World* world)
     m_World = world;
 }
 
+void SceneDocumentManager::SetUndoRedoService(UndoRedoService* history)
+{
+    if (m_History != history && m_DirtyRefreshPending)
+    {
+        m_UntrackedDirty = true;
+        m_DirtyRefreshPending = false;
+    }
+    m_HistoryChanged.Reset();
+    m_History = history;
+    if (m_History)
+        m_HistoryChanged = m_History->HistoryChanged().Subscribe([this] { OnHistoryChanged(); });
+}
+
 std::optional<std::string> SceneDocumentManager::GetDisplaySceneName() const
 {
     if (m_DisplaySceneName.has_value() && !m_DisplaySceneName->empty())
@@ -71,11 +84,8 @@ void SceneDocumentManager::SetChangeNotifications(EditorChangeNotifications* not
 void SceneDocumentManager::MarkDirty()
 {
     if (HistoryMutationScope::IsRestoringFor(m_History))
-    {
-        RefreshDirtyState();
-        return;
-    }
-    if (!HistoryMutationScope::IsActiveFor(m_History))
+        m_DirtyRefreshPending = true;
+    else if (!HistoryMutationScope::IsActiveFor(m_History))
         m_UntrackedDirty = true;
     if (!m_Dirty)
         Logger::Log::Debug("SceneDocumentManager: scene marked dirty");
@@ -88,6 +98,7 @@ void SceneDocumentManager::MarkClean()
         Logger::Log::Debug("SceneDocumentManager: scene marked clean");
     m_Dirty = false;
     m_UntrackedDirty = false;
+    m_DirtyRefreshPending = false;
     if (m_History)
         m_History->MarkSaved(this);
 }
@@ -95,6 +106,15 @@ void SceneDocumentManager::MarkClean()
 void SceneDocumentManager::RefreshDirtyState()
 {
     m_Dirty = m_UntrackedDirty || !m_History || !m_History->IsAtSavedRevision(this);
+}
+
+void SceneDocumentManager::OnHistoryChanged()
+{
+    if (!m_History || !m_DirtyRefreshPending || m_History->HasOpenInteractiveEdit() ||
+        !HistoryMutationScope::IsRestoringFor(m_History))
+        return;
+    m_DirtyRefreshPending = false;
+    RefreshDirtyState();
 }
 
 void SceneDocumentManager::SetHierarchyUiCaptureForSave(std::function<Scene::SceneHierarchyUi()> capture)
@@ -1144,11 +1164,7 @@ void SceneDocumentManager::Subscribe()
                 return;
             if (event.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
-            if (event.kind == EditorChangeNotifications::ChangeKind::UndoRedo &&
-                HistoryMutationScope::IsRestoringFor(m_History))
-                RefreshDirtyState();
-            else
-                MarkDirty();
+            MarkDirty();
         });
 
     m_SubStructure = m_Notifications->SubscribeWorldStructureChanged(
@@ -1158,11 +1174,7 @@ void SceneDocumentManager::Subscribe()
                 return;
             if (event.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
-            if (event.kind == EditorChangeNotifications::ChangeKind::UndoRedo &&
-                HistoryMutationScope::IsRestoringFor(m_History))
-                RefreshDirtyState();
-            else
-                MarkDirty();
+            MarkDirty();
         });
 }
 

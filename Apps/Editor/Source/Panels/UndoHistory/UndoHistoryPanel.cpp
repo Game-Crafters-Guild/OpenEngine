@@ -124,6 +124,7 @@ void UndoHistoryPanel::AddRevision(std::uint64_t id, const std::string& label, c
     auto* row = dynamic_cast<Button*>(root.get());
     if (!row)
         return;
+    row->RequestSubtreeStyleAssetPath("UI/controls/UndoHistory/UndoHistory.css", "editor");
     const bool current = id == m_Undo->GetCurrentNodeId();
     row->SetId("HistoryNode" + std::to_string(id));
     row->SetText(label);

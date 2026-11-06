@@ -26,7 +26,7 @@
     flex-direction: column;
     width: 100%;
 }
-.button.history-revision {
+.history-revision {
     display: flex;
     flex-direction: row;
     align-items: stretch;
@@ -44,10 +44,16 @@
     color: var(--ui_color_text);
     background-color: transparent;
 }
-.button.history-revision:hover {
+.history-revision:hover {
     background-color: var(--ui_color_bg_item_hover);
 }
-.button.history-revision.history-current {
+.history-current {
+    background-color: var(--ui_color_bg_selected);
+}
+.history-current:hover {
+    background-color: var(--ui_color_bg_selected);
+}
+.history-current:active {
     background-color: var(--ui_color_bg_selected);
 }
 .history-revision-label {

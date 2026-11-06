@@ -2,6 +2,7 @@
 
 #include "EditorChangeNotifications.h"
 #include "Engine/Rendering/SceneBuildPump.h"
+#include "Events/Event.h"
 #include "Scene/SceneIO.h"
 #include "Scene/SceneLoadFailure.h"
 #include "Terrain/TerrainZonePayloadSaver.h"
@@ -53,7 +54,7 @@ class SceneDocumentManager
     ~SceneDocumentManager();
 
     void SetWorld(ECS::World* world);
-    void SetUndoRedoService(UndoRedoService* history) { m_History = history; }
+    void SetUndoRedoService(UndoRedoService* history);
     void SetChangeNotifications(EditorChangeNotifications* notifications);
 
     ECS::World* GetWorld() const { return m_World; }
@@ -304,9 +305,12 @@ class SceneDocumentManager
     std::optional<std::filesystem::path> m_PartialLoadDocument;
     std::optional<SceneLoadDegraded> m_LastLoadDegraded;
     UndoRedoService* m_History = nullptr;
+    EventSubscription m_HistoryChanged;
     void RefreshDirtyState();
+    void OnHistoryChanged();
     bool m_Dirty = false;
     bool m_UntrackedDirty = false;
+    bool m_DirtyRefreshPending = false;
 
     std::optional<Scene::SceneHierarchyUiFromFile> m_PendingHierarchyUiFromLoad;
     std::function<Scene::SceneHierarchyUi()> m_HierarchyUiCaptureForSave;

@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
 #include "EditorChangeNotifications.h"
+#include "Editor/Entities/ComponentRemoval.h"
+#include "Panels/Script/ScriptTextEditCommand.h"
 #include "Scene/SceneDocumentManager.h"
+#include "UndoRedo/DeleteEntitiesCommand.h"
 #include "UndoRedo/Spline/SplineUndoHelpers.h"
 #include "UndoRedo/UndoRedoService.h"
 
@@ -78,6 +81,18 @@ protected:
         ASSERT_TRUE(target.Capture(after));
         ASSERT_TRUE(target.Apply(before));
         history.Execute(std::make_unique<HistorySnapshotCommand>("Move Spline Point", target, before, after));
+    }
+
+    void RemoveName(UndoRedoService& history)
+    {
+        CommitComponentRemoval(m_World, &history, &m_Notifications, m_Entity,
+            ECS::GetComponentTypeId<Components::Name>(), "Remove Name");
+    }
+
+    void DeleteEntity(UndoRedoService& history, ECS::EntityHandle entity)
+    {
+        history.Execute(std::make_unique<DeleteEntitiesCommand>("Delete Entity", &m_World,
+            &m_Notifications, std::vector<ECS::EntityHandle>{entity}));
     }
 
     ECS::World m_World;
@@ -265,6 +280,82 @@ TEST_F(SceneDocumentHistoryTest, CommittingAPreviewAtItsStartingValueLeavesTheSc
         SplineECS::SplineService::Get().GetSplineData(m_Spline)->SetPointPosition(0, {0.0f, 0.0f, 0.0f});
     });
     edit.Commit();
+    EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, UndoingASavedComponentRemovalIsDirtyAndRedoIsClean)
+{
+    m_World.AddComponentImmediate(m_Entity, Components::Name{});
+    m_Document.MarkClean();
+    RemoveName(m_History);
+    ASSERT_FALSE(m_World.HasComponent<Components::Name>(m_Entity));
+    m_Document.MarkClean();
+    m_History.Undo();
+    EXPECT_TRUE(m_World.HasComponent<Components::Name>(m_Entity));
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_FALSE(m_World.HasComponent<Components::Name>(m_Entity));
+    EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, UndoingASavedEntityDeletionIsDirtyAndRedoIsClean)
+{
+    const auto entity = m_World.CreateEntity();
+    m_World.AddComponentImmediate(entity, Components::Name{});
+    m_Document.MarkClean();
+    DeleteEntity(m_History, entity);
+    ASSERT_FALSE(m_World.IsValid(entity));
+    m_Document.MarkClean();
+    m_History.Undo();
+    EXPECT_TRUE(m_World.IsValid(entity));
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_FALSE(m_World.IsValid(entity));
+    EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, CheckoutUsesTheFinalCursorForInlineNotifyingCommands)
+{
+    m_World.AddComponentImmediate(m_Entity, Components::Name{});
+    const auto other = m_World.CreateEntity();
+    m_World.AddComponentImmediate(other, Components::Name{});
+    m_Document.MarkClean();
+    RemoveName(m_History);
+    const auto saved = m_History.GetCurrentNodeId();
+    m_Document.MarkClean();
+    m_History.Undo();
+    DeleteEntity(m_History, other);
+    ASSERT_TRUE(m_History.Checkout(saved));
+    EXPECT_FALSE(m_World.HasComponent<Components::Name>(m_Entity));
+    EXPECT_TRUE(m_World.IsValid(other));
+    EXPECT_FALSE(m_Document.IsDirty());
+    ASSERT_TRUE(m_History.Checkout(m_History.GetRootNodeId()));
+    EXPECT_TRUE(m_World.HasComponent<Components::Name>(m_Entity));
+    EXPECT_TRUE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, ScriptOnlyHistoryTraversalDoesNotDirtyTheScene)
+{
+    auto script = ScriptHistoryDocument::Open("scene-history-unrelated-script.cs", "before");
+    script->SetText("after");
+    m_History.CommitAlreadyApplied(std::make_unique<ScriptTextEditCommand>(script, "before", "after"));
+    m_History.Undo();
+    EXPECT_FALSE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, RebindingHistoryRefreshesFromTheNewServiceAfterReplay)
+{
+    UndoRedoService replacement;
+    m_Document.SetUndoRedoService(&replacement);
+    m_World.AddComponentImmediate(m_Entity, Components::Name{});
+    m_Document.MarkClean();
+    RemoveName(replacement);
+    m_Document.MarkClean();
+    replacement.Undo();
+    EXPECT_TRUE(m_Document.IsDirty());
+    replacement.Redo();
     EXPECT_FALSE(m_Document.IsDirty());
 }
 } // namespace
