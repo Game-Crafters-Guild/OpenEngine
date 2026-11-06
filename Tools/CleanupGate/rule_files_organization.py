@@ -37,6 +37,8 @@ REPORTED = ["shared_helper_names"]
 kClassDefinition = re.compile(r"^\s*(?:template\s*<[^>]*>\s*)?(?:class|struct)\s+(?:alignas\s*\([^)]*\)\s*)?(?:\w+\s+)?(\w+)\s*(?::[^;{]*)?\{?\s*$|^\s*(?:class|struct)\s+(\w+)\s*(?::[^;{]*)?\{")
 kEnumDefinition = re.compile(r"^\s*enum\s+(?:class\s+)?(\w+)")
 kFunctionHead = re.compile(r"^\s*(?:\[\[nodiscard\]\]\s*)?(?:template\s*<[^>]*>\s*)?(?:static\s+|inline\s+|constexpr\s+|extern\s+|virtual\s+|explicit\s+)*(?:[\w:<>,\s\*&]+?)\s+([\w:~]+)\s*\(([^;{]*)\)\s*(?:const)?\s*(?:noexcept(?:\([^)]*\))?)?\s*(?:override)?\s*(?:->\s*[\w:<>]+)?\s*(\{|;)?\s*$")
+kReturnTypeToken = re.compile(r"\b[A-Za-z_]\w*\b")
+kInitializerColon = re.compile(r"(?<!:):(?!:)")
 kControlWords = {"if", "for", "while", "switch", "return", "else", "do", "catch", "sizeof", "static_assert", "alignas", "decltype", "define", "namespace", "using", "typedef", "delete", "new", "throw", "co_return"}
 kVerbName = re.compile(r"^(Compute|Build|Resolve|Apply|Collect|Make|Create|Get|Set|Find|Load|Save|Parse|Format|Write|Read|Convert|Draw|Emit|Pick|Place|Snap|Rename|Replace|Restore|Register|Scan|Sync|Update|Validate|Derive|Project|Extract|Merge|Split|Fit|Clamp|Pack|Unpack|Encode|Decode|Hash|Measure|Refresh|Run|Launch|Open|Close|Query|Sample|Seed|Spawn|Tick|Step|Walk|Trim|Strip|Ensure|Attach|Detach|Mount|Patch|Record|Capture|Tokenize|Classify|Quantize|Layout|Describe|Prepare|Install|Bind|Resize|Flush|Reset|Clear|Begin|End|Insert|Remove|Append|Try|Is|Has|Can|Should|Select|Choose|Compare|Count|Copy|Move|Fill|Generate|Dump|Print|Report|Warm|Prewarm|Schedule|Dispatch|Submit|Upload|Download|Fetch|Serialize|Deserialize|Export|Import|Compile|Link|Stage|Promote|Adopt|Inherit|Heal|Detect|Surface)[A-Z]")
 kOwnerSuffix = re.compile(r"(Service|System|Controller|Manager|Panel|Inspector|Registry|Cache|Builder|Loader|Writer|Reader|Handler|Tracker|Provider|Tests?|Model|View|State|Policy|Queue|Pool|Ring|Context|Collector|Gate|Runner|Surfacer|Launcher|Watchdog|Bridge|Session|Store|Table|Map|Set|Query|Command|Dialog|Rules?|Spec|Desc|Info|Options|Settings|Plan|Ops)$")
@@ -117,6 +119,15 @@ def _analyze(code_lines):
         if class_stack and depth <= class_stack[-1]:
             class_stack.pop()
     return classes, functions, enums, defines_member
+
+
+def _is_free_helper_head(code):
+    """A helper needs a return-type token; a bare call or an initializer's single colon is not one."""
+    head = kFunctionHead.match(code)
+    if not head:
+        return False
+    prefix = code[:head.start(1)]
+    return bool(kReturnTypeToken.search(prefix)) and not kInitializerColon.search(prefix + head.group(1))
 
 
 def _words(name):
@@ -215,7 +226,7 @@ class Rule:
         in_hub_folder = os.path.dirname(path) in kHubFolders
         defined = [function for function in functions if function[2]] if path.endswith(".cpp") else functions
         for name, line_number, has_body, body in functions:
-            if has_body and path.endswith((".cpp", ".h", ".inl")):
+            if has_body and path.endswith((".cpp", ".h", ".inl")) and _is_free_helper_head(source.code[line_number - 1][1]):
                 self.m_HelperFiles[name].add(path)
                 self.m_HelperBodies[(name, body)].setdefault(path, line_number)
         sites = []

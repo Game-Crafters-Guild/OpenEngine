@@ -490,7 +490,7 @@ private:
     };
     SelectionSnapshot m_LastSelectionSnapshot;
     bool m_SuppressSelectionUndo = false;
-    void PushSelectionUndo(const SelectionSnapshot& before, const SelectionSnapshot& after);
+    void CommitPendingBeforeSelection();
     SelectionSnapshot CaptureSelectionSnapshot() const;
     void ApplySelectionSnapshot(const SelectionSnapshot& snapshot, bool syncTree);
     std::shared_ptr<AnimationClip> m_PendingCurveUndoClip;

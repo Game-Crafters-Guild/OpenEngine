@@ -2,6 +2,7 @@
 
 #include "EditorChangeNotifications.h"
 #include "Engine/Rendering/SceneBuildPump.h"
+#include "Events/Event.h"
 #include "Scene/SceneIO.h"
 #include "Scene/SceneLoadFailure.h"
 #include "Terrain/TerrainZonePayloadSaver.h"
@@ -28,6 +29,7 @@ class RenderServices;
 
 namespace Editor
 {
+class UndoRedoService;
 
 // Refusal text shared by every manual-save entry point that declines while play
 // mode is active. It has to read correctly in all four non-Edit states, so it
@@ -45,7 +47,6 @@ inline constexpr const char* kSaveBlockedDuringPlayMessage =
 // This tracks:
 // - which .scene file (if any) backs the current world
 // - whether the world has unsaved changes
-// - a baseline ECS snapshot at last save/load (used for fast dirty checking if needed)
 class SceneDocumentManager
 {
   public:
@@ -53,6 +54,7 @@ class SceneDocumentManager
     ~SceneDocumentManager();
 
     void SetWorld(ECS::World* world);
+    void SetUndoRedoService(UndoRedoService* history);
     void SetChangeNotifications(EditorChangeNotifications* notifications);
 
     ECS::World* GetWorld() const { return m_World; }
@@ -116,7 +118,9 @@ class SceneDocumentManager
                                       DegradedSavePolicy policy) const;
 
     bool IsDirty() const { return m_Dirty; }
+    /// Changes outside the attached history remain dirty until MarkClean.
     void MarkDirty();
+    /// Accept the current scene as the clean baseline.
     void MarkClean();
 
     // Replace the world contents with the given scene.
@@ -300,8 +304,13 @@ class SceneDocumentManager
     std::optional<SceneLoadFailure> m_LastLoadFailure;
     std::optional<std::filesystem::path> m_PartialLoadDocument;
     std::optional<SceneLoadDegraded> m_LastLoadDegraded;
+    UndoRedoService* m_History = nullptr;
+    EventSubscription m_HistoryChanged;
+    void RefreshDirtyState();
+    void OnHistoryChanged();
     bool m_Dirty = false;
-    std::vector<uint8_t> m_BaselineSnapshot;
+    bool m_UntrackedDirty = false;
+    bool m_DirtyRefreshPending = false;
 
     std::optional<Scene::SceneHierarchyUiFromFile> m_PendingHierarchyUiFromLoad;
     std::function<Scene::SceneHierarchyUi()> m_HierarchyUiCaptureForSave;

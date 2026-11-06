@@ -63,6 +63,7 @@ Editor::UndoRedoService::SnapshotTarget MakeFlareSnapshotTarget(FlareAsset* flar
 {
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = std::move(label);
+    target.Identity = {reinterpret_cast<std::uintptr_t>(flare)};
     target.Capture = [flare](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
     {
         if (!flare)

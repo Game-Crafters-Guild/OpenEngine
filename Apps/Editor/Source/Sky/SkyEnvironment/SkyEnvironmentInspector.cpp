@@ -225,6 +225,7 @@ static void AddSkyColorRow(const InspectorContext& ctx, UIElement* parent, const
     InspectorUI::ComponentColorBinding<Components::SkyEnvironment> binding;
     binding.World = ctx.World;
     binding.Entity = ctx.Entity;
+    binding.AdditionalEntities = InspectorDrag::GetAdditionalEntities(ctx);
     binding.Notifications = ctx.ChangeNotifications;
     binding.Undo = ctx.Undo;
     binding.OpenPicker = ctx.OpenColorPickerWindow;

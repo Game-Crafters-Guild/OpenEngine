@@ -3,6 +3,7 @@
 #include "Assets/AssetManager.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Particles/Assets/ParticleStackAsset.h"
+#include "Types/Fnv1a.h"
 
 #include <filesystem>
 #include <fstream>
@@ -75,6 +76,7 @@ Editor::UndoRedoService::SnapshotTarget MakeFileSnapshotTarget(const StackFile& 
 {
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
+    target.Identity = {Hashing::Fnv1a64(file.Path.generic_string())};
     target.Capture = [file](Editor::UndoRedoService::SnapshotTarget::Snapshot& out) { return CaptureStackFile(file, out); };
     target.Apply = [file](const Editor::UndoRedoService::SnapshotTarget::Snapshot& snapshot)
     { return ApplyStackFile(file, snapshot); };
@@ -118,6 +120,8 @@ void ParticleStackEditor::RequestRefresh() const
 
 void ParticleStackEditor::Commit(const std::string& label, const Edit& edit, bool rebuild)
 {
+    if (m_Undo && !m_Gesture && !m_Undo->CommitPendingEdit())
+        return;
     if (m_Gesture)
     {
         auto document = m_Document;

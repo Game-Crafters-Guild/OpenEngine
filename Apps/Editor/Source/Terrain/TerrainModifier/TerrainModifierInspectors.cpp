@@ -933,6 +933,7 @@ void RegisterTerrainModifierInspectors()
         InspectorUI::ComponentColorBinding<TerrainColorEffect> color;
         color.World = ctx.World;
         color.Entity = ctx.Entity;
+    color.AdditionalEntities = InspectorDrag::GetAdditionalEntities(ctx);
         color.Notifications = ctx.ChangeNotifications;
         color.Undo = ctx.Undo;
         color.OpenPicker = ctx.OpenColorPickerWindow;

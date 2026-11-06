@@ -1,5 +1,8 @@
 #include "Scene/SceneDocumentManager.h"
 
+#include "UndoRedo/History/HistoryMutationScope.h"
+#include "UndoRedo/UndoRedoService.h"
+
 #include "Diagnostics/MainThreadHangWatchdog.h"
 #include "Scene/DefaultSceneEntities.h"
 
@@ -47,6 +50,19 @@ void SceneDocumentManager::SetWorld(ECS::World* world)
     m_World = world;
 }
 
+void SceneDocumentManager::SetUndoRedoService(UndoRedoService* history)
+{
+    if (m_History != history && m_DirtyRefreshPending)
+    {
+        m_UntrackedDirty = true;
+        m_DirtyRefreshPending = false;
+    }
+    m_HistoryChanged.Reset();
+    m_History = history;
+    if (m_History)
+        m_HistoryChanged = m_History->HistoryChanged().Subscribe([this] { OnHistoryChanged(); });
+}
+
 std::optional<std::string> SceneDocumentManager::GetDisplaySceneName() const
 {
     if (m_DisplaySceneName.has_value() && !m_DisplaySceneName->empty())
@@ -67,6 +83,10 @@ void SceneDocumentManager::SetChangeNotifications(EditorChangeNotifications* not
 
 void SceneDocumentManager::MarkDirty()
 {
+    if (HistoryMutationScope::IsRestoringFor(m_History))
+        m_DirtyRefreshPending = true;
+    else if (!HistoryMutationScope::IsActiveFor(m_History))
+        m_UntrackedDirty = true;
     if (!m_Dirty)
         Logger::Log::Debug("SceneDocumentManager: scene marked dirty");
     m_Dirty = true;
@@ -77,7 +97,24 @@ void SceneDocumentManager::MarkClean()
     if (m_Dirty)
         Logger::Log::Debug("SceneDocumentManager: scene marked clean");
     m_Dirty = false;
-    m_BaselineSnapshot = CaptureWorldSnapshot();
+    m_UntrackedDirty = false;
+    m_DirtyRefreshPending = false;
+    if (m_History)
+        m_History->MarkSaved(this);
+}
+
+void SceneDocumentManager::RefreshDirtyState()
+{
+    m_Dirty = m_UntrackedDirty || !m_History || !m_History->IsAtSavedRevision(this);
+}
+
+void SceneDocumentManager::OnHistoryChanged()
+{
+    if (!m_History || !m_DirtyRefreshPending || m_History->HasOpenInteractiveEdit() ||
+        !HistoryMutationScope::IsRestoringFor(m_History))
+        return;
+    m_DirtyRefreshPending = false;
+    RefreshDirtyState();
 }
 
 void SceneDocumentManager::SetHierarchyUiCaptureForSave(std::function<Scene::SceneHierarchyUi()> capture)
@@ -830,6 +867,8 @@ bool SceneDocumentManager::RefuseSaveWrite(const std::filesystem::path& targetPa
 
 bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
 {
+    if (m_History && !m_History->CommitPendingEdit())
+        return false;
     if (!m_World)
         return false;
     if (!m_ScenePath.has_value())
@@ -911,6 +950,8 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
 
 bool SceneDocumentManager::SaveAs(const std::filesystem::path& scenePath, DegradedSavePolicy degradedPolicy)
 {
+    if (m_History && !m_History->CommitPendingEdit())
+        return false;
     if (!m_World)
         return false;
     // Save As to a DIFFERENT path is the sanctioned escape for a degraded document: the source file
@@ -1117,22 +1158,21 @@ void SceneDocumentManager::Subscribe()
         return;
 
     m_SubComponent = m_Notifications->SubscribeComponentChanged(
-        [this](const EditorChangeNotifications::ComponentChangedEvent& e)
+        [this](const EditorChangeNotifications::ComponentChangedEvent& event)
         {
-            if (!m_World || e.world != m_World)
+            if (!m_World || event.world != m_World)
                 return;
-            if (e.kind == EditorChangeNotifications::ChangeKind::Preview ||
-                e.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
+            if (event.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
             MarkDirty();
         });
 
     m_SubStructure = m_Notifications->SubscribeWorldStructureChanged(
-        [this](const EditorChangeNotifications::WorldStructureChangedEvent& e)
+        [this](const EditorChangeNotifications::WorldStructureChangedEvent& event)
         {
-            if (!m_World || e.world != m_World)
+            if (!m_World || event.world != m_World)
                 return;
-            if (e.kind != EditorChangeNotifications::ChangeKind::Commit)
+            if (event.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
             MarkDirty();
         });

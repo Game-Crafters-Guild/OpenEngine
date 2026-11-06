@@ -17,6 +17,8 @@ Apps/Editor/Source/Panels/LogChannelPopover.cpp:control_creations:1             
 Apps/Editor/Source/Panels/LogChannelPopover.cpp:files_assembling_ui:1                        # no layout file can name the search field; #5156
 Apps/Editor/Source/Panels/ProjectPicker/ProjectCard.cpp:named_for_a_function:1               # the class ProjectCard; the rule ignores the classes a file defines (#5208)
 Apps/Editor/Source/Panels/ProjectPicker/ProjectCard.h:named_for_a_function:1                 # the class ProjectCard; the rule ignores the classes a file defines (#5208)
+Apps/Editor/Source/Panels/UndoHistory/UndoHistoryPanel.cpp:add_child_calls:3                # attaches XML-loaded revision rows, notices and branch lanes; their counts come from history data
+Apps/Editor/Source/Panels/UndoHistory/UndoHistoryPanel.cpp:files_assembling_ui:1             # flagged sites populate dynamic lists; fixed structure and styling live in the UndoHistory XML/CSS assets
 Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:add_child_calls:3                    # the dialog attaches as the eight before it (modal mount #5071); the two Inspector banners mount their controls
 Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:files_assembling_ui:1                # attaches as the eight dialogs before it; the shared modal mount is #5071
 Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:imperative_no_asset:1                # attaches as the eight dialogs before it; the shared modal mount is #5071

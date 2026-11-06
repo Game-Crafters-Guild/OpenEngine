@@ -675,95 +675,10 @@ HierarchyPanel::HierarchyPanel()
                                       UI::Interaction::ItemId anchorAfter = m_Selection->GetAnchor();
                                       std::vector<UI::Interaction::ItemId> selectionAfter = m_Selection->GetSelection();
 
-                                      if (m_Undo && !m_SuppressSelectionUndo)
-                                      {
-                                          std::vector<UI::Interaction::ItemId> selectionBefore = m_LastSelectionIds;
-                                          UI::Interaction::ItemId anchorBefore = m_LastSelectionAnchor;
-
-                                          // Only create an undo command if the selection actually changed.
-                                          if (!SelectionItemSetsEqual(selectionBefore, selectionAfter) || anchorBefore != anchorAfter)
-                                          {
-                                              class HierarchySelectionCommand final : public Editor::IEditorCommand
-                                              {
-                                                public:
-                                                  using NotifyFn = std::function<void(UI::Interaction::ItemId)>;
-
-                                                  HierarchySelectionCommand(UI::Interaction::SelectionModel* selection,
-                                                                            std::vector<UI::Interaction::ItemId> beforeIds,
-                                                                            UI::Interaction::ItemId beforeAnchor,
-                                                                            std::vector<UI::Interaction::ItemId> afterIds,
-                                                                            UI::Interaction::ItemId afterAnchor,
-                                                                            bool* suppressFlag,
-                                                                            NotifyFn notify)
-                                                      : m_Selection(selection), m_BeforeIds(std::move(beforeIds)), m_AfterIds(std::move(afterIds)), m_BeforeAnchor(beforeAnchor), m_AfterAnchor(afterAnchor), m_SuppressFlag(suppressFlag), m_Notify(std::move(notify))
-                                                  {
-                                                  }
-
-                                                  const char* GetName() const override { return "Hierarchy Selection"; }
-
-                                                  void Do() override { Redo(); }
-
-                                                  void Undo() override
-                                                  {
-                                                      if (!m_Selection || !m_SuppressFlag)
-                                                          return;
-                                                      *m_SuppressFlag = true;
-                                                      m_Selection->SetSelection(m_BeforeIds, m_BeforeAnchor);
-                                                      *m_SuppressFlag = false;
-                                                      if (m_Notify)
-                                                          m_Notify(m_BeforeAnchor);
-                                                  }
-
-                                                  void Redo() override
-                                                  {
-                                                      if (!m_Selection || !m_SuppressFlag)
-                                                          return;
-                                                      *m_SuppressFlag = true;
-                                                      m_Selection->SetSelection(m_AfterIds, m_AfterAnchor);
-                                                      *m_SuppressFlag = false;
-                                                      if (m_Notify)
-                                                          m_Notify(m_AfterAnchor);
-                                                  }
-
-                                                private:
-                                                  UI::Interaction::SelectionModel* m_Selection = nullptr; // not owned
-                                                  std::vector<UI::Interaction::ItemId> m_BeforeIds;
-                                                  std::vector<UI::Interaction::ItemId> m_AfterIds;
-                                                  UI::Interaction::ItemId m_BeforeAnchor = 0;
-                                                  UI::Interaction::ItemId m_AfterAnchor = 0;
-                                                  bool* m_SuppressFlag = nullptr; // not owned
-                                                  NotifyFn m_Notify;
-                                              };
-
-                                              auto notify = [this](UI::Interaction::ItemId /*anchorId*/)
-                                              {
-                                                  // Undo/redo applied SetSelection already; sync snapshot so the next user
-                                                  // selection compares against the correct baseline (otherwise undo appears broken).
-                                                  m_SuppressSelectionUndo = true;
-                                                  if (m_Selection)
-                                                  {
-                                                      m_LastSelectionIds = m_Selection->GetSelection();
-                                                      m_LastSelectionAnchor = m_Selection->GetAnchor();
-                                                  }
-                                                  if (m_Tree)
-                                                  {
-                                                      m_Tree->RefreshFromProvider();
-                                                      m_Tree->SyncSelectionVisuals();
-                                                  }
-                                                  m_SuppressSelectionUndo = false;
-                                              };
-
-                                              auto cmd = std::make_unique<HierarchySelectionCommand>(
-                                                  m_Selection.get(),
-                                                  std::move(selectionBefore),
-                                                  anchorBefore,
-                                                  selectionAfter,
-                                                  anchorAfter,
-                                                  &m_SuppressSelectionUndo,
-                                                  notify);
-                                              m_Undo->CommitAlreadyApplied(std::move(cmd));
-                                          }
-                                      }
+                                      if (m_Undo && !m_SuppressSelectionUndo &&
+                                          (!SelectionItemSetsEqual(m_LastSelectionIds, selectionAfter) ||
+                                           m_LastSelectionAnchor != anchorAfter))
+                                          m_Undo->CommitPendingEdit();
 
                                       // Update snapshot for next time.
                                       m_LastSelectionIds = std::move(selectionAfter);

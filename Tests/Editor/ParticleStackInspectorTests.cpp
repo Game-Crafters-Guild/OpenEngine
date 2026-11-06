@@ -410,3 +410,33 @@ TEST(ParticleStackInspector, AFlagsRowIsOneMaskFieldAndAClickSetsOneFlag)
     EXPECT_EQ(undo.GetUndoCount(), 1u);
     std::filesystem::remove(file);
 }
+
+TEST(ParticleStackInspector, RepeatedParameterGesturesRemainOnePendingAction)
+{
+    RegisterWindProcessor();
+    const auto file = std::filesystem::temp_directory_path() / "ge_particle_stack_pending.particlestack";
+    {
+        std::ofstream output(file);
+        output << R"({"version":1,"entryPhase":1,"lifetime":2,"phases":[{"id":1,"label":"Spawn","processors":[)"
+                  R"({"type":"emitRate","id":2,"stage":"emission"},)"
+                  R"({"type":"test.wind","id":3,"stage":"update","parameters":{"strength":2.5}}]}]})";
+    }
+    ParticleStackAsset asset(GUID::Generate(), file);
+    ASSERT_TRUE(asset.Load());
+    Editor::UndoRedoService undo;
+    ParticleInspectors::ParticleStackEditor editor(asset, nullptr, &undo, {});
+    editor.Preview("Set Gust", SetGustToFour);
+    editor.FinishPreview();
+    editor.Preview("Set Gust", [](StackDocument& document)
+    {
+        FindProcessor(document, 3)->Params<ParticleStackInspectorTestTypes::WindParameters>().Strength = 6.0f;
+    });
+    editor.FinishPreview();
+    EXPECT_TRUE(undo.GetHistoryNodes().empty());
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
+    undo.Undo();
+    EXPECT_FLOAT_EQ(StoredStrength(file), 2.5f);
+    undo.Redo();
+    EXPECT_FLOAT_EQ(StoredStrength(file), 6.0f);
+    std::filesystem::remove(file);
+}

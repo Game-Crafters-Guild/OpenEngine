@@ -1,0 +1,8 @@
+<Button class="history-revision">
+  <UIElement id="HistoryBranches" class="history-branches" />
+  <UIElement id="HistoryContent" class="history-content">
+    <Label id="HistoryTitle" class="history-revision-label" />
+    <Label id="HistoryDetails" class="history-change-details" />
+  </UIElement>
+  <Label id="HistoryCurrent" text="Current" class="history-current-label" />
+</Button>

@@ -14,9 +14,9 @@
 namespace GameEngine::InspectorUI
 {
 
-/// A component's linear color member on a chip and the picker. An edit, a cancel or a label double-click
-/// reset is one undo step; the row edits red, green and blue, never alpha; the chip and the picker share one
-/// sRGB encoding (HdrColorToPickerState).
+/// A component's linear color member on a chip and picker. Each pending picker action and label
+/// double-click reset is one undo step. The row edits red, green and blue, never alpha; the chip
+/// and picker share one sRGB encoding (HdrColorToPickerState).
 template<typename TComponent>
 struct ComponentColorBinding
 {
@@ -24,6 +24,7 @@ struct ComponentColorBinding
 
     ECS::World* World = nullptr;
     ECS::EntityHandle Entity{};
+    std::vector<ECS::EntityHandle> AdditionalEntities;
     Editor::EditorChangeNotifications* Notifications = nullptr;
     Editor::UndoRedoService* Undo = nullptr;
     OpenColorPickerWindowFn OpenPicker;
@@ -68,8 +69,17 @@ void WriteComponentColor(TComponent& component, const ComponentColorBinding<TCom
     color.b = picked.b;
 }
 
-// One picker session: every change previews into the interactive edit, apply commits it as one undo
-// step, cancel restores the value from before.
+template<typename TComponent>
+Editor::UndoRedoService::InteractiveEdit BeginComponentColorEdit(const ComponentColorBinding<TComponent>& binding)
+{
+    if (!binding.Undo)
+        return {};
+    return binding.Undo->BeginInteractiveEdit(
+        binding.ChangeLabel, InspectorDrag::MakeMultiComponentSnapshotTarget<TComponent>(
+            binding.World, binding.Entity, binding.AdditionalEntities, binding.Notifications, binding.ChangeLabel));
+}
+
+// Cancel restores the current pending color action's starting value.
 template<typename TComponent>
 void OpenComponentColorPicker(const std::shared_ptr<ComponentColorBinding<TComponent>>& binding)
 {
@@ -78,18 +88,28 @@ void OpenComponentColorPicker(const std::shared_ptr<ComponentColorBinding<TCompo
         return;
     const ColorPickerState state = ComponentColorPickerState(*component, *binding);
     using Edit = Editor::UndoRedoService::InteractiveEdit;
-    auto edit = std::make_shared<Edit>();
-    if (binding->Undo)
-        *edit = binding->Undo->BeginInteractiveEdit(
-            binding->ChangeLabel, InspectorDrag::MakeComponentSnapshotTarget<TComponent>(binding->World, binding->Entity,
-                                                                          binding->Notifications, binding->ChangeLabel));
+    auto edit = std::make_shared<Edit>(BeginComponentColorEdit(*binding));
     auto preview = [binding, edit](std::uint32_t argb, float intensity)
     {
+        if (binding->Undo && !*edit)
+            *edit = BeginComponentColorEdit(*binding);
+        if (binding->Undo && !*edit)
+            return;
+        auto write = [&]
+        {
+            auto apply = [&](ECS::EntityHandle entity)
+            {
+                if (TComponent* component = binding->World->template GetComponentForWrite<TComponent>(entity))
+                    WriteComponentColor(*component, *binding, argb, intensity);
+            };
+            apply(binding->Entity);
+            for (const auto entity : binding->AdditionalEntities)
+                apply(entity);
+        };
         if (*edit)
-            edit->Preview([&] {
-                if (TComponent* c = binding->World->template GetComponentForWrite<TComponent>(binding->Entity))
-                    WriteComponentColor(*c, *binding, argb, intensity);
-            });
+            edit->Preview(write);
+        else
+            write();
         RefreshComponentColorRow(*binding);
     };
     ColorPickerCallbacks callbacks;
@@ -124,8 +144,8 @@ void HandleComponentColorLabelPress(ComponentColorBinding<TComponent>& binding, 
         return;
     event.Stop();
     const ColorLinear defaultColor = TComponent{}.*binding.Color;
-    InspectorDrag::CommitComponentWithUndo<TComponent>(
-        binding.World, binding.Entity, binding.Notifications, binding.Undo, binding.ChangeLabel,
+    InspectorDrag::CommitComponentsWithUndo<TComponent>(
+        binding.World, binding.Entity, binding.AdditionalEntities, binding.Notifications, binding.Undo, binding.ChangeLabel,
         [&binding, defaultColor](TComponent& component)
         {
             ColorLinear& color = component.*binding.Color;

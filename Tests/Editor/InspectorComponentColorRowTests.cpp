@@ -37,6 +37,12 @@ namespace
 
 constexpr ColorLinear kAuthored{0.25f, 0.5f, 1.0f, 0.5f};
 constexpr std::uint32_t kPickedArgb = 0xFF336699u;
+constexpr std::uint32_t kRedArgb = 0xFFFF0000u;
+constexpr std::uint32_t kGreenArgb = 0xFF00FF00u;
+constexpr std::uint32_t kBlueArgb = 0xFF0000FFu;
+constexpr ColorLinear kRed{1.0f, 0.0f, 0.0f, kAuthored.a};
+constexpr ColorLinear kGreen{0.0f, 1.0f, 0.0f, kAuthored.a};
+constexpr ColorLinear kBlue{0.0f, 0.0f, 1.0f, kAuthored.a};
 
 // One sRGB byte step around linear 0.5, about 0.006, scaled by an intensity of 2: what an sRGB byte
 // encode and decode may move a channel of a color twice as bright as white.
@@ -235,6 +241,114 @@ TEST(InspectorComponentColorRow, ADoubleClickOnTheLabelResetsTheDefaultAsOneUndo
     ASSERT_EQ(row.Undo.GetUndoCount(), 1u);
     row.Undo.Undo();
     EXPECT_EQ(row.Component().GradientSkyTopColor, kAuthoredTop) << "undo did not restore the color from before the reset";
+}
+
+TEST(InspectorComponentColorRow, PreviewAndApplyResumeAfterRepeatedHistorySettlement)
+{
+    ColorRowFixture<PostProcessVolume> row(&PostProcessVolume::NightTintColor, kAuthored, 1.0f);
+    Label* value = FindValue(row.Parent, InspectorUI::FormatColorRgb(kAuthored.r, kAuthored.g, kAuthored.b));
+    ASSERT_NE(value, nullptr);
+    Press(*value);
+    ASSERT_TRUE(row.Picker.Callbacks.has_value());
+    row.Picker.Callbacks->onValueChanging(kRedArgb, 1.0f);
+    ASSERT_EQ(row.Component().NightTintColor, kRed);
+    ASSERT_TRUE(row.Undo.CommitPendingEdit());
+    row.Undo.MarkSaved(&row);
+
+    row.Picker.Callbacks->onValueChanging(kGreenArgb, 1.0f);
+    EXPECT_EQ(row.Component().NightTintColor, kGreen);
+    EXPECT_FALSE(row.Undo.IsAtSavedRevision(&row));
+    ASSERT_TRUE(row.Undo.CommitPendingEdit());
+    row.Picker.Callbacks->onApply(kBlueArgb, 1.0f);
+    EXPECT_EQ(row.Component().NightTintColor, kBlue);
+    ASSERT_TRUE(row.Undo.CommitPendingEdit());
+    ASSERT_EQ(row.Undo.GetUndoCount(), 3u);
+
+    row.Undo.Undo();
+    EXPECT_EQ(row.Component().NightTintColor, kGreen);
+    row.Undo.Undo();
+    EXPECT_EQ(row.Component().NightTintColor, kRed);
+    EXPECT_TRUE(row.Undo.IsAtSavedRevision(&row));
+    row.Undo.Undo();
+    EXPECT_EQ(row.Component().NightTintColor, kAuthored);
+    row.Undo.Redo();
+    EXPECT_EQ(row.Component().NightTintColor, kRed);
+    row.Undo.Redo();
+    EXPECT_EQ(row.Component().NightTintColor, kGreen);
+    row.Undo.Redo();
+    EXPECT_EQ(row.Component().NightTintColor, kBlue);
+}
+
+TEST(InspectorComponentColorRow, ApplyResumesAfterSettlingAnUnchangedPicker)
+{
+    ColorRowFixture<PostProcessVolume> row(&PostProcessVolume::NightTintColor, kAuthored, 1.0f);
+    Label* value = FindValue(row.Parent, InspectorUI::FormatColorRgb(kAuthored.r, kAuthored.g, kAuthored.b));
+    ASSERT_NE(value, nullptr);
+    Press(*value);
+    ASSERT_TRUE(row.Picker.Callbacks.has_value());
+    ASSERT_TRUE(row.Undo.CommitPendingEdit());
+    EXPECT_EQ(row.Undo.GetUndoCount(), 0u);
+
+    row.Picker.Callbacks->onApply(kGreenArgb, 1.0f);
+    EXPECT_EQ(row.Component().NightTintColor, kGreen);
+    ASSERT_EQ(row.Undo.GetUndoCount(), 1u);
+    row.Undo.Undo();
+    EXPECT_EQ(row.Component().NightTintColor, kAuthored);
+    row.Undo.Redo();
+    EXPECT_EQ(row.Component().NightTintColor, kGreen);
+}
+
+TEST(InspectorComponentColorRow, CancelRestoresTheColorAtTheLastSettlement)
+{
+    ColorRowFixture<PostProcessVolume> row(&PostProcessVolume::NightTintColor, kAuthored, 1.0f);
+    Label* value = FindValue(row.Parent, InspectorUI::FormatColorRgb(kAuthored.r, kAuthored.g, kAuthored.b));
+    ASSERT_NE(value, nullptr);
+    Press(*value);
+    ASSERT_TRUE(row.Picker.Callbacks.has_value());
+    row.Picker.Callbacks->onValueChanging(kRedArgb, 1.0f);
+    ASSERT_TRUE(row.Undo.CommitPendingEdit());
+
+    row.Picker.Callbacks->onValueChanging(kGreenArgb, 1.0f);
+    EXPECT_EQ(row.Component().NightTintColor, kGreen);
+    row.Picker.Callbacks->onCancel();
+    EXPECT_EQ(row.Component().NightTintColor, kRed);
+    EXPECT_FALSE(row.Undo.HasPendingEdit());
+    ASSERT_EQ(row.Undo.GetUndoCount(), 1u);
+    row.Undo.Undo();
+    EXPECT_EQ(row.Component().NightTintColor, kAuthored);
+}
+
+TEST(InspectorComponentColorRow, ResumingThePickerSettlesAnotherEditWithoutCancelingIt)
+{
+    ColorRowFixture<PostProcessVolume> row(&PostProcessVolume::NightTintColor, kAuthored, 1.0f);
+    Label* value = FindValue(row.Parent, InspectorUI::FormatColorRgb(kAuthored.r, kAuthored.g, kAuthored.b));
+    ASSERT_NE(value, nullptr);
+    Press(*value);
+    ASSERT_TRUE(row.Picker.Callbacks.has_value());
+    row.Picker.Callbacks->onValueChanging(kRedArgb, 1.0f);
+
+    PostProcessVolume otherVolume{};
+    otherVolume.NightTintColor = kAuthored;
+    const ECS::EntityHandle other = row.World.Create(otherVolume).GetHandle();
+    auto otherEdit = row.Undo.BeginInteractiveEdit("Other color",
+        InspectorDrag::MakeMultiComponentSnapshotTarget<PostProcessVolume>(&row.World, other, {}, nullptr, "Other color"));
+    ASSERT_TRUE(otherEdit);
+    otherEdit.Preview([&row, other] {
+        row.World.GetComponentForWrite<PostProcessVolume>(other)->NightTintColor = kGreen;
+    });
+
+    row.Picker.Callbacks->onValueChanging(kBlueArgb, 1.0f);
+    EXPECT_EQ(row.Component().NightTintColor, kBlue);
+    EXPECT_FALSE(otherEdit);
+    row.Picker.Callbacks->onCancel();
+    EXPECT_EQ(row.Component().NightTintColor, kRed);
+    EXPECT_EQ(row.World.GetComponent<PostProcessVolume>(other)->NightTintColor, kGreen);
+    ASSERT_EQ(row.Undo.GetUndoCount(), 2u);
+    row.Undo.Undo();
+    EXPECT_EQ(row.World.GetComponent<PostProcessVolume>(other)->NightTintColor, kAuthored);
+    EXPECT_EQ(row.Component().NightTintColor, kRed);
+    row.Undo.Undo();
+    EXPECT_EQ(row.Component().NightTintColor, kAuthored);
 }
 
 } // namespace

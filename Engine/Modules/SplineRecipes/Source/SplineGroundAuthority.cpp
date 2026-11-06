@@ -191,6 +191,8 @@ void SplineGroundAuthorityController::SweepPaving(ECS::World& world, ECS::Entity
 
 void SplineGroundAuthorityController::Update(ECS::World& world, RecipeEditJournal* journal)
 {
+    if (journal)
+        journal->BeginGroundUpdate(world, *this);
     ++m_SweepGeneration;
 
     std::vector<Pending> pending;
@@ -436,6 +438,8 @@ void SplineGroundAuthorityController::Update(ECS::World& world, RecipeEditJourna
     // the lifetime of the editor session.
     m_Provisioned.EraseIf([this](ECS::EntityHandle, const Provisioned& record)
                           { return record.SeenGeneration != m_SweepGeneration; });
+    if (journal)
+        journal->EndGroundUpdate();
 }
 
 void SplineGroundAuthorityController::Shutdown()
