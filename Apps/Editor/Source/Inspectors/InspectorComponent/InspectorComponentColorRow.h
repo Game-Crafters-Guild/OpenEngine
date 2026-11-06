@@ -14,9 +14,9 @@
 namespace GameEngine::InspectorUI
 {
 
-/// A component's linear color member on a chip and the picker. An edit, a cancel or a label double-click
-/// reset is one undo step; the row edits red, green and blue, never alpha; the chip and the picker share one
-/// sRGB encoding (HdrColorToPickerState).
+/// A component's linear color member on a chip and picker. Each pending picker action and label
+/// double-click reset is one undo step. The row edits red, green and blue, never alpha; the chip
+/// and picker share one sRGB encoding (HdrColorToPickerState).
 template<typename TComponent>
 struct ComponentColorBinding
 {
@@ -69,7 +69,17 @@ void WriteComponentColor(TComponent& component, const ComponentColorBinding<TCom
     color.b = picked.b;
 }
 
-// Picker gestures share the pending color action. Cancel restores its original value.
+template<typename TComponent>
+Editor::UndoRedoService::InteractiveEdit BeginComponentColorEdit(const ComponentColorBinding<TComponent>& binding)
+{
+    if (!binding.Undo)
+        return {};
+    return binding.Undo->BeginInteractiveEdit(
+        binding.ChangeLabel, InspectorDrag::MakeMultiComponentSnapshotTarget<TComponent>(
+            binding.World, binding.Entity, binding.AdditionalEntities, binding.Notifications, binding.ChangeLabel));
+}
+
+// Cancel restores the current pending color action's starting value.
 template<typename TComponent>
 void OpenComponentColorPicker(const std::shared_ptr<ComponentColorBinding<TComponent>>& binding)
 {
@@ -78,13 +88,11 @@ void OpenComponentColorPicker(const std::shared_ptr<ComponentColorBinding<TCompo
         return;
     const ColorPickerState state = ComponentColorPickerState(*component, *binding);
     using Edit = Editor::UndoRedoService::InteractiveEdit;
-    auto edit = std::make_shared<Edit>();
-    if (binding->Undo)
-        *edit = binding->Undo->BeginInteractiveEdit(
-            binding->ChangeLabel, InspectorDrag::MakeMultiComponentSnapshotTarget<TComponent>(
-                binding->World, binding->Entity, binding->AdditionalEntities, binding->Notifications, binding->ChangeLabel));
+    auto edit = std::make_shared<Edit>(BeginComponentColorEdit(*binding));
     auto preview = [binding, edit](std::uint32_t argb, float intensity)
     {
+        if (binding->Undo && !*edit)
+            *edit = BeginComponentColorEdit(*binding);
         if (binding->Undo && !*edit)
             return;
         auto write = [&]
