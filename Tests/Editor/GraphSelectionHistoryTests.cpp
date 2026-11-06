@@ -2,8 +2,8 @@
 #include "Graph/GraphModel.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <string>
-#include <unordered_set>
 
 #include <gtest/gtest.h>
 
@@ -25,7 +25,7 @@ protected:
         m_Model.Nodes = {first, second};
     }
 
-    bool Select(const std::unordered_set<std::string>& nodes)
+    bool Select(std::initializer_list<std::string> nodes)
     {
         return m_Selection.UpdateSelection(nodes, &m_History);
     }
@@ -49,7 +49,7 @@ protected:
         return target;
     }
 
-    void Move(const std::unordered_set<std::string>& nodes, float delta)
+    void Move(std::initializer_list<std::string> nodes, float delta)
     {
         auto edit = m_History.BeginInteractiveEdit("Move Nodes", Target());
         ASSERT_TRUE(static_cast<bool>(edit));

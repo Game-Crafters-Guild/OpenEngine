@@ -2245,7 +2245,7 @@ if(TARGET EditorTests)
 	ge_stage_test_asset(EditorTests
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/UndoHistory/UndoHistory.uxml"
 	    "Assets/UI/controls/UndoHistory/UndoHistory.uxml")
-	foreach(_layout HistoryRevision HistoryLane)
+	foreach(_layout HistoryRevision HistoryLane HistoryNotice)
 	    ge_stage_test_asset(EditorTests
 	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/UndoHistory/${_layout}.uxml"
 	        "Assets/UI/controls/UndoHistory/${_layout}.uxml")

@@ -4,8 +4,9 @@
 #include "UndoRedo/UndoRedoService.h"
 
 #include <algorithm>
+#include <concepts>
+#include <ranges>
 #include <string>
-#include <unordered_set>
 
 namespace GameEngine::Editor
 {
@@ -14,17 +15,23 @@ class GraphSelectionHistory
 {
 public:
     /// Return false if the pending action cannot be settled before selection changes.
-    bool UpdateSelection(const std::unordered_set<std::string>& selectedNodeIds, UndoRedoService* history)
+    /// Selected node IDs must be unique; their order does not affect action boundaries.
+    template <typename TNodeIds>
+        requires std::ranges::forward_range<const TNodeIds&> &&
+                 std::ranges::sized_range<const TNodeIds&> &&
+                 std::same_as<std::ranges::range_value_t<const TNodeIds&>, std::string>
+    bool UpdateSelection(const TNodeIds& selectedNodeIds, UndoRedoService* history)
     {
-        const bool unchanged = selectedNodeIds.size() == m_SelectedNodeIds.Size() &&
-            std::all_of(selectedNodeIds.begin(), selectedNodeIds.end(),
+        const auto selectedCount = std::ranges::size(selectedNodeIds);
+        const bool unchanged = selectedCount == m_SelectedNodeIds.Size() &&
+            std::ranges::all_of(selectedNodeIds,
                 [this](const std::string& nodeId) { return m_SelectedNodeIds.Contains(nodeId); });
         if (unchanged)
             return true;
         if (history && !history->CommitPendingEdit())
             return false;
         m_SelectedNodeIds.Clear();
-        m_SelectedNodeIds.Reserve(selectedNodeIds.size());
+        m_SelectedNodeIds.Reserve(selectedCount);
         for (const auto& nodeId : selectedNodeIds)
             m_SelectedNodeIds.Insert(nodeId);
         return true;

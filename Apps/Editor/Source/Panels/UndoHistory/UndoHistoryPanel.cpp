@@ -1,4 +1,5 @@
 #include "Panels/UndoHistory/UndoHistoryPanel.h"
+#include "Logger/LogSink.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "Types/FlatMap.h"
 #include "UI/UIElement.h"
@@ -11,8 +12,6 @@
 
 #include <bitset>
 #include <chrono>
-#include <cstdio>
-#include <ctime>
 #include <string>
 
 namespace GameEngine {
@@ -54,20 +53,12 @@ std::unique_ptr<UIElement> BuildHistoryLane(const HistoryLaneParts& parts)
     return lane;
 }
 
-std::string FormatTimestamp(std::chrono::system_clock::time_point tp)
+std::string FormatTimestamp(std::chrono::system_clock::time_point timestamp)
 {
-    if (tp == std::chrono::system_clock::time_point{})
+    if (timestamp == std::chrono::system_clock::time_point{})
         return {};
-    const std::time_t t = std::chrono::system_clock::to_time_t(tp);
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
-    char buf[9]; // "HH:MM:SS\0"
-    std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
-    return buf;
+    constexpr std::size_t kClockTimeLength = 8; // HH:MM:SS without milliseconds.
+    return Logger::FormatTimestamp(timestamp).substr(0, kClockTimeLength);
 }
 
 } // namespace
@@ -175,12 +166,15 @@ void UndoHistoryPanel::AddRevision(std::uint64_t id, const std::string& label, c
 
 void UndoHistoryPanel::AddNotice(const std::string& text, const std::string& id, const std::string& tooltip)
 {
-    auto row = std::make_unique<Label>();
+    constexpr std::string_view required[] = {"HistoryNotice"};
+    auto root = Editor::ControlLayoutLoader::Load("UI/controls/UndoHistory/HistoryNotice.uxml", required);
+    auto* row = dynamic_cast<Label*>(root.get());
+    if (!row)
+        return;
     row->SetId(id);
-    row->AddClass("history-pending");
     row->SetText(text);
     row->SetTooltip(tooltip);
-    m_List->AddChild(std::move(row));
+    m_List->AddChild(std::move(root));
 }
 
 void UndoHistoryPanel::OnOwnerManagerChanged(UIManager* owner)
