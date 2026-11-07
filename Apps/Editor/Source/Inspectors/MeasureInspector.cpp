@@ -7,6 +7,7 @@
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "EditorChangeNotifications.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "UI/Controls/Label.h"
@@ -48,6 +49,16 @@ void ArgbToMeasureColor(uint32_t argb, float (&out)[4])
     out[1] = ((argb >> 8) & 0xFF) / 255.0f;
     out[2] = (argb & 0xFF) / 255.0f;
     out[3] = ((argb >> 24) & 0xFF) / 255.0f;
+}
+
+std::uint32_t ReadMeasurePickerColor(const Components::MeasureComponent& component)
+{
+    return MeasureColorToArgb(component.Color);
+}
+
+void WriteMeasurePickerColor(Components::MeasureComponent& component, std::uint32_t argb, float)
+{
+    ArgbToMeasureColor(argb, component.Color);
 }
 
 std::string FormatRgb(const float (&c)[4])
@@ -94,7 +105,7 @@ void RegisterMeasureInspector()
         ECS::EntityHandle e = ctx.Entity;
         Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
         Editor::UndoRedoService* undo = ctx.Undo;
-        OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
+
         using namespace InspectorDrag;
 
         UIElement* row = InspectorUI::AddRow(ctx.Parent);
@@ -136,93 +147,8 @@ void RegisterMeasureInspector()
             rgbLabel->SetText(FormatRgb(c->Color));
         };
 
-        auto clickHandler = [w, e, n, undo, openPicker, updateUI](UIEvent& ev)
-        {
-            if (ev.Button != 0)
-                return;
-            ev.Stop();
-
-            if (!openPicker)
-                return;
-
-            auto* comp = w->GetComponent<Components::MeasureComponent>(e);
-            if (!comp)
-                return;
-
-            const uint32_t currentArgb = MeasureColorToArgb(comp->Color);
-
-            using Edit = Editor::UndoRedoService::InteractiveEdit;
-            auto edit = std::make_shared<Edit>();
-            if (undo)
-            {
-                auto target = MakeComponentSnapshotTarget<Components::MeasureComponent>(w, e, n, "Measure Color");
-                *edit = undo->BeginInteractiveEdit("Change Measure Color", std::move(target));
-            }
-
-            ColorPickerCallbacks cbs;
-            cbs.onApply = [w, e, n, undo, edit, updateUI](uint32_t newArgb, float)
-            {
-                if (undo && !*edit)
-                    *edit = undo->BeginInteractiveEdit("Change Measure Color",
-                        MakeComponentSnapshotTarget<Components::MeasureComponent>(w, e, n, "Measure Color"));
-                if (undo && !*edit)
-                    return;
-                if (*edit)
-                {
-                    edit->Preview([&]
-                    {
-                        auto* c = w->GetComponentForWrite<Components::MeasureComponent>(e);
-                        if (c)
-                            ArgbToMeasureColor(newArgb, c->Color);
-                    });
-                    edit->Commit();
-                }
-                else
-                {
-                    auto* c = w->GetComponent<Components::MeasureComponent>(e);
-                    if (!c)
-                        return;
-                    Components::MeasureComponent updated = *c;
-                    ArgbToMeasureColor(newArgb, updated.Color);
-                    Editor::CommitComponentUpdate(w, e, n, updated);
-                }
-                updateUI();
-            };
-            cbs.onCancel = [edit, updateUI]()
-            {
-                if (*edit)
-                    edit->Cancel();
-                updateUI();
-            };
-            cbs.onValueChanging = [w, e, n, undo, edit, updateUI](uint32_t newArgb, float)
-            {
-                if (undo && !*edit)
-                    *edit = undo->BeginInteractiveEdit("Change Measure Color",
-                        MakeComponentSnapshotTarget<Components::MeasureComponent>(w, e, n, "Measure Color"));
-                if (undo && !*edit)
-                    return;
-                if (*edit)
-                {
-                    edit->Preview([&]
-                    {
-                        auto* c = w->GetComponentForWrite<Components::MeasureComponent>(e);
-                        if (c)
-                            ArgbToMeasureColor(newArgb, c->Color);
-                    });
-                }
-                else
-                {
-                    auto* c = w->GetComponent<Components::MeasureComponent>(e);
-                    if (!c)
-                        return;
-                    Components::MeasureComponent updated = *c;
-                    ArgbToMeasureColor(newArgb, updated.Color);
-                    Editor::PreviewComponentUpdate(w, e, n, updated);
-                }
-                updateUI();
-            };
-            openPicker(currentArgb, 1.0f, std::move(cbs));
-        };
+        auto clickHandler = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<Components::MeasureComponent>(
+            ctx, "Change Measure Color", "Measure Color", ReadMeasurePickerColor, WriteMeasurePickerColor, updateUI);
 
         swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
         rgbLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);

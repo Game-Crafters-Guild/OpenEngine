@@ -13,6 +13,7 @@
 
 #include "Inspectors/InspectorColorSwatchRow.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/LuxText.h"
@@ -170,6 +171,16 @@ static void ArgbToLightColor(uint32_t argb, float (&out)[3])
     out[0] = color.r;
     out[1] = color.g;
     out[2] = color.b;
+}
+
+std::uint32_t ReadLightPickerColor(const Components::Light& component)
+{
+    return LightColorToArgb(component.Color);
+}
+
+void WriteLightPickerColor(Components::Light& component, std::uint32_t argb, float)
+{
+    ArgbToLightColor(argb, component.Color);
 }
 
 static void RefreshLightColorRow(ECS::World* world, ECS::EntityHandle entity,
@@ -440,7 +451,7 @@ void RegisterLightInspector()
         Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
         Editor::UndoRedoService* undo = ctx.Undo;
         const LightType type = light->Type == LightType::Volume ? LightType::Point : light->Type;
-        OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
+
         using namespace InspectorDrag;
         auto extras = GetAdditionalEntities(ctx);
 
@@ -775,83 +786,8 @@ void RegisterLightInspector()
             else
             {
 
-            auto clickHandler = [w, e, n, undo, openPicker, updateUI](UIEvent& ev) {
-                if (ev.Button != 0)
-                    return;
-                ev.Stop();
-
-                if (!openPicker)
-                    return;
-
-                auto* comp = w->GetComponent<Components::Light>(e);
-                if (!comp)
-                    return;
-
-                uint32_t currentArgb = LightColorToArgb(comp->Color);
-
-                using Edit = Editor::UndoRedoService::InteractiveEdit;
-                auto edit = std::make_shared<Edit>();
-
-                if (undo)
-                {
-                    auto target = MakeComponentSnapshotTarget<Components::Light>(w, e, n, "Light Color");
-                    *edit = undo->BeginInteractiveEdit("Change Light Color", std::move(target));
-                }
-
-                ColorPickerCallbacks cbs;
-                cbs.onApply = [w, e, n, undo, edit, updateUI](uint32_t newArgb, float) {
-                    if (undo && !*edit)
-                        *edit = undo->BeginInteractiveEdit("Change Light Color",
-                            MakeComponentSnapshotTarget<Components::Light>(w, e, n, "Light Color"));
-                    if (undo && !*edit)
-                        return;
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<Components::Light>(e);
-                            if (c) ArgbToLightColor(newArgb, c->Color);
-                        });
-                        edit->Commit();
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<Components::Light>(e);
-                        if (!c) return;
-                        Components::Light updated = *c;
-                        ArgbToLightColor(newArgb, updated.Color);
-                        Editor::CommitComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                cbs.onCancel = [edit, updateUI](){ 
-                    if (*edit) edit->Cancel();
-                    updateUI();
-                };
-                cbs.onValueChanging = [w, e, n, undo, edit, updateUI](uint32_t newArgb, float) {
-                    if (undo && !*edit)
-                        *edit = undo->BeginInteractiveEdit("Change Light Color",
-                            MakeComponentSnapshotTarget<Components::Light>(w, e, n, "Light Color"));
-                    if (undo && !*edit)
-                        return;
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<Components::Light>(e);
-                            if (c) ArgbToLightColor(newArgb, c->Color);
-                        });
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<Components::Light>(e);
-                        if (!c) return;
-                        Components::Light updated = *c;
-                        ArgbToLightColor(newArgb, updated.Color);
-                        Editor::PreviewComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                openPicker(currentArgb, 1.0f, std::move(cbs));
-            };
+            auto clickHandler = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<Components::Light>(
+                ctx, "Change Light Color", "Light Color", ReadLightPickerColor, WriteLightPickerColor, updateUI);
 
             swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
             rgbLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
