@@ -4,6 +4,7 @@
 
 #include "Components/Rendering/PostProcessEffects/FilmSimulationEffect.h"
 #include "Editor/Entities/EditorECSHelpers.h"
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Mathematics/Interpolation.h"
@@ -19,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace GameEngine
@@ -78,14 +80,63 @@ void StyleTintSwatch(UIElement* swatch, uint32_t argb)
         .Set(Style::Cursor, CursorStyle::Pointer);
 }
 
+InspectorUI::ColorPickerState ReadFilmPickerState(const Film& film)
+{
+    InspectorUI::ColorPickerState state;
+    TintToPickerState(film.HalationTint, state.Argb, state.Intensity);
+    return state;
+}
+
+void WriteFilmPickerColor(Film& film, uint32_t argb, float intensity)
+{
+    PickerStateToTint(argb, intensity, film.HalationTint);
+}
+
+void RefreshFilmTintRow(const InspectorContext& context, UIElement::WeakRef<UIElement> swatchRef,
+                        UIElement::WeakRef<Label> labelRef)
+{
+    const auto* film = context.World->GetComponent<Film>(context.Entity);
+    UIElement* swatch = swatchRef.Get();
+    Label* label = labelRef.Get();
+    if (!film || !swatch || !label)
+        return;
+    StyleTintSwatch(swatch, ReadFilmPickerState(*film).Argb);
+    label->SetText(FormatTint(film->HalationTint));
+}
+
+void RefreshUnrecordedFilmPicker(const InspectorContext& context, const Film& original,
+                                 const std::function<void()>& refresh, Editor::EditChangeKind kind)
+{
+    if (kind == Editor::EditChangeKind::UndoRedo)
+        Editor::PreviewComponentUpdate(context.World, context.Entity, context.ChangeNotifications, original);
+    if (kind != Editor::EditChangeKind::Commit)
+        refresh();
+}
+
+void OpenFilmTintPicker(const InspectorContext& context, UIEvent& event, const std::function<void()>& refresh)
+{
+    if (event.Button != 0)
+        return;
+    event.Stop();
+    const auto* film = context.World->GetComponent<Film>(context.Entity);
+    if (!context.OpenColorPickerWindow || !film)
+        return;
+    const auto state = ReadFilmPickerState(*film);
+    auto binding = InspectorUI::InspectorColorPickerEdit::ForComponent<Film>(
+        context, "Change Film Simulation Halation Tint", "Halation Tint", WriteFilmPickerColor, refresh);
+    if (!context.Undo)
+    {
+        binding.Changed = [context, original = *film, refresh](Editor::EditChangeKind kind)
+        {
+            RefreshUnrecordedFilmPicker(context, original, refresh, kind);
+        };
+    }
+    context.OpenColorPickerWindow(state.Argb, state.Intensity,
+                                  InspectorUI::InspectorColorPickerEdit::Bind(std::move(binding)));
+}
+
 void AddHalationTintRow(const InspectorContext& ctx, UIElement* parent, const Film* effect)
 {
-    ECS::World* world = ctx.World;
-    const ECS::EntityHandle entity = ctx.Entity;
-    Editor::EditorChangeNotifications* notifications = ctx.ChangeNotifications;
-    Editor::UndoRedoService* undo = ctx.Undo;
-    OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
-
     UIElement* row = InspectorUI::AddRow(parent);
     Label* tintLabel = InspectorUI::AddLabel(row, "Halation Tint", "HDR color of the film-base scatter");
     if (tintLabel)
@@ -112,91 +163,14 @@ void AddHalationTintRow(const InspectorContext& ctx, UIElement* parent, const Fi
     Label* valueLabelRaw = valueLabel.get();
     fieldContainer->AddChild(std::move(valueLabel));
 
-    // The picker's callbacks outlive an inspector rebuild: resolve the row through weak
-    // refs instead of holding the freed widgets.
-    auto updateUI = [world, entity, swatchRef = UIElement::MakeWeakRef(swatchRaw),
-                     valueLabelRef = UIElement::MakeWeakRef(valueLabelRaw)]()
+    auto refresh = [ctx, swatchRef = UIElement::MakeWeakRef(swatchRaw),
+                    labelRef = UIElement::MakeWeakRef(valueLabelRaw)]
     {
-        const auto* film = world->GetComponent<Film>(entity);
-        UIElement* swatch = swatchRef.Get();
-        Label* valueLabel = valueLabelRef.Get();
-        if (!film || !swatch || !valueLabel)
-            return;
-        uint32_t nextArgb = 0;
-        float nextIntensity = 1.0f;
-        TintToPickerState(film->HalationTint, nextArgb, nextIntensity);
-        StyleTintSwatch(swatch, nextArgb);
-        valueLabel->SetText(FormatTint(film->HalationTint));
+        RefreshFilmTintRow(ctx, swatchRef, labelRef);
     };
-
-    auto clickHandler = [world, entity, notifications, undo, openPicker, updateUI](UIEvent& event)
+    auto clickHandler = [ctx, refresh](UIEvent& event)
     {
-        if (event.Button != 0)
-            return;
-        event.Stop();
-        if (!openPicker)
-            return;
-        const auto* current = world->GetComponent<Film>(entity);
-        if (!current)
-            return;
-        const Film original = *current;
-        uint32_t initialArgb = 0;
-        float initialIntensity = 1.0f;
-        TintToPickerState(current->HalationTint, initialArgb, initialIntensity);
-
-        using Edit = Editor::UndoRedoService::InteractiveEdit;
-        auto edit = std::make_shared<Edit>();
-        if (undo)
-        {
-            auto target = InspectorDrag::MakeComponentSnapshotTarget<Film>(world, entity, notifications, "Halation Tint");
-            *edit = undo->BeginInteractiveEdit("Change Film Simulation Halation Tint", std::move(target));
-        }
-
-        auto previewTint = [world, entity, notifications, edit](uint32_t newArgb, float newIntensity)
-        {
-            float tint[3]{};
-            PickerStateToTint(newArgb, newIntensity, tint);
-            if (*edit)
-            {
-                edit->Preview([&]
-                              {
-                    auto* film = world->GetComponentForWrite<Film>(entity);
-                    if (!film)
-                        return;
-                    std::copy_n(tint, 3, film->HalationTint); });
-            }
-            else if (const auto* film = world->GetComponent<Film>(entity))
-            {
-                Film updated = *film;
-                std::copy_n(tint, 3, updated.HalationTint);
-                Editor::PreviewComponentUpdate(world, entity, notifications, updated);
-            }
-        };
-
-        ColorPickerCallbacks callbacks;
-        callbacks.onValueChanging = [previewTint, updateUI](uint32_t color, float value)
-        {
-            previewTint(color, value);
-            updateUI();
-        };
-        callbacks.onApply = [world, entity, notifications, edit, previewTint, updateUI](uint32_t color, float value)
-        {
-            previewTint(color, value);
-            if (*edit)
-                edit->Commit();
-            else if (const auto* film = world->GetComponent<Film>(entity))
-                Editor::CommitComponentUpdate(world, entity, notifications, *film);
-            updateUI();
-        };
-        callbacks.onCancel = [world, entity, notifications, edit, original, updateUI]()
-        {
-            if (*edit)
-                edit->Cancel();
-            else
-                Editor::PreviewComponentUpdate(world, entity, notifications, original);
-            updateUI();
-        };
-        openPicker(initialArgb, initialIntensity, std::move(callbacks));
+        OpenFilmTintPicker(ctx, event, refresh);
     };
     swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
     valueLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);

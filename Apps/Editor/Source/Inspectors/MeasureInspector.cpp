@@ -51,9 +51,9 @@ void ArgbToMeasureColor(uint32_t argb, float (&out)[4])
     out[3] = ((argb >> 24) & 0xFF) / 255.0f;
 }
 
-std::uint32_t ReadMeasurePickerColor(const Components::MeasureComponent& component)
+InspectorUI::ColorPickerState ReadMeasurePickerState(const Components::MeasureComponent& component)
 {
-    return MeasureColorToArgb(component.Color);
+    return {MeasureColorToArgb(component.Color), 1.0f};
 }
 
 void WriteMeasurePickerColor(Components::MeasureComponent& component, std::uint32_t argb, float)
@@ -148,7 +148,7 @@ void RegisterMeasureInspector()
         };
 
         auto clickHandler = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<Components::MeasureComponent>(
-            ctx, "Change Measure Color", "Measure Color", ReadMeasurePickerColor, WriteMeasurePickerColor, updateUI);
+            ctx, "Change Measure Color", "Measure Color", ReadMeasurePickerState, WriteMeasurePickerColor, updateUI);
 
         swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
         rgbLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);

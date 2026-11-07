@@ -961,6 +961,11 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/BloomEffectInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/ColorFilterEffectInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/AtmosphericCloudLayerInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/FilmSimulationEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/HeightFogEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/VolumetricFogEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/VhsEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/VignetteEffectInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurveField.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurveTangents.cpp
 	# The grass inspector's Root Color row (Auto or authored), built in process over a live

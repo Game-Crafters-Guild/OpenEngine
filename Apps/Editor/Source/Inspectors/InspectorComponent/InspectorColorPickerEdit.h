@@ -2,6 +2,7 @@
 
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "InspectorRegistry.h"
+#include "Inspectors/InspectorColorSwatchRow.h"
 #include "UI/UIEvents.h"
 #include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
@@ -80,7 +81,7 @@ public:
     template<typename TComponent>
     static std::function<void(UIEvent&)> MakeComponentPressHandler(
         InspectorContext context, std::string label, std::string snapshotLabel,
-        std::uint32_t (*readColor)(const TComponent&),
+        ColorPickerState (*readColor)(const TComponent&),
         void (*writeColor)(TComponent&, std::uint32_t, float), std::function<void()> refresh)
     {
         auto binding = ForComponent(context, std::move(label), std::move(snapshotLabel), writeColor, std::move(refresh));
@@ -93,7 +94,7 @@ public:
 private:
     template<typename TComponent>
     static void HandleComponentPress(const InspectorContext& context, UIEvent& event, const Binding& binding,
-                                      std::uint32_t (*readColor)(const TComponent&))
+                                      ColorPickerState (*readColor)(const TComponent&))
     {
         if (event.Button != 0)
             return;
@@ -103,8 +104,8 @@ private:
         const auto* component = context.World->GetComponent<TComponent>(context.Entity);
         if (!component)
             return;
-        const std::uint32_t currentArgb = readColor(*component);
-        context.OpenColorPickerWindow(currentArgb, 1.0f, Bind(binding));
+        const ColorPickerState state = readColor(*component);
+        context.OpenColorPickerWindow(state.Argb, state.Intensity, Bind(binding));
     }
 
     template<typename TComponent>

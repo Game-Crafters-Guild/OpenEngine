@@ -173,9 +173,9 @@ static void ArgbToLightColor(uint32_t argb, float (&out)[3])
     out[2] = color.b;
 }
 
-std::uint32_t ReadLightPickerColor(const Components::Light& component)
+InspectorUI::ColorPickerState ReadLightPickerState(const Components::Light& component)
 {
-    return LightColorToArgb(component.Color);
+    return {LightColorToArgb(component.Color), 1.0f};
 }
 
 void WriteLightPickerColor(Components::Light& component, std::uint32_t argb, float)
@@ -787,7 +787,7 @@ void RegisterLightInspector()
             {
 
             auto clickHandler = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<Components::Light>(
-                ctx, "Change Light Color", "Light Color", ReadLightPickerColor, WriteLightPickerColor, updateUI);
+                ctx, "Change Light Color", "Light Color", ReadLightPickerState, WriteLightPickerColor, updateUI);
 
             swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
             rgbLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);

@@ -2,11 +2,21 @@
 #include "Inspectors/AtmosphericCloudLayerInspector.h"
 #include "Inspectors/PostProcessEffects/BloomEffectInspector.h"
 #include "Inspectors/PostProcessEffects/ColorFilterEffectInspector.h"
+#include "Inspectors/PostProcessEffects/FilmSimulationEffectInspector.h"
+#include "Inspectors/PostProcessEffects/HeightFogEffectInspector.h"
+#include "Inspectors/PostProcessEffects/VolumetricFogEffectInspector.h"
+#include "Inspectors/PostProcessEffects/VhsEffectInspector.h"
+#include "Inspectors/PostProcessEffects/VignetteEffectInspector.h"
 #include "Inspectors/InspectorUIHelpers.h"
 
 #include "Components/Rendering/PostProcessEffects/AtmosphericCloudLayer.h"
 #include "Components/Rendering/PostProcessEffects/BloomEffect.h"
 #include "Components/Rendering/PostProcessEffects/ColorFilterEffect.h"
+#include "Components/Rendering/PostProcessEffects/FilmSimulationEffect.h"
+#include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
+#include "Components/Rendering/PostProcessEffects/VolumetricFogEffect.h"
+#include "Components/Rendering/PostProcessEffects/VhsEffect.h"
+#include "Components/Rendering/PostProcessEffects/VignetteEffect.h"
 #include "Core/Engine.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
@@ -32,21 +42,36 @@ namespace
 using Bloom = Components::BloomEffect;
 using Filter = Components::ColorFilterEffect;
 using Cloud = Components::AtmosphericCloudLayer;
+using Film = Components::FilmSimulationEffect;
+using HeightFog = Components::HeightFogEffect;
+using VolumeFog = Components::VolumetricFogEffect;
+using Vhs = Components::VhsEffect;
+using Vignette = Components::VignetteEffect;
 
 constexpr std::uint32_t kRed = 0xFFFF0000u;
 constexpr std::uint32_t kGreen = 0xFF00FF00u;
 constexpr std::uint32_t kBlue = 0xFF0000FFu;
+constexpr std::uint32_t kMixedColor = 0xFF33FF99u;
 constexpr float kOtherValue = 0.25f;
 
-template<typename TComponent>
+template<typename TComponent, auto TColor>
 ECS::EntityHandle CreateComponent(ECS::World& world)
 {
     TComponent component{};
+    auto& color = component.*TColor;
+    color[0] = color[1] = color[2] = 1.0f;
     if constexpr (std::is_same_v<TComponent, Bloom>)
     {
         component.DepthVeilEnabled = true;
         component.LensDirtEnabled = true;
     }
+    if constexpr (std::is_same_v<TComponent, HeightFog>)
+    {
+        component.ColorMode = Components::HeightFogColorMode::FixedColor;
+        component.FogGlowEnabled = true;
+    }
+    if constexpr (std::is_same_v<TComponent, VolumeFog>)
+        component.FogGlowEnabled = true;
     return world.Create(component).GetHandle();
 }
 
@@ -81,6 +106,13 @@ struct PickerCase
     float Intensity;
 };
 
+template<typename TComponent, auto TColor, auto TOther>
+PickerCase MakePickerCase(const char* name, const char* row, void (*registerInspector)(), float intensity)
+{
+    return {name, row, registerInspector, CreateComponent<TComponent, TColor>, ReadColor<TComponent, TColor>,
+            SetOtherValue<TComponent, TOther>, ReadOtherValue<TComponent, TOther>, intensity};
+}
+
 Label* FindLabel(UIElement& element, const std::string& text)
 {
     if (auto* label = dynamic_cast<Label*>(&element); label && label->GetText() == text)
@@ -88,6 +120,16 @@ Label* FindLabel(UIElement& element, const std::string& text)
     for (const auto& child : element.GetChildren())
         if (Label* found = FindLabel(*child, text))
             return found;
+    return nullptr;
+}
+
+Label* FindColorValue(UIElement& row)
+{
+    for (const auto& field : row.GetChildren())
+        if (field->HasClass("inspector-field"))
+            for (const auto& control : field->GetChildren())
+                if (auto* label = dynamic_cast<Label*>(control.get()); label && label->HasClass("inspector-text"))
+                    return label;
     return nullptr;
 }
 
@@ -139,21 +181,21 @@ protected:
         (*inspector)(context);
     }
 
-    void OpenPicker()
+    void OpenPicker(std::uint32_t expectedArgb = 0xFFFFFFFFu, float expectedIntensity = 1.0f)
     {
         Label* name = FindLabel(Root, GetParam().Row);
         ASSERT_NE(name, nullptr);
         UIElement* row = InspectorUI::RowOfControl(name);
         ASSERT_NE(row, nullptr);
-        Label* value = FindLabel(*row, "(1.00, 1.00, 1.00)");
+        Label* value = FindColorValue(*row);
         ASSERT_NE(value, nullptr);
         UIEvent press{};
         press.Id = kEventMouseDown;
         press.Button = 0;
         value->DispatchEvent(press);
         ASSERT_TRUE(Callbacks);
-        EXPECT_EQ(OpenedArgb, 0xFFFFFFFFu);
-        EXPECT_FLOAT_EQ(OpenedIntensity, 1.0f);
+        EXPECT_EQ(OpenedArgb, expectedArgb);
+        EXPECT_FLOAT_EQ(OpenedIntensity, expectedIntensity);
     }
 
     void ExpectColor(float red, float green, float blue)
@@ -238,16 +280,39 @@ TEST_P(InspectorEffectColorPickerTests, PreviewAndApplyWorkWithoutAnUndoService)
     ExpectColor(0.0f, 0.0f, GetParam().Intensity);
 }
 
+TEST_P(InspectorEffectColorPickerTests, ReopeningKeepsTheAuthoredPickerIntensity)
+{
+    OpenPicker();
+    ASSERT_TRUE(Callbacks);
+    Callbacks->onApply(kMixedColor, GetParam().Intensity);
+    ASSERT_TRUE(Undo.CommitPendingEdit());
+    BuildInspector(true);
+    OpenPicker(kMixedColor, GetParam().Intensity);
+    Callbacks->onCancel();
+    ExpectColor(0.2f * GetParam().Intensity, GetParam().Intensity, 0.6f * GetParam().Intensity);
+}
+
 INSTANTIATE_TEST_SUITE_P(EffectRows, InspectorEffectColorPickerTests, ::testing::Values(
-    PickerCase{"BloomTint", "Tint", RegisterBloomEffectInspector, CreateComponent<Bloom>,
-        ReadColor<Bloom, &Bloom::Tint>, SetOtherValue<Bloom, &Bloom::Intensity>, ReadOtherValue<Bloom, &Bloom::Intensity>, 1.0f},
-    PickerCase{"BloomVeilTint", "Veil Tint", RegisterBloomEffectInspector, CreateComponent<Bloom>,
-        ReadColor<Bloom, &Bloom::DepthVeilTint>, SetOtherValue<Bloom, &Bloom::Intensity>, ReadOtherValue<Bloom, &Bloom::Intensity>, 1.0f},
-    PickerCase{"BloomVignette", "Vignette Color", RegisterBloomEffectInspector, CreateComponent<Bloom>,
-        ReadColor<Bloom, &Bloom::LensDirtVignetteColor>, SetOtherValue<Bloom, &Bloom::Intensity>, ReadOtherValue<Bloom, &Bloom::Intensity>, 1.0f},
-    PickerCase{"ColorFilter", "Color", RegisterColorFilterEffectInspector, CreateComponent<Filter>,
-        ReadColor<Filter, &Filter::Color>, SetOtherValue<Filter, &Filter::Intensity>, ReadOtherValue<Filter, &Filter::Intensity>, 1.0f},
-    PickerCase{"AtmosphericCloud", "CloudColor", RegisterAtmosphericCloudLayerInspector, CreateComponent<Cloud>,
-        ReadColor<Cloud, &Cloud::CloudColor>, SetOtherValue<Cloud, &Cloud::SkyFill>, ReadOtherValue<Cloud, &Cloud::SkyFill>, 2.0f}),
+    MakePickerCase<Bloom, &Bloom::Tint, &Bloom::Intensity>("BloomTint", "Tint", RegisterBloomEffectInspector, 1.0f),
+    MakePickerCase<Bloom, &Bloom::DepthVeilTint, &Bloom::Intensity>("BloomVeilTint", "Veil Tint", RegisterBloomEffectInspector, 1.0f),
+    MakePickerCase<Bloom, &Bloom::LensDirtVignetteColor, &Bloom::Intensity>("BloomVignette", "Vignette Color", RegisterBloomEffectInspector, 1.0f),
+    MakePickerCase<Filter, &Filter::Color, &Filter::Intensity>("ColorFilter", "Color", RegisterColorFilterEffectInspector, 1.0f),
+    MakePickerCase<Cloud, &Cloud::CloudColor, &Cloud::SkyFill>("AtmosphericCloud", "CloudColor", RegisterAtmosphericCloudLayerInspector, 2.0f),
+    MakePickerCase<Film, &Film::HalationTint, &Film::HalationIntensity>("FilmHalation", "Halation Tint", RegisterFilmSimulationEffectInspector, 2.0f),
+    MakePickerCase<HeightFog, &HeightFog::Emissive, &HeightFog::Density>("HeightFogEmissive", "Emissive", RegisterHeightFogEffectInspector, 2.0f),
+    MakePickerCase<HeightFog, &HeightFog::GradientLowColor, &HeightFog::Density>("HeightFogGradientLow", "Gradient Low", RegisterHeightFogEffectInspector, 2.0f),
+    MakePickerCase<HeightFog, &HeightFog::GradientHighColor, &HeightFog::Density>("HeightFogGradientHigh", "Gradient High", RegisterHeightFogEffectInspector, 2.0f),
+    MakePickerCase<HeightFog, &HeightFog::SunColor, &HeightFog::Density>("HeightFogSun", "Sun Color", RegisterHeightFogEffectInspector, 2.0f),
+    MakePickerCase<HeightFog, &HeightFog::FogGlowTint, &HeightFog::Density>("HeightFogGlow", "Tint", RegisterHeightFogEffectInspector, 2.0f),
+    MakePickerCase<VolumeFog, &VolumeFog::Albedo, &VolumeFog::Density>("VolumeFogAlbedo", "Albedo", RegisterVolumetricFogEffectInspector, 2.0f),
+    MakePickerCase<VolumeFog, &VolumeFog::Emission, &VolumeFog::Density>("VolumeFogEmission", "Emission", RegisterVolumetricFogEffectInspector, 2.0f),
+    MakePickerCase<VolumeFog, &VolumeFog::SunScatteringTint, &VolumeFog::Density>("VolumeFogSun", "Sun Tint", RegisterVolumetricFogEffectInspector, 2.0f),
+    MakePickerCase<VolumeFog, &VolumeFog::AmbientScatteringTint, &VolumeFog::Density>("VolumeFogAmbient", "Ambient Tint", RegisterVolumetricFogEffectInspector, 2.0f),
+    MakePickerCase<VolumeFog, &VolumeFog::GradientLowTint, &VolumeFog::Density>("VolumeFogGradientLow", "Gradient Low", RegisterVolumetricFogEffectInspector, 2.0f),
+    MakePickerCase<VolumeFog, &VolumeFog::GradientHighTint, &VolumeFog::Density>("VolumeFogGradientHigh", "Gradient High", RegisterVolumetricFogEffectInspector, 2.0f),
+    MakePickerCase<VolumeFog, &VolumeFog::FogGlowTint, &VolumeFog::Density>("VolumeFogGlow", "Tint", RegisterVolumetricFogEffectInspector, 2.0f),
+    MakePickerCase<Vhs, &Vhs::DateBurnColor, &Vhs::Intensity>("VhsDateBurn", "Date Burn Color", RegisterVhsEffectInspector, 1.0f),
+    MakePickerCase<Vhs, &Vhs::OverlayColor, &Vhs::Intensity>("VhsTransport", "Transport Color", RegisterVhsEffectInspector, 1.0f),
+    MakePickerCase<Vignette, &Vignette::Color, &Vignette::Intensity>("Vignette", "Color", RegisterVignetteEffectInspector, 1.0f)),
     [](const ::testing::TestParamInfo<PickerCase>& parameter) { return parameter.param.Name; });
 } // namespace

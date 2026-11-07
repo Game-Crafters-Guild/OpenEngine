@@ -77,9 +77,9 @@ static void StyleSwatch(UIElement* swatch, uint32_t argb)
         .Set(Style::Cursor, CursorStyle::Pointer);
 }
 
-uint32_t ReadColorFilterPickerColor(const Components::ColorFilterEffect& filter)
+InspectorUI::ColorPickerState ReadColorFilterPickerState(const Components::ColorFilterEffect& filter)
 {
-    return ColorToArgb(filter.Color);
+    return {ColorToArgb(filter.Color), 1.0f};
 }
 
 void WriteColorFilterPickerColor(Components::ColorFilterEffect& filter, uint32_t argb, float)
@@ -163,7 +163,7 @@ void RegisterColorFilterEffectInspector()
             };
             auto clickHandler = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<CF>(
                 ctx, "Change ColorFilter Color", "ColorFilter Color",
-                ReadColorFilterPickerColor, WriteColorFilterPickerColor, updateUI);
+                ReadColorFilterPickerState, WriteColorFilterPickerColor, updateUI);
 
             swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
             rgbLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
