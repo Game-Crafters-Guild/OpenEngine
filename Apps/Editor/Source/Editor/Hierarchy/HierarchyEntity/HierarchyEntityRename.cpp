@@ -3,6 +3,7 @@
 
 #include "EditorChangeNotifications.h"
 #include "UndoRedo/EntityComponentsEdit.h"
+#include "UndoRedo/UndoRedoService.h"
 
 #include "Components/Name.h"
 #include "UI/Controls/Label.h"
@@ -44,8 +45,10 @@ bool CommitEntityRename(ECS::World& world, ECS::EntityHandle entity, const std::
 {
     if (!ValidateEntityName(name).empty() || !entity.IsValid() || !world.IsValid(entity))
         return false;
+    if (undo && !undo->CommitPendingEdit())
+        return false;
 
-    const bool renamed = CommitEntityComponentsEdit(world, entity, undo, notifications, kRenameEntityLabel, [&]()
+    const bool renamed = CommitEntityComponentsEdit(world, entity, undo, notifications, kRenameEntityLabel, [&world, entity, &name]()
     {
         Components::Name value{};
         std::memcpy(value.value, name.data(), name.size());

@@ -18,16 +18,9 @@ namespace GameEngine::Editor
 class EditorChangeNotifications;
 class UndoRedoService;
 
-// Runs `edit` on `entity` as one undo step named `label`, for a write that does not know in
-// advance which of the entity's components it adds or changes (a component set by name, which
-// can bring a required companion with it). The step holds every component of the entity whose
-// bytes differ after the edit, including one the edit added or removed: undo puts back the
-// bytes from before (removing what the edit added), redo the bytes from after, and each
-// announces the components it wrote as an UndoRedo change. The edit's own writes are the caller's
-// to announce.
-//
-// A refused or throwing edit restores the starting components. A successful edit records only
-// changed components; an unchanged edit or a null `undo` records no step.
+/// Records changed, added, or removed component bytes; refused or throwing edits restore the starting components.
+/// Settle the previous action before opening an enclosing snapshot or calling this function.
+/// Enclosing snapshots remain active during `edit`. The caller announces its own writes.
 bool CommitEntityComponentsEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedoService* undo,
                                 EditorChangeNotifications* notifications, const std::string& label,
                                 const std::function<bool()>& edit);

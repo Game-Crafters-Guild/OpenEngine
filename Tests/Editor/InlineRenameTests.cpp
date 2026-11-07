@@ -13,6 +13,7 @@
 #include "InspectorRegistry.h"
 #include "Inspectors/EntityHeader/InspectorEntityNameField.h"
 #include "UI/InlineRenameSession.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Components/Name.h"
@@ -198,6 +199,31 @@ TEST(EntityRename, OneUndoStepThatWritesAndAnnouncesTheName)
     undo.Undo();
     EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Cube");
     notifications.Unsubscribe(token);
+}
+
+TEST(EntityRename, SettlesThePreviousNameEditBeforeCapturingTheRename)
+{
+    ECS::World world;
+    Components::Name original{};
+    std::strcpy(original.value, "Cube");
+    const auto entity = world.CreateEntity();
+    world.AddComponentImmediate(entity, original);
+    Editor::UndoRedoService undo;
+    auto edit = undo.BeginInteractiveEdit("Edit Name", Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        &world, {entity}, ECS::GetComponentTypeId<Components::Name>(), nullptr, "Name"));
+    edit.Preview([&world, entity] { std::strcpy(world.GetComponentForWrite<Components::Name>(entity)->value, "Crate"); });
+
+    ASSERT_TRUE(Editor::CommitEntityRename(world, entity, "Tower", &undo, nullptr));
+    EXPECT_FALSE(edit);
+    ASSERT_EQ(undo.GetUndoCount(), 2u);
+    undo.Undo();
+    EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Crate");
+    undo.Undo();
+    EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Cube");
+    undo.Redo();
+    EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Crate");
+    undo.Redo();
+    EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Tower");
 }
 
 namespace

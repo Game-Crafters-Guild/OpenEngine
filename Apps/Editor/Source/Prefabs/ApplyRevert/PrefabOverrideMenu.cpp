@@ -156,6 +156,8 @@ void RevertPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pr
 {
     if (targets.empty())
         return;
+    if (undo && !undo->CommitPendingEdit())
+        return;
     std::string error;
     // One edit for each entity, in one compound step when the targets span several entities.
     std::vector<ECS::EntityHandle> entities;

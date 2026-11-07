@@ -193,7 +193,7 @@ bool CommitEntityComponentsEdit(ECS::World& world, ECS::EntityHandle entity, Und
                                 EditorChangeNotifications* notifications, const std::string& label,
                                 const std::function<bool()>& edit)
 {
-    if (!world.IsValid(entity) || (undo && !undo->CommitPendingEdit()))
+    if (!world.IsValid(entity))
         return false;
     const EntityComponentBytes before = CaptureEntityComponents(world, entity);
     bool applied = false;

@@ -4856,7 +4856,6 @@
    "Apps/Editor/Include/UI/SyntaxHighlightSettings.h": 1,
    "Apps/Editor/Include/UI/ToolbarDragDrop.h": 2,
    "Apps/Editor/Include/UI/ViewOverlayHost.h": 1,
-   "Apps/Editor/Include/UndoRedo/EntityComponentsEdit.h": 1,
    "Apps/Editor/Include/UndoRedo/RenameAssetCommand.h": 1,
    "Apps/Editor/Include/UndoRedo/SetAssetMetaValueCommand.h": 2,
    "Apps/Editor/Include/UndoRedo/Spline/SplineNetworkRecordCommand.h": 1,
