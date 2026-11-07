@@ -958,6 +958,11 @@ set(EDITOR_TEST_SOURCES
 	# The component color row on a ColorLinear member: apply, alpha kept, undo.
 	InspectorComponentColorRowTests.cpp
 	InspectorEffectColorPickerTests.cpp
+	LensFlareColorPickerTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LensFlareSourceInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurvePresetPicker.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurvePresets.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/RenameLayoutModal.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/BloomEffectInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/ColorFilterEffectInspector.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/AtmosphericCloudLayerInspector.cpp

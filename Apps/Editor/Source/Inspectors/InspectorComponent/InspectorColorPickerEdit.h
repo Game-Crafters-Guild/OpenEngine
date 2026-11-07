@@ -26,6 +26,8 @@ public:
         std::function<Editor::HistorySnapshotTarget()> MakeTarget;
         std::function<void(std::uint32_t, float, Editor::EditChangeKind)> Write;
         std::function<void(Editor::EditChangeKind)> Changed;
+        // Persist asset previews before the committed snapshot is captured.
+        std::function<bool()> Persist;
         std::function<void()> Applied;
     };
 
@@ -158,6 +160,11 @@ private:
     {
         if (!WriteValue(argb, intensity, Editor::EditChangeKind::Commit))
             return;
+        if (m_Binding.Persist && !m_Binding.Persist())
+        {
+            Cancel();
+            return;
+        }
         NotifyChanged(Editor::EditChangeKind::Commit);
         if (m_Edit)
             m_Edit.Commit();

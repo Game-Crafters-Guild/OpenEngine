@@ -15,6 +15,7 @@
 #include "ECS/Entity.h"
 #include "Inspectors/DefaultComponentInspector.h"
 #include "Inspectors/InspectorColorSwatchRow.h"
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Panels/ColorPicker.h"
@@ -58,6 +59,26 @@ namespace
 using FlareAsset = LensFlareDefinitionAsset;
 using FlareMutation = std::function<void(FlareAsset&)>;
 
+bool RestoreFlareSnapshot(FlareAsset* flare, const Editor::UndoRedoService::SnapshotTarget::Snapshot& snapshot)
+{
+    if (!flare)
+        return false;
+    Vector<uint8> current;
+    if (!ReadFileBytesShared(flare->GetPath(), current) ||
+        !std::equal(current.begin(), current.end(), snapshot.begin(), snapshot.end()))
+    {
+        std::ofstream stream(flare->GetPath(), std::ios::binary | std::ios::trunc);
+        if (!stream.is_open())
+            return false;
+        if (!snapshot.empty())
+            stream.write(reinterpret_cast<const char*>(snapshot.data()), static_cast<std::streamsize>(snapshot.size()));
+        stream.close();
+        if (!stream.good())
+            return false;
+    }
+    return flare->Reload() == ReloadOutcome::Reloaded;
+}
+
 Editor::UndoRedoService::SnapshotTarget MakeFlareSnapshotTarget(FlareAsset* flare,
                                                                  std::string label)
 {
@@ -76,16 +97,7 @@ Editor::UndoRedoService::SnapshotTarget MakeFlareSnapshotTarget(FlareAsset* flar
     };
     target.Apply = [flare](const Editor::UndoRedoService::SnapshotTarget::Snapshot& snapshot) -> bool
     {
-        if (!flare)
-            return false;
-        std::ofstream stream(flare->GetPath(), std::ios::binary | std::ios::trunc);
-        if (!stream.is_open())
-            return false;
-        if (!snapshot.empty())
-            stream.write(reinterpret_cast<const char*>(snapshot.data()),
-                         static_cast<std::streamsize>(snapshot.size()));
-        stream.close();
-        return stream.good() && flare->Reload() == ReloadOutcome::Reloaded;
+        return RestoreFlareSnapshot(flare, snapshot);
     };
     return target;
 }
@@ -588,6 +600,85 @@ void UpdateFlareElementHeaderColor(FlareElementPreview* preview,
         swatch->SetTooltip("Tint " + FormatFlareColor(color));
 }
 
+void RefreshFlarePicker(FlareAsset& flare, Editor::UndoRedoService* undo, const FlareColorAccess& access,
+                        const LensFlare::Color& original, const std::function<void()>& refresh,
+                        Editor::EditChangeKind kind)
+{
+    if (kind == Editor::EditChangeKind::Commit)
+        return;
+    if (kind == Editor::EditChangeKind::UndoRedo)
+    {
+        if (undo)
+            (void)flare.Reload();
+        else if (LensFlare::Color* color = access(flare))
+            *color = original;
+    }
+    if (refresh)
+        refresh();
+}
+
+void UpdateFlareColorRow(FlareAsset& flare, const FlareColorAccess& access,
+                         const UIElement::WeakRef<UIElement>& swatchRef,
+                         const UIElement::WeakRef<Label>& valueLabelRef, const FlareColorUiChanged& onColorUiChanged)
+{
+    LensFlare::Color* current = access(flare);
+    UIElement* swatch = swatchRef.Get();
+    Label* valueLabel = valueLabelRef.Get();
+    if (!current || !swatch || !valueLabel)
+        return;
+    uint32_t currentArgb = 0u;
+    float currentIntensity = 1.0f;
+    FlareColorToPickerState(*current, currentArgb, currentIntensity);
+    InspectorUI::StyleColorSwatch(swatch, currentArgb);
+    valueLabel->SetText(FormatFlareColor(*current));
+    if (onColorUiChanged)
+        onColorUiChanged(*current);
+}
+
+void HandleFlareColorPress(FlareAsset* flare, Editor::UndoRedoService* undo, const std::string& label,
+                           const FlareColorAccess& access, const OpenColorPickerWindowFn& openPicker,
+                           const std::function<void()>& updateUi, UIEvent& event)
+{
+    if (event.Button != 0)
+        return;
+    event.Stop();
+    if (!openPicker || !flare)
+        return;
+    if (undo && !undo->CommitPendingEdit())
+        return;
+    LensFlare::Color* current = access(*flare);
+    if (!current)
+        return;
+    const LensFlare::Color original = *current;
+    uint32_t initialArgb = 0u;
+    float initialIntensity = 1.0f;
+    FlareColorToPickerState(original, initialArgb, initialIntensity);
+
+    const std::string changeName = "Change " + label;
+    InspectorUI::InspectorColorPickerEdit::Binding binding;
+    binding.Undo = undo;
+    binding.Label = changeName;
+    binding.MakeTarget = [flare, changeName]
+    {
+        return MakeFlareSnapshotTarget(flare, changeName);
+    };
+    binding.Write = [flare, access](uint32_t newArgb, float newIntensity, Editor::EditChangeKind)
+    {
+        if (LensFlare::Color* color = access(*flare))
+            *color = PickerStateToFlareColor(newArgb, newIntensity);
+    };
+    binding.Changed = [flare, undo, access, original, updateUi](Editor::EditChangeKind kind)
+    {
+        RefreshFlarePicker(*flare, undo, access, original, updateUi, kind);
+    };
+    binding.Persist = [flare]
+    {
+        return flare->Save();
+    };
+    binding.Applied = updateUi;
+    openPicker(initialArgb, initialIntensity, InspectorUI::InspectorColorPickerEdit::Bind(std::move(binding)));
+}
+
 void AddFlareColorPickerRow(UIElement* parent,
                             const std::string& label,
                             FlareAsset* flare,
@@ -632,94 +723,12 @@ void AddFlareColorPickerRow(UIElement* parent,
     const auto updateUi = [flare, access, swatchRef = UIElement::MakeWeakRef(swatchRaw),
                            valueLabelRef = UIElement::MakeWeakRef(valueLabelRaw), onColorUiChanged]
     {
-        LensFlare::Color* current = access(*flare);
-        UIElement* swatch = swatchRef.Get();
-        Label* valueLabel = valueLabelRef.Get();
-        if (!current || !swatch || !valueLabel)
-            return;
-        uint32_t currentArgb = 0u;
-        float currentIntensity = 1.0f;
-        FlareColorToPickerState(*current, currentArgb, currentIntensity);
-        InspectorUI::StyleColorSwatch(swatch, currentArgb);
-        valueLabel->SetText(FormatFlareColor(*current));
-        if (onColorUiChanged)
-            onColorUiChanged(*current);
+        UpdateFlareColorRow(*flare, access, swatchRef, valueLabelRef, onColorUiChanged);
     };
 
     const auto clickHandler = [flare, undo, label, access, openPicker, updateUi](UIEvent& event)
     {
-        if (event.Button != 0)
-            return;
-        event.Stop();
-        if (!openPicker || !flare)
-            return;
-        LensFlare::Color* current = access(*flare);
-        if (!current)
-            return;
-        const LensFlare::Color original = *current;
-        uint32_t initialArgb = 0u;
-        float initialIntensity = 1.0f;
-        FlareColorToPickerState(original, initialArgb, initialIntensity);
-
-        using OptionalEdit = std::optional<Editor::UndoRedoService::InteractiveEdit>;
-        auto edit = std::make_shared<OptionalEdit>();
-        const std::string changeName = "Change " + label;
-        const auto preview = [flare, undo, access, edit, changeName, updateUi](
-                                 uint32_t newArgb, float newIntensity)
-        {
-            if (undo && !edit->has_value())
-                edit->emplace(undo->BeginInteractiveEdit(
-                    changeName, MakeFlareSnapshotTarget(flare, changeName)));
-            if (LensFlare::Color* color = access(*flare))
-                *color = PickerStateToFlareColor(newArgb, newIntensity);
-            updateUi();
-        };
-
-        ColorPickerCallbacks callbacks;
-        callbacks.onValueChanging = preview;
-        callbacks.onApply = [flare, undo, access, edit, changeName, updateUi](
-                                uint32_t newArgb, float newIntensity)
-        {
-            const LensFlare::Color next = PickerStateToFlareColor(newArgb, newIntensity);
-            if (edit->has_value())
-            {
-                if (LensFlare::Color* color = access(*flare))
-                    *color = next;
-                auto finished = std::move(edit->value());
-                edit->reset();
-                if (flare->Save())
-                    finished.Commit();
-                else
-                {
-                    finished.Cancel();
-                    (void)flare->Reload();
-                }
-            }
-            else
-            {
-                CommitFlareChange(flare, undo, changeName, [access, next](FlareAsset& asset)
-                {
-                    if (LensFlare::Color* color = access(asset))
-                        *color = next;
-                });
-            }
-            updateUi();
-        };
-        callbacks.onCancel = [flare, access, edit, original, updateUi]
-        {
-            if (edit->has_value())
-            {
-                auto cancelled = std::move(edit->value());
-                edit->reset();
-                cancelled.Cancel();
-            }
-            else if (LensFlare::Color* color = access(*flare))
-            {
-                *color = original;
-            }
-            updateUi();
-        };
-        openPicker(initialArgb, initialIntensity, std::move(callbacks));
+        HandleFlareColorPress(flare, undo, label, access, openPicker, updateUi, event);
     };
 
     swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
