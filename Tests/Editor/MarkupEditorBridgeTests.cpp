@@ -29,6 +29,7 @@
 #include "Logger/CallbackSink.h"
 #include "Logger/Logger.h"
 #include "MarkupECS/MarkupService.h"
+#include "Scene/SceneDocumentManager.h"
 #include "Scene/WorldSnapshotCommand.h"
 #include "TestEnvVar.h"
 #include "TestTempDir.h"
@@ -43,6 +44,7 @@
 #include "UI/StyleProperties.h"
 #include "UI/UiContext.h"
 #include "UI/UiDispatcher.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <gtest/gtest.h>
@@ -287,6 +289,52 @@ TEST_F(MarkupEditorBridgeTest, CommitsAndUndoStampTheScopesAuthorAndPreviewsNeve
     const uint32 before = MarkupService::Get().GetRevision(World);
     Notify<Components::Transform>(prop, EditorChangeNotifications::ChangeKind::Commit);
     EXPECT_EQ(MarkupService::Get().GetRevision(World), before);
+}
+
+TEST_F(MarkupEditorBridgeTest, UndoToSavedTransformPreservesDirtinessForObserverAuthoredNotes)
+{
+    const auto lake = CreateMarkup();
+    Notify<Components::Transform>(lake, EditorChangeNotifications::ChangeKind::Commit);
+    const auto savedEntries = MarkupService::Get().FindNotes(World, lake)->Entries.size();
+    const Markup savedMarkup = MarkupOf(lake);
+    Editor::UndoRedoService history;
+    m_Bridge->SetUndoService(&history);
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&World);
+    document.SetUndoRedoService(&history);
+    document.SetChangeNotifications(&Notifications);
+    document.MarkClean();
+
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        &World, {lake}, ECS::GetComponentTypeId<Components::Transform>(), &Notifications, "Move Mark-up");
+    auto edit = history.BeginInteractiveEdit("Move Mark-up", target);
+    edit.Preview([this, lake] { World.GetComponentForWrite<Components::Transform>(lake)->Translate(2.0f, 0.0f, 0.0f); });
+    m_Now = 1010;
+    edit.Commit();
+    ASSERT_TRUE(history.CommitPendingEdit());
+    ASSERT_TRUE(document.IsDirty());
+    ASSERT_GT(MarkupService::Get().FindNotes(World, lake)->Entries.size(), savedEntries);
+    const Markup editedMarkup = MarkupOf(lake);
+    ASSERT_GT(editedMarkup.Revision, savedMarkup.Revision);
+
+    history.Undo();
+    EXPECT_FLOAT_EQ(World.GetComponent<Components::Transform>(lake)->GetPosition().x, 0.0f);
+    EXPECT_GT(MarkupService::Get().FindNotes(World, lake)->Entries.size(), savedEntries);
+    EXPECT_EQ(MarkupOf(lake).Revision, editedMarkup.Revision);
+    EXPECT_EQ(MarkupOf(lake).UpdatedUnix, editedMarkup.UpdatedUnix);
+    EXPECT_TRUE(document.IsDirty());
+    history.Redo();
+    EXPECT_TRUE(document.IsDirty());
+    ASSERT_TRUE(history.Checkout(history.GetRootNodeId()));
+    EXPECT_TRUE(document.IsDirty());
+
+    document.MarkClean();
+    EXPECT_FALSE(document.IsDirty());
+    history.Redo();
+    EXPECT_TRUE(document.IsDirty());
+    history.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_EQ(MarkupOf(lake).Revision, editedMarkup.Revision);
 }
 
 // A duplicate copies the component bytes and nothing copies the notes: the copy gets its

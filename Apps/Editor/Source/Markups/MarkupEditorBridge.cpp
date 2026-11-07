@@ -57,6 +57,17 @@ bool IsTouchingKind(EditorChangeNotifications::ChangeKind kind)
            kind == EditorChangeNotifications::ChangeKind::UndoRedo;
 }
 
+void NotifyUntrackedMarkupChange(EditorChangeNotifications& notifications, ECS::World& world,
+                                 ECS::EntityHandle entity)
+{
+    EditorChangeNotifications::ComponentChangedEvent event;
+    event.world = &world;
+    event.entity = entity;
+    event.componentType = ECS::GetComponentTypeId<Components::Markup>();
+    event.Untracked = true;
+    notifications.NotifyComponentChanged(event);
+}
+
 bool IsMarkupPart(ECS::ComponentTypeId type)
 {
     return type == ECS::GetComponentTypeId<Components::Markup>() ||
@@ -726,7 +737,7 @@ const MarkupRegionFrameGround& MarkupEditorBridge::RegionFrameGroundOf(ECS::Worl
 
 void MarkupEditorBridge::OnComponentChanged(const EditorChangeNotifications::ComponentChangedEvent& event)
 {
-    if (!event.world || !IsTouchingKind(event.kind) || !IsMarkupPart(event.componentType))
+    if (!event.world || event.Untracked || !IsTouchingKind(event.kind) || !IsMarkupPart(event.componentType))
         return;
     auto* service = MarkupECS::MarkupService::TryGet();
     if (!service || !event.world->IsValid(event.entity) || !event.world->GetComponent<Components::Markup>(event.entity))
@@ -741,7 +752,8 @@ void MarkupEditorBridge::OnComponentChanged(const EditorChangeNotifications::Com
     const MarkupECS::MarkupNotes* notes = service->FindNotes(*event.world, event.entity);
     if (!notes)
     {
-        (void)service->BeginMarkup(*event.world, event.entity, CurrentAuthor(), Now());
+        if (service->BeginMarkup(*event.world, event.entity, CurrentAuthor(), Now()))
+            NotifyUntrackedMarkupChange(m_Notifications, *event.world, event.entity);
         return;
     }
     // An undo can shorten the thread below the length at the last look; the entries
@@ -759,6 +771,7 @@ void MarkupEditorBridge::OnComponentChanged(const EditorChangeNotifications::Com
         (void)service->RecordEdit(*event.world, event.entity, changes, CurrentAuthor(), Now());
     else
         (void)service->Touch(*event.world, event.entity, CurrentAuthor(), Now());
+    NotifyUntrackedMarkupChange(m_Notifications, *event.world, event.entity);
 }
 
 void MarkupEditorBridge::OnWorldStructureChanged(const EditorChangeNotifications::WorldStructureChangedEvent& event)

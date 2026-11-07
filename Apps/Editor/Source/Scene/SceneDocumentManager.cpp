@@ -1164,6 +1164,8 @@ void SceneDocumentManager::Subscribe()
                 return;
             if (event.kind == EditorChangeNotifications::ChangeKind::InspectorRebuild)
                 return;
+            if (event.Untracked)
+                m_UntrackedDirty = true;
             MarkDirty();
         });
 

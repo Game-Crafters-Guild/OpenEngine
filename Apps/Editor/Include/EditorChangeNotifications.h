@@ -33,6 +33,8 @@ public:
         ECS::EntityHandle entity{};
         ECS::ComponentTypeId componentType = 0;
         ChangeKind kind = ChangeKind::Commit;
+        // Observer-authored data outside the active history snapshot.
+        bool Untracked = false;
     };
 
     using ComponentChangedCallback = std::function<void(const ComponentChangedEvent&)>;
