@@ -330,7 +330,11 @@ bool TerrainBrushTool::ApplyStrokePhase(TerrainStrokePhase phase,
             return false;
         const Mathematics::Vector3 dir = surfacePoint * (1.0f / len);
         if (phase == TerrainStrokePhase::Begin)
-            BeginSphereStroke(); // undo boundary: one Begin..End = one entry
+        {
+            BeginSphereStroke();
+            if (!m_SphereStroking)
+                return false;
+        }
         ApplySphereDab(dir, planetRadius);
         return true;
     }
@@ -379,6 +383,9 @@ void TerrainBrushTool::ApplySphereDab(const Mathematics::Vector3& hitDir, float 
 
 void TerrainBrushTool::BeginSphereStroke()
 {
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return;
+
     auto* svc = TerrainService::TryGet();
     if (!svc)
         return;
@@ -601,6 +608,9 @@ bool TerrainBrushTool::EnsureActiveZone(const Mathematics::Vector3& hit)
 
 void TerrainBrushTool::BeginStroke(const Mathematics::Vector3& hit)
 {
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return;
+
     auto* world = &m_Owner.GetWorld();
     auto* svc = TerrainService::TryGet();
     if (!svc)

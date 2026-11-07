@@ -149,6 +149,9 @@ void ApplyPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pre
                                    UndoRedoService* undo, EditorChangeNotifications* notifications,
                                    const std::string& undoName)
 {
+    if (undo && !undo->CommitPendingEdit())
+        return;
+
     if (targets.empty())
         return;
     std::string error;

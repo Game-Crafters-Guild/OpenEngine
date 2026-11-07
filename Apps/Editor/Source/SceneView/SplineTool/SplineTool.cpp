@@ -1065,6 +1065,9 @@ void SplineTool::ClearSelectedControlTransformEdit()
 
 void SplineTool::FinalizeSpline(const GizmoRay& releaseRay)
 {
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return;
+
     const auto& points = m_ClickPoints;
     auto* world = &m_State->World();
     if (points.size() < 2 || !world)

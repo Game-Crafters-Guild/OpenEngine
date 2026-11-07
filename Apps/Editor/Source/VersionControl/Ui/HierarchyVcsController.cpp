@@ -641,6 +641,9 @@ SceneObjectDiff HierarchyVcsController::MakeLiveAddedDiff(
 void HierarchyVcsController::RevertEntityToBaseline(
     ECS::EntityHandle entity, const SceneObjectDiff& object)
 {
+    if (m_Panel.m_Undo && !m_Panel.m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Panel.m_World || !entity.IsValid() ||
         !m_Panel.m_World->IsValid(entity))
         return;
@@ -779,6 +782,9 @@ void HierarchyVcsController::RevertEntityToBaseline(
 
 void HierarchyVcsController::RestoreGhostEntity(TreeId id)
 {
+    if (m_Panel.m_Undo && !m_Panel.m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Panel.m_World || !IsGhostTreeId(id))
         return;
     const uint32_t index = GhostTreeIdIndex(id);

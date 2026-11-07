@@ -520,12 +520,14 @@ bool SceneViewPanel::HandleSceneViewCommandShortcut(SceneViewController* control
             // Copy: `selected` aliases the controller's live selection, which the
             // post-duplicate re-select below replaces.
             const std::vector<ECS::EntityHandle> selectionBefore = selected;
+            auto* undo = (m_Context && m_Context->UndoRedo) ? m_Context->UndoRedo : nullptr;
+            if (undo && !undo->CommitPendingEdit())
+                return true;
             const Editor::EntityDuplicateResult duplicate = Editor::DuplicateEntitySubtreeRoots(*world, selectionBefore);
             const std::vector<ECS::EntityHandle>& newRoots = duplicate.NewRoots;
 
             SceneViewController* notifyController = controller ? controller : selectionController;
 
-            auto* undo = (m_Context && m_Context->UndoRedo) ? m_Context->UndoRedo : nullptr;
             if (undo && !newRoots.empty() && notifyController)
             {
                 // NewRoots only lists the duplicated top roots; the command must own
@@ -2029,6 +2031,9 @@ ECS::EntityHandle SceneViewPanel::CreateMeasureEntity(const std::array<float, 3>
                                                       const std::array<float, 3>& end,
                                                       bool is2D)
 {
+    if (m_Context && m_Context->UndoRedo && !m_Context->UndoRedo->CommitPendingEdit())
+        return {};
+
     const float dx = end[0] - start[0];
     const float dy = end[1] - start[1];
     const float dz = end[2] - start[2];
@@ -3761,6 +3766,9 @@ UI::Interaction::DropFeedback SceneViewPanel::CanDrop(const UI::Interaction::Dro
 
 void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
 {
+    if (m_Context && m_Context->UndoRedo && !m_Context->UndoRedo->CommitPendingEdit())
+        return;
+
     UIElement* viewport = GetActiveViewportElement();
     if (!m_Context || !m_Context->Assets || !m_Controller || !viewport)
         return;
@@ -4456,6 +4464,9 @@ ECS::EntityHandle SceneViewPanel::SpawnDroppedModel(ECS::World& world, Engine::R
                                                     const GUID& modelGuid, const std::filesystem::path& modelPath,
                                                     const std::string& name, const Mathematics::Vector3& worldPos)
 {
+    if (m_Context && m_Context->UndoRedo && !m_Context->UndoRedo->CommitPendingEdit())
+        return {};
+
     AssetManager& assets = EngineCore::GetInstance().GetAssetManager();
     SharedPtr<Asset> asset = assets.GetAsset(modelGuid);
     auto* modelAsset = dynamic_cast<ModelAsset*>(asset.get());

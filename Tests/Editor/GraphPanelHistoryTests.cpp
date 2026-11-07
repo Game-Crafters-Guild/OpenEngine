@@ -61,6 +61,9 @@ Label* FindLabel(UIElement& element, const std::string& text)
 class HistoryGraphPanel final : public GraphPanel
 {
 public:
+    using GraphPanel::RootModel;
+    using GraphPanel::CommitLiveGraphMutation;
+
     HistoryGraphPanel() : GraphPanel(Graph::kKindIdGameLogic)
     {
         GraphKindHooks hooks;
@@ -234,6 +237,94 @@ TEST_F(GraphPanelHistoryTests, CancelingTheFirstSaveKeepsTheCurrentHistoryValid)
     EXPECT_EQ(Panel->Value(), "0");
     EXPECT_TRUE(History.GetLastError().empty());
 }
+TEST_F(GraphPanelHistoryTests, CommittingAnotherParameterSettlesThePreviewBeforeWriting)
+{
+    Panel->RootModel().FindNode("node")->Parameters["other"] = "0";
+    ASSERT_TRUE(Panel->SetNodeParameter("node", "value", "1", false));
+    ASSERT_TRUE(Panel->SetNodeParameter("node", "other", "2", true));
+    History.Undo();
+    EXPECT_EQ(Panel->Value(), "1");
+    EXPECT_EQ(Panel->RootModel().FindNode("node")->Parameters.GetString("other", ""), "0");
+    History.Undo();
+    EXPECT_EQ(Panel->Value(), "0");
+    History.Redo();
+    EXPECT_EQ(Panel->Value(), "1");
+    EXPECT_EQ(Panel->RootModel().FindNode("node")->Parameters.GetString("other", ""), "0");
+    History.Redo();
+    EXPECT_EQ(Panel->RootModel().FindNode("node")->Parameters.GetString("other", ""), "2");
+}
+
+TEST_F(GraphPanelHistoryTests, LiveMutationSettlesThePreviewBeforeCapturingItsBeforeState)
+{
+    Panel->RootModel().FindNode("node")->Parameters["other"] = "0";
+    ASSERT_TRUE(Panel->SetNodeParameter("node", "value", "1", false));
+    Panel->CommitLiveGraphMutation("Set Other", [panel = Panel]() {
+        panel->RootModel().FindNode("node")->Parameters["other"] = "2";
+    });
+    History.Undo();
+    History.Undo();
+    EXPECT_EQ(Panel->Value(), "0");
+    History.Redo();
+    EXPECT_EQ(Panel->Value(), "1");
+    EXPECT_EQ(Panel->RootModel().FindNode("node")->Parameters.GetString("other", ""), "0");
+    History.Redo();
+    EXPECT_EQ(Panel->RootModel().FindNode("node")->Parameters.GetString("other", ""), "2");
+}
+
+TEST_F(GraphPanelHistoryTests, AVariableCommitDoesNotEnterThePendingParameterRevision)
+{
+    ASSERT_TRUE(Panel->SetNodeParameter("node", "value", "1", false));
+    ASSERT_TRUE(Panel->EditGraphVariableFromInspector("Parameter", "2", true));
+    History.Undo();
+    History.Undo();
+    History.Redo();
+    EXPECT_EQ(Panel->Value(), "1");
+    EXPECT_EQ(Panel->ActiveGraphModel()->Variables.front().Value, "0");
+    History.Redo();
+    EXPECT_EQ(Panel->ActiveGraphModel()->Variables.front().Value, "2");
+}
+
+TEST_F(GraphPanelHistoryTests, CommittingTheSameParameterFinishesOneGesture)
+{
+    ASSERT_TRUE(Panel->SetNodeParameter("node", "value", "1", false));
+    ASSERT_TRUE(Panel->SetNodeParameter("node", "value", "2", true));
+    ASSERT_TRUE(History.CommitPendingEdit());
+    EXPECT_EQ(History.GetUndoCount(), 1u);
+    History.Undo();
+    EXPECT_EQ(Panel->Value(), "0");
+    History.Redo();
+    EXPECT_EQ(Panel->Value(), "2");
+}
+
+TEST_F(GraphPanelHistoryTests, FailedSettlementPreventsTheNextMutation)
+{
+    bool available = true;
+    std::uint8_t value = 0;
+    Editor::HistorySnapshotTarget target;
+    target.Capture = [&available, &value](Editor::HistorySnapshotTarget::Snapshot& snapshot) {
+        if (!available)
+            return false;
+        snapshot = {value};
+        return true;
+    };
+    target.Apply = [&value](const Editor::HistorySnapshotTarget::Snapshot& snapshot) {
+        value = snapshot.front();
+        return true;
+    };
+    auto edit = History.BeginInteractiveEdit("Unavailable Preview", std::move(target));
+    ASSERT_TRUE(edit);
+    edit.Preview([&value]() { value = 1; });
+    available = false;
+    EXPECT_FALSE(Panel->SetNodeParameter("node", "value", "2", true));
+    EXPECT_EQ(Panel->Value(), "0");
+    bool mutated = false;
+    Panel->CommitLiveGraphMutation("Refused Mutation", [&mutated]() { mutated = true; });
+    EXPECT_FALSE(mutated);
+    EXPECT_TRUE(History.HasOpenInteractiveEdit());
+    available = true;
+    edit.Cancel();
+}
+
 } // namespace
 
 namespace GameEngine::Platform

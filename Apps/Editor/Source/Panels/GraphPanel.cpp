@@ -1799,6 +1799,9 @@ void GraphPanel::ShowVariablesSortContextMenu(float screenX, float screenY)
 
 bool GraphPanel::ReorderGraphVariable(const std::string& name, size_t targetDisplayIndex)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
+
     const std::string cleanName = TrimCopy(name);
     if (cleanName.empty())
         return false;
@@ -1936,6 +1939,9 @@ std::vector<Graph::Variable> GraphPanel::CollectVariablesForDisplay() const
 
 void GraphPanel::AddGraphVariable()
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     std::unordered_set<std::string> existing;
     for (const auto& variable : CollectVariablesForDisplay())
         existing.insert(variable.Name);
@@ -1969,6 +1975,9 @@ void GraphPanel::AddGraphVariable()
 
 void GraphPanel::RenameGraphVariable(const std::string& oldName, const std::string& newName)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     const std::string cleanOldName = TrimCopy(oldName);
     const std::string cleanNewName = TrimCopy(newName);
     if (cleanOldName.empty() || cleanNewName.empty() || cleanOldName == cleanNewName)
@@ -2108,6 +2117,9 @@ void GraphPanel::RequestSetGraphVariableType(const std::string& name, const std:
 
 void GraphPanel::SetGraphVariableType(const std::string& name, const std::string& type)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     std::vector<std::uint8_t> before;
     const bool haveBefore = (m_Undo && CaptureGraphSnapshot(before));
     Graph::Variable* variable = EnsureGraphVariable(name);
@@ -2245,6 +2257,9 @@ bool GraphPanel::SetGraphVariableValue(const std::string& name, const std::strin
         return true;
     }
 
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
+
     std::vector<std::uint8_t> before;
     const bool haveBefore = CaptureGraphSnapshot(before);
     if (!ApplyGraphVariableValue(cleanName, value, false))
@@ -2276,6 +2291,9 @@ bool GraphPanel::SetGraphVariableValue(const std::string& name, const std::strin
 
 void GraphPanel::SetGraphVariablePublic(const std::string& name, bool isPublic)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     std::vector<std::uint8_t> before;
     const bool haveBefore = (m_Undo && CaptureGraphSnapshot(before));
     Graph::Variable* variable = EnsureGraphVariable(name);
@@ -2302,6 +2320,9 @@ void GraphPanel::SetGraphVariablePublic(const std::string& name, bool isPublic)
 
 void GraphPanel::SetGraphVariableGlobal(const std::string& name, bool isGlobal)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     std::vector<std::uint8_t> before;
     const bool haveBefore = (m_Undo && CaptureGraphSnapshot(before));
     Graph::Variable* variable = EnsureGraphVariable(name);
@@ -2710,6 +2731,9 @@ void GraphPanel::AddNodeFromPalette(const std::string& typeId)
 void GraphPanel::AddNodeFromPaletteAtScreen(const std::string& typeId, float screenX, float screenY,
                                                 bool centerOnPointer, bool rejectPaletteArea)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Canvas || !m_Canvas->GetModel())
         return;
 
@@ -2786,6 +2810,9 @@ void GraphPanel::AddNodeFromWireDropAtScreen(const std::string& anchorNodeId, co
                                                  const std::string& typeId, const std::string& connectPortId,
                                                  float screenX, float screenY, bool fromInputPort)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Canvas || !m_Canvas->GetModel())
         return;
 
@@ -4102,27 +4129,7 @@ void GraphPanel::SetupUI()
     });
     canvas->SetUndoScope([this](const std::string& actionName, std::function<void()> mutate)
     {
-        if (!m_Undo || !m_Canvas)
-        {
-            if (mutate)
-                mutate();
-            return;
-        }
-        std::vector<std::uint8_t> before;
-        if (!CaptureGraphSnapshot(before))
-        {
-            if (mutate)
-                mutate();
-            return;
-        }
-        if (mutate)
-            mutate();
-        std::vector<std::uint8_t> after;
-        if (!CaptureGraphSnapshot(after))
-            return;
-        auto cmd = std::make_unique<GraphSnapshotCommand>(this, std::move(before), std::move(after),
-                                                          actionName);
-        m_Undo->CommitAlreadyApplied(std::move(cmd));
+        CommitLiveGraphMutation(actionName.c_str(), std::move(mutate));
     });
     canvas->SetOnNodeDragStarted([this]()
     {
@@ -4862,6 +4869,9 @@ bool GraphPanel::SetNodeParameter(const std::string& nodeId, const std::string& 
         return true;
     }
 
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
+
     std::vector<std::uint8_t> before;
     if (!CaptureGraphSnapshot(before))
         return ApplyNodeParameterValue(nodeId, key, value);
@@ -4923,6 +4933,9 @@ bool GraphPanel::SetTransitionFromInspector(const std::string& linkId, const Gra
         m_GraphTransitionEditLinkId.clear();
         return true;
     }
+
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
 
     std::vector<std::uint8_t> before;
     if (!CaptureGraphSnapshot(before))
@@ -5153,6 +5166,9 @@ void GraphPanel::MarkDirty()
 
 void GraphPanel::CommitLiveGraphMutation(const char* actionName, std::function<void()> mutate)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Undo)
     {
         if (mutate)

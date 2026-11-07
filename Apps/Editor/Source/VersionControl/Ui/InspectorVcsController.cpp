@@ -452,6 +452,9 @@ void InspectorVcsController::ShowPropertyContextMenu(
 
 void InspectorVcsController::RevertProperty(const ScenePropertyDiff& property)
 {
+    if (m_Panel.m_Undo && !m_Panel.m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Panel.m_World || !m_Panel.m_Entity.IsValid() ||
         !m_Panel.m_World->IsValid(m_Panel.m_Entity) ||
         property.OriginalValue.empty())

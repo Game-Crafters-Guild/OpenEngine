@@ -100,6 +100,9 @@ bool CommitMarkupNotesEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedo
                            EditorChangeNotifications* notifications, const std::string& label,
                            const std::function<bool()>& edit, const std::function<void()>& vocabularyChanged)
 {
+    if (undo && !undo->CommitPendingEdit())
+        return false;
+
     auto* service = MarkupECS::MarkupService::TryGet();
     const auto* markup = world.GetComponent<Components::Markup>(entity);
     if (!service || !markup)

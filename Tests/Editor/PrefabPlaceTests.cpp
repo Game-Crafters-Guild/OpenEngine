@@ -35,6 +35,7 @@
 #include "Thumbnails/IThumbnailProvider.h"
 #include "UndoRedo/DuplicateEntitiesCommand.h"
 #include "UndoRedo/SceneViewDropUndoCommand.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Assets/AssetManager.h"
@@ -2860,4 +2861,36 @@ TEST_F(PrefabPlaceTests, ApplyingOverridesOwnsTheSceneRevisionAcrossSave)
     undo.Redo();
     EXPECT_FALSE(document.IsDirty());
     EXPECT_FLOAT_EQ(IntensityOf(world, FindChild(world, second)), 2.0f);
+}
+
+TEST_F(PrefabPlaceTests, ApplyingOverridesSettlesTheOpenPreviewBeforeUpdatingAnotherInstance)
+{
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    const auto file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const auto first = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    const auto second = PlaceAt(world, file, 4.0f, 0.0f, 0.0f);
+    const auto firstLid = FindChild(world, first);
+    const auto secondLid = FindChild(world, second);
+    const float original = IntensityOf(world, secondLid);
+    Editor::UndoRedoService undo;
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        &world, {firstLid, secondLid}, ECS::GetComponentTypeId<Components::ReflectionProbe>(), &Notifications(),
+        "Preview Probe Intensity");
+    auto preview = undo.BeginInteractiveEdit("Preview Probe Intensity", std::move(target));
+    preview.Preview([&world, firstLid]() {
+        world.GetComponentForWrite<Components::ReflectionProbe>(firstLid)->Intensity = 2.0f;
+    });
+    Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, firstLid);
+    const auto menu = OverrideMenuOf(world, firstLid, ECS::GetComponentTypeId<Components::ReflectionProbe>(), "Intensity", undo);
+    ASSERT_EQ(menu.size(), 2u);
+    menu.front().Run();
+    ASSERT_FLOAT_EQ(IntensityOf(world, secondLid), 2.0f);
+    undo.Undo();
+    undo.Undo();
+    undo.Redo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, firstLid), 2.0f);
+    EXPECT_FLOAT_EQ(IntensityOf(world, secondLid), original);
+    undo.Redo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, secondLid), 2.0f);
 }

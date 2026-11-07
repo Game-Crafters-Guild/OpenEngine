@@ -158,6 +158,9 @@ void NotifyPrefabCreation(const CreatePrefabTarget& target)
 bool CreatePrefabsFromDialog(const CreatePrefabTarget& target, const std::vector<std::filesystem::path>& prefabFiles,
                              bool replace, std::string& outError)
 {
+    if (target.Undo && !target.Undo->CommitPendingEdit())
+        return false;
+
     if (prefabFiles.size() != target.Roots.size())
         return false;
     std::vector<std::unique_ptr<CreatePrefabCommand>> commands;
@@ -386,6 +389,9 @@ void NotifyPrefabUnpacked(const HierarchyCommandContext& context)
 // Unpacks the target instance to `depth` as one undo step; a refusal shows its notice.
 void UnpackPrefab(const HierarchyCommandContext& context, Scene::PrefabUnpackDepth depth)
 {
+    if (context.Undo && !context.Undo->CommitPendingEdit())
+        return;
+
     if (!context.HasTargetEntity || !context.World)
         return;
     std::string error;

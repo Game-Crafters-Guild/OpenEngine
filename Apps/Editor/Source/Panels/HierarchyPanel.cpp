@@ -1643,6 +1643,9 @@ HierarchyPanel::HierarchyPanel()
 
 void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_World)
         return;
 
@@ -2392,6 +2395,9 @@ ECS::EntityHandle HierarchyPanel::FirstSelectedEntity() const
 
 void HierarchyPanel::DuplicateSelectedEntities()
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_World || !m_Selection)
         return;
 
@@ -2512,6 +2518,9 @@ void HierarchyPanel::DuplicateSelectedEntities()
 
 bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
+
     if (IsLoadRecentSceneCommand(cmd))
     {
         const size_t index = static_cast<size_t>(cmd - kCmdLoadRecentSceneBase);
@@ -4634,6 +4643,9 @@ void HierarchyPanel::DeferFileDrop(const std::filesystem::path& assetPath, const
 
 bool HierarchyPanel::FinishTreeTextureDrop(const std::filesystem::path& texturePath, ECS::EntityHandle parent)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
+
     if (!m_Context || !m_World || !m_Context->Assets || !m_Context->RenderServices)
         return false;
     const bool is2D = m_Context->IsSceneView2D && m_Context->IsSceneView2D();
@@ -4669,6 +4681,9 @@ void HierarchyPanel::DeferTreeTextureDrop(const std::filesystem::path& texturePa
 void HierarchyPanel::FinishFileDrop(const std::filesystem::path& assetPath, const GUID& assetGuid,
                                     const std::string& entityName)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Context || !m_World || !m_Context->Assets)
         return;
     auto& am = *m_Context->Assets;
@@ -4765,6 +4780,9 @@ void HierarchyPanel::FinishFileDrop(const std::filesystem::path& assetPath, cons
 
 void HierarchyPanel::PerformDrop(const UI::Interaction::DropRequest& request)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     // Asset paths drop (textures, models from Assets panel)
     if (const auto* pathsPl = request.payload.TryGet<Editor::AssetPathsDragPayload>())
     {
