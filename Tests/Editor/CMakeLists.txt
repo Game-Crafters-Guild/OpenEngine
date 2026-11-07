@@ -957,6 +957,12 @@ set(EDITOR_TEST_SOURCES
 	TerrainInspectorSectionStyleTests.cpp
 	# The component color row on a ColorLinear member: apply, alpha kept, undo.
 	InspectorComponentColorRowTests.cpp
+	InspectorEffectColorPickerTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/BloomEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/ColorFilterEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/AtmosphericCloudLayerInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurveField.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurveTangents.cpp
 	# The grass inspector's Root Color row (Auto or authored), built in process over a live
 	# World with a stub colour picker. The terrain panel's inspectors register from one TU.
 	TerrainGrassRootColorRowTests.cpp

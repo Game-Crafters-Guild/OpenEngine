@@ -7,6 +7,7 @@
 #include "Components/Rendering/PostProcessEffects/AtmosphericCloudLayer.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
@@ -17,8 +18,10 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace GameEngine
 {
@@ -81,6 +84,39 @@ static void StyleSwatch(UIElement* swatch, uint32_t argb)
         .Set(Style::Cursor, CursorStyle::Pointer);
 }
 
+void WriteCloudPickerColor(Components::AtmosphericCloudLayer& cloud, uint32_t argb, float intensity)
+{
+    PickerStateToCloudRgb(argb, intensity, cloud.CloudColor);
+}
+
+void RefreshCloudColorRow(const InspectorContext& context, UIElement::WeakRef<UIElement> swatchRef,
+                          UIElement::WeakRef<Label> labelRef)
+{
+    const auto* cloud = context.World->GetComponent<Components::AtmosphericCloudLayer>(context.Entity);
+    UIElement* swatch = swatchRef.Get();
+    Label* label = labelRef.Get();
+    if (!cloud || !swatch || !label)
+        return;
+    StyleSwatch(swatch, CloudRgbToArgb(cloud->CloudColor));
+    label->SetText(FormatRgb(cloud->CloudColor));
+}
+
+void OpenCloudColorPicker(const InspectorContext& context, UIEvent& event, const std::function<void()>& refresh)
+{
+    if (event.Button != 0)
+        return;
+    event.Stop();
+    const auto* cloud = context.World->GetComponent<Components::AtmosphericCloudLayer>(context.Entity);
+    if (!context.OpenColorPickerWindow || !cloud)
+        return;
+    uint32_t argb = 0;
+    float intensity = 1.0f;
+    CloudRgbToPickerState(cloud->CloudColor, argb, intensity);
+    auto binding = InspectorUI::InspectorColorPickerEdit::ForComponent<Components::AtmosphericCloudLayer>(
+        context, "Change Atmospheric Cloud Color", "Atmospheric Cloud Color", WriteCloudPickerColor, refresh);
+    context.OpenColorPickerWindow(argb, intensity, InspectorUI::InspectorColorPickerEdit::Bind(std::move(binding)));
+}
+
 } // namespace
 
 void RegisterAtmosphericCloudLayerInspector()
@@ -104,7 +140,6 @@ void RegisterAtmosphericCloudLayerInspector()
         ECS::EntityHandle e = ctx.Entity;
         Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
         Editor::UndoRedoService* undo = ctx.Undo;
-        OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
 
         AddComponentFloatRowWithDrag<Layer>(ctx.Parent, "SkyFill", layer->SkyFill, w, e, n,
             undo, "Change Cloud Sky Fill",
@@ -141,86 +176,14 @@ void RegisterAtmosphericCloudLayerInspector()
             Label* rgbLabelRaw = rgbLabel.get();
             fieldContainer->AddChild(std::move(rgbLabel));
 
-            // The picker's callbacks outlive an inspector rebuild: resolve the row through
-            // weak refs instead of holding the freed widgets.
-            auto updateUI = [swatchRef = UIElement::MakeWeakRef(swatchRaw),
-                             rgbLabelRef = UIElement::MakeWeakRef(rgbLabelRaw), w, e]() {
-                auto* c = w->GetComponent<Layer>(e);
-                UIElement* swatch = swatchRef.Get();
-                Label* rgbLabel = rgbLabelRef.Get();
-                if (!c || !swatch || !rgbLabel) return;
-                StyleSwatch(swatch, CloudRgbToArgb(c->CloudColor));
-                rgbLabel->SetText(FormatRgb(c->CloudColor));
+            auto updateUI = [ctx, swatchRef = UIElement::MakeWeakRef(swatchRaw),
+                             labelRef = UIElement::MakeWeakRef(rgbLabelRaw)]
+            {
+                RefreshCloudColorRow(ctx, swatchRef, labelRef);
             };
-
-            auto clickHandler = [w, e, n, undo, openPicker, updateUI](UIEvent& ev) {
-                if (ev.Button != 0)
-                    return;
-                ev.Stop();
-
-                if (!openPicker)
-                    return;
-
-                auto* comp = w->GetComponent<Layer>(e);
-                if (!comp)
-                    return;
-
-                uint32_t currentArgb = 0;
-                float currentIntensity = 1.0f;
-                CloudRgbToPickerState(comp->CloudColor, currentArgb, currentIntensity);
-
-                using Edit = Editor::UndoRedoService::InteractiveEdit;
-                auto edit = std::make_shared<Edit>();
-
-                if (undo)
-                {
-                    auto target = MakeComponentSnapshotTarget<Layer>(w, e, n, "Atmospheric Cloud Color");
-                    *edit = undo->BeginInteractiveEdit("Change Atmospheric Cloud Color", std::move(target));
-                }
-
-                ColorPickerCallbacks cbs;
-                cbs.onApply = [w, e, n, edit, updateUI](uint32_t newArgb, float newIntensity) {
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<Layer>(e);
-                            if (c) PickerStateToCloudRgb(newArgb, newIntensity, c->CloudColor);
-                        });
-                        edit->Commit();
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<Layer>(e);
-                        if (!c) return;
-                        Layer updated = *c;
-                        PickerStateToCloudRgb(newArgb, newIntensity, updated.CloudColor);
-                        Editor::CommitComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                cbs.onCancel = [edit, updateUI]() {
-                    if (*edit) edit->Cancel();
-                    updateUI();
-                };
-                cbs.onValueChanging = [w, e, n, edit, updateUI](uint32_t newArgb, float newIntensity) {
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<Layer>(e);
-                            if (c) PickerStateToCloudRgb(newArgb, newIntensity, c->CloudColor);
-                        });
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<Layer>(e);
-                        if (!c) return;
-                        Layer updated = *c;
-                        PickerStateToCloudRgb(newArgb, newIntensity, updated.CloudColor);
-                        Editor::PreviewComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                openPicker(currentArgb, currentIntensity, std::move(cbs));
+            auto clickHandler = [ctx, updateUI](UIEvent& event)
+            {
+                OpenCloudColorPicker(ctx, event, updateUI);
             };
 
             swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);

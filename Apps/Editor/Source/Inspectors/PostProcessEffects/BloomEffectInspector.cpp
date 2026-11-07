@@ -7,6 +7,7 @@
 #include "Editor/Entities/EditorECSHelpers.h"
 
 #include "Assets/AssetRegistry.h" // AssetIndexRecord — the lens-dirt metadata filter
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
@@ -21,8 +22,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace GameEngine
@@ -92,13 +95,69 @@ void StyleVignetteSwatch(UIElement* swatch, uint32_t argb)
         .Set(Style::Cursor, CursorStyle::Pointer);
 }
 
-void AddBloomColorRow(
-    UIElement* parent, const char* labelText, const char* tooltip,
-    const char* snapshotLabel, const char* undoLabel,
-    float32 (Bloom::*colorMember)[3], ECS::World* world, ECS::EntityHandle entity,
-    Editor::EditorChangeNotifications* notifications, Editor::UndoRedoService* undo,
-    OpenColorPickerWindowFn openPicker, const float (&initialColor)[3])
+template<auto TColor>
+uint32_t ReadBloomPickerColor(const Bloom& bloom)
 {
+    return VignetteColorToArgb(bloom.*TColor);
+}
+
+template<auto TColor>
+void WriteBloomPickerColor(Bloom& bloom, uint32_t argb, float)
+{
+    ArgbToVignetteColor(argb, bloom.*TColor);
+}
+
+template<auto TColor>
+void RefreshBloomColorRow(const InspectorContext& context, UIElement::WeakRef<UIElement> swatchRef,
+                          UIElement::WeakRef<Label> labelRef)
+{
+    const auto* bloom = context.World->GetComponent<Bloom>(context.Entity);
+    UIElement* swatch = swatchRef.Get();
+    Label* label = labelRef.Get();
+    if (!bloom || !swatch || !label)
+        return;
+    StyleVignetteSwatch(swatch, ReadBloomPickerColor<TColor>(*bloom));
+    label->SetText(FormatVignetteColor(bloom->*TColor));
+}
+
+void RefreshUnrecordedBloomPicker(const InspectorContext& context, const Bloom& original,
+                                  const std::function<void()>& refresh, Editor::EditChangeKind kind)
+{
+    if (kind == Editor::EditChangeKind::UndoRedo)
+        Editor::PreviewComponentUpdate(context.World, context.Entity, context.ChangeNotifications, original);
+    if (kind != Editor::EditChangeKind::Commit)
+        refresh();
+}
+
+template<auto TColor>
+void OpenBloomColorPicker(const InspectorContext& context, UIEvent& event, const char* snapshotLabel,
+                          const char* undoLabel, const std::function<void()>& refresh)
+{
+    if (event.Button != 0)
+        return;
+    event.Stop();
+    const auto* bloom = context.World->GetComponent<Bloom>(context.Entity);
+    if (!context.OpenColorPickerWindow || !bloom)
+        return;
+    auto binding = InspectorUI::InspectorColorPickerEdit::ForComponent<Bloom>(
+        context, undoLabel, snapshotLabel, WriteBloomPickerColor<TColor>, refresh);
+    if (!context.Undo)
+    {
+        binding.Changed = [context, original = *bloom, refresh](Editor::EditChangeKind kind)
+        {
+            RefreshUnrecordedBloomPicker(context, original, refresh, kind);
+        };
+    }
+    context.OpenColorPickerWindow(ReadBloomPickerColor<TColor>(*bloom), 1.0f,
+                                  InspectorUI::InspectorColorPickerEdit::Bind(std::move(binding)));
+}
+
+template<auto TColor>
+void AddBloomColorRow(UIElement* parent, const char* labelText, const char* tooltip,
+                      const char* snapshotLabel, const char* undoLabel,
+                      const InspectorContext& context, const Bloom& initial)
+{
+    const auto& initialColor = initial.*TColor;
     UIElement* row = InspectorUI::AddRow(parent);
     Label* label = InspectorUI::AddLabel(row, labelText, tooltip);
     if (label)
@@ -122,80 +181,14 @@ void AddBloomColorRow(
     rgbLabelRaw->Style().Set(Style::Cursor, CursorStyle::Pointer);
     field->AddChild(std::move(rgbLabel));
 
-    // The picker's callbacks outlive an inspector rebuild: resolve the row through weak
-    // refs instead of holding the freed widgets.
-    auto refresh = [swatchRef = UIElement::MakeWeakRef(swatchRaw),
-                    rgbLabelRef = UIElement::MakeWeakRef(rgbLabelRaw), colorMember, world, entity]()
+    auto refresh = [context, swatchRef = UIElement::MakeWeakRef(swatchRaw),
+                    labelRef = UIElement::MakeWeakRef(rgbLabelRaw)]
     {
-        const auto* bloom = world->GetComponent<Bloom>(entity);
-        UIElement* swatch = swatchRef.Get();
-        Label* rgbLabel = rgbLabelRef.Get();
-        if (!bloom || !swatch || !rgbLabel)
-            return;
-        const auto& color = bloom->*colorMember;
-        StyleVignetteSwatch(swatch, VignetteColorToArgb(color));
-        rgbLabel->SetText(FormatVignetteColor(color));
+        RefreshBloomColorRow<TColor>(context, swatchRef, labelRef);
     };
-
-    auto onClick = [world, entity, notifications, undo, openPicker, refresh,
-                    snapshotLabel, undoLabel, colorMember](UIEvent& event)
+    auto onClick = [context, refresh, snapshotLabel, undoLabel](UIEvent& event)
     {
-        if (event.Button != 0)
-            return;
-        event.Stop();
-        if (!openPicker)
-            return;
-        const auto* bloom = world->GetComponent<Bloom>(entity);
-        if (!bloom)
-            return;
-        const Bloom original = *bloom;
-
-        using Edit = Editor::UndoRedoService::InteractiveEdit;
-        auto edit = std::make_shared<Edit>();
-        if (undo)
-        {
-            auto target = InspectorDrag::MakeComponentSnapshotTarget<Bloom>(
-                world, entity, notifications, snapshotLabel);
-            *edit = undo->BeginInteractiveEdit(undoLabel, std::move(target));
-        }
-
-        auto applyColor = [world, entity, notifications, edit, refresh,
-                           colorMember](uint32_t argb, bool commit)
-        {
-            if (*edit)
-            {
-                edit->Preview([&]
-                {
-                    if (auto* value = world->GetComponentForWrite<Bloom>(entity))
-                        ArgbToVignetteColor(argb, value->*colorMember);
-                });
-                if (commit)
-                    edit->Commit();
-            }
-            else if (const auto* current = world->GetComponent<Bloom>(entity))
-            {
-                Bloom updated = *current;
-                ArgbToVignetteColor(argb, updated.*colorMember);
-                if (commit)
-                    Editor::CommitComponentUpdate(world, entity, notifications, updated);
-                else
-                    Editor::PreviewComponentUpdate(world, entity, notifications, updated);
-            }
-            refresh();
-        };
-
-        ColorPickerCallbacks callbacks;
-        callbacks.onApply = [applyColor](uint32_t argb, float) { applyColor(argb, true); };
-        callbacks.onValueChanging = [applyColor](uint32_t argb, float) { applyColor(argb, false); };
-        callbacks.onCancel = [world, entity, notifications, edit, original, refresh]()
-        {
-            if (*edit)
-                edit->Cancel();
-            else
-                Editor::PreviewComponentUpdate(world, entity, notifications, original);
-            refresh();
-        };
-        openPicker(VignetteColorToArgb(bloom->*colorMember), 1.0f, std::move(callbacks));
+        OpenBloomColorPicker<TColor>(context, event, snapshotLabel, undoLabel, refresh);
     };
 
     swatchRaw->RegisterEventHandler(kEventMouseDown, onClick);
@@ -289,7 +282,6 @@ void RegisterBloomEffectInspector()
         ECS::EntityHandle e = ctx.Entity;
         Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
         Editor::UndoRedoService* undo = ctx.Undo;
-        OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
 
         struct ResponseCurveState
         {
@@ -358,10 +350,9 @@ void RegisterBloomEffectInspector()
             undo, "Change Bloom Intensity",
             [](Bloom& u, float v) { u.Intensity = std::max(0.0f, v); },
             1.0f, "Additive gain of filtered highlights; zero leaves only Diffusion and any depth veil.");
-        AddBloomColorRow(
+        AddBloomColorRow<&Bloom::Tint>(
             ctx.Parent, "Tint", "Scene-linear color tint applied to the highlight bloom pyramid",
-            "Bloom Tint", "Change Bloom Tint", &Bloom::Tint,
-            w, e, n, undo, openPicker, effect->Tint);
+            "Bloom Tint", "Change Bloom Tint", ctx, *effect);
 
         AddComponentFloatRowWithDrag<Bloom>(ctx.Parent, "Diffusion",
             Math::Clamp01(effect->ScatteringAmount), w, e, n, undo,
@@ -445,10 +436,9 @@ void RegisterBloomEffectInspector()
                 500.0f, "Camera-space distance where the atmospheric veil reaches full strength",
                 {}, 0.0f, 100000.0f);
 
-            AddBloomColorRow(
+            AddBloomColorRow<&Bloom::DepthVeilTint>(
                 depthVeilControlsRaw, "Veil Tint", "Color of the depth-driven atmospheric veil",
-                "Bloom Depth Veil Tint", "Change Bloom Depth Veil Tint", &Bloom::DepthVeilTint,
-                w, e, n, undo, openPicker, effect->DepthVeilTint);
+                "Bloom Depth Veil Tint", "Change Bloom Depth Veil Tint", ctx, *effect);
             ctx.Parent->AddChild(std::move(depthVeilControls));
         }
 
@@ -515,12 +505,10 @@ void RegisterBloomEffectInspector()
             },
             "Aspect-correct the dirt vignette to a circle");
 
-        AddBloomColorRow(
+        AddBloomColorRow<&Bloom::LensDirtVignetteColor>(
             lensDirtVignetteControlsRaw, "Vignette Color",
             "Tint applied to the lens dirt revealed at the image sides",
-            "Bloom Lens Dirt Vignette Color", "Change Bloom Lens Dirt Vignette Color",
-            &Bloom::LensDirtVignetteColor, w, e, n, undo, openPicker,
-            effect->LensDirtVignetteColor);
+            "Bloom Lens Dirt Vignette Color", "Change Bloom Lens Dirt Vignette Color", ctx, *effect);
         lensDirtControlsRaw->AddChild(std::move(lensDirtVignetteControls));
 
         AddComponentFloatRowWithDrag<Bloom>(lensDirtControlsRaw, "Lens Dirt Intensity",
