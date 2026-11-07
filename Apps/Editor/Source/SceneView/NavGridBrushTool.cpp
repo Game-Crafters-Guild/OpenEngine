@@ -224,6 +224,8 @@ void NavGridBrushTool::OnPointerEvent(const ScenePointerEvent& event)
     case PointerPhase::Down:
         if (event.button == PointerButton::Left && hitGrid)
         {
+            if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+                return;
             m_StrokeBeforeState.clear();
             m_StrokeCellsModified.clear();
             m_IsPainting = true;

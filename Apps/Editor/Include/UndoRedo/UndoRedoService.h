@@ -1,666 +1,592 @@
 #pragma once
 
+#include "Core/CpuProfiler.h"
+#include "Events/Event.h"
+#include "Types/FlatMap.h"
+#include "UndoRedo/History/CompoundHistoryCommand.h"
+#include "UndoRedo/History/HistoryGraph.h"
+#include "UndoRedo/History/HistoryMutationScope.h"
+#include "UndoRedo/History/HistoryReplayScope.h"
+#include "UndoRedo/History/HistorySnapshotCommand.h"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "Core/CpuProfiler.h"
-#include "EditorChangeNotifications.h"
-#include "UndoRedo/IEditorCommand.h"
-
 namespace GameEngine::Editor
 {
-// Editor-side undo/redo stack with support for:
-// - executing commands
-// - compound commands (grouping)
-// - interactive edits (drag/scrub) that capture before/after snapshots once
+/// One pending logical edit followed by immutable, branch-preserving revisions.
 class UndoRedoService
 {
-  public:
-    struct Config
+    struct PendingEdit
     {
-        std::size_t maxUndo = 1024;
+        std::uint64_t Id = 0;
+        std::string Name;
+        HistorySnapshotTarget Target;
+        HistorySnapshotTarget::Snapshot Before;
+        HistorySnapshotTarget::Snapshot After;
+        bool Active = true;
+        bool GestureOpen = true;
+        bool Previewed = false;
+        std::vector<std::unique_ptr<IEditorCommand>> Consequences;
+        FlatSet<const void*> Documents;
     };
 
-    // Use default-initialized config by default; callers may override.
+    struct PendingCompound
+    {
+        std::unique_ptr<CompoundHistoryCommand> Command;
+        FlatSet<const void*> Documents;
+    };
+
+public:
+    using SnapshotTarget = HistorySnapshotTarget;
+    using NodeId = HistoryGraph::NodeId;
+    enum class RevisionScope
+    {
+        History,
+        Document
+    };
+    struct SavedRevision
+    {
+        NodeId Revision = 0;
+        RevisionScope Scope = RevisionScope::History;
+    };
+    struct Config { std::size_t maxUndo = 1024; };
+    struct History
+    {
+        HistoryGraph Graph;
+        FlatMap<const void*, SavedRevision> SavedRevisions;
+    };
+
     UndoRedoService() = default;
-    explicit UndoRedoService(Config cfg) : m_Config(std::move(cfg)) {}
+    explicit UndoRedoService(Config config) : m_Config(config) {}
+    UndoRedoService(const UndoRedoService&) = delete;
+    UndoRedoService& operator=(const UndoRedoService&) = delete;
+    ~UndoRedoService()
+    {
+        if (m_Pending)
+            m_Pending->Active = false;
+    }
 
-    bool CanUndo() const { return !m_Undo.empty(); }
-    bool CanRedo() const { return !m_Redo.empty(); }
-
-    std::size_t GetUndoCount() const { return m_Undo.size(); }
-    std::size_t GetRedoCount() const { return m_Redo.size(); }
-
-    // Returns the display name for the next undo/redo command (top of stack),
-    // or nullptr if the stack is empty.
+    bool CanUndo() const { return HasPendingCommand() || HasPendingEdit() || m_Graph.GetCurrent() != m_Graph.GetRoot(); }
+    bool CanRedo() const { return !HasPendingCommand() && !HasPendingEdit() && !m_Graph.GetFuture().empty(); }
+    // Includes an ended, unpublished logical action. GetHistoryNodes contains only committed revisions.
+    std::size_t GetUndoCount() const { return m_Graph.GetAncestors().size() + (HasPendingStep() ? 1u : 0u); }
+    std::size_t GetRedoCount() const { return m_Graph.GetFuture().size(); }
+    NodeId GetCurrentNodeId() const { return m_Graph.GetCurrent(); }
+    NodeId GetRootNodeId() const { return m_Graph.GetRoot(); }
+    const std::vector<HistoryGraph::Node>& GetHistoryNodes() const { return m_Graph.GetNodes(); }
+    const std::string& GetLastError() const { return m_LastError; }
+    /// Document scope ignores revisions whose mutations belong to other documents.
+    void MarkSaved(const void* document, RevisionScope scope = RevisionScope::History)
+    {
+        const NodeId revision = scope == RevisionScope::Document
+            ? m_Graph.GetDocumentRevision(document) : GetCurrentNodeId();
+        m_SavedRevisions.InsertOrAssign(document, SavedRevision{revision, scope});
+    }
+    bool IsAtSavedRevision(const void* document) const
+    {
+        const SavedRevision* saved = m_SavedRevisions.Find(document);
+        if (!saved)
+            return false;
+        if (saved->Scope == RevisionScope::Document)
+            return saved->Revision == m_Graph.GetDocumentRevision(document) && !HasPendingDocumentChange(document);
+        return saved->Revision == GetCurrentNodeId() && !HasPendingEdit() && !HasPendingCommand();
+    }
+    /// Associate a synchronous, recorded mutation with the document it changes.
+    bool MarkDocumentChanged(const void* document)
+    {
+        if (!document || !HistoryMutationScope::IsActiveFor(this) || HistoryMutationScope::IsRestoringFor(this))
+            return false;
+        if (m_Pending)
+            m_Pending->Documents.Insert(document);
+        else if (m_PendingCommand)
+            m_PendingCommandDocuments.Insert(document);
+        else
+            return false;
+        return true;
+    }
+    bool HasPendingEdit() const
+    {
+        return m_Pending && m_Pending->Active && (m_Pending->Previewed || !m_Pending->Consequences.empty());
+    }
+    bool HasOpenInteractiveEdit() const { return m_Pending && m_Pending->Active && m_Pending->GestureOpen; }
+    const char* GetPendingName() const
+    {
+        return HasPendingCommand() ? m_PendingCommand->GetName() : HasPendingEdit() ? m_Pending->Name.c_str() : nullptr;
+    }
+    std::string GetPendingDescription() const
+    {
+        if (HasPendingCommand())
+            return m_PendingCommand->GetDescription();
+        if (!HasPendingEdit() || m_Pending->GestureOpen)
+            return {};
+        std::string result = m_Pending->Target.Describe
+            ? m_Pending->Target.Describe(m_Pending->Before, m_Pending->After) : std::string{};
+        for (const auto& command : m_Pending->Consequences)
+        {
+            const std::string description = command->GetDescription();
+            if (description.empty())
+                continue;
+            if (!result.empty())
+                result += '\n';
+            result += description;
+        }
+        return result;
+    }
+    NodeId GetPendingActionId() const { return m_Pending ? m_Pending->Id : m_PendingCommandId; }
+    void SetBeforeCommit(std::function<void()> callback) { m_BeforeCommit = std::move(callback); }
+    bool AppendConsequence(NodeId action, std::unique_ptr<IEditorCommand> command)
+    {
+        if (!command || action == 0 || action != GetPendingActionId() || m_Replaying)
+            return false;
+        if (m_Pending)
+            m_Pending->Consequences.push_back(std::move(command));
+        else
+        {
+            auto compound = std::make_unique<CompoundHistoryCommand>(m_PendingCommand->GetName());
+            compound->Add(std::move(m_PendingCommand));
+            compound->Add(std::move(command));
+            m_PendingCommand = std::move(compound);
+        }
+        return true;
+    }
     const char* PeekUndoName() const
     {
-        if (m_Undo.empty() || !m_Undo.back())
-            return nullptr;
-        return m_Undo.back()->GetName();
+        if (const char* pending = GetPendingName())
+            return pending;
+        const auto* node = m_Graph.Find(m_Graph.GetCurrent());
+        return node ? node->GetName() : nullptr;
     }
-    const char* PeekRedoName() const
+    const char* PeekRedoName() const { return GetRedoNameAt(0); }
+    NodeId GetUndoEntryIdAt(std::size_t index) const
     {
-        if (m_Redo.empty() || !m_Redo.back())
-            return nullptr;
-        return m_Redo.back()->GetName();
+        const auto path = m_Graph.GetAncestors();
+        return index < path.size() ? path[index] : index == path.size() && HasPendingStep() ? GetPendingActionId() : 0;
     }
-
-    // Optional notification hook for UI to refresh menu labels, etc.
-    void SetOnHistoryChanged(std::function<void()> cb) { m_OnHistoryChanged = std::move(cb); }
-
-    // Optional hook fired at the START of any world-mutating operation — Execute,
-    // CommitAlreadyApplied, Undo, Redo, and BeginInteractiveEdit — before any
-    // state is captured or applied. The editor uses it to drain an in-flight
-    // deferred scene build first, so an edit / undo / redo never captures or
-    // restores a half-resolved world (an unresolved MeshRenderer would otherwise
-    // bake meshGpuHandleId==0 into undo history and re-hide the entity forever).
-    void SetBeforeMutation(std::function<void()> cb) { m_BeforeMutation = std::move(cb); }
-
-    // Each entry's id: assigned when the entry is first pushed, never reused, and carried
-    // with the entry through Undo, Redo and DetachHistory/AttachHistory, so a caller can
-    // name a step whose index every commit, undo and trim moves. 0 for an index out of
-    // range. A command merged into the top entry keeps that entry's id.
-    // Undo: index 0 = oldest, index (count-1) = most recent (next to be undone).
-    std::uint64_t GetUndoEntryIdAt(std::size_t index) const
+    NodeId GetRedoEntryIdAt(std::size_t index) const
     {
-        return index < m_UndoIds.size() ? m_UndoIds[index] : 0;
+        const auto path = m_Graph.GetFuture();
+        return index < path.size() ? path[index] : 0;
     }
-    // Redo: index 0 = next to redo (most recently undone), index (count-1) = oldest redo.
-    std::uint64_t GetRedoEntryIdAt(std::size_t index) const
-    {
-        return index < m_RedoIds.size() ? m_RedoIds[m_RedoIds.size() - 1 - index] : 0;
-    }
-
-    // An interactive edit (a drag or a scrub) is open: BeginInteractiveEdit returned it
-    // and it has not committed, cancelled or been destroyed. Its "before" snapshot
-    // predates anything committed meanwhile.
-    bool HasOpenInteractiveEdit() const { return *m_OpenInteractiveEdits > 0; }
-
-    // Read-only name/timestamp accessors for history panel display.
-    // Undo: index 0 = oldest, index (count-1) = most recent (next to be undone).
     const char* GetUndoNameAt(std::size_t index) const
     {
-        if (index >= m_Undo.size() || !m_Undo[index])
-            return nullptr;
-        return m_Undo[index]->GetName();
+        const auto* node = m_Graph.Find(GetUndoEntryIdAt(index));
+        return node ? node->GetName() : index == m_Graph.GetAncestors().size() ? GetPendingName() : nullptr;
     }
-    std::chrono::system_clock::time_point GetUndoTimestampAt(std::size_t index) const
+    const char* GetRedoNameAt(std::size_t index) const
     {
-        if (index >= m_UndoTimestamps.size())
-            return {};
-        return m_UndoTimestamps[index];
+        const auto* node = m_Graph.Find(GetRedoEntryIdAt(index));
+        return node ? node->GetName() : nullptr;
     }
     const char* GetUndoTypeNameAt(std::size_t index) const
     {
-        if (index >= m_Undo.size() || !m_Undo[index])
-            return nullptr;
-        return m_Undo[index]->GetTypeName();
-    }
-    // Redo: index 0 = next to redo (most recently undone), index (count-1) = oldest redo.
-    const char* GetRedoNameAt(std::size_t index) const
-    {
-        if (index >= m_Redo.size())
-            return nullptr;
-        const std::size_t rIndex = m_Redo.size() - 1 - index;
-        return m_Redo[rIndex] ? m_Redo[rIndex]->GetName() : nullptr;
+        const auto* node = m_Graph.Find(GetUndoEntryIdAt(index));
+        return node ? node->GetTypeName() : index == m_Graph.GetAncestors().size() && HasPendingStep() ? "Pending" : nullptr;
     }
     const char* GetRedoTypeNameAt(std::size_t index) const
     {
-        if (index >= m_Redo.size())
-            return nullptr;
-        const std::size_t rIndex = m_Redo.size() - 1 - index;
-        return m_Redo[rIndex] ? m_Redo[rIndex]->GetTypeName() : nullptr;
+        const auto* node = m_Graph.Find(GetRedoEntryIdAt(index));
+        return node ? node->GetTypeName() : nullptr;
     }
-
-    // Capture/restore history (used for Play Mode isolation, tests, and tools).
-    // Note: active compound edits are cleared when detaching.
-    // undoTimestamps and undoIds run in lockstep with undo, redoIds with redo (one entry
-    // per command).
-    struct History
+    std::chrono::system_clock::time_point GetUndoTimestampAt(std::size_t index) const
     {
-        std::vector<std::unique_ptr<IEditorCommand>> undo;
-        std::vector<std::chrono::system_clock::time_point> undoTimestamps;
-        std::vector<std::uint64_t> undoIds;
-        std::vector<std::unique_ptr<IEditorCommand>> redo;
-        std::vector<std::uint64_t> redoIds;
-    };
+        const auto* node = m_Graph.Find(GetUndoEntryIdAt(index));
+        return node ? node->Timestamp : std::chrono::system_clock::time_point{};
+    }
+    void SetOnHistoryChanged(std::function<void()> callback) { m_OnHistoryChanged = std::move(callback); }
+    Event<>& HistoryChanged() { return m_HistoryChanged; }
+    void SetBeforeMutation(std::function<void()> callback) { m_BeforeMutation = std::move(callback); }
 
+    /// Resolve the logical action before saving, switching documents or starting a discrete operation.
+    bool CommitPendingEdit()
+    {
+        m_LastError.clear();
+        if (m_BeforeCommit && !m_Settling && GetPendingActionId() != 0)
+        {
+            const HistoryMutationScope mutationScope(this);
+            m_Settling = true;
+            m_BeforeCommit();
+            m_Settling = false;
+        }
+        if (m_PendingCommand)
+        {
+            auto command = std::move(m_PendingCommand);
+            auto documents = std::move(m_PendingCommandDocuments);
+            m_PendingCommandDocuments.Clear();
+            const NodeId id = std::exchange(m_PendingCommandId, 0);
+            if (!command->IsNoOp())
+                CommitInternal(std::move(command), id, std::move(documents));
+        }
+        if (!m_Pending)
+            return true;
+        const auto edit = m_Pending;
+        if (edit->GestureOpen && !CaptureAfter(edit))
+            return false;
+        m_Pending.reset();
+        edit->Active = false;
+        if (edit->Before != edit->After || !edit->Consequences.empty())
+        {
+            std::unique_ptr<IEditorCommand> command = std::make_unique<HistorySnapshotCommand>(
+                edit->Name, edit->Target, std::move(edit->Before), std::move(edit->After));
+            if (!edit->Consequences.empty())
+            {
+                auto compound = std::make_unique<CompoundHistoryCommand>(edit->Name);
+                compound->Add(std::move(command));
+                for (auto& consequence : edit->Consequences)
+                    compound->Add(std::move(consequence));
+                command = std::move(compound);
+            }
+            CommitInternal(std::move(command), edit->Id, std::move(edit->Documents));
+        }
+        NotifyHistoryChanged();
+        return true;
+    }
     History DetachHistory()
     {
-        History h{};
-        h.undo = std::move(m_Undo);
-        h.undoTimestamps = std::move(m_UndoTimestamps);
-        h.undoIds = std::move(m_UndoIds);
-        h.redo = std::move(m_Redo);
-        h.redoIds = std::move(m_RedoIds);
-        m_Undo.clear();
-        m_UndoTimestamps.clear();
-        m_UndoIds.clear();
-        m_Redo.clear();
-        m_RedoIds.clear();
+        CommitPendingEdit();
+        History result{std::move(m_Graph), std::move(m_SavedRevisions)};
+        m_Graph = {};
+        m_SavedRevisions = {};
         m_CompoundStack.clear();
         NotifyHistoryChanged();
-        return h;
+        return result;
     }
-
-    void AttachHistory(History&& h)
+    void AttachHistory(History&& history)
     {
-        m_Undo = std::move(h.undo);
-        m_UndoTimestamps = std::move(h.undoTimestamps);
-        m_UndoTimestamps.resize(m_Undo.size());
-        m_UndoIds = std::move(h.undoIds);
-        m_UndoIds.resize(m_Undo.size());
-        m_Redo = std::move(h.redo);
-        m_RedoIds = std::move(h.redoIds);
-        m_RedoIds.resize(m_Redo.size());
-        m_CompoundStack.clear();
+        Clear();
+        m_Graph = std::move(history.Graph);
+        m_SavedRevisions = std::move(history.SavedRevisions);
+        const auto& nodes = m_Graph.GetNodes();
+        const NodeId greatest = nodes.empty() ? m_Graph.GetRoot() : nodes.back().Id;
+        m_NextEntryId = std::max(m_NextEntryId, greatest + 1);
         NotifyHistoryChanged();
     }
-
     void Clear()
     {
-        m_Undo.clear();
-        m_UndoTimestamps.clear();
-        m_UndoIds.clear();
-        ClearRedo();
+        m_LastError.clear();
+        for (auto& [document, saved] : m_SavedRevisions)
+        {
+            saved.Revision = IsAtSavedRevision(document) ? 0 : std::numeric_limits<NodeId>::max();
+        }
+        DiscardPendingEdit();
+        m_Graph = {};
         m_CompoundStack.clear();
         NotifyHistoryChanged();
     }
-
-    void Execute(std::unique_ptr<IEditorCommand> cmd)
+    /// Discard an unavailable edit only when its live world is about to be replaced.
+    void DiscardPendingEdit()
     {
-        if (!cmd)
-            return;
-
-        FireBeforeMutation();
-        cmd->Do();
-        CommitInternal(std::move(cmd));
+        if (m_Pending)
+            m_Pending->Active = false;
+        m_Pending.reset();
+        m_PendingCommand.reset();
+        m_PendingCommandDocuments.Clear();
+        m_PendingCommandId = 0;
     }
-
-    // True when a command can join the newest undo entry: an entry exists, no redo entry waits and
-    // no compound is open.
-    bool CanJoinTop() const { return !m_Undo.empty() && m_Undo.back() && m_Redo.empty() && m_CompoundStack.empty(); }
-
-    // Adds `cmd`, already applied to the world, to the newest undo entry, which keeps its name and
-    // id: one undo reverts both. For the consequence of an edit that lands a frame after it. Does
-    // nothing unless CanJoinTop.
-    void CommitJoiningTop(std::unique_ptr<IEditorCommand> cmd)
+    void Execute(std::unique_ptr<IEditorCommand> command)
     {
-        if (!cmd || !CanJoinTop())
+        if (!command || m_Replaying || !CommitPendingEdit())
             return;
         FireBeforeMutation();
-        auto joined = std::make_unique<CompoundCommand>(m_Undo.back()->GetName());
-        joined->Add(std::move(m_Undo.back()));
-        joined->Add(std::move(cmd));
-        m_Undo.back() = std::move(joined);
-        NotifyHistoryChanged();
-    }
-
-    // Push a command that has already been applied to the world (typical for
-    // interactive edits where Preview(...) updates state live).
-    void CommitAlreadyApplied(std::unique_ptr<IEditorCommand> cmd)
-    {
-        if (!cmd)
-            return;
-        FireBeforeMutation();
-        CommitInternal(std::move(cmd));
-    }
-
-    void Undo()
-    {
-        if (m_Undo.empty())
-            return;
-
-        FireBeforeMutation();
-        auto cmd = std::move(m_Undo.back());
-        m_Undo.pop_back();
-        if (!m_UndoTimestamps.empty())
-            m_UndoTimestamps.pop_back();
-        const std::uint64_t id = m_UndoIds.back();
-        m_UndoIds.pop_back();
-
-        if (cmd)
-            cmd->Undo();
-
-        m_Redo.push_back(std::move(cmd));
-        m_RedoIds.push_back(id);
-        NotifyHistoryChanged();
-    }
-
-    void Redo()
-    {
-        if (m_Redo.empty())
-            return;
-
-        FireBeforeMutation();
-        auto cmd = std::move(m_Redo.back());
-        m_Redo.pop_back();
-        const std::uint64_t id = m_RedoIds.back();
-        m_RedoIds.pop_back();
-
-        if (cmd)
-            cmd->Redo();
-
-        m_Undo.push_back(std::move(cmd));
-        m_UndoTimestamps.push_back(std::chrono::system_clock::now());
-        m_UndoIds.push_back(id);
-        NotifyHistoryChanged();
-    }
-
-    // --- Compound commands -------------------------------------------------
-
-    void BeginCompound(std::string name)
-    {
-        m_CompoundStack.push_back(std::make_unique<CompoundCommand>(std::move(name)));
-    }
-
-    void EndCompound()
-    {
-        if (m_CompoundStack.empty())
-            return;
-
-        std::unique_ptr<CompoundCommand> finished = std::move(m_CompoundStack.back());
-        m_CompoundStack.pop_back();
-
-        if (!finished || finished->Empty())
-            return;
-
-        // Nested compounds: add to parent compound rather than pushing to stack.
-        if (!m_CompoundStack.empty())
+        m_PendingCommandId = m_NextEntryId++;
+        m_PendingCommand = std::move(command);
         {
-            m_CompoundStack.back()->Add(std::move(finished));
+            const HistoryMutationScope mutationScope(this);
+            m_PendingCommand->Do();
+        }
+        CommitPendingEdit();
+    }
+    /// Notify the completed write under its pending command's ownership before publication.
+    void CommitAlreadyApplied(std::unique_ptr<IEditorCommand> command, const std::function<void()>& notify = {})
+    {
+        if (!command || m_Replaying)
+            return;
+        if (m_PendingCommand && m_PendingCommand->CanMergeWith(*command) && m_PendingCommand->MergeWith(*command))
+        {
+            NotifyAlreadyApplied(notify);
+            NotifyHistoryChanged();
             return;
         }
-
-        // Pushing a compound is a committed action; redo stack is invalidated.
-        ClearRedo();
-        m_Undo.push_back(std::move(finished));
-        // Keep m_UndoTimestamps and m_UndoIds in lockstep with m_Undo (Execute/Redo do the
-        // same); otherwise the trailing compound entries read back as epoch-0 timestamps.
-        m_UndoTimestamps.push_back(std::chrono::system_clock::now());
-        m_UndoIds.push_back(m_NextEntryId++);
-        TrimUndo();
+        if (!CommitPendingEdit())
+        {
+            if (notify)
+            {
+                const HistoryMutationScope untrackedScope(nullptr);
+                notify();
+            }
+            return;
+        }
+        FireBeforeMutation();
+        m_PendingCommandId = m_NextEntryId++;
+        const bool continuous = command->IsContinuous();
+        m_PendingCommand = std::move(command);
+        NotifyAlreadyApplied(notify);
+        if (!continuous)
+            CommitPendingEdit();
+        else
+            NotifyHistoryChanged();
+    }
+    bool Checkout(NodeId destination)
+    {
+        if (m_Replaying || !CommitPendingEdit())
+            return false;
+        FireBeforeMutation();
+        const HistoryReplayScope replayScope;
+        const HistoryMutationScope mutationScope(this, HistoryMutationScope::Phase::Restore);
+        m_Replaying = true;
+        const bool success = m_Graph.Checkout(destination);
+        m_Replaying = false;
+        if (!success)
+            m_LastError = "Could not restore that revision. Its targets are unavailable.";
+        NotifyHistoryChanged();
+        return success;
+    }
+    void Undo()
+    {
+        if (m_Replaying || !CommitPendingEdit())
+            return;
+        FireBeforeMutation();
+        const HistoryReplayScope replayScope;
+        const HistoryMutationScope mutationScope(this, HistoryMutationScope::Phase::Restore);
+        m_Replaying = true;
+        if (!m_Graph.Undo() && CanUndo())
+            m_LastError = "Undo failed. The current revision was kept.";
+        m_Replaying = false;
         NotifyHistoryChanged();
     }
-
-    // --- Interactive snapshot edits ---------------------------------------
-
-    struct SnapshotTarget
+    void Redo()
     {
-        using Snapshot = std::vector<std::uint8_t>;
-
-        // Optional label (debug/UI).
-        std::string debugLabel;
-
-        // Capture current state into outSnapshot.
-        std::function<bool(Snapshot& outSnapshot)> Capture;
-
-        // Apply a captured snapshot.
-        std::function<bool(const Snapshot& snapshot)> Apply;
-
-        // Optional notification hook for Preview/Commit.
-        std::function<void(EditorChangeNotifications::ChangeKind kind)> Notify;
-    };
+        if (m_Replaying || !CommitPendingEdit())
+            return;
+        FireBeforeMutation();
+        const HistoryReplayScope replayScope;
+        const HistoryMutationScope mutationScope(this, HistoryMutationScope::Phase::Restore);
+        m_Replaying = true;
+        if (!m_Graph.Redo() && CanRedo())
+            m_LastError = "Redo failed. The current revision was kept.";
+        m_Replaying = false;
+        NotifyHistoryChanged();
+    }
+    void BeginCompound(std::string name)
+    {
+        CommitPendingEdit();
+        m_CompoundStack.push_back({std::make_unique<CompoundHistoryCommand>(std::move(name)), {}});
+    }
+    void EndCompound()
+    {
+        CommitPendingEdit();
+        if (m_CompoundStack.empty())
+            return;
+        auto finished = std::move(m_CompoundStack.back());
+        m_CompoundStack.pop_back();
+        if (!finished.Command->Empty())
+            CommitInternal(std::move(finished.Command), 0, std::move(finished.Documents));
+    }
 
     class InteractiveEdit
     {
-      public:
+    public:
         InteractiveEdit() = default;
         InteractiveEdit(const InteractiveEdit&) = delete;
         InteractiveEdit& operator=(const InteractiveEdit&) = delete;
-
-        InteractiveEdit(InteractiveEdit&& other) noexcept
-        {
-            *this = std::move(other);
-        }
+        InteractiveEdit(InteractiveEdit&& other) noexcept { *this = std::move(other); }
         InteractiveEdit& operator=(InteractiveEdit&& other) noexcept
         {
-            if (this == &other)
-                return *this;
-
-            // If we already own an active edit, cancel it to avoid leaving state
-            // un-undoable.
-            if (m_Active && !m_Committed && m_AutoCancelOnDestruct)
+            if (this != &other)
             {
                 Cancel();
+                m_Service = other.m_Service;
+                m_Edit = std::move(other.m_Edit);
+                other.m_Service = nullptr;
             }
-
-            m_Service = other.m_Service;
-            m_OpenCount = std::move(other.m_OpenCount);
-            m_Name = std::move(other.m_Name);
-            m_Target = std::move(other.m_Target);
-            m_Before = std::move(other.m_Before);
-            m_Active = other.m_Active;
-            m_Committed = other.m_Committed;
-            m_AutoCancelOnDestruct = other.m_AutoCancelOnDestruct;
-
-            other.m_Service = nullptr;
-            other.m_Active = false;
-            other.m_Committed = false;
             return *this;
         }
-
-        ~InteractiveEdit()
-        {
-            if (m_Active && !m_Committed && m_AutoCancelOnDestruct)
-            {
-                Cancel();
-            }
-        }
-
-        explicit operator bool() const { return m_Active; }
-
-        // Apply a live preview update (drag/scrub step). The caller performs the
-        // domain-specific mutation; we only emit notifications.
-        template <typename ApplyFn>
-        void Preview(ApplyFn&& applyFn)
+        ~InteractiveEdit() { Cancel(); }
+        explicit operator bool() const { return m_Edit && m_Edit->Active && m_Edit->GestureOpen; }
+        template<typename ApplyFn>
+        void Preview(ApplyFn&& apply)
         {
             GE_CPU_PROFILE_SCOPE("UndoRedo.InteractiveEdit.Preview");
-            if (!m_Active)
+            if (!*this)
                 return;
-
-            {
-                GE_CPU_PROFILE_SCOPE("UndoRedo.InteractiveEdit.Preview.Apply");
-                applyFn();
-            }
-
-            if (m_Target.Notify)
-            {
-                GE_CPU_PROFILE_SCOPE("UndoRedo.InteractiveEdit.Preview.Notify");
-                m_Target.Notify(EditorChangeNotifications::ChangeKind::Preview);
-            }
+            const auto edit = m_Edit;
+            UndoRedoService* service = m_Service;
+            if (edit->Target.Validate && !edit->Target.Validate())
+                return;
+            const HistoryMutationScope mutationScope(service);
+            const bool firstPreview = !edit->Previewed;
+            apply();
+            edit->Previewed = true;
+            if (edit->Target.Notify)
+                edit->Target.Notify(EditChangeKind::Preview);
+            if (firstPreview)
+                service->NotifyHistoryChanged();
         }
-
-        // Commit the edit as a single undoable command. Assumes the world is
-        // already in the desired final state (from Preview).
         void Commit()
         {
-            if (!m_Active || m_Committed || !m_Service)
+            if (!*this)
                 return;
-
-            SnapshotTarget::Snapshot after;
-            if (!m_Target.Capture || !m_Target.Capture(after))
-            {
-                // Cannot capture; do not push an undo entry.
-                Close();
+            const auto edit = m_Edit;
+            UndoRedoService* service = m_Service;
+            if (!service->CaptureAfter(edit))
                 return;
-            }
-
-            if (after != m_Before)
-            {
-                // Command will be replayed for redo, so it must contain the apply/notify hooks.
-                auto cmd = std::make_unique<SnapshotCommand>(
-                    m_Name,
-                    SnapshotCommand::ApplyFn{m_Target.Apply},
-                    SnapshotCommand::NotifyFn{m_Target.Notify},
-                    std::move(m_Before),
-                    std::move(after));
-
-                m_Service->CommitAlreadyApplied(std::move(cmd));
-            }
-
-            if (m_Target.Notify)
-            {
-                m_Target.Notify(EditorChangeNotifications::ChangeKind::Commit);
-            }
-
-            Close();
+            edit->GestureOpen = false;
+            edit->Previewed = edit->Before != edit->After;
+            m_Edit.reset();
+            const HistoryMutationScope mutationScope(service, edit->Previewed
+                ? HistoryMutationScope::Phase::Edit : HistoryMutationScope::Phase::Restore);
+            if (edit->Target.Notify)
+                edit->Target.Notify(edit->Previewed ? EditChangeKind::Commit : EditChangeKind::UndoRedo);
+            service->NotifyHistoryChanged();
         }
-
-        // Cancel the edit by restoring the captured "before" snapshot.
         void Cancel()
         {
-            if (!m_Active || m_Committed)
+            if (!*this)
+            {
+                m_Edit.reset();
                 return;
-
-            if (m_Target.Apply)
-            {
-                (void)m_Target.Apply(m_Before);
             }
-            if (m_Target.Notify)
+            const auto edit = m_Edit;
+            UndoRedoService* service = m_Service;
+            const HistoryMutationScope mutationScope(service, HistoryMutationScope::Phase::Restore);
+            std::size_t undone = 0;
+            for (auto command = edit->Consequences.rbegin(); command != edit->Consequences.rend(); ++command)
             {
-                // Use Commit (not UndoRedo) so observers that already show
-                // the reverted value via their own updateUI callback don't
-                // trigger a redundant full rebuild.
-                m_Target.Notify(EditorChangeNotifications::ChangeKind::Commit);
+                if (!(*command)->TryUndo())
+                {
+                    for (std::size_t restore = edit->Consequences.size() - undone; restore < edit->Consequences.size(); ++restore)
+                        edit->Consequences[restore]->TryRedo();
+                    return;
+                }
+                ++undone;
             }
-
-            Close();
+            if (!edit->Target.Apply || !edit->Target.Apply(edit->Before))
+            {
+                for (auto& command : edit->Consequences)
+                    command->TryRedo();
+                return;
+            }
+            edit->Active = false;
+            edit->GestureOpen = false;
+            if (service->m_Pending == edit)
+                service->m_Pending.reset();
+            m_Edit.reset();
+            for (auto& command : edit->Consequences)
+                command->NotifyReplay();
+            if (edit->Target.Notify)
+                edit->Target.Notify(EditChangeKind::UndoRedo);
+            service->NotifyHistoryChanged();
         }
-
-      private:
+    private:
         friend class UndoRedoService;
-
-        InteractiveEdit(UndoRedoService* svc, std::string name, SnapshotTarget target, SnapshotTarget::Snapshot before)
-            : m_Service(svc), m_OpenCount(svc->m_OpenInteractiveEdits), m_Name(std::move(name)),
-              m_Target(std::move(target)), m_Before(std::move(before))
-        {
-            m_Active = true;
-            ++*m_OpenCount;
-        }
-
-        // Ends the edit: it no longer counts toward HasOpenInteractiveEdit.
-        void Close()
-        {
-            m_Committed = true;
-            if (m_OpenCount)
-                --*m_OpenCount;
-            m_OpenCount.reset();
-        }
-
+        InteractiveEdit(UndoRedoService* service, std::shared_ptr<PendingEdit> edit)
+            : m_Service(service), m_Edit(std::move(edit)) {}
         UndoRedoService* m_Service = nullptr;
-        // The service's count of open edits, shared so that an edit outliving its service
-        // (a panel destroyed after the editor's history) still closes safely.
-        std::shared_ptr<std::size_t> m_OpenCount;
-        std::string m_Name;
-        SnapshotTarget m_Target{};
-        SnapshotTarget::Snapshot m_Before;
-        bool m_Active = false;
-        bool m_Committed = false;
-        bool m_AutoCancelOnDestruct = true;
+        std::shared_ptr<PendingEdit> m_Edit;
     };
 
     InteractiveEdit BeginInteractiveEdit(std::string name, SnapshotTarget target)
     {
-        // Resolve any in-flight scene build before the "before" snapshot is
-        // captured, or a mid-pump edit would bake unresolved components into it.
+        if (m_Replaying)
+            return {};
         FireBeforeMutation();
+        if (m_Pending && !m_Pending->GestureOpen && !target.Identity.empty() &&
+            target.Identity == m_Pending->Target.Identity && name == m_Pending->Name)
+        {
+            m_Pending->GestureOpen = true;
+            return InteractiveEdit(this, m_Pending);
+        }
+        if (!CommitPendingEdit())
+            return {};
         SnapshotTarget::Snapshot before;
         if (!target.Capture || !target.Capture(before))
-        {
             return {};
-        }
-        return InteractiveEdit(this, std::move(name), std::move(target), std::move(before));
+        m_Pending = std::make_shared<PendingEdit>();
+        m_Pending->Id = m_NextEntryId++;
+        m_Pending->Name = std::move(name);
+        m_Pending->Target = std::move(target);
+        m_Pending->Before = std::move(before);
+        m_Pending->After = m_Pending->Before;
+        return InteractiveEdit(this, m_Pending);
     }
 
-  private:
-    // --- Internal command implementations ----------------------------------
-
-    class CompoundCommand final : public IEditorCommand
+private:
+    void NotifyAlreadyApplied(const std::function<void()>& notify)
     {
-      public:
-        explicit CompoundCommand(std::string name) : m_Name(std::move(name)) {}
-
-        const char* GetName() const override { return m_Name.c_str(); }
-        const char* GetTypeName() const override { return "Compound"; }
-
-        void Do() override
-        {
-            for (auto& c : m_Commands)
-            {
-                if (c)
-                    c->Do();
-            }
-        }
-
-        void Undo() override
-        {
-            for (auto it = m_Commands.rbegin(); it != m_Commands.rend(); ++it)
-            {
-                if (*it)
-                    (*it)->Undo();
-            }
-        }
-
-        void Redo() override
-        {
-            for (auto& c : m_Commands)
-            {
-                if (c)
-                    c->Redo();
-            }
-        }
-
-        void Add(std::unique_ptr<IEditorCommand> cmd)
-        {
-            if (cmd)
-                m_Commands.push_back(std::move(cmd));
-        }
-
-        bool Empty() const { return m_Commands.empty(); }
-
-      private:
-        std::string m_Name;
-        std::vector<std::unique_ptr<IEditorCommand>> m_Commands;
-    };
-
-    class SnapshotCommand final : public IEditorCommand
-    {
-      public:
-        using Snapshot = SnapshotTarget::Snapshot;
-        using ApplyFn = std::function<bool(const Snapshot&)>;
-        using NotifyFn = std::function<void(EditorChangeNotifications::ChangeKind)>;
-
-        SnapshotCommand(std::string name, ApplyFn apply, NotifyFn notify, Snapshot before, Snapshot after)
-            : m_Name(std::move(name)), m_Apply(std::move(apply)), m_Notify(std::move(notify)),
-              m_Before(std::move(before)), m_After(std::move(after))
-        {
-        }
-
-        const char* GetName() const override { return m_Name.c_str(); }
-        const char* GetTypeName() const override { return "Snapshot"; }
-
-        void Do() override
-        {
-            ApplySnapshot(m_After);
-        }
-
-        void Undo() override
-        {
-            ApplySnapshot(m_Before);
-        }
-
-        void Redo() override
-        {
-            ApplySnapshot(m_After);
-        }
-
-      private:
-        void ApplySnapshot(const Snapshot& s)
-        {
-            if (m_Apply)
-            {
-                (void)m_Apply(s);
-            }
-            if (m_Notify)
-            {
-                m_Notify(EditorChangeNotifications::ChangeKind::UndoRedo);
-            }
-        }
-
-        std::string m_Name;
-        ApplyFn m_Apply;
-        NotifyFn m_Notify;
-        Snapshot m_Before;
-        Snapshot m_After;
-    };
-
-    void CommitInternal(std::unique_ptr<IEditorCommand> cmd)
-    {
-        if (!cmd)
+        if (!notify)
             return;
-
-        // If inside a compound, add there and do not touch stacks.
+        const HistoryMutationScope mutationScope(this);
+        notify();
+    }
+    bool HasPendingDocumentChange(const void* document) const
+    {
+        if (HasPendingEdit() && m_Pending->Documents.Contains(document))
+            return true;
+        if (HasPendingCommand() && m_PendingCommandDocuments.Contains(document))
+            return true;
+        return std::any_of(m_CompoundStack.begin(), m_CompoundStack.end(), [document](const PendingCompound& compound)
+        {
+            return compound.Documents.Contains(document);
+        });
+    }
+    bool HasPendingCommand() const { return m_PendingCommand && !m_PendingCommand->IsNoOp(); }
+    bool HasPendingStep() const
+    {
+        return HasPendingCommand() || (HasPendingEdit() && !m_Pending->GestureOpen);
+    }
+    bool CaptureAfter(const std::shared_ptr<PendingEdit>& edit)
+    {
+        SnapshotTarget::Snapshot after;
+        if (!edit->Target.Capture || !edit->Target.Capture(after))
+        {
+            m_LastError = "Could not finish the pending action. Its targets are unavailable.";
+            NotifyHistoryChanged();
+            return false;
+        }
+        edit->After = std::move(after);
+        return true;
+    }
+    void CommitInternal(std::unique_ptr<IEditorCommand> command, NodeId id, FlatSet<const void*> documents)
+    {
         if (!m_CompoundStack.empty())
         {
-            m_CompoundStack.back()->Add(std::move(cmd));
-            return;
+            m_CompoundStack.back().Command->Add(std::move(command));
+            for (const void* document : documents)
+                m_CompoundStack.back().Documents.Insert(document);
         }
-
-        // Try merge with last undo entry if supported.
-        if (!m_Undo.empty() && m_Undo.back() && cmd &&
-            m_Undo.back()->CanMergeWith(*cmd) &&
-            m_Undo.back()->MergeWith(*cmd))
-        {
-            // Merged into previous command; redo history invalidated.
-            ClearRedo();
-            NotifyHistoryChanged();
-            return;
-        }
-
-        ClearRedo();
-        m_Undo.push_back(std::move(cmd));
-        m_UndoTimestamps.push_back(std::chrono::system_clock::now());
-        m_UndoIds.push_back(m_NextEntryId++);
-        TrimUndo();
+        else
+            m_Graph.Append(id ? id : m_NextEntryId++, std::move(command), m_Config.maxUndo, std::move(documents));
         NotifyHistoryChanged();
     }
-
-    void TrimUndo()
-    {
-        const std::size_t max = (m_Config.maxUndo == 0) ? 0 : m_Config.maxUndo;
-        if (max == 0)
-            return;
-        if (m_Undo.size() <= max)
-            return;
-        const std::size_t extra = m_Undo.size() - max;
-        m_Undo.erase(m_Undo.begin(), m_Undo.begin() + static_cast<std::ptrdiff_t>(extra));
-        if (m_UndoTimestamps.size() > max)
-            m_UndoTimestamps.erase(m_UndoTimestamps.begin(),
-                                   m_UndoTimestamps.begin() + static_cast<std::ptrdiff_t>(m_UndoTimestamps.size() - max));
-        m_UndoIds.erase(m_UndoIds.begin(), m_UndoIds.begin() + static_cast<std::ptrdiff_t>(extra));
-    }
-
-    void ClearRedo()
-    {
-        m_Redo.clear();
-        m_RedoIds.clear();
-    }
-
     void NotifyHistoryChanged()
     {
         if (m_OnHistoryChanged)
-        {
             m_OnHistoryChanged();
-        }
+        m_HistoryChanged.Invoke();
     }
-
-    void FireBeforeMutation()
-    {
-        if (m_BeforeMutation)
-        {
-            m_BeforeMutation();
-        }
-    }
-
+    void FireBeforeMutation() { if (m_BeforeMutation) m_BeforeMutation(); }
     Config m_Config{};
-    std::vector<std::unique_ptr<IEditorCommand>> m_Undo;
-    std::vector<std::chrono::system_clock::time_point> m_UndoTimestamps;
-    std::vector<std::uint64_t> m_UndoIds; // lockstep with m_Undo
-    std::vector<std::unique_ptr<IEditorCommand>> m_Redo;
-    std::vector<std::uint64_t> m_RedoIds; // lockstep with m_Redo
-    std::uint64_t m_NextEntryId = 1;
-    std::shared_ptr<std::size_t> m_OpenInteractiveEdits = std::make_shared<std::size_t>(0);
-    std::vector<std::unique_ptr<CompoundCommand>> m_CompoundStack;
+    HistoryGraph m_Graph;
+    FlatMap<const void*, SavedRevision> m_SavedRevisions;
+    NodeId m_NextEntryId = 1;
+    std::shared_ptr<PendingEdit> m_Pending;
+    std::unique_ptr<IEditorCommand> m_PendingCommand;
+    FlatSet<const void*> m_PendingCommandDocuments;
+    NodeId m_PendingCommandId = 0;
+    bool m_Settling = false;
+    std::function<void()> m_BeforeCommit;
+    std::vector<PendingCompound> m_CompoundStack;
+    bool m_Replaying = false;
     std::function<void()> m_OnHistoryChanged;
     std::function<void()> m_BeforeMutation;
+    std::string m_LastError;
+    Event<> m_HistoryChanged;
 };
-
 } // namespace GameEngine::Editor

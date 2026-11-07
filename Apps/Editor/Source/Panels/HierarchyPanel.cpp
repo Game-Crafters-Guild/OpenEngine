@@ -675,95 +675,10 @@ HierarchyPanel::HierarchyPanel()
                                       UI::Interaction::ItemId anchorAfter = m_Selection->GetAnchor();
                                       std::vector<UI::Interaction::ItemId> selectionAfter = m_Selection->GetSelection();
 
-                                      if (m_Undo && !m_SuppressSelectionUndo)
-                                      {
-                                          std::vector<UI::Interaction::ItemId> selectionBefore = m_LastSelectionIds;
-                                          UI::Interaction::ItemId anchorBefore = m_LastSelectionAnchor;
-
-                                          // Only create an undo command if the selection actually changed.
-                                          if (!SelectionItemSetsEqual(selectionBefore, selectionAfter) || anchorBefore != anchorAfter)
-                                          {
-                                              class HierarchySelectionCommand final : public Editor::IEditorCommand
-                                              {
-                                                public:
-                                                  using NotifyFn = std::function<void(UI::Interaction::ItemId)>;
-
-                                                  HierarchySelectionCommand(UI::Interaction::SelectionModel* selection,
-                                                                            std::vector<UI::Interaction::ItemId> beforeIds,
-                                                                            UI::Interaction::ItemId beforeAnchor,
-                                                                            std::vector<UI::Interaction::ItemId> afterIds,
-                                                                            UI::Interaction::ItemId afterAnchor,
-                                                                            bool* suppressFlag,
-                                                                            NotifyFn notify)
-                                                      : m_Selection(selection), m_BeforeIds(std::move(beforeIds)), m_AfterIds(std::move(afterIds)), m_BeforeAnchor(beforeAnchor), m_AfterAnchor(afterAnchor), m_SuppressFlag(suppressFlag), m_Notify(std::move(notify))
-                                                  {
-                                                  }
-
-                                                  const char* GetName() const override { return "Hierarchy Selection"; }
-
-                                                  void Do() override { Redo(); }
-
-                                                  void Undo() override
-                                                  {
-                                                      if (!m_Selection || !m_SuppressFlag)
-                                                          return;
-                                                      *m_SuppressFlag = true;
-                                                      m_Selection->SetSelection(m_BeforeIds, m_BeforeAnchor);
-                                                      *m_SuppressFlag = false;
-                                                      if (m_Notify)
-                                                          m_Notify(m_BeforeAnchor);
-                                                  }
-
-                                                  void Redo() override
-                                                  {
-                                                      if (!m_Selection || !m_SuppressFlag)
-                                                          return;
-                                                      *m_SuppressFlag = true;
-                                                      m_Selection->SetSelection(m_AfterIds, m_AfterAnchor);
-                                                      *m_SuppressFlag = false;
-                                                      if (m_Notify)
-                                                          m_Notify(m_AfterAnchor);
-                                                  }
-
-                                                private:
-                                                  UI::Interaction::SelectionModel* m_Selection = nullptr; // not owned
-                                                  std::vector<UI::Interaction::ItemId> m_BeforeIds;
-                                                  std::vector<UI::Interaction::ItemId> m_AfterIds;
-                                                  UI::Interaction::ItemId m_BeforeAnchor = 0;
-                                                  UI::Interaction::ItemId m_AfterAnchor = 0;
-                                                  bool* m_SuppressFlag = nullptr; // not owned
-                                                  NotifyFn m_Notify;
-                                              };
-
-                                              auto notify = [this](UI::Interaction::ItemId /*anchorId*/)
-                                              {
-                                                  // Undo/redo applied SetSelection already; sync snapshot so the next user
-                                                  // selection compares against the correct baseline (otherwise undo appears broken).
-                                                  m_SuppressSelectionUndo = true;
-                                                  if (m_Selection)
-                                                  {
-                                                      m_LastSelectionIds = m_Selection->GetSelection();
-                                                      m_LastSelectionAnchor = m_Selection->GetAnchor();
-                                                  }
-                                                  if (m_Tree)
-                                                  {
-                                                      m_Tree->RefreshFromProvider();
-                                                      m_Tree->SyncSelectionVisuals();
-                                                  }
-                                                  m_SuppressSelectionUndo = false;
-                                              };
-
-                                              auto cmd = std::make_unique<HierarchySelectionCommand>(
-                                                  m_Selection.get(),
-                                                  std::move(selectionBefore),
-                                                  anchorBefore,
-                                                  selectionAfter,
-                                                  anchorAfter,
-                                                  &m_SuppressSelectionUndo,
-                                                  notify);
-                                              m_Undo->CommitAlreadyApplied(std::move(cmd));
-                                          }
-                                      }
+                                      if (m_Undo && !m_SuppressSelectionUndo &&
+                                          (!SelectionItemSetsEqual(m_LastSelectionIds, selectionAfter) ||
+                                           m_LastSelectionAnchor != anchorAfter))
+                                          m_Undo->CommitPendingEdit();
 
                                       // Update snapshot for next time.
                                       m_LastSelectionIds = std::move(selectionAfter);
@@ -1728,6 +1643,9 @@ HierarchyPanel::HierarchyPanel()
 
 void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_World)
         return;
 
@@ -1806,10 +1724,10 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             if (Editor::IsHdriPath(texPath))
             {
                 ECS::EntityHandle skybox = Editor::CreateSkyboxEntityFromHdri(
-                    *m_World, *m_Context->Assets, texPath, m_ChangeNotifications,
-                    [ctx = m_Context]() { if (ctx && ctx->OnSceneDirty) ctx->OnSceneDirty(); });
+                    *m_World, *m_Context->Assets, texPath);
                 if (skybox.IsValid())
                 {
+                    NotifyWorldStructure(m_ChangeNotifications, m_World);
                     if (m_Provider)
                         m_Provider->Rebuild();
                     m_Tree->RefreshFromProvider();
@@ -2020,10 +1938,6 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             Editor::ShowSceneViewNotice(Editor::DescribeUnplaceableFile(absPath));
         }
 
-        NotifyWorldStructure(m_ChangeNotifications, m_World);
-        if (m_Context && m_Context->OnSceneDirty)
-            m_Context->OnSceneDirty();
-
         if (m_Provider)
             m_Provider->Rebuild();
         m_Tree->RefreshFromProvider();
@@ -2059,6 +1973,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
 
             if (lastSkybox.IsValid())
             {
+                NotifyWorldStructure(m_ChangeNotifications, m_World);
                 if (m_Provider)
                     m_Provider->Rebuild();
                 m_Tree->RefreshFromProvider();
@@ -2356,10 +2271,11 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             m_ChangeNotifications,
             std::move(states.Before),
             std::move(states.After));
-        m_Undo->CommitAlreadyApplied(std::move(cmd));
+        m_Undo->CommitAlreadyApplied(std::move(cmd),
+            std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, m_World));
     }
-
-    NotifyWorldStructure(m_ChangeNotifications, m_World);
+    else
+        NotifyWorldStructure(m_ChangeNotifications, m_World);
 
     if (m_Provider)
         m_Provider->Rebuild();
@@ -2479,6 +2395,9 @@ ECS::EntityHandle HierarchyPanel::FirstSelectedEntity() const
 
 void HierarchyPanel::DuplicateSelectedEntities()
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_World || !m_Selection)
         return;
 
@@ -2548,11 +2467,11 @@ void HierarchyPanel::DuplicateSelectedEntities()
         const std::string undoName = (newRoots.size() > 1) ? "Duplicate Entities" : "Duplicate Entity";
         m_Undo->CommitAlreadyApplied(std::make_unique<Editor::DuplicateEntitiesCommand>(
             undoName, m_World, m_ChangeNotifications, std::move(clones),
-            std::move(onClonesRestored), std::move(onClonesRemoved)));
+            std::move(onClonesRestored), std::move(onClonesRemoved)),
+            std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, m_World));
     }
-
-    // Notify world structure changed so the hierarchy rebuilds.
-    NotifyWorldStructure(m_ChangeNotifications, m_World);
+    else
+        NotifyWorldStructure(m_ChangeNotifications, m_World);
 
     if (newRoots.empty())
         return;
@@ -2599,6 +2518,9 @@ void HierarchyPanel::DuplicateSelectedEntities()
 
 bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
+
     if (IsLoadRecentSceneCommand(cmd))
     {
         const size_t index = static_cast<size_t>(cmd - kCmdLoadRecentSceneBase);
@@ -2882,8 +2804,11 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
                 withCapsuleShape,
                 capsule,
                 hierarchyOrder);
-            m_Undo->CommitAlreadyApplied(std::move(cmdObj));
+            m_Undo->CommitAlreadyApplied(std::move(cmdObj),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
         }
+        else
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         // Select after the structure notification refresh has run. Doing this
         // synchronously from key/native-menu command callbacks can re-enter
@@ -2893,7 +2818,6 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             m_Tree->SetExpanded(HierarchyDataProvider::Encode(m_ContextTargetEntity), true);
         }
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
         scheduleSelectCreatedEntity(h);
     };
 
@@ -2945,7 +2869,10 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             return;
         }
         if (m_Undo)
-            m_Undo->CommitAlreadyApplied(std::move(created.Command));
+            m_Undo->CommitAlreadyApplied(std::move(created.Command),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
+        else
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         // Select after the hierarchy refresh posted by the structure notification.
         if (m_Tree)
@@ -2956,7 +2883,6 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             m_Tree->SetExpanded(HierarchyDataProvider::Encode(created.NewParent), true);
         }
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
         scheduleSelectCreatedEntity(created.NewParent);
     };
 
@@ -3002,13 +2928,15 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
                 parentComp,
                 emitter,
                 hierarchyOrder);
-            m_Undo->CommitAlreadyApplied(std::move(cmdObj));
+            m_Undo->CommitAlreadyApplied(std::move(cmdObj),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
         }
+        else
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         if (hasParent && m_Tree)
             m_Tree->SetExpanded(HierarchyDataProvider::Encode(m_ContextTargetEntity), true);
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
         scheduleSelectCreatedEntity(h);
     };
 
@@ -3055,13 +2983,15 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
                 parentComp,
                 probe,
                 hierarchyOrder);
-            m_Undo->CommitAlreadyApplied(std::move(cmdObj));
+            m_Undo->CommitAlreadyApplied(std::move(cmdObj),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
         }
+        else
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         if (hasParent && m_Tree)
             m_Tree->SetExpanded(HierarchyDataProvider::Encode(m_ContextTargetEntity), true);
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
         scheduleSelectCreatedEntity(h);
     };
 
@@ -3137,7 +3067,6 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             return true;
 
         const ECS::EntityHandle h = Editor::CreateSkyEnvironmentEntity(*m_World, m_Undo, m_ChangeNotifications);
-        NotifyWorldStructure(m_ChangeNotifications, m_World);
         scheduleSelectCreatedEntity(h);
         return true;
     }
@@ -4687,13 +4616,19 @@ void HierarchyPanel::CommitDropStep(const std::vector<ECS::EntityHandle>& droppe
                                     const std::vector<UI::Interaction::ItemId>& selectionBefore,
                                     UI::Interaction::ItemId anchorBefore)
 {
-    if (!m_Undo || !m_World || droppedRoots.empty())
+    if (!m_World || droppedRoots.empty())
         return;
+    if (!m_Undo)
+    {
+        NotifyWorldStructure(m_ChangeNotifications, m_World);
+        return;
+    }
     m_Undo->CommitAlreadyApplied(std::make_unique<Editor::SceneViewDropUndoCommand>(
         Editor::SceneViewDropUndoCommand::NameFor(*m_World, droppedRoots), m_World, m_ChangeNotifications,
         droppedRoots, selectionBefore, anchorBefore, GetSelectionItemIds(), GetSelectionAnchor(),
         [this](const std::vector<UI::Interaction::ItemId>& ids, UI::Interaction::ItemId anchor)
-        { ApplySelectionProgrammatic(ids, anchor); }));
+        { ApplySelectionProgrammatic(ids, anchor); }),
+        std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, m_World));
 }
 
 void HierarchyPanel::DeferFileDrop(const std::filesystem::path& assetPath, const GUID& assetGuid,
@@ -4708,6 +4643,9 @@ void HierarchyPanel::DeferFileDrop(const std::filesystem::path& assetPath, const
 
 bool HierarchyPanel::FinishTreeTextureDrop(const std::filesystem::path& texturePath, ECS::EntityHandle parent)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return false;
+
     if (!m_Context || !m_World || !m_Context->Assets || !m_Context->RenderServices)
         return false;
     const bool is2D = m_Context->IsSceneView2D && m_Context->IsSceneView2D();
@@ -4743,6 +4681,9 @@ void HierarchyPanel::DeferTreeTextureDrop(const std::filesystem::path& texturePa
 void HierarchyPanel::FinishFileDrop(const std::filesystem::path& assetPath, const GUID& assetGuid,
                                     const std::string& entityName)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Context || !m_World || !m_Context->Assets)
         return;
     auto& am = *m_Context->Assets;
@@ -4839,6 +4780,9 @@ void HierarchyPanel::FinishFileDrop(const std::filesystem::path& assetPath, cons
 
 void HierarchyPanel::PerformDrop(const UI::Interaction::DropRequest& request)
 {
+    if (m_Undo && !m_Undo->CommitPendingEdit())
+        return;
+
     // Asset paths drop (textures, models from Assets panel)
     if (const auto* pathsPl = request.payload.TryGet<Editor::AssetPathsDragPayload>())
     {
@@ -4860,9 +4804,6 @@ void HierarchyPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             const ECS::EntityHandle root = Editor::PrefabService(*m_Context->Assets).Place(*m_World, assetPath, at, {});
             if (!root.IsValid())
                 return;
-            NotifyWorldStructure(m_ChangeNotifications, m_World);
-            if (m_Context->OnSceneDirty)
-                m_Context->OnSceneDirty();
             if (m_Provider)
                 m_Provider->Rebuild();
             m_Tree->RefreshFromProvider();
@@ -4941,6 +4882,7 @@ void HierarchyPanel::PerformDrop(const UI::Interaction::DropRequest& request)
 
             if (lastCreated.IsValid())
             {
+                NotifyWorldStructure(m_ChangeNotifications, m_World);
                 if (m_Provider)
                     m_Provider->Rebuild();
                 m_Tree->RefreshFromProvider();

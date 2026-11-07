@@ -25,26 +25,6 @@ namespace
 // enough to arrive quickly and bind as a preview.
 constexpr std::string_view kPreviewHdriResolution = "1k";
 
-void NotifySkyboxCreated(ECS::World& world,
-                         ECS::EntityHandle skyEntity,
-                         EditorChangeNotifications* notifications)
-{
-    if (!notifications)
-        return;
-
-    EditorChangeNotifications::ComponentChangedEvent e{};
-    e.world = &world;
-    e.entity = skyEntity;
-    e.componentType = ECS::GetComponentTypeId<Components::Skybox>();
-    e.kind = EditorChangeNotifications::ChangeKind::Commit;
-    notifications->NotifyComponentChanged(e);
-
-    EditorChangeNotifications::WorldStructureChangedEvent wse{};
-    wse.world = &world;
-    wse.kind = EditorChangeNotifications::ChangeKind::Commit;
-    notifications->NotifyWorldStructureChanged(wse);
-}
-
 void SetSkyboxName(ECS::World& world, ECS::EntityHandle skyEntity, const std::string& label)
 {
     Components::Name name{};
@@ -63,8 +43,6 @@ void AddIdentityTransform(ECS::World& world, ECS::EntityHandle skyEntity)
 // A Skybox with no HDRI bound yet, waiting for a Polyhaven download.
 ECS::EntityHandle CreatePendingHDRISkybox(ECS::World& world,
                                           std::string_view displayName,
-                                          EditorChangeNotifications* notifications,
-                                          const std::function<void()>& markDirty,
                                           std::string_view sourceSlug,
                                           std::string_view resolution)
 {
@@ -86,10 +64,6 @@ ECS::EntityHandle CreatePendingHDRISkybox(ECS::World& world,
     SetSkyboxName(world, skyEntity,
                   displayName.empty() ? std::string("Skybox") : "Skybox - " + std::string(displayName));
 
-    NotifySkyboxCreated(world, skyEntity, notifications);
-    if (markDirty)
-        markDirty();
-
     return skyEntity;
 }
 } // namespace
@@ -103,8 +77,6 @@ bool IsHdriPath(const std::filesystem::path& path)
 ECS::EntityHandle CreateSkyboxEntityFromHdri(ECS::World& world,
                                              AssetManager& assets,
                                              const std::filesystem::path& hdriPath,
-                                             EditorChangeNotifications* notifications,
-                                             const std::function<void()>& markDirty,
                                              std::string_view sourceSlug,
                                              std::string_view resolution)
 {
@@ -148,10 +120,6 @@ ECS::EntityHandle CreateSkyboxEntityFromHdri(ECS::World& world,
 
     SetSkyboxName(world, skyEntity, "Skybox - " + hdriPath.stem().string());
 
-    NotifySkyboxCreated(world, skyEntity, notifications);
-    if (markDirty)
-        markDirty();
-
     return skyEntity;
 }
 
@@ -163,13 +131,6 @@ ECS::EntityHandle CreateSkyboxEntityFromPolyhavenHdri(ECS::World& world,
 {
     if (slug.empty())
         return {};
-
-    const EditorContext* ctx = &context;
-    const std::function<void()> markDirty = [ctx]()
-    {
-        if (ctx->OnSceneDirty)
-            ctx->OnSceneDirty();
-    };
 
     const std::string slugString(slug);
     const std::string preview(kPreviewHdriResolution);
@@ -189,8 +150,8 @@ ECS::EntityHandle CreateSkyboxEntityFromPolyhavenHdri(ECS::World& world,
 
     if (!mainFilePath.empty() && context.Assets)
     {
-        const ECS::EntityHandle skyEntity = CreateSkyboxEntityFromHdri(world, *context.Assets, mainFilePath, notifications,
-                                                                       markDirty, slug, initialResolution);
+        const ECS::EntityHandle skyEntity = CreateSkyboxEntityFromHdri(world, *context.Assets, mainFilePath,
+                                                                       slug, initialResolution);
         if (skyEntity.IsValid() && !preferredOnDisk && downloads)
         {
             downloads->AssignHDRIToSkyboxOnComplete(slugString, preferred, skyEntity, notifications);
@@ -200,7 +161,7 @@ ECS::EntityHandle CreateSkyboxEntityFromPolyhavenHdri(ECS::World& world,
     }
 
     const ECS::EntityHandle pendingSkybox = CreatePendingHDRISkybox(
-        world, displayName.empty() ? slug : displayName, notifications, markDirty, slug, preferred);
+        world, displayName.empty() ? slug : displayName, slug, preferred);
     if (pendingSkybox.IsValid() && downloads)
     {
         if (preferred != preview)

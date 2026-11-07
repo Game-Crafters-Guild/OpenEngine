@@ -151,7 +151,7 @@
 #include "Panels/AssetsPanel.h"
 #include "Panels/TodoPanel.h"
 #include "Panels/BookmarksPanel.h"
-#include "Panels/UndoHistoryPanel.h"
+#include "Panels/UndoHistory/UndoHistoryPanel.h"
 #include "Panels/GameViewPanel.h"
 #include "Panels/HierarchyPanel.h"
 #include "Panels/InspectorPanel.h"
@@ -2515,7 +2515,7 @@ bool EditorApplication::Initialize()
             {
                 if (auto* rgBuild = sm->GetSystem<Engine::Renderer::RenderGraphBuildSystem>())
                     rgBuild->SetSkipFrameGraphBuild(true);
-                m_EditorServices.Start({m_UndoRedo.get(), *sm});
+                m_EditorServices.Start({m_UndoRedo.get(), *sm, m_ChangeNotifications.get()});
             }
         }
 
@@ -4239,10 +4239,6 @@ bool EditorApplication::Initialize()
                     if (undoHistoryPanel)
                     {
                         undoHistoryPanel->SetUndoRedoService(m_UndoRedo.get());
-                        m_UndoRedo->SetOnHistoryChanged([this, undoHistoryPanel]() {
-                            if (m_EditorToolbar) m_EditorToolbar->UpdateUndoRedoTitles();
-                            undoHistoryPanel->Rebuild();
-                        });
                     }
                     GraphPanel::ForEachLive([this, editorCtx](GraphPanel& panel) {
                         panel.SetUndoRedoService(m_UndoRedo.get());

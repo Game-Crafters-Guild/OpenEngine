@@ -386,7 +386,7 @@ class AnimationPanelSnapshotCommand final : public Editor::IEditorCommand
                                   AnimationWindowPanel::PanelEditSnapshot afterSnapshot,
                                   bool mergeable)
         : m_Name(std::move(name))
-        , m_Panel(panel)
+        , m_Panel(UIElement::MakeWeakRef(panel))
         , m_BeforeSnapshot(std::move(beforeSnapshot))
         , m_AfterSnapshot(std::move(afterSnapshot))
         , m_Mergeable(mergeable)
@@ -396,31 +396,40 @@ class AnimationPanelSnapshotCommand final : public Editor::IEditorCommand
     const char* GetName() const override { return m_Name.c_str(); }
     void Do() override {}
 
-    void Undo() override
+    void Undo() override { TryUndo(); }
+    void Redo() override { TryRedo(); }
+    bool TryUndo() override
     {
-        if (m_Panel)
-            m_Panel->ApplyPanelEditSnapshot(m_BeforeSnapshot);
+        auto* panel = m_Panel.Get();
+        if (!panel)
+            return false;
+        panel->ApplyPanelEditSnapshot(m_BeforeSnapshot);
+        return true;
+    }
+    bool TryRedo() override
+    {
+        auto* panel = m_Panel.Get();
+        if (!panel)
+            return false;
+        panel->ApplyPanelEditSnapshot(m_AfterSnapshot);
+        return true;
     }
 
-    void Redo() override
-    {
-        if (m_Panel)
-            m_Panel->ApplyPanelEditSnapshot(m_AfterSnapshot);
-    }
+    bool IsContinuous() const override { return m_Mergeable; }
 
     bool CanMergeWith(const Editor::IEditorCommand& other) const override
     {
         if (!m_Mergeable)
             return false;
         const auto* otherCommand = dynamic_cast<const AnimationPanelSnapshotCommand*>(&other);
-        return otherCommand && otherCommand->m_Mergeable && otherCommand->m_Panel == m_Panel &&
+        return otherCommand && otherCommand->m_Mergeable && otherCommand->m_Panel.Get() == m_Panel.Get() &&
                otherCommand->m_Name == m_Name;
     }
 
     bool MergeWith(const Editor::IEditorCommand& other) override
     {
         const auto* otherCommand = dynamic_cast<const AnimationPanelSnapshotCommand*>(&other);
-        if (!otherCommand || !m_Mergeable || !otherCommand->m_Mergeable || otherCommand->m_Panel != m_Panel ||
+        if (!otherCommand || !m_Mergeable || !otherCommand->m_Mergeable || otherCommand->m_Panel.Get() != m_Panel.Get() ||
             otherCommand->m_Name != m_Name)
         {
             return false;
@@ -432,7 +441,7 @@ class AnimationPanelSnapshotCommand final : public Editor::IEditorCommand
 
   private:
     std::string m_Name;
-    AnimationWindowPanel* m_Panel = nullptr; // not owned
+    UIElement::WeakRef<AnimationWindowPanel> m_Panel;
     AnimationWindowPanel::PanelEditSnapshot m_BeforeSnapshot;
     AnimationWindowPanel::PanelEditSnapshot m_AfterSnapshot;
     bool m_Mergeable = false;
@@ -3972,7 +3981,6 @@ void AnimationWindowPanel::ConfigureElements()
         {
             if (m_SuppressSelectionUndo) return;
 
-            const SelectionSnapshot before = CaptureSelectionSnapshot();
 
             // Tree selection sets the editable scope — drop any dopesheet key selection
             // so the orange selection box doesn't linger over rows that just became
@@ -4024,7 +4032,7 @@ void AnimationWindowPanel::ConfigureElements()
 
             const SelectionSnapshot after = CaptureSelectionSnapshot();
             m_LastSelectionSnapshot = after;
-            PushSelectionUndo(before, after);
+            CommitPendingBeforeSelection();
         });
         m_PropertiesTree->SetOnContextMenu([this](TreeId id, float x, float y)
         {
@@ -4336,10 +4344,9 @@ void AnimationWindowPanel::ConfigureElements()
         {
             if (!m_SuppressSelectionUndo && !m_DopeSheetView->IsBoxSelecting())
             {
-                const SelectionSnapshot before = m_LastSelectionSnapshot;
                 const SelectionSnapshot after  = CaptureSelectionSnapshot();
                 m_LastSelectionSnapshot = after;
-                PushSelectionUndo(before, after);
+                CommitPendingBeforeSelection();
             }
             UpdateStatsBar();
             UpdateInterpolationButtonState();
@@ -4382,7 +4389,6 @@ void AnimationWindowPanel::ConfigureElements()
         });
         m_CurvesGraphView->SetOnKeyframeSelected([this](int channel, int component, int /*keyIndex*/, float /*time*/)
         {
-            const SelectionSnapshot before = m_LastSelectionSnapshot;
             m_SelectedChannel = channel;
             m_SelectedComponent = static_cast<uint32>(std::max(component, 0));
             // Don't call RefreshChannelSelection here — it would reset ShowAllComponents and
@@ -4390,17 +4396,16 @@ void AnimationWindowPanel::ConfigureElements()
             UpdateStatsBar();
             const SelectionSnapshot after = CaptureSelectionSnapshot();
             m_LastSelectionSnapshot = after;
-            PushSelectionUndo(before, after);
+            CommitPendingBeforeSelection();
         });
         m_CurvesGraphView->SetOnSelectionChanged([this]()
         {
             // Skip undo push during live box drag; push once when the box is committed on mouse-up.
             if (!m_SuppressSelectionUndo && !m_CurvesGraphView->IsBoxSelecting())
             {
-                const SelectionSnapshot before = m_LastSelectionSnapshot;
                 const SelectionSnapshot after  = CaptureSelectionSnapshot();
                 m_LastSelectionSnapshot = after;
-                PushSelectionUndo(before, after);
+                CommitPendingBeforeSelection();
             }
             UpdateStatsBar();
             UpdateInterpolationButtonState();
@@ -11373,31 +11378,10 @@ void AnimationWindowPanel::ApplySelectionSnapshot(const SelectionSnapshot& s, bo
     m_SuppressSelectionUndo = false;
 }
 
-void AnimationWindowPanel::PushSelectionUndo(const SelectionSnapshot& before, const SelectionSnapshot& after)
+void AnimationWindowPanel::CommitPendingBeforeSelection()
 {
-    if (!m_UndoRedo) return;
-
-    class AnimationSelectionCommand final : public Editor::IEditorCommand
-    {
-    public:
-        AnimationSelectionCommand(AnimationWindowPanel* panel,
-                                  SelectionSnapshot before,
-                                  SelectionSnapshot after)
-            : m_Panel(panel), m_Before(std::move(before)), m_After(std::move(after)) {}
-
-        const char* GetName() const override { return "Animation Selection"; }
-        void Do() override {}
-
-        void Undo() override { if (m_Panel) m_Panel->ApplySelectionSnapshot(m_Before, true); }
-        void Redo() override { if (m_Panel) m_Panel->ApplySelectionSnapshot(m_After, true); }
-
-    private:
-        AnimationWindowPanel* m_Panel;
-        SelectionSnapshot m_Before;
-        SelectionSnapshot m_After;
-    };
-
-    m_UndoRedo->CommitAlreadyApplied(std::make_unique<AnimationSelectionCommand>(this, before, after));
+    if (m_UndoRedo)
+        m_UndoRedo->CommitPendingEdit();
 }
 
 AnimationWindowPanel::PanelEditSnapshot AnimationWindowPanel::CapturePanelEditSnapshot() const

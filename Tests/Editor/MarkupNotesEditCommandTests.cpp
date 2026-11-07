@@ -9,6 +9,8 @@
 #include "ECS/Entity.h"
 #include "EditorChangeNotifications.h"
 #include "MarkupECS/MarkupService.h"
+#include "Scene/SceneDocumentManager.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <gtest/gtest.h>
@@ -89,5 +91,64 @@ TEST(MarkupNotesEditCommand, ATagNameTheEditAddedLeavesTheVocabularyOnUndo)
     ASSERT_NE(service.FindTag("Brigde"), MarkupService::kInvalidTag);
     EXPECT_EQ(service.FindNotes(world, lake)->Tags, std::vector<uint32>{service.FindTag("Brigde")});
     EXPECT_EQ(saves, 3);
+    MarkupService::Shutdown();
+}
+
+TEST(MarkupNotesEditCommand, TheRecordedCommentOwnsItsSceneRevision)
+{
+    MarkupService::Initialize();
+    ECS::World world;
+    Editor::EditorChangeNotifications notifications;
+    Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    const auto entity = world.CreateEntity();
+    world.AddComponentImmediate(entity, Markup{});
+    auto& service = MarkupService::Get();
+    ASSERT_TRUE(service.BeginMarkup(world, entity, MarkupAuthor::User, 10));
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&notifications);
+    document.MarkClean();
+
+    ASSERT_TRUE(Editor::CommitMarkupNotesEdit(world, entity, &undo, &notifications, "Add Mark-up Comment",
+        [&]() { return service.AddComment(world, entity, MarkupAuthor::User, 20, "Keep the shore"); }, {}));
+    EXPECT_TRUE(document.IsDirty());
+    undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    undo.Redo();
+    document.MarkClean();
+    undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_EQ(service.FindNotes(world, entity)->Entries.back().Text, "Keep the shore");
+    MarkupService::Shutdown();
+}
+
+TEST(MarkupNotesEditCommand, AStatusEditSettlesAnOpenComponentPreviewBeforeWriting)
+{
+    MarkupService::Initialize();
+    ECS::World world;
+    Editor::EditorChangeNotifications notifications;
+    Editor::UndoRedoService undo;
+    const auto entity = world.CreateEntity();
+    world.AddComponentImmediate(entity, Markup{});
+    auto& service = MarkupService::Get();
+    ASSERT_TRUE(service.BeginMarkup(world, entity, MarkupAuthor::User, 10));
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        &world, {entity}, ECS::GetComponentTypeId<Markup>(), &notifications, "Edit Mark-up Color");
+    auto preview = undo.BeginInteractiveEdit("Edit Mark-up Color", std::move(target));
+    preview.Preview([&world, entity]() { world.GetComponentForWrite<Markup>(entity)->Color[0] = 0.25f; });
+    ASSERT_TRUE(Editor::CommitMarkupNotesEdit(world, entity, &undo, &notifications, "Set Mark-up Status",
+        [&service, &world, entity]() {
+            return service.SetStatus(world, entity, Components::kMarkupStatusComplete, MarkupAuthor::User, 20);
+        }, {}));
+    undo.Undo();
+    undo.Undo();
+    undo.Redo();
+    EXPECT_FLOAT_EQ(world.GetComponent<Markup>(entity)->Color[0], 0.25f);
+    EXPECT_EQ(world.GetComponent<Markup>(entity)->Status, Components::kMarkupStatusRequested);
+    undo.Redo();
+    EXPECT_EQ(world.GetComponent<Markup>(entity)->Status, Components::kMarkupStatusComplete);
     MarkupService::Shutdown();
 }

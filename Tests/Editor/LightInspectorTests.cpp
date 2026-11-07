@@ -18,9 +18,12 @@
 #include "UndoRedo/UndoRedoService.h"
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace GameEngine;
@@ -121,6 +124,79 @@ INSTANTIATE_TEST_SUITE_P(WithAndWithoutUndo, LightInspectorColorResetTests, ::te
                          [](const ::testing::TestParamInfo<bool>& info) {
                              return info.param ? "WithUndo" : "WithoutUndo";
                          });
+
+class LightInspectorColorPickerTests : public ::testing::TestWithParam<bool>
+{
+protected:
+    void SetUp() override
+    {
+        Components::Light light{};
+        light.Type = Components::LightType::Ambient;
+        Entity = World.Create(light).GetHandle();
+        RegisterLightInspector();
+        InspectorFn* inspector = InspectorRegistry::Get().TryGetComponentInspector<Components::Light>();
+        ASSERT_NE(inspector, nullptr);
+        InspectorContext context{};
+        context.Parent = &Root;
+        context.World = &World;
+        context.Entity = Entity;
+        context.Undo = &Undo;
+        context.ChangeNotifications = &Notifications;
+        context.OpenColorPickerWindow = [this](std::uint32_t, float, ColorPickerCallbacks callbacks)
+        {
+            Picker = std::move(callbacks);
+        };
+        (*inspector)(context);
+        Label* value = FindLabel(Root, "(1.00, 1.00, 1.00)");
+        ASSERT_NE(value, nullptr);
+        UIEvent press{};
+        press.Id = kEventMouseDown;
+        press.Button = 0;
+        value->DispatchEvent(press);
+        ASSERT_TRUE(Picker.has_value());
+    }
+
+    ECS::World World;
+    ECS::EntityHandle Entity;
+    Editor::UndoRedoService Undo;
+    Editor::EditorChangeNotifications Notifications;
+    UIElement Root;
+    std::optional<ColorPickerCallbacks> Picker;
+};
+
+TEST_P(LightInspectorColorPickerTests, ResumesAfterSettlementAndInspectorRebuild)
+{
+    Picker->onValueChanging(0xFFFF0000u, 1.0f);
+    ASSERT_TRUE(Undo.CommitPendingEdit());
+    ASSERT_EQ(Undo.GetUndoCount(), 1u);
+    Root.RemoveAllChildren();
+
+    if (GetParam())
+    {
+        Picker->onApply(0xFF00FF00u, 1.0f);
+        ASSERT_TRUE(Undo.CommitPendingEdit());
+        EXPECT_FLOAT_EQ(World.GetComponent<Components::Light>(Entity)->Color[1], 1.0f);
+        ASSERT_EQ(Undo.GetUndoCount(), 2u);
+        Undo.Undo();
+        EXPECT_FLOAT_EQ(World.GetComponent<Components::Light>(Entity)->Color[0], 1.0f);
+        EXPECT_FLOAT_EQ(World.GetComponent<Components::Light>(Entity)->Color[1], 0.0f);
+        Undo.Redo();
+        EXPECT_FLOAT_EQ(World.GetComponent<Components::Light>(Entity)->Color[1], 1.0f);
+    }
+    else
+    {
+        Picker->onValueChanging(0xFF00FF00u, 1.0f);
+        EXPECT_FLOAT_EQ(World.GetComponent<Components::Light>(Entity)->Color[1], 1.0f);
+        Picker->onCancel();
+        EXPECT_FLOAT_EQ(World.GetComponent<Components::Light>(Entity)->Color[0], 1.0f);
+        EXPECT_FLOAT_EQ(World.GetComponent<Components::Light>(Entity)->Color[1], 0.0f);
+        EXPECT_FALSE(Undo.HasPendingEdit());
+        ASSERT_EQ(Undo.GetUndoCount(), 1u);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(AfterSave, LightInspectorColorPickerTests, ::testing::Bool(),
+    [](const ::testing::TestParamInfo<bool>& info) { return info.param ? "Apply" : "Cancel"; });
 
 TEST(LightInspectorLayoutTests, TemperatureControlsStaySynchronizedAndCommitOneUndoEntry)
 {

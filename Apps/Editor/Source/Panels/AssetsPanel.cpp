@@ -1331,64 +1331,8 @@ void AssetsPanel::ApplyListRowHeight(float height)
 
 void AssetsPanel::HandleSelectionChanged(const std::vector<std::filesystem::path>& paths)
 {
-    if (m_Undo && !m_SuppressSelectionUndo)
-    {
-        const std::vector<std::filesystem::path> before = m_LastSelectionPaths;
-        const std::vector<std::filesystem::path> after = paths;
-
-        if (before != after)
-        {
-            class AssetsSelectionCommand final : public Editor::IEditorCommand
-            {
-              public:
-                AssetsSelectionCommand(AssetsPanel* panel,
-                                       std::vector<std::filesystem::path> beforePaths,
-                                       std::vector<std::filesystem::path> afterPaths,
-                                       bool* suppressFlag)
-                    : m_Panel(panel)
-                    , m_BeforePaths(std::move(beforePaths))
-                    , m_AfterPaths(std::move(afterPaths))
-                    , m_SuppressFlag(suppressFlag)
-                {
-                }
-
-                const char* GetName() const override { return "Assets Selection"; }
-
-                void Do() override { Redo(); }
-
-                void Undo() override
-                {
-                    if (!m_Panel || !m_SuppressFlag)
-                        return;
-                    *m_SuppressFlag = true;
-                    m_Panel->ApplySelectionFromUndo(m_BeforePaths);
-                    *m_SuppressFlag = false;
-                }
-
-                void Redo() override
-                {
-                    if (!m_Panel || !m_SuppressFlag)
-                        return;
-                    *m_SuppressFlag = true;
-                    m_Panel->ApplySelectionFromUndo(m_AfterPaths);
-                    *m_SuppressFlag = false;
-                }
-
-              private:
-                AssetsPanel* m_Panel = nullptr; // not owned
-                std::vector<std::filesystem::path> m_BeforePaths;
-                std::vector<std::filesystem::path> m_AfterPaths;
-                bool* m_SuppressFlag = nullptr; // not owned
-            };
-
-            auto cmd = std::make_unique<AssetsSelectionCommand>(
-                this,
-                before,
-                after,
-                &m_SuppressSelectionUndo);
-            m_Undo->CommitAlreadyApplied(std::move(cmd));
-        }
-    }
+    if (m_Undo && !m_SuppressSelectionUndo && m_LastSelectionPaths != paths)
+        m_Undo->CommitPendingEdit();
 
     m_LastSelectionPaths = paths;
 
@@ -1409,16 +1353,6 @@ void AssetsPanel::SilentlyClearSelection()
     UpdateAssetPreview();
 }
 
-void AssetsPanel::ApplySelectionFromUndo(const std::vector<std::filesystem::path>& paths)
-{
-    m_LastSelectionPaths = paths;
-    m_SelectedAssetPaths = paths;
-    if (m_Controller)
-        m_Controller->SetSelectionFromPaths(paths);
-    if (m_OnSelectAssets)
-        m_OnSelectAssets(paths);
-    UpdateAssetPreview();
-}
 
 void AssetsPanel::UpdateAssetPreview()
 {

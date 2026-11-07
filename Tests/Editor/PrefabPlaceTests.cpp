@@ -35,6 +35,7 @@
 #include "Thumbnails/IThumbnailProvider.h"
 #include "UndoRedo/DuplicateEntitiesCommand.h"
 #include "UndoRedo/SceneViewDropUndoCommand.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Assets/AssetManager.h"
@@ -2181,14 +2182,29 @@ TEST_F(PrefabPlaceTests, TheRowMenuRevertsAFieldAndAStaleOverrideIsRefusedWithAN
     const ECS::ComponentTypeId probeType = ECS::GetComponentTypeId<Components::ReflectionProbe>();
 
     Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&Notifications());
+    document.MarkClean();
     std::vector<OverrideMenuEntry> menu = OverrideMenuOf(world, lid, probeType, "Intensity", undo);
     ASSERT_EQ(menu.size(), 2u);
     menu[1].Run();
     EXPECT_EQ(undo.GetUndoCount(), 1u);
     EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_TRUE(document.IsDirty());
     EXPECT_FALSE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).Overridden);
     undo.Undo();
     EXPECT_FLOAT_EQ(IntensityOf(world, lid), 2.0f);
+    EXPECT_FALSE(document.IsDirty());
+    undo.Redo();
+    document.MarkClean();
+    undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
+    undo.Undo();
+    document.MarkClean();
 
     menu = OverrideMenuOf(world, lid, probeType, "Intensity", undo);
     ASSERT_EQ(menu.size(), 2u);
@@ -2203,6 +2219,7 @@ TEST_F(PrefabPlaceTests, TheRowMenuRevertsAFieldAndAStaleOverrideIsRefusedWithAN
     menu[1].Run();
     EXPECT_EQ(Editor::TestStubs::LastSceneViewNotice(), "Reflection Probe Intensity is not in the prefab.");
     EXPECT_EQ(undo.GetUndoCount(), steps);
+    EXPECT_FALSE(document.IsDirty());
 }
 
 // Apply and Revert edit the edit world and the prefab file, so the menus offer nothing in Play mode.
@@ -2657,6 +2674,11 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
     Editor::NotifyWorldStructure(&Notifications(), &world);
     const ECS::EntityHandle other = PlaceAt(world, file, 4.0f, 0.0f, 0.0f);
     Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&Notifications());
+    document.MarkClean();
     Editor::PrefabOverridesListReopen reopen;
     const Editor::PrefabOverridesListContext context{{}, {}, &reopen};
     Editor::PrefabBar bar(world, instance.Root, &Notifications(), &undo, context, {}, {}, {});
@@ -2669,6 +2691,7 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
     ASSERT_TRUE(revertAll && applyAll);
 
     revertAll->TriggerClick();
+    EXPECT_TRUE(document.IsDirty());
     EXPECT_EQ(undo.GetUndoCount(), 1u);
     EXPECT_FALSE(world.HasComponent<Components::ReflectionProbe>(instance.Root));
     EXPECT_FLOAT_EQ(IntensityOf(world, instance.Lid), 1.0f);
@@ -2683,6 +2706,7 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
     ASSERT_NE(OverridesListOf(rebuilt), nullptr);
     EXPECT_TRUE(OverridesListOf(rebuilt)->IsPopupOpen()) << "a rebuilt bar opens the list again";
     undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
     EXPECT_TRUE(world.HasComponent<Components::ReflectionProbe>(instance.Root));
     EXPECT_FLOAT_EQ(IntensityOf(world, instance.Lid), 2.0f);
     EXPECT_FALSE(world.HasComponent<Components::ReflectionProbe>(instance.Base));
@@ -2806,4 +2830,67 @@ TEST_F(PrefabPlaceTests, TheOverridesListOffersNoActionInPlayMode)
     EXPECT_EQ(BarText(*list, "prefab-overrides-note"), "Stop Play mode to apply or revert.");
     EXPECT_TRUE(list->FindById("prefab-overrides-revert-all"_sid)->HasClass("hidden"));
     EXPECT_TRUE(list->FindById("prefab-overrides-apply-all"_sid)->HasClass("hidden"));
+}
+
+TEST_F(PrefabPlaceTests, ApplyingOverridesOwnsTheSceneRevisionAcrossSave)
+{
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    const auto file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const auto first = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    const auto second = PlaceAt(world, file, 4.0f, 0.0f, 0.0f);
+    const auto lid = FindChild(world, first);
+    world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 2.0f;
+    Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, lid);
+    Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&Notifications());
+    document.MarkClean();
+    const auto menu = OverrideMenuOf(world, lid, ECS::GetComponentTypeId<Components::ReflectionProbe>(), "Intensity", undo);
+    ASSERT_EQ(menu.size(), 2u);
+    menu.front().Run();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    undo.Redo();
+    document.MarkClean();
+    undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_FLOAT_EQ(IntensityOf(world, FindChild(world, second)), 2.0f);
+}
+
+TEST_F(PrefabPlaceTests, ApplyingOverridesSettlesTheOpenPreviewBeforeUpdatingAnotherInstance)
+{
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    const auto file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const auto first = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    const auto second = PlaceAt(world, file, 4.0f, 0.0f, 0.0f);
+    const auto firstLid = FindChild(world, first);
+    const auto secondLid = FindChild(world, second);
+    const float original = IntensityOf(world, secondLid);
+    Editor::UndoRedoService undo;
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        &world, {firstLid, secondLid}, ECS::GetComponentTypeId<Components::ReflectionProbe>(), &Notifications(),
+        "Preview Probe Intensity");
+    auto preview = undo.BeginInteractiveEdit("Preview Probe Intensity", std::move(target));
+    preview.Preview([&world, firstLid]() {
+        world.GetComponentForWrite<Components::ReflectionProbe>(firstLid)->Intensity = 2.0f;
+    });
+    Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, firstLid);
+    const auto menu = OverrideMenuOf(world, firstLid, ECS::GetComponentTypeId<Components::ReflectionProbe>(), "Intensity", undo);
+    ASSERT_EQ(menu.size(), 2u);
+    menu.front().Run();
+    ASSERT_FLOAT_EQ(IntensityOf(world, secondLid), 2.0f);
+    undo.Undo();
+    undo.Undo();
+    undo.Redo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, firstLid), 2.0f);
+    EXPECT_FLOAT_EQ(IntensityOf(world, secondLid), original);
+    undo.Redo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, secondLid), 2.0f);
 }

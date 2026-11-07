@@ -4,6 +4,7 @@
 #include "SceneView/SceneViewGizmos.h"
 #include "SceneView/SelectionTool.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "EditorChangeNotifications.h"
 #include "ECS/Entity.h"
 #include "Mathematics/Vector3.h"
 #include "SplineECS/SplineNetwork.h"

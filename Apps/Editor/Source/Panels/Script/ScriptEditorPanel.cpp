@@ -1,4 +1,5 @@
 #include "Panels/Script/ScriptEditorPanel.h"
+#include "Panels/Script/ScriptTextEditCommand.h"
 #include "AssetCore/SharedFileRead.h"
 
 #include "Editor/Settings/ScriptEditorSettings.h"
@@ -81,95 +82,6 @@ std::vector<Dropdown::Option> BuildTextScaleDropdownOptions()
 }
 }
 
-// Command for script text edits - integrates with the global UndoRedoService
-class ScriptTextEditCommand : public Editor::IEditorCommand
-{
-public:
-    ScriptTextEditCommand(ScriptTextArea* textArea, std::string beforeText, std::string afterText, 
-                          bool* loadingFlag, std::function<void()> onUndoRedo)
-        : m_TextArea(textArea)
-        , m_BeforeText(std::move(beforeText))
-        , m_AfterText(std::move(afterText))
-        , m_LoadingFlag(loadingFlag)
-        , m_OnUndoRedo(std::move(onUndoRedo))
-    {
-    }
-
-    const char* GetName() const override { return "Script Edit"; }
-
-    void Do() override
-    {
-        // Already applied when command was created
-    }
-
-    void Undo() override
-    {
-        if (m_TextArea && m_LoadingFlag)
-        {
-            *m_LoadingFlag = true;
-            m_TextArea->SetValue(m_BeforeText);
-            *m_LoadingFlag = false;
-            if (m_OnUndoRedo) m_OnUndoRedo();
-        }
-    }
-
-    void Redo() override
-    {
-        if (m_TextArea && m_LoadingFlag)
-        {
-            *m_LoadingFlag = true;
-            m_TextArea->SetValue(m_AfterText);
-            *m_LoadingFlag = false;
-            if (m_OnUndoRedo) m_OnUndoRedo();
-        }
-    }
-
-    // Allow merging consecutive character edits into a single command
-    bool CanMergeWith(const IEditorCommand& other) const override
-    {
-        auto* otherCmd = dynamic_cast<const ScriptTextEditCommand*>(&other);
-        if (!otherCmd) return false;
-        // Merge if it's the same text area and the change is small (single character edit)
-        if (m_TextArea != otherCmd->m_TextArea) return false;
-        // Only merge if the difference between before and after is small
-        int sizeDiff = std::abs((int)m_AfterText.size() - (int)otherCmd->m_BeforeText.size());
-        if (sizeDiff > 1 || m_AfterText != otherCmd->m_BeforeText) return false;
-        
-        // Don't merge if the new edit contains a newline (Enter key creates new undo step)
-        if (otherCmd->m_AfterText.size() > otherCmd->m_BeforeText.size())
-        {
-            // Character was added - check if it's a newline
-            for (size_t i = 0; i < otherCmd->m_AfterText.size(); ++i)
-            {
-                if (i >= otherCmd->m_BeforeText.size() || otherCmd->m_AfterText[i] != otherCmd->m_BeforeText[i])
-                {
-                    if (otherCmd->m_AfterText[i] == '\n')
-                        return false;
-                    break;
-                }
-            }
-        }
-        
-        return true;
-    }
-
-    bool MergeWith(const IEditorCommand& other) override
-    {
-        auto* otherCmd = dynamic_cast<const ScriptTextEditCommand*>(&other);
-        if (!otherCmd) return false;
-        // Keep our before state, take their after state
-        m_AfterText = otherCmd->m_AfterText;
-        return true;
-    }
-
-private:
-    ScriptTextArea* m_TextArea;
-    std::string m_BeforeText;
-    std::string m_AfterText;
-    bool* m_LoadingFlag;
-    std::function<void()> m_OnUndoRedo;
-};
-
 ScriptEditorPanel::ScriptEditorPanel()
     : DockPanel("Script Editor")
 {
@@ -178,6 +90,22 @@ ScriptEditorPanel::ScriptEditorPanel()
 
 ScriptEditorPanel::~ScriptEditorPanel()
 {
+    m_HistoryDocumentSubscription.Reset();
+    if (auto* modal = m_DiskConflictModal.Get())
+    {
+        modal->Hide();
+        modal->SetOnSave({});
+        modal->SetOnDontSave({});
+        modal->SetOnCancel({});
+        if (auto* manager = modal->GetOwnerManager())
+        {
+            manager->PostToUI([weakModal = m_DiskConflictModal]
+            {
+                if (auto* pending = weakModal.Get(); pending && pending->GetParent())
+                    pending->GetParent()->RemoveChild(pending);
+            });
+        }
+    }
     if (m_SearchField && m_SearchField->GetParent())
         EditorSearchBars::UnregisterFocusTarget(m_SearchField->GetParent());
 }
@@ -581,6 +509,8 @@ void ScriptEditorPanel::SetupUI()
 
 bool ScriptEditorPanel::OpenScript(const std::filesystem::path& scriptPath)
 {
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return false;
     if (scriptPath.empty() || !std::filesystem::exists(scriptPath))
     {
         Logger::Log::Error("ScriptEditorPanel: Cannot open script - path is empty or file does not exist: {}", 
@@ -588,15 +518,18 @@ bool ScriptEditorPanel::OpenScript(const std::filesystem::path& scriptPath)
         return false;
     }
 
+    HideCompletions();
+    m_IsLoading = true;
+    if (!LoadScriptFromFile(scriptPath))
+    {
+        m_IsLoading = false;
+        return false;
+    }
+    m_CurrentScriptPath = scriptPath;
     m_IsCSharpScript = (scriptPath.extension() == ".cs");
     if (m_TextArea)
         m_TextArea->SetLanguage(Editor::ScriptLanguageForPath(scriptPath));
-
-    HideCompletions();
-    m_IsLoading = true;
-    LoadScriptFromFile(scriptPath);
-    m_CurrentScriptPath = scriptPath;
-    m_HasUnsavedChanges = false;
+    m_HasUnsavedChanges = m_HistoryDocument && m_HistoryDocument->IsDirty();
     m_IsLoading = false;
     
     // Initialize undo tracking state
@@ -632,21 +565,11 @@ void ScriptEditorPanel::PromptSaveBeforeQuit(std::function<void()> onProceed)
     }
 
     if (!m_QuitModal)
-    {
-        auto modal = std::make_unique<SaveSceneChangesModal>();
-        m_QuitModal = modal.get();
-        UIManager* ui = GetOwnerManager();
-        UIElement* uiRoot = ui ? ui->GetRootElement() : nullptr;
-        if (uiRoot)
-            uiRoot->AddChild(std::move(modal));
-        else
-            AddChild(std::move(modal));
-    }
+        m_QuitModal = CreateSavePrompt();
 
     m_QuitModal->SetOnSave([this, onProceed]()
     {
-        if (SaveScript())
-            onProceed();
+        SaveScriptAndThen(onProceed);
     });
     m_QuitModal->SetOnDontSave([onProceed]() { onProceed(); });
     m_QuitModal->SetOnCancel([]() {});
@@ -661,16 +584,42 @@ void ScriptEditorPanel::PromptSaveBeforeQuit(std::function<void()> onProceed)
 
 bool ScriptEditorPanel::SaveScript()
 {
-    if (m_CurrentScriptPath.empty() || !m_TextArea)
+    return SaveScriptAndThen({});
+}
+
+bool ScriptEditorPanel::SaveScriptAndThen(std::function<void()> onSaved)
+{
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return false;
+    if (m_CurrentScriptPath.empty() || !m_TextArea || !m_HistoryDocument)
     {
         Logger::Log::Warning("ScriptEditorPanel: Cannot save - no file is open");
         return false;
     }
 
-    std::string content = m_TextArea->GetValue();
+    String diskText;
+    if (!ReadFileTextShared(m_CurrentScriptPath, diskText))
+    {
+        Logger::Log::Error("ScriptEditorPanel: Cannot save because the current disk contents could not be read: {}",
+                           m_CurrentScriptPath.string());
+        return false;
+    }
+    m_HistoryDocument->ReconcileDiskText(diskText);
+    if (m_HistoryDocument->HasDiskConflict())
+    {
+        PromptDiskConflict(std::move(onSaved));
+        return false;
+    }
+
+    const std::string content = m_TextArea->GetValue();
     if (WriteScriptToFile(m_CurrentScriptPath, content))
     {
         m_LastSavedContent = content;
+        if (m_HistoryDocument)
+        {
+            m_HistoryDocument->MarkSaved();
+            m_HistoryDocument->Changed().Invoke();
+        }
         m_HasUnsavedChanges = false;
         UpdateTitle();
 
@@ -680,10 +629,83 @@ bool ScriptEditorPanel::SaveScript()
         }
 
         Logger::Log::Info("ScriptEditorPanel: Saved script: {}", m_CurrentScriptPath.string());
+        if (onSaved)
+            onSaved();
         return true;
     }
 
     return false;
+}
+
+SaveSceneChangesModal* ScriptEditorPanel::CreateSavePrompt()
+{
+    auto modal = std::make_unique<SaveSceneChangesModal>();
+    auto* result = modal.get();
+    UIManager* manager = GetOwnerManager();
+    UIElement* root = manager ? manager->GetRootElement() : nullptr;
+    if (root)
+        root->AddChild(std::move(modal));
+    else
+        AddChild(std::move(modal));
+    return result;
+}
+
+void ScriptEditorPanel::PromptDiskConflict(std::function<void()> onSaved)
+{
+    m_ConflictingDocument = m_HistoryDocument;
+    m_ConflictDiskText = m_HistoryDocument->GetSavedText();
+    m_AfterConflictSave = std::move(onSaved);
+    auto* modal = m_DiskConflictModal.Get();
+    if (!modal)
+    {
+        modal = CreateSavePrompt();
+        m_DiskConflictModal = UIElement::MakeWeakRef(modal);
+        modal->SetId("ScriptDiskConflictModal");
+        modal->SetOnSave([this] { ConfirmDiskOverwrite(); });
+        modal->SetOnDontSave([this] { ReloadConflictingScript(); });
+        modal->SetOnCancel([this]
+        {
+            m_ConflictingDocument.reset();
+            m_AfterConflictSave = {};
+        });
+    }
+    modal->Show("Script Changed on Disk",
+        "\"" + Editor::OnDiskFileName(m_CurrentScriptPath) + "\" changed on disk and has unsaved edits.\n"
+        "Replace the disk version with your edits, reload and discard your edits, or cancel.",
+        {"Replace Disk Version", "Reload from Disk", "Cancel"});
+}
+
+void ScriptEditorPanel::ConfirmDiskOverwrite()
+{
+    const auto document = m_ConflictingDocument.lock();
+    auto onSaved = std::move(m_AfterConflictSave);
+    m_ConflictingDocument.reset();
+    if (!document || document != m_HistoryDocument)
+        return;
+    if (!document->AcceptDiskChanges(m_ConflictDiskText))
+    {
+        PromptDiskConflict(std::move(onSaved));
+        return;
+    }
+    SaveScriptAndThen(std::move(onSaved));
+}
+
+void ScriptEditorPanel::ReloadConflictingScript()
+{
+    const auto document = m_ConflictingDocument.lock();
+    auto onSaved = std::move(m_AfterConflictSave);
+    m_ConflictingDocument.reset();
+    if (!document || document != m_HistoryDocument)
+        return;
+    m_IsLoading = true;
+    const bool loaded = LoadScriptFromFile(m_CurrentScriptPath);
+    m_IsLoading = false;
+    if (!loaded)
+        return;
+    document->SetText(document->GetSavedText());
+    document->Changed().Invoke();
+    if (onSaved)
+        onSaved();
 }
 
 void ScriptEditorPanel::OnTextChanged()
@@ -692,7 +714,9 @@ void ScriptEditorPanel::OnTextChanged()
         return;
 
     std::string currentContent = m_TextArea->GetValue();
-    m_HasUnsavedChanges = (currentContent != m_LastSavedContent);
+    if (m_HistoryDocument)
+        m_HistoryDocument->SetText(currentContent);
+    m_HasUnsavedChanges = m_HistoryDocument ? m_HistoryDocument->IsDirty() : currentContent != m_LastSavedContent;
     UpdateTitle();
 
     if (m_IsCSharpScript)
@@ -724,34 +748,15 @@ void ScriptEditorPanel::OnTextChanged()
     }
 
     // Push text edit to global undo/redo service
-    if (m_UndoRedo && currentContent != m_LastUndoContent)
+    if (m_UndoRedo && m_HistoryDocument && currentContent != m_LastUndoContent)
     {
-        auto cmd = std::make_unique<ScriptTextEditCommand>(
-            m_TextArea, 
-            m_LastUndoContent, 
-            currentContent,
-            &m_IsUndoRedoOperation,
-            [this]() {
-                // Update unsaved indicator after undo/redo
-                if (m_TextArea) {
-                    std::string content = m_TextArea->GetValue();
-                    m_HasUnsavedChanges = (content != m_LastSavedContent);
-                    m_LastUndoContent = content;
-                    UpdateTitle();
-
-                    // Re-parse variables after undo/redo (C# only)
-                    if (m_IsCSharpScript) {
-                        ParseScriptVariables();
-                        if (m_OnScriptVariablesChanged) {
-                            m_OnScriptVariablesChanged(m_ScriptVariables);
-                        }
-                    }
-                }
-            }
-        );
+        auto cmd = std::make_unique<Editor::ScriptTextEditCommand>(
+            m_HistoryDocument, m_LastUndoContent, currentContent);
         m_UndoRedo->CommitAlreadyApplied(std::move(cmd));
         m_LastUndoContent = currentContent;
     }
+    if (m_HistoryDocument)
+        m_HistoryDocument->Changed().Invoke();
 }
 
 void ScriptEditorPanel::OnEvent(UIEvent& e)
@@ -791,6 +796,8 @@ void ScriptEditorPanel::UpdateTitle()
         {
             title += " *";
         }
+        if (m_HistoryDocument && m_HistoryDocument->HasDiskConflict())
+            title += " (disk changed)";
     }
 
     SetTitle(title);
@@ -815,7 +822,7 @@ void ScriptEditorPanel::UpdateTitle()
     }
 }
 
-void ScriptEditorPanel::LoadScriptFromFile(const std::filesystem::path& path)
+bool ScriptEditorPanel::LoadScriptFromFile(const std::filesystem::path& path)
 {
     try
     {
@@ -823,18 +830,48 @@ void ScriptEditorPanel::LoadScriptFromFile(const std::filesystem::path& path)
         if (!GameEngine::ReadFileTextShared(path, content))
         {
             Logger::Log::Error("ScriptEditorPanel: Failed to open file for reading: {}", path.string());
-            return;
+            return false;
         }
 
+        m_HistoryDocumentSubscription.Reset();
+        m_HistoryDocument = Editor::ScriptHistoryDocument::Open(path, content);
+        m_HistoryDocumentSubscription = m_HistoryDocument->Changed().Subscribe([this] { RefreshFromHistoryDocument(); });
         if (m_TextArea)
         {
-            m_TextArea->SetValue(content);
-            m_LastSavedContent = content;
+            m_TextArea->SetValue(m_HistoryDocument->GetText());
+            m_LastSavedContent = m_HistoryDocument->GetSavedText();
         }
+        return true;
     }
-    catch (const std::exception& e)
+    catch (const std::exception& exception)
     {
-        Logger::Log::Error("ScriptEditorPanel: Exception while loading script: {}", e.what());
+        Logger::Log::Error("ScriptEditorPanel: Exception while loading script: {}", exception.what());
+        return false;
+    }
+}
+
+void ScriptEditorPanel::RefreshFromHistoryDocument()
+{
+    if (!m_HistoryDocument || !m_TextArea)
+        return;
+    if (m_LastUndoContent == m_HistoryDocument->GetText() && m_LastSavedContent == m_HistoryDocument->GetSavedText())
+    {
+        UpdateTitle();
+        return;
+    }
+    m_IsUndoRedoOperation = true;
+    if (m_TextArea->GetValue() != m_HistoryDocument->GetText())
+        m_TextArea->SetValue(m_HistoryDocument->GetText());
+    m_IsUndoRedoOperation = false;
+    m_LastUndoContent = m_HistoryDocument->GetText();
+    m_LastSavedContent = m_HistoryDocument->GetSavedText();
+    m_HasUnsavedChanges = m_HistoryDocument->IsDirty();
+    UpdateTitle();
+    if (m_IsCSharpScript)
+    {
+        ParseScriptVariables();
+        if (m_OnScriptVariablesChanged)
+            m_OnScriptVariablesChanged(m_ScriptVariables);
     }
 }
 

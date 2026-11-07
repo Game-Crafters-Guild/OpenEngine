@@ -9,6 +9,7 @@
 #include "ECS/Entity.h"
 #include "ECS/World.h"
 
+#include <functional>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -46,6 +47,7 @@ void WireSceneViewAssetDropUndo(SceneViewPanel* sceneViewPanel,
 
             if (!undoRedo)
             {
+                NotifyWorldStructure(notifications, world);
                 return;
             }
 
@@ -68,7 +70,7 @@ void WireSceneViewAssetDropUndo(SceneViewPanel* sceneViewPanel,
                 anchorBefore,
                 selAfter,
                 anchorAfter,
-                std::move(applySelection)));
+                std::move(applySelection)), std::bind_front(NotifyWorldStructure, notifications, world));
         });
 }
 

@@ -1065,6 +1065,9 @@ void SplineTool::ClearSelectedControlTransformEdit()
 
 void SplineTool::FinalizeSpline(const GizmoRay& releaseRay)
 {
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return;
+
     const auto& points = m_ClickPoints;
     auto* world = &m_State->World();
     if (points.size() < 2 || !world)
@@ -1200,15 +1203,6 @@ void SplineTool::FinalizeSpline(const GizmoRay& releaseRay)
     splineComp.DefaultRadius = defaultRadius;
     world->AddComponentImmediate(entity, splineComp);
 
-    // Notify the editor so the hierarchy panel refreshes.
-    if (m_ChangeNotifications)
-    {
-        Editor::EditorChangeNotifications::WorldStructureChangedEvent e{};
-        e.world = world;
-        e.kind = Editor::EditorChangeNotifications::ChangeKind::Commit;
-        m_ChangeNotifications->NotifyWorldStructureChanged(e);
-    }
-
     if (undoNewSplineEntity && m_UndoRedo)
     {
         std::vector<uint8_t> worldAfter = world->SerializeWorld();
@@ -1219,9 +1213,12 @@ void SplineTool::FinalizeSpline(const GizmoRay& releaseRay)
                 world,
                 m_ChangeNotifications,
                 std::move(worldUndoBefore),
-                std::move(worldAfter)));
+                std::move(worldAfter)),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
         }
     }
+    else
+        Editor::NotifyWorldStructure(m_ChangeNotifications, world);
 
     if (m_OnSplineCreated)
         m_OnSplineCreated(entity);

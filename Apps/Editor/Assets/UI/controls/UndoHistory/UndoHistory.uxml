@@ -1,0 +1,14 @@
+<UIElement class="undo-history-panel">
+  <UIElement class="undo-history-header">
+    <Label text="Undo History" class="undo-history-title" />
+    <Button id="HistoryUndo" text="Undo" class="secondary" tooltip="Undo" />
+    <Button id="HistoryRedo" text="Redo" class="secondary" tooltip="Redo" />
+  </UIElement>
+  <ScrollView id="HistoryScroll" class="undo-history-scroll">
+    <UIElement id="HistoryList" class="undo-history-list" />
+  </ScrollView>
+  <UIElement class="undo-history-footer">
+    <Label id="HistoryCount" class="undo-history-count" />
+    <Button id="HistoryClear" text="Clear" class="secondary" tooltip="Clear all history branches" />
+  </UIElement>
+</UIElement>

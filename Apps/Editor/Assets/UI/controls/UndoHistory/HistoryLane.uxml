@@ -1,0 +1,7 @@
+<UIElement class="history-lane">
+  <UIElement id="HistoryLineUp" class="history-line history-line-up" />
+  <UIElement id="HistoryLineDown" class="history-line history-line-down" />
+  <UIElement id="HistoryLineLeft" class="history-line history-line-left" />
+  <UIElement id="HistoryLineRight" class="history-line history-line-right" />
+  <UIElement id="HistoryMark" class="history-node-mark" />
+</UIElement>

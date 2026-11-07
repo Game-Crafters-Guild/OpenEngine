@@ -8,6 +8,7 @@
 #include "EditorChangeNotifications.h"
 #include "InspectorRegistry.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorColorSwatchRow.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "UI/ContextMenuLabels.h"
@@ -30,6 +31,7 @@
 #include "UI/UIEvents.h"
 #include "UndoRedo/UndoRedoService.h"
 
+#include <cstdint>
 #include <functional>
 #include <initializer_list>
 #include <memory>
@@ -131,6 +133,33 @@ Dropdown* AddStatusRow(const InspectorContext& ctx, MarkupEditorBridge& bridge, 
     return dropdown;
 }
 
+void WriteMarkupPickerColor(Markup& markup, std::uint32_t argb, float)
+{
+    SetMarkupColorArgb(markup, argb);
+}
+
+void OpenMarkupColorPicker(const InspectorContext& ctx, MarkupEditorBridge& bridge, UIEvent& event)
+{
+    if (event.Button != 0 || bridge.IsInPlayMode() || !ctx.OpenColorPickerWindow)
+        return;
+    event.Stop();
+    const Markup* current = ctx.World->GetComponent<Markup>(ctx.Entity);
+    if (!current)
+        return;
+    using PickerEdit = InspectorUI::InspectorColorPickerEdit;
+    auto binding = PickerEdit::ForComponent<Markup>(
+        ctx, "Set Mark-up Color", "Mark-up Color", WriteMarkupPickerColor);
+    binding.Write = [undo = ctx.Undo, write = std::move(binding.Write)](
+                        std::uint32_t argb, float intensity, EditChangeKind kind)
+    {
+        if (undo || kind == EditChangeKind::Commit)
+            write(argb, intensity, kind);
+    };
+    binding.Applied = ctx.RequestInspectorRefresh;
+    auto callbacks = PickerEdit::Bind(std::move(binding));
+    ctx.OpenColorPickerWindow(MarkupDisplayArgb(*current), 1.0f, std::move(callbacks));
+}
+
 // The color the mark-up draws in. Its default is its status's color: the swatch shows that
 // color and the row says "Status color". A picked color (shown as its hex value) is one undo
 // step, and the reset glyph beside the swatch takes it back to the status color (Markup::Color
@@ -144,49 +173,7 @@ void AddColorRow(const InspectorContext& ctx, MarkupEditorBridge& bridge, const 
         custom ? ContextMenuLabels::ArgbToHexRGB(MarkupDisplayArgb(markup)) : std::string("Status color"));
     if (!row.Swatch || !row.Value)
         return;
-    const auto open = [ctx, &bridge](UIEvent& event) {
-        if (event.Button != 0 || bridge.IsInPlayMode() || !ctx.OpenColorPickerWindow)
-            return;
-        event.Stop();
-        const Markup* current = ctx.World->GetComponent<Markup>(ctx.Entity);
-        if (!current)
-            return;
-        using Edit = UndoRedoService::InteractiveEdit;
-        auto edit = std::make_shared<Edit>();
-        if (ctx.Undo)
-            *edit = ctx.Undo->BeginInteractiveEdit(
-                "Set Mark-up Color",
-                InspectorDrag::MakeComponentSnapshotTarget<Markup>(ctx.World, ctx.Entity, ctx.ChangeNotifications, "Mark-up Color"));
-        const auto write = [ctx](uint32_t argb) {
-            if (Markup* edited = ctx.World->GetComponentForWrite<Markup>(ctx.Entity))
-                SetMarkupColorArgb(*edited, argb);
-        };
-        ColorPickerCallbacks callbacks;
-        callbacks.onValueChanging = [edit, write](uint32_t argb, float) {
-            if (*edit)
-                edit->Preview([&] { write(argb); });
-        };
-        callbacks.onApply = [ctx, edit, write](uint32_t argb, float) {
-            if (*edit)
-            {
-                edit->Preview([&] { write(argb); });
-                edit->Commit();
-            }
-            else
-            {
-                InspectorDrag::CommitComponentWithUndo<Markup>(ctx.World, ctx.Entity, ctx.ChangeNotifications, nullptr,
-                                                               "Set Mark-up Color",
-                                                               [argb](Markup& edited) { SetMarkupColorArgb(edited, argb); });
-            }
-            if (ctx.RequestInspectorRefresh)
-                ctx.RequestInspectorRefresh();
-        };
-        callbacks.onCancel = [edit]() {
-            if (*edit)
-                edit->Cancel();
-        };
-        ctx.OpenColorPickerWindow(MarkupDisplayArgb(*current), 1.0f, std::move(callbacks));
-    };
+    const auto open = [ctx, &bridge](UIEvent& event) { OpenMarkupColorPicker(ctx, bridge, event); };
     row.Swatch->RegisterEventHandler(kEventMouseDown, open);
     row.Value->RegisterEventHandler(kEventMouseDown, open);
     if (!custom || bridge.IsInPlayMode())

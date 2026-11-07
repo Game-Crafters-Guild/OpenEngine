@@ -26,6 +26,7 @@
 #include "VersionControl/EditorVersionControlService.h"
 #include "VersionControl/SceneDiff/SceneDiffLiveOverlay.h"
 
+#include <functional>
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -451,6 +452,9 @@ void InspectorVcsController::ShowPropertyContextMenu(
 
 void InspectorVcsController::RevertProperty(const ScenePropertyDiff& property)
 {
+    if (m_Panel.m_Undo && !m_Panel.m_Undo->CommitPendingEdit())
+        return;
+
     if (!m_Panel.m_World || !m_Panel.m_Entity.IsValid() ||
         !m_Panel.m_World->IsValid(m_Panel.m_Entity) ||
         property.OriginalValue.empty())
@@ -491,19 +495,17 @@ void InspectorVcsController::RevertProperty(const ScenePropertyDiff& property)
     }
     m_Panel.m_World->ProcessCommands();
     const std::vector<uint8_t> after = m_Panel.m_World->SerializeWorld();
-    if (m_Panel.m_Undo && before != after)
+    if (before == after)
+        return;
+    if (m_Panel.m_Undo)
         m_Panel.m_Undo->CommitAlreadyApplied(
             std::make_unique<WorldSnapshotCommand>(
                 std::string("Revert ") + property.Key + " to VCS baseline",
                 m_Panel.m_World, m_Panel.m_ChangeNotifications,
-                before, after));
-    if (m_Panel.m_ChangeNotifications)
-    {
-        EditorChangeNotifications::WorldStructureChangedEvent event{};
-        event.world = m_Panel.m_World;
-        event.kind = EditorChangeNotifications::ChangeKind::Commit;
-        m_Panel.m_ChangeNotifications->NotifyWorldStructureChanged(event);
-    }
+                before, after),
+            std::bind_front(NotifyWorldStructure, m_Panel.m_ChangeNotifications, m_Panel.m_World));
+    else
+        NotifyWorldStructure(m_Panel.m_ChangeNotifications, m_Panel.m_World);
     m_Panel.ShowEntity(
         m_Panel.m_World, m_Panel.m_Entity, false, false);
 }

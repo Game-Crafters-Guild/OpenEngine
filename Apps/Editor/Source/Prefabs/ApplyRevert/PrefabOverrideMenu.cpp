@@ -15,6 +15,7 @@
 #include "Scene/SceneSchemaRegistry.h"
 #include "Types/StringUtils.h"
 
+#include <functional>
 #include <algorithm>
 #include <format>
 #include <memory>
@@ -29,6 +30,15 @@ namespace
 {
 
 constexpr const char* kRevertFieldLabel = "Revert to prefab value";
+
+bool RevertEntityOverrides(ECS::World& world, ECS::EntityHandle entity,
+                           std::span<const Scene::PrefabOverrideTarget> targets, std::string& error)
+{
+    for (const Scene::PrefabOverrideTarget& target : targets)
+        if (target.Entity == entity && !Scene::RevertPrefabOverride(world, entity, target.Override, error))
+            return false;
+    return true;
+}
 
 // The overrides of the target's entity that its row or header shows: the field's lines for a row, the
 // component's addition or removal for a header.
@@ -139,13 +149,22 @@ void ApplyPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pre
                                    UndoRedoService* undo, EditorChangeNotifications* notifications,
                                    const std::string& undoName)
 {
+    if (undo && !undo->CommitPendingEdit())
+        return;
+
     if (targets.empty())
         return;
     std::string error;
     std::unique_ptr<ApplyPrefabOverrideCommand> command =
         ApplyPrefabOverrideCommand::Create(world, notifications, targets, undoName, error);
-    if (command && undo)
-        undo->CommitAlreadyApplied(std::move(command));
+    if (command)
+    {
+        if (undo)
+            undo->CommitAlreadyApplied(std::move(command),
+                std::bind_front(NotifyWorldStructure, notifications, &world));
+        else
+            NotifyWorldStructure(notifications, &world);
+    }
     if (!error.empty())
         ShowSceneViewNotice(std::move(error));
 }
@@ -155,6 +174,8 @@ void RevertPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pr
                                     const std::string& undoName)
 {
     if (targets.empty())
+        return;
+    if (undo && !undo->CommitPendingEdit())
         return;
     std::string error;
     // One edit for each entity, in one compound step when the targets span several entities.
@@ -169,17 +190,15 @@ void RevertPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pr
     {
         if (!world.IsValid(entity))
             continue;
-        const auto revert = [&world, entity, targets, &error]()
+        CommitEntityComponentsEdit(world, entity, undo, notifications, undoName, [&world, entity, targets, &error]()
         {
-            for (const Scene::PrefabOverrideTarget& target : targets)
-                if (target.Entity == entity && !Scene::RevertPrefabOverride(world, entity, target.Override, error))
-                    return false;
-            return true;
-        };
-        CommitEntityComponentsEdit(world, entity, undo, notifications, undoName, revert);
-        if (notifications)
-            notifications->NotifyComponentChanged({&world, entity, ComponentTypeOfTargets(targets, entity),
-                                                   EditorChangeNotifications::ChangeKind::Commit});
+            return RevertEntityOverrides(world, entity, targets, error);
+        }, [&world, entity, targets, notifications]()
+        {
+            if (notifications)
+                notifications->NotifyComponentChanged({&world, entity, ComponentTypeOfTargets(targets, entity),
+                                                       EditorChangeNotifications::ChangeKind::Commit});
+        });
     }
     if (compound)
         undo->EndCompound();

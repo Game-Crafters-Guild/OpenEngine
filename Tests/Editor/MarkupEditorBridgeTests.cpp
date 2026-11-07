@@ -29,6 +29,7 @@
 #include "Logger/CallbackSink.h"
 #include "Logger/Logger.h"
 #include "MarkupECS/MarkupService.h"
+#include "Scene/SceneDocumentManager.h"
 #include "Scene/WorldSnapshotCommand.h"
 #include "TestEnvVar.h"
 #include "TestTempDir.h"
@@ -43,6 +44,7 @@
 #include "UI/StyleProperties.h"
 #include "UI/UiContext.h"
 #include "UI/UiDispatcher.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <gtest/gtest.h>
@@ -208,7 +210,8 @@ class MarkupEditorBridgeTest : public ::testing::Test
     template <typename T>
     std::unique_ptr<UIElement> BuildSection(ECS::EntityHandle entity, Editor::UndoRedoService& undo,
                                             std::vector<std::function<void()>>* frameCallbacks = nullptr,
-                                            std::function<void()> requestRefresh = {})
+                                            std::function<void()> requestRefresh = {},
+                                            OpenColorPickerWindowFn openPicker = {})
     {
         Editor::RegisterMarkupInspector(*m_Bridge);
         auto section = std::make_unique<UIElement>();
@@ -220,6 +223,7 @@ class MarkupEditorBridgeTest : public ::testing::Test
         ctx.ChangeNotifications = &Notifications;
         ctx.FrameRefreshCallbacks = frameCallbacks;
         ctx.RequestInspectorRefresh = std::move(requestRefresh);
+        ctx.OpenColorPickerWindow = std::move(openPicker);
         (*InspectorRegistry::Get().TryGetComponentInspector<T>())(ctx);
         return section;
     }
@@ -227,6 +231,24 @@ class MarkupEditorBridgeTest : public ::testing::Test
     std::unique_ptr<UIElement> BuildInspectorSection(ECS::EntityHandle entity, Editor::UndoRedoService& undo)
     {
         return BuildSection<Markup>(entity, undo);
+    }
+
+    std::unique_ptr<UIElement> OpenColorPicker(ECS::EntityHandle entity, Editor::UndoRedoService& undo,
+                                              ColorPickerCallbacks& picker)
+    {
+        auto section = BuildSection<Markup>(entity, undo, nullptr, {},
+            [&picker](uint32_t, float, ColorPickerCallbacks callbacks) { picker = std::move(callbacks); });
+        for (Label* label : FindAll<Label>(*section))
+        {
+            if (label->GetText() != "Status color")
+                continue;
+            UIEvent press{};
+            press.Id = kEventMouseDown;
+            press.Button = 0;
+            label->DispatchEvent(press);
+            break;
+        }
+        return section;
     }
 
     // Writes `text` into the section's comment field and presses Add Comment.
@@ -287,6 +309,52 @@ TEST_F(MarkupEditorBridgeTest, CommitsAndUndoStampTheScopesAuthorAndPreviewsNeve
     const uint32 before = MarkupService::Get().GetRevision(World);
     Notify<Components::Transform>(prop, EditorChangeNotifications::ChangeKind::Commit);
     EXPECT_EQ(MarkupService::Get().GetRevision(World), before);
+}
+
+TEST_F(MarkupEditorBridgeTest, UndoToSavedTransformPreservesDirtinessForObserverAuthoredNotes)
+{
+    const auto lake = CreateMarkup();
+    Notify<Components::Transform>(lake, EditorChangeNotifications::ChangeKind::Commit);
+    const auto savedEntries = MarkupService::Get().FindNotes(World, lake)->Entries.size();
+    const Markup savedMarkup = MarkupOf(lake);
+    Editor::UndoRedoService history;
+    m_Bridge->SetUndoService(&history);
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&World);
+    document.SetUndoRedoService(&history);
+    document.SetChangeNotifications(&Notifications);
+    document.MarkClean();
+
+    auto target = Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+        &World, {lake}, ECS::GetComponentTypeId<Components::Transform>(), &Notifications, "Move Mark-up");
+    auto edit = history.BeginInteractiveEdit("Move Mark-up", target);
+    edit.Preview([this, lake] { World.GetComponentForWrite<Components::Transform>(lake)->Translate(2.0f, 0.0f, 0.0f); });
+    m_Now = 1010;
+    edit.Commit();
+    ASSERT_TRUE(history.CommitPendingEdit());
+    ASSERT_TRUE(document.IsDirty());
+    ASSERT_GT(MarkupService::Get().FindNotes(World, lake)->Entries.size(), savedEntries);
+    const Markup editedMarkup = MarkupOf(lake);
+    ASSERT_GT(editedMarkup.Revision, savedMarkup.Revision);
+
+    history.Undo();
+    EXPECT_FLOAT_EQ(World.GetComponent<Components::Transform>(lake)->GetPosition().x, 0.0f);
+    EXPECT_GT(MarkupService::Get().FindNotes(World, lake)->Entries.size(), savedEntries);
+    EXPECT_EQ(MarkupOf(lake).Revision, editedMarkup.Revision);
+    EXPECT_EQ(MarkupOf(lake).UpdatedUnix, editedMarkup.UpdatedUnix);
+    EXPECT_TRUE(document.IsDirty());
+    history.Redo();
+    EXPECT_TRUE(document.IsDirty());
+    ASSERT_TRUE(history.Checkout(history.GetRootNodeId()));
+    EXPECT_TRUE(document.IsDirty());
+
+    document.MarkClean();
+    EXPECT_FALSE(document.IsDirty());
+    history.Redo();
+    EXPECT_TRUE(document.IsDirty());
+    history.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_EQ(MarkupOf(lake).Revision, editedMarkup.Revision);
 }
 
 // A duplicate copies the component bytes and nothing copies the notes: the copy gets its
@@ -1044,6 +1112,51 @@ TEST_F(MarkupEditorBridgeTest, TheColorRowShowsTheStatusColorUntilOneIsSet)
     EXPECT_FALSE(Editor::MarkupHasOwnColor(MarkupOf(docks)));
     undo.Undo();
     EXPECT_TRUE(Editor::MarkupHasOwnColor(MarkupOf(docks)));
+}
+
+TEST_F(MarkupEditorBridgeTest, ColorPickerCancelRestoresTheLastSettlementAfterInspectorRebuild)
+{
+    const auto docks = CreateMarkup();
+    Editor::UndoRedoService undo;
+    ColorPickerCallbacks picker;
+    auto section = OpenColorPicker(docks, undo, picker);
+    ASSERT_TRUE(picker.onValueChanging);
+    picker.onValueChanging(0xFFFF0000u, 1.0f);
+    ASSERT_TRUE(undo.CommitPendingEdit());
+    ASSERT_EQ(undo.GetUndoCount(), 1u);
+    section.reset();
+
+    picker.onValueChanging(0xFF00FF00u, 1.0f);
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFF00FF00u);
+    picker.onCancel();
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFFFF0000u);
+    EXPECT_FALSE(undo.HasPendingEdit());
+    ASSERT_EQ(undo.GetUndoCount(), 1u);
+    undo.Undo();
+    EXPECT_FALSE(Editor::MarkupHasOwnColor(MarkupOf(docks)));
+    undo.Redo();
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFFFF0000u);
+}
+
+TEST_F(MarkupEditorBridgeTest, ColorPickerApplyIsUndoableAfterSettlementAndInspectorRebuild)
+{
+    const auto docks = CreateMarkup();
+    Editor::UndoRedoService undo;
+    ColorPickerCallbacks picker;
+    auto section = OpenColorPicker(docks, undo, picker);
+    ASSERT_TRUE(picker.onValueChanging);
+    picker.onValueChanging(0xFFFF0000u, 1.0f);
+    ASSERT_TRUE(undo.CommitPendingEdit());
+    section.reset();
+
+    picker.onApply(0xFF00FF00u, 1.0f);
+    ASSERT_TRUE(undo.CommitPendingEdit());
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFF00FF00u);
+    ASSERT_EQ(undo.GetUndoCount(), 2u);
+    undo.Undo();
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFFFF0000u);
+    undo.Redo();
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFF00FF00u);
 }
 
 // A Markup removed and added again on the same entity starts from its own state: the state it had

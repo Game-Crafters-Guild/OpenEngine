@@ -2,6 +2,7 @@
 
 #include "Events/Event.h"
 #include "Graph/GraphModel.h"
+#include "Graph/GraphSelectionHistory.h"
 #include "Graph/GraphCanvas.h"
 #include "Graph/GraphNest.h"
 #include "Graph/GraphTransitionStore.h"
@@ -200,6 +201,8 @@ public:
     void OnPostLayout() override;
 
 private:
+    class GraphSnapshotCommand;
+    Editor::UndoRedoService::SnapshotTarget MakeGraphSnapshotTarget();
     void RebuildPalette();
     // Rebuilds the palette on the next deferred drain, at most once however often it is asked.
     void SchedulePaletteRebuild();
@@ -318,6 +321,7 @@ private:
 
     const EditorContext* m_Context = nullptr;
     Editor::UndoRedoService* m_Undo = nullptr;
+    Editor::GraphSelectionHistory m_SelectionHistory;
     OpenColorPickerWindowFn m_OpenColorPickerWindow;
     std::function<void(const std::filesystem::path&)> m_PingAsset;
     // A changed-file batch that names an asset a node references rebinds the bound nodes once.
@@ -337,6 +341,8 @@ private:
     std::string m_GraphTransitionEditLinkId;
 
     Graph::Model m_Model;
+    // A save keeps this identity; replacing the document invalidates its history targets.
+    std::uint64_t m_DocumentId = 1;
     std::string m_PanelKindId;
     RequestOpenGraphAssetFn m_RequestOpenGraphAsset;
     bool m_ForwardingOpenGraph = false;

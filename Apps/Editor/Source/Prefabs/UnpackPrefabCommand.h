@@ -31,6 +31,7 @@ class UnpackPrefabCommand final : public IEditorCommand
   public:
     /// Unpacks the instance at `root` to `depth`. Null, with `outError` stating the cause and the fix,
     /// when nothing was unpacked.
+    /// The caller publishes the initial change through CommitAlreadyApplied; the command publishes replay.
     static std::unique_ptr<UnpackPrefabCommand> Create(ECS::World& world, EditorChangeNotifications* notifications,
                                                        ECS::EntityHandle root, Scene::PrefabUnpackDepth depth,
                                                        std::string& outError);

@@ -35,7 +35,6 @@ std::unique_ptr<UnpackPrefabCommand> UnpackPrefabCommand::Create(ECS::World& wor
     command->m_Before = Scene::UnpackPrefabInstance(world, root, depth, outError);
     if (command->m_Before.empty())
         return nullptr;
-    NotifyWorldStructure(notifications, &world);
     return command;
 }
 

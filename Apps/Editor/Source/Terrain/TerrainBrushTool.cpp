@@ -24,6 +24,7 @@
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainZoneAuthoring.h"
 
+#include <functional>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -329,7 +330,11 @@ bool TerrainBrushTool::ApplyStrokePhase(TerrainStrokePhase phase,
             return false;
         const Mathematics::Vector3 dir = surfacePoint * (1.0f / len);
         if (phase == TerrainStrokePhase::Begin)
-            BeginSphereStroke(); // undo boundary: one Begin..End = one entry
+        {
+            BeginSphereStroke();
+            if (!m_SphereStroking)
+                return false;
+        }
         ApplySphereDab(dir, planetRadius);
         return true;
     }
@@ -378,6 +383,9 @@ void TerrainBrushTool::ApplySphereDab(const Mathematics::Vector3& hitDir, float 
 
 void TerrainBrushTool::BeginSphereStroke()
 {
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return;
+
     auto* svc = TerrainService::TryGet();
     if (!svc)
         return;
@@ -410,7 +418,8 @@ bool TerrainBrushTool::EndSphereStroke()
         return false;
     std::vector<CBTTerrain::SphereSculptPageState> after = svc->SnapshotSphereSculptPages(before);
     m_UndoRedo->CommitAlreadyApplied(std::make_unique<Editor::SphereSculptStrokeCommand>(
-        svc, std::move(before), std::move(after)));
+        svc, std::move(before), std::move(after)),
+        std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, &m_Owner.GetWorld()));
     return true;
 }
 
@@ -599,6 +608,9 @@ bool TerrainBrushTool::EnsureActiveZone(const Mathematics::Vector3& hit)
 
 void TerrainBrushTool::BeginStroke(const Mathematics::Vector3& hit)
 {
+    if (m_UndoRedo && !m_UndoRedo->CommitPendingEdit())
+        return;
+
     auto* world = &m_Owner.GetWorld();
     auto* svc = TerrainService::TryGet();
     if (!svc)
@@ -828,15 +840,8 @@ void TerrainBrushTool::FinalizeStroke()
         // stays in sync — no separate compound or post-commit notify needed.
         m_UndoRedo->CommitAlreadyApplied(std::make_unique<Editor::TerrainZoneStrokeCommand>(
             world, m_ChangeNotifications, svc, m_ActiveZone, m_ActivePayload, created,
-            std::move(before), std::move(after)));
-
-        if (created && m_ChangeNotifications)
-        {
-            EditorChangeNotifications::WorldStructureChangedEvent e{};
-            e.world = world;
-            e.kind = EditorChangeNotifications::ChangeKind::Commit;
-            m_ChangeNotifications->NotifyWorldStructureChanged(e);
-        }
+            std::move(before), std::move(after)),
+            std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
     }
 
     m_PayloadBefore = TerrainZonePayload{};

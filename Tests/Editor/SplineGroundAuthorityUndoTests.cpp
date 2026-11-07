@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 
 #include "Placement/RecipeEditorHooks.h"
+#include "EditorChangeNotifications.h"
+#include "Scene/SceneDocumentManager.h"
 #include "SplineGroundAuthorityTestWorld.h"
 #include "SplineRecipes/SplineGroundAuthority.h"
 #include "SplineRecipes/SplineRecipeSystem.h"
@@ -38,7 +40,7 @@ TEST(SplineGroundAuthority, RecipeCreatedCleanupIsUndoable)
 
     Editor::UndoRedoService undo;
     SplineRecipes::SplineRecipeSystem recipes(nullptr);
-    Editor::RecipeEditorHooks journal(&undo, recipes);
+    Editor::RecipeEditorHooks journal(&undo, recipes, nullptr);
     SplineRecipes::SplineGroundAuthorityController controller;
     controller.Update(world, &journal);
     ASSERT_NE(world.GetComponent<Components::TerrainFlattenEffect>(run), nullptr);
@@ -79,7 +81,7 @@ TEST(SplineGroundAuthority, OwnsToGradesRemovesOnlyARecipeCreatedClaim)
 
     Editor::UndoRedoService undo;
     SplineRecipes::SplineRecipeSystem recipes(nullptr);
-    Editor::RecipeEditorHooks journal(&undo, recipes);
+    Editor::RecipeEditorHooks journal(&undo, recipes, nullptr);
     SplineRecipes::SplineGroundAuthorityController controller;
     controller.Update(world, &journal);
     ASSERT_NE(world.GetComponent<Components::TerrainGroundClaimEffect>(run), nullptr);
@@ -118,7 +120,7 @@ TEST(SplineGroundAuthority, APavedAreaTurnedOffComesBackOnUndoWithItsGrassAndPai
 
     Editor::UndoRedoService undo;
     SplineRecipes::SplineRecipeSystem recipes(nullptr);
-    Editor::RecipeEditorHooks journal(&undo, recipes);
+    Editor::RecipeEditorHooks journal(&undo, recipes, nullptr);
     SplineRecipes::SplineGroundAuthorityController controller;
     controller.Update(world, &journal);
 
@@ -172,7 +174,7 @@ TEST(SplineGroundAuthority, PickingNoneIsOneUndoStepWithTheCleanupItCauses)
 
     Editor::UndoRedoService undo;
     SplineRecipes::SplineRecipeSystem recipes(nullptr);
-    Editor::RecipeEditorHooks journal(&undo, recipes);
+    Editor::RecipeEditorHooks journal(&undo, recipes, nullptr);
     SplineRecipes::SplineGroundAuthorityController controller;
     controller.Update(world, &journal);
 
@@ -208,7 +210,7 @@ TEST(SplineGroundAuthority, UndoOfPickingOwnsRemovesWhatItProvisionedAndKeepsThe
 
     Editor::UndoRedoService undo;
     SplineRecipes::SplineRecipeSystem recipes(nullptr);
-    Editor::RecipeEditorHooks journal(&undo, recipes);
+    Editor::RecipeEditorHooks journal(&undo, recipes, nullptr);
     SplineRecipes::SplineGroundAuthorityController controller;
     controller.Update(world, &journal);
     ASSERT_EQ(world.GetComponent<Components::TerrainGrassEffect>(area), nullptr);
@@ -233,4 +235,35 @@ TEST(SplineGroundAuthority, UndoOfPickingOwnsRemovesWhatItProvisionedAndKeepsThe
     EXPECT_NE(world.GetComponent<Components::TerrainGrassEffect>(area), nullptr);
     EXPECT_NE(world.GetComponent<Components::TerrainGroundClaimEffect>(area), nullptr);
     EXPECT_EQ(undo.GetUndoCount(), 1u);
+}
+
+TEST(SplineGroundAuthority, StandaloneCleanupOwnsItsSceneRevisionAcrossSave)
+{
+    ScopedTerrainService terrainScope;
+    ScopedSplineService splineScope;
+    ECS::World world;
+    const auto area = CreatePavedArea(world, SplineECS::SplineService::Get(), {});
+    Editor::UndoRedoService undo;
+    Editor::EditorChangeNotifications notifications;
+    SplineRecipes::SplineRecipeSystem recipes(nullptr);
+    Editor::RecipeEditorHooks journal(&undo, recipes, &notifications);
+    SplineRecipes::SplineGroundAuthorityController controller;
+    controller.Update(world, &journal);
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&notifications);
+    document.MarkClean();
+
+    world.GetComponentForWrite<Components::SplinePaving>(area)->GroundAuthority = SplineGroundAuthority::None;
+    controller.Update(world, &journal);
+    ASSERT_EQ(world.GetComponent<Components::TerrainGrassEffect>(area), nullptr);
+    ASSERT_TRUE(undo.CanUndo());
+    EXPECT_TRUE(document.IsDirty());
+    document.MarkClean();
+    undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    EXPECT_NE(world.GetComponent<Components::TerrainGrassEffect>(area), nullptr);
+    undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
 }

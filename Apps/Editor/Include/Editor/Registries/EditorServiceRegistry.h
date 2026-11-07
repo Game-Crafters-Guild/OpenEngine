@@ -11,12 +11,14 @@ namespace GameEngine::Editor
 
 class IEditorService;
 class UndoRedoService;
+class EditorChangeNotifications;
 
 /// What a service factory gets when the editor's system schedule starts.
 struct EditorServiceContext
 {
     UndoRedoService* Undo = nullptr;
     ECS::SystemManager& Systems;
+    EditorChangeNotifications* Notifications = nullptr;
 };
 
 /// The editor services: each is made when the system schedule starts, released at each scene

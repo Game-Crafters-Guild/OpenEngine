@@ -3,6 +3,7 @@
 #include "InspectorRegistry.h"
 #include "Inspectors/InspectorColorSwatchRow.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Platform/SystemMetrics.h"
 #include "UI/Controls/Label.h"
 #include "UndoRedo/UndoRedoService.h"
@@ -14,9 +15,9 @@
 namespace GameEngine::InspectorUI
 {
 
-/// A component's linear color member on a chip and the picker. An edit, a cancel or a label double-click
-/// reset is one undo step; the row edits red, green and blue, never alpha; the chip and the picker share one
-/// sRGB encoding (HdrColorToPickerState).
+/// A component's linear color member on a chip and picker. Each pending picker action and label
+/// double-click reset is one undo step. The row edits red, green and blue, never alpha; the chip
+/// and picker share one sRGB encoding (HdrColorToPickerState).
 template<typename TComponent>
 struct ComponentColorBinding
 {
@@ -24,6 +25,7 @@ struct ComponentColorBinding
 
     ECS::World* World = nullptr;
     ECS::EntityHandle Entity{};
+    std::vector<ECS::EntityHandle> AdditionalEntities;
     Editor::EditorChangeNotifications* Notifications = nullptr;
     Editor::UndoRedoService* Undo = nullptr;
     OpenColorPickerWindowFn OpenPicker;
@@ -68,8 +70,19 @@ void WriteComponentColor(TComponent& component, const ComponentColorBinding<TCom
     color.b = picked.b;
 }
 
-// One picker session: every change previews into the interactive edit, apply commits it as one undo
-// step, cancel restores the value from before.
+template<typename TComponent>
+void WriteComponentColorSelection(const ComponentColorBinding<TComponent>& binding, std::uint32_t argb, float intensity)
+{
+    if (auto* component = binding.World->template GetComponentForWrite<TComponent>(binding.Entity))
+        WriteComponentColor(*component, binding, argb, intensity);
+    for (const auto entity : binding.AdditionalEntities)
+    {
+        if (auto* component = binding.World->template GetComponentForWrite<TComponent>(entity))
+            WriteComponentColor(*component, binding, argb, intensity);
+    }
+}
+
+// Cancel restores the current pending color action's starting value.
 template<typename TComponent>
 void OpenComponentColorPicker(const std::shared_ptr<ComponentColorBinding<TComponent>>& binding)
 {
@@ -77,36 +90,20 @@ void OpenComponentColorPicker(const std::shared_ptr<ComponentColorBinding<TCompo
     if (!binding->OpenPicker || !component)
         return;
     const ColorPickerState state = ComponentColorPickerState(*component, *binding);
-    using Edit = Editor::UndoRedoService::InteractiveEdit;
-    auto edit = std::make_shared<Edit>();
-    if (binding->Undo)
-        *edit = binding->Undo->BeginInteractiveEdit(
-            binding->ChangeLabel, InspectorDrag::MakeComponentSnapshotTarget<TComponent>(binding->World, binding->Entity,
-                                                                          binding->Notifications, binding->ChangeLabel));
-    auto preview = [binding, edit](std::uint32_t argb, float intensity)
+    InspectorColorPickerEdit::Binding edit;
+    edit.Undo = binding->Undo;
+    edit.Label = binding->ChangeLabel;
+    edit.MakeTarget = [binding]
     {
-        if (*edit)
-            edit->Preview([&] {
-                if (TComponent* c = binding->World->template GetComponentForWrite<TComponent>(binding->Entity))
-                    WriteComponentColor(*c, *binding, argb, intensity);
-            });
-        RefreshComponentColorRow(*binding);
+        return InspectorDrag::MakeMultiComponentSnapshotTarget<TComponent>(binding->World, binding->Entity,
+            binding->AdditionalEntities, binding->Notifications, binding->ChangeLabel);
     };
-    ColorPickerCallbacks callbacks;
-    callbacks.onValueChanging = preview;
-    callbacks.onApply = [preview, edit](std::uint32_t argb, float intensity)
+    edit.Write = [binding](std::uint32_t argb, float intensity, Editor::EditChangeKind)
     {
-        preview(argb, intensity);
-        if (*edit)
-            edit->Commit();
+        WriteComponentColorSelection(*binding, argb, intensity);
     };
-    callbacks.onCancel = [binding, edit]()
-    {
-        if (*edit)
-            edit->Cancel();
-        RefreshComponentColorRow(*binding);
-    };
-    binding->OpenPicker(state.Argb, state.Intensity, std::move(callbacks));
+    edit.Changed = [binding](Editor::EditChangeKind) { RefreshComponentColorRow(*binding); };
+    binding->OpenPicker(state.Argb, state.Intensity, InspectorColorPickerEdit::Bind(std::move(edit)));
 }
 
 // A second press on the label within the platform's double-click interval resets the color's red, green and
@@ -124,8 +121,8 @@ void HandleComponentColorLabelPress(ComponentColorBinding<TComponent>& binding, 
         return;
     event.Stop();
     const ColorLinear defaultColor = TComponent{}.*binding.Color;
-    InspectorDrag::CommitComponentWithUndo<TComponent>(
-        binding.World, binding.Entity, binding.Notifications, binding.Undo, binding.ChangeLabel,
+    InspectorDrag::CommitComponentsWithUndo<TComponent>(
+        binding.World, binding.Entity, binding.AdditionalEntities, binding.Notifications, binding.Undo, binding.ChangeLabel,
         [&binding, defaultColor](TComponent& component)
         {
             ColorLinear& color = component.*binding.Color;

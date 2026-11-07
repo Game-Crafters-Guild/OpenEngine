@@ -1,4 +1,5 @@
 #include "Inspectors/Physics/PhysicsColliderInspector.h"
+#include "UndoRedo/History/HistoryComponentTargets.h"
 
 #include "Editor/Entities/EditorComponentTraits.h"
 #include "InspectorRegistry.h"
@@ -170,15 +171,23 @@ class PhysicsColliderInspectorSection final : public UIElement
         for (auto& ex : m_AdditionalEntities)
             allEntities.push_back(ex);
 
+        ECS::World* world = m_World;
+        Editor::EditorChangeNotifications* notifications = m_Changes;
         UndoRedoService::SnapshotTarget t{};
+        auto targets = std::make_shared<Editor::HistoryComponentTargets>([world] { return world; }, allEntities,
+            ECS::GetComponentTypeId<Components::PhysicsCollider>(), notifications);
+        t.Identity = targets->GetIdentity();
+        t.Validate = [targets] { return targets->IsValid(); };
         t.debugLabel = "PhysicsCollider";
-        t.Capture = [this, allEntities](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
+        t.Capture = [world, targets, allEntities](UndoRedoService::SnapshotTarget::Snapshot& out) -> bool
         {
             constexpr std::size_t kSize = sizeof(PhysicsColliderSnapshot);
+            if (!targets->IsValid())
+                return false;
             out.resize(allEntities.size() * kSize);
             for (std::size_t i = 0; i < allEntities.size(); ++i)
             {
-                auto* col = m_World->GetComponent<Components::PhysicsCollider>(allEntities[i]);
+                auto* col = world->GetComponent<Components::PhysicsCollider>(allEntities[i]);
                 if (!col)
                     return false;
                 const PhysicsColliderSnapshot s = CaptureCollider(*col);
@@ -186,32 +195,39 @@ class PhysicsColliderInspectorSection final : public UIElement
             }
             return true;
         };
-        t.Apply = [this, allEntities](const UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
+        t.Apply = [world, targets, allEntities](const UndoRedoService::SnapshotTarget::Snapshot& in) -> bool
         {
             constexpr std::size_t kSize = sizeof(PhysicsColliderSnapshot);
-            if (in.size() != allEntities.size() * kSize)
+            if (!targets->IsValid() || in.size() != allEntities.size() * kSize)
                 return false;
+            if (!targets->IsValid())
+                return false;
+            for (const auto entity : allEntities)
+            {
+                if (!world->IsValid(entity) || !world->GetComponent<Components::PhysicsCollider>(entity))
+                    return false;
+            }
             for (std::size_t i = 0; i < allEntities.size(); ++i)
             {
                 auto ent = allEntities[i];
-                if (!m_World || !ent.IsValid() || !m_World->IsValid(ent))
+                if (!world || !ent.IsValid() || !world->IsValid(ent))
                     continue;
-                auto* col = m_World->GetComponentForWrite<Components::PhysicsCollider>(ent);
+                auto* col = world->GetComponentForWrite<Components::PhysicsCollider>(ent);
                 if (!col)
                     continue;
                 PhysicsColliderSnapshot s{};
                 std::memcpy(&s, in.data() + i * kSize, kSize);
                 ApplyCollider(*col, s);
-                MarkOwningBodyNeedsRebuild(m_World, ent);
+                MarkOwningBodyNeedsRebuild(world, ent);
             }
             return true;
         };
-        t.Notify = [this, allEntities](Editor::EditorChangeNotifications::ChangeKind kind)
+        t.Notify = [world, targets, notifications, allEntities](Editor::EditorChangeNotifications::ChangeKind kind)
         {
-            if (!m_Changes)
+            if (!targets->IsValid() || !notifications)
                 return;
             for (auto& ent : allEntities)
-                m_Changes->NotifyComponentChange<Components::PhysicsCollider>(m_World, ent, kind);
+                notifications->NotifyComponentChange<Components::PhysicsCollider>(world, ent, kind);
         };
         return t;
     }

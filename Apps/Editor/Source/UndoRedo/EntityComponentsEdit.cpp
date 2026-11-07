@@ -1,10 +1,12 @@
 #include "UndoRedo/EntityComponentsEdit.h"
 
 #include "ECS/ECSTemplates.h"
+#include "ECS/Component/ComponentRegistry.h"
 #include "ECS/Entity.h"
 #include "ECS/World.h"
 #include "EditorChangeNotifications.h"
 #include "UndoRedo/IEditorCommand.h"
+#include "UndoRedo/History/HistoryValueFormatter.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <algorithm>
@@ -60,25 +62,58 @@ std::vector<ComponentChange> DiffEntityComponents(const EntityComponentBytes& be
     return changes;
 }
 
-// Writes the `side` bytes of each change to `entity`, removing a component absent on that side, and
-// announces each change as an UndoRedo change.
-void ApplyComponentChanges(ECS::World& world, ECS::EntityHandle entity, const std::vector<ComponentChange>& changes,
+bool WriteComponentChange(ECS::World& world, ECS::EntityHandle entity, ECS::ComponentTypeId typeId,
+                           const std::optional<ComponentBytes>& bytes)
+{
+    if (bytes)
+        return world.ApplyComponentBytesImmediate(entity, typeId, *bytes);
+    return !world.HasComponent(entity, typeId) || world.RemoveComponentByTypeIdImmediate(entity, typeId);
+}
+
+void NotifyComponentChanges(ECS::World& world, ECS::EntityHandle entity,
+                            const std::vector<ComponentChange>& changes, EditorChangeNotifications* notifications)
+{
+    if (notifications)
+        for (const ComponentChange& change : changes)
+            notifications->NotifyComponentChanged({&world, entity, change.TypeId, EditChangeKind::UndoRedo});
+}
+
+// Validate every payload before writing and restore prior values if a write fails.
+bool ApplyComponentChanges(ECS::World& world, ECS::EntityHandle entity, const std::vector<ComponentChange>& changes,
                            std::optional<ComponentBytes> ComponentChange::*side, EditorChangeNotifications* notifications)
 {
     if (!world.IsValid(entity))
-        return;
+        return false;
+    std::vector<std::optional<ComponentBytes>> before;
+    before.reserve(changes.size());
     for (const ComponentChange& change : changes)
     {
-        const std::optional<ComponentBytes>& bytes = change.*side;
-        if (bytes)
-            (void)world.ApplyComponentBytesImmediate(entity, change.TypeId, *bytes);
+        const auto* handler = ECS::ComponentRegistry::GetHandler(change.TypeId);
+        const auto& bytes = change.*side;
+        if (!handler || (bytes && bytes->size() != handler->GetComponentSize()))
+            return false;
+        ComponentBytes current;
+        if (world.CaptureComponentBytes(entity, change.TypeId, current))
+            before.emplace_back(std::move(current));
+        else if (world.HasComponent(entity, change.TypeId))
+            return false;
         else
-            (void)world.RemoveComponentByTypeIdImmediate(entity, change.TypeId);
+            before.emplace_back(std::nullopt);
     }
-    if (!notifications)
-        return;
-    for (const ComponentChange& change : changes)
-        notifications->NotifyComponentChanged({&world, entity, change.TypeId, EditorChangeNotifications::ChangeKind::UndoRedo});
+    for (std::size_t index = 0; index < changes.size(); ++index)
+    {
+        const auto& change = changes[index];
+        if (WriteComponentChange(world, entity, change.TypeId, change.*side))
+            continue;
+        while (index > 0)
+        {
+            --index;
+            WriteComponentChange(world, entity, changes[index].TypeId, before[index]);
+        }
+        return false;
+    }
+    NotifyComponentChanges(world, entity, changes, notifications);
+    return true;
 }
 
 class EntityComponentsEditCommand final : public IEditorCommand
@@ -92,20 +127,36 @@ public:
           m_Notifications(notifications),
           m_Changes(std::move(changes))
     {
+        for (const auto& change : m_Changes)
+        {
+            const ComponentBytes empty;
+            const std::string description = HistoryValueFormatter::DescribeComponent(change.TypeId,
+                change.Before ? *change.Before : empty, change.After ? *change.After : empty);
+            if (description.empty())
+                continue;
+            if (!m_Description.empty())
+                m_Description += '\n';
+            m_Description += description;
+        }
     }
 
     const char* GetName() const override { return m_Label.c_str(); }
+    std::string GetDescription() const override { return m_Description; }
     const char* GetTypeName() const override { return "EntityComponentsEditCommand"; }
-    void Do() override { Apply(&ComponentChange::After); }
-    void Undo() override { Apply(&ComponentChange::Before); }
+    void Do() override { if (TryRedo()) NotifyReplay(); }
+    void Undo() override { if (TryUndo()) NotifyReplay(); }
+    bool TryUndo() override { return Apply(&ComponentChange::Before); }
+    bool TryRedo() override { return Apply(&ComponentChange::After); }
+    void NotifyReplay() override { NotifyComponentChanges(m_World, m_Entity, m_Changes, m_Notifications); }
 
 private:
-    void Apply(std::optional<ComponentBytes> ComponentChange::*side)
+    bool Apply(std::optional<ComponentBytes> ComponentChange::*side)
     {
-        ApplyComponentChanges(m_World, m_Entity, m_Changes, side, m_Notifications);
+        return ApplyComponentChanges(m_World, m_Entity, m_Changes, side, nullptr);
     }
 
     std::string m_Label;
+    std::string m_Description;
     ECS::World& m_World;
     ECS::EntityHandle m_Entity;
     EditorChangeNotifications* m_Notifications;
@@ -140,20 +191,34 @@ void RestoreEntityComponents(ECS::World& world, ECS::EntityHandle entity, const 
 
 bool CommitEntityComponentsEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedoService* undo,
                                 EditorChangeNotifications* notifications, const std::string& label,
-                                const std::function<bool()>& edit)
+                                const std::function<bool()>& edit, const std::function<void()>& notify)
 {
-    if (!undo)
-        return edit();
+    if (!world.IsValid(entity))
+        return false;
     const EntityComponentBytes before = CaptureEntityComponents(world, entity);
-    const bool applied = edit();
-    // Diffed whatever the edit answered: a write refused part-way has already landed what it
-    // wrote before refusing, and the step is what lets the user take that back.
+    bool applied = false;
+    try
+    {
+        applied = edit();
+    }
+    catch (...)
+    {
+        RestoreEntityComponents(world, entity, before, notifications);
+        throw;
+    }
+    if (!applied)
+    {
+        RestoreEntityComponents(world, entity, before, notifications);
+        return false;
+    }
     std::vector<ComponentChange> changes = DiffEntityComponents(before, CaptureEntityComponents(world, entity));
-    if (!changes.empty())
+    if (undo && !changes.empty())
     {
         undo->CommitAlreadyApplied(
-            std::make_unique<EntityComponentsEditCommand>(label, world, entity, notifications, std::move(changes)));
+            std::make_unique<EntityComponentsEditCommand>(label, world, entity, notifications, std::move(changes)), notify);
     }
+    else if (!changes.empty() && notify)
+        notify();
     return applied;
 }
 

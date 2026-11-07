@@ -13,6 +13,8 @@ namespace GameEngine::Editor
 void CommitGenericEdit(ECS::World& world, UndoRedoService& undo, const std::string& label,
                        const std::function<void()>& applyEdit)
 {
+    if (!undo.CommitPendingEdit())
+        return;
     std::vector<GenericEditUndoRecorder> recorders;
     const auto registered = EditorComponentTraitsRegistry::Get().Snapshot();
     for (const auto& [typeId, traits] : *registered)

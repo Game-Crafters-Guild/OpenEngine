@@ -24,6 +24,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Platform/Shell.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "UndoRedo/History/HistoryValueFormatter.h"
 #include "Editor/Vcs/EditorVcsProviderRegistry.h"
 #include "VCSIntegration/IVCSIntegration.h"
 
@@ -500,6 +501,11 @@ static Editor::UndoRedoService::SnapshotTarget MakeMaterialSnapshotTarget(Materi
 {
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
+    target.Identity = {reinterpret_cast<std::uintptr_t>(mat)};
+    target.Describe = [path = mat->GetPath()](const auto& before, const auto& after)
+    {
+        return Editor::HistoryValueFormatter::DescribeMaterial(before, after, path);
+    };
 
     // The file as it is on disk, not the loaded document: the document carries the defaults
     // filled in at load, which undo would otherwise write into the author's file.
@@ -855,7 +861,7 @@ static InspectorDrag::SliderWithFloatValueRow AddMaterialSliderRow(
     using OptEdit = std::optional<Editor::UndoRedoService::InteractiveEdit>;
     auto activeEdit = std::make_shared<OptEdit>();
     auto beginEditIfNeeded = [undo, mat, activeEdit, propKey]() {
-        if (!undo || !mat || !activeEdit || activeEdit->has_value())
+        if (!undo || !mat || !activeEdit || (activeEdit->has_value() && activeEdit->value()))
             return;
         activeEdit->emplace(
             undo->BeginInteractiveEdit(std::string("Material ") + propKey, MakeMaterialSnapshotTarget(mat, propKey)));
@@ -1974,9 +1980,10 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                 (void)mat->Reload();
                 UpdateRuntimeTextureTransform(mat, texName, newSt);
 
-                if (editPtr && editPtr->has_value() && editPtr->value())
+                if (editPtr && editPtr->has_value())
                 {
-                    editPtr->value().Commit();
+                    if (editPtr->value())
+                        editPtr->value().Commit();
                     editPtr->reset();
                 }
             };
@@ -1984,7 +1991,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
             auto beginEditIfNeeded = [mat, editPtr, undo](const std::string& label) {
                 if (!undo || !editPtr)
                     return;
-                if (editPtr->has_value())
+                if (editPtr->has_value() && editPtr->value())
                     return;
                 editPtr->emplace(undo->BeginInteractiveEdit(label, MakeMaterialSnapshotTarget(mat, label)));
             };
@@ -2080,6 +2087,11 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     return;
                 label->Style().Set(Style::Cursor, CursorStyle::ColResize);
 
+                auto commitHeaderComponent = [beginEditIfNeeded, commitComponent, editLabel](int index, float value) {
+                    beginEditIfNeeded(editLabel);
+                    commitComponent(index, value);
+                };
+
                 auto startA = std::make_shared<float>(0.0f);
                 auto startB = std::make_shared<float>(0.0f);
                 auto didMove = std::make_shared<bool>(false);
@@ -2088,7 +2100,7 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                 label->RegisterEventHandler(kEventMouseDown,
                     [label, fA, fB, startA, startB, didMove, lastClick,
                      defaultA, defaultB, idxA, idxB,
-                     beginEditIfNeeded, commitComponent, editLabel](UIEvent& e) {
+                     commitHeaderComponent](UIEvent& e) {
                     if (e.Button != 0)
                         return;
                     auto& state = InspectorDrag::GetDragState();
@@ -2098,11 +2110,10 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                     auto now = std::chrono::steady_clock::now();
                     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - *lastClick);
                     if (lastClick->time_since_epoch().count() != 0 && elapsed < GameEngine::Platform::GetDoubleClickInterval()) {
-                        beginEditIfNeeded(editLabel);
                         fA->SetValue(defaultA);
                         fB->SetValue(defaultB);
-                        commitComponent(idxA, defaultA);
-                        commitComponent(idxB, defaultB);
+                        commitHeaderComponent(idxA, defaultA);
+                        commitHeaderComponent(idxB, defaultB);
                         *lastClick = {};
                         e.Stop();
                         return;
@@ -2144,22 +2155,22 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
                 });
 
                 label->RegisterEventHandler(kEventMouseUp,
-                    [label, fA, fB, didMove, idxA, idxB, commitComponent](UIEvent& e) {
+                    [label, fA, fB, didMove, idxA, idxB, commitHeaderComponent](UIEvent& e) {
                     auto& state = InspectorDrag::GetDragState();
                     if (state.draggingLabel != label || e.Button != 0)
                         return;
                     InspectorDrag::SetLabelDragHighlight(label, false);
                     state.draggingLabel = nullptr;
                     if (*didMove) {
-                        commitComponent(idxA, fA->GetValue());
-                        commitComponent(idxB, fB->GetValue());
+                        commitHeaderComponent(idxA, fA->GetValue());
+                        commitHeaderComponent(idxB, fB->GetValue());
                     }
                     e.Stop();
                 });
 
                 label->RegisterEventHandler(kEventMouseCancel,
-                    [label, fA, fB, startA, startB, didMove, idxA, idxB, commitComponent](UIEvent& e) {
-                    CancelHeaderDrag(e, label, *didMove, {fA, idxA, *startA}, {fB, idxB, *startB}, commitComponent);
+                    [label, fA, fB, startA, startB, didMove, idxA, idxB, commitHeaderComponent](UIEvent& e) {
+                    CancelHeaderDrag(e, label, *didMove, {fA, idxA, *startA}, {fB, idxB, *startB}, commitHeaderComponent);
                 });
             };
 

@@ -35,6 +35,7 @@ class ApplyPrefabOverrideCommand final : public IEditorCommand
     /// Applies `targets` with one write per prefab file and names the step `name`. Null, with `outError` stating
     /// the cause, when nothing was written. A command with `outError` set covers the files written before the
     /// write that failed.
+    /// The caller publishes the initial change through CommitAlreadyApplied; the command publishes replay.
     static std::unique_ptr<ApplyPrefabOverrideCommand> Create(ECS::World& world, EditorChangeNotifications* notifications,
                                                               std::span<const Scene::PrefabOverrideTarget> targets,
                                                               std::string name, std::string& outError);

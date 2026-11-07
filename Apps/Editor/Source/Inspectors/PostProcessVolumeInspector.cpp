@@ -444,6 +444,7 @@ void RegisterPostProcessVolumeInspector()
         InspectorUI::ComponentColorBinding<PP> tintColor;
         tintColor.World = w;
         tintColor.Entity = e;
+    tintColor.AdditionalEntities = InspectorDrag::GetAdditionalEntities(ctx);
         tintColor.Notifications = n;
         tintColor.Undo = undo;
         tintColor.OpenPicker = ctx.OpenColorPickerWindow;

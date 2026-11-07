@@ -48,6 +48,8 @@
 #include "TestTempDir.h"
 #include "TerrainECS/TerrainService.h"
 #include "Types/ColorUtils.h"
+#include "UndoRedo/EntityComponentsEdit.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
 #include "UndoRedo/Spline/SplineUndoHelpers.h"
 
@@ -1924,6 +1926,65 @@ TEST_F(SplineToolTests, TransformingControlsOnTwoSplinesIsOneUndoStep)
     undo.Redo();
     EXPECT_FLOAT_EQ(service->GetSplineData(firstHandle)->Points[0].Position.x, before.x + 2);
     EXPECT_FLOAT_EQ(service->GetSplineData(secondHandle)->Points[0].Position.x, before.x + 2);
+}
+
+TEST_F(SplineToolTests, ComponentWritesKeepTheirEnclosingSplineSnapshotAndSeparateThePreviousAction)
+{
+    using namespace GameEngine;
+    World* world = GetWorld();
+    auto* service = SplineECS::SplineService::TryGet();
+    ASSERT_NE(service, nullptr);
+    for (const bool changeComponent : {false, true})
+    {
+        SCOPED_TRACE(changeComponent ? "points and component bytes" : "points only");
+        const auto created = MakeSplineEntity(world, 3);
+        const auto entity = created.SplineEntity;
+        const auto handle = created.Handle;
+        Editor::UndoRedoService::SnapshotTarget::Snapshot beforePoints;
+        ASSERT_TRUE(Editor::SplineUndo::EncodeSplineConfig(service->GetSplineData(handle), beforePoints));
+        const float beforeRadius = world->GetComponent<SplineComponent>(entity)->DefaultRadius;
+        const Vector3 changedPosition(7.0f, 8.0f, 9.0f);
+        Editor::UndoRedoService undo;
+        auto move = undo.BeginInteractiveEdit("Move", Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+            world, {entity}, ECS::GetComponentTypeId<Transform>(), nullptr, "Move"));
+        move.Preview([world, entity] { world->GetComponentForWrite<Transform>(entity)->Translate(2.0f, 0.0f, 0.0f); });
+
+        undo.BeginCompound("Set SplineComponent");
+        auto splineEdit = undo.BeginInteractiveEdit("Set SplineComponent",
+            Editor::SplineUndo::MakeSplineEditableSnapshotTarget(service, handle, world, entity, nullptr,
+                                                                 "Set SplineComponent"));
+        ASSERT_TRUE(splineEdit);
+        ASSERT_TRUE(Editor::CommitEntityComponentsEdit(*world, entity, &undo, nullptr, "Set SplineComponent",
+            [world, entity, service, handle, changeComponent, changedPosition, beforeRadius]
+            {
+                service->GetSplineData(handle)->SetPointPosition(0, changedPosition);
+                if (changeComponent)
+                    world->GetComponentForWrite<SplineComponent>(entity)->DefaultRadius = beforeRadius + 2.0f;
+                return true;
+            }));
+        splineEdit.Commit();
+        undo.EndCompound();
+
+        EXPECT_FALSE(move);
+        ASSERT_EQ(undo.GetUndoCount(), 2u);
+        EXPECT_FLOAT_EQ((service->GetSplineData(handle)->Points[0].Position - changedPosition).LengthSquared(), 0.0f);
+        undo.Undo();
+        Editor::UndoRedoService::SnapshotTarget::Snapshot restoredPoints;
+        ASSERT_TRUE(Editor::SplineUndo::EncodeSplineConfig(service->GetSplineData(handle), restoredPoints));
+        EXPECT_EQ(restoredPoints, beforePoints);
+        EXPECT_FLOAT_EQ(world->GetComponent<SplineComponent>(entity)->DefaultRadius, beforeRadius);
+        EXPECT_FLOAT_EQ(world->GetComponent<Transform>(entity)->GetPosition().x, 2.0f);
+        undo.Undo();
+        EXPECT_FLOAT_EQ(world->GetComponent<Transform>(entity)->GetPosition().x, 0.0f);
+        undo.Redo();
+        ASSERT_TRUE(Editor::SplineUndo::EncodeSplineConfig(service->GetSplineData(handle), restoredPoints));
+        EXPECT_EQ(restoredPoints, beforePoints);
+        undo.Redo();
+        EXPECT_FLOAT_EQ((service->GetSplineData(handle)->Points[0].Position - changedPosition).LengthSquared(), 0.0f);
+        EXPECT_FLOAT_EQ(world->GetComponent<SplineComponent>(entity)->DefaultRadius,
+                        changeComponent ? beforeRadius + 2.0f : beforeRadius);
+        EXPECT_FLOAT_EQ(world->GetComponent<Transform>(entity)->GetPosition().x, 2.0f);
+    }
 }
 
 TEST_F(SplineToolTests, SnapshotFollowsTheOwnersRecreatedSplineWithoutRestoringRuntimeHandles)

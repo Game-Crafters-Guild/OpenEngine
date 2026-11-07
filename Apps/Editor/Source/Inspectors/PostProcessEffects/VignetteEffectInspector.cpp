@@ -5,6 +5,7 @@
 #include "Components/Rendering/PostProcessEffects/VignetteEffect.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
@@ -17,6 +18,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace GameEngine
 {
@@ -64,6 +66,27 @@ void StyleSwatch(UIElement* swatch, uint32_t argb)
         .Set(Style::BackgroundColor, argb)
         .Set(Style::Cursor, CursorStyle::Pointer);
 }
+InspectorUI::ColorPickerState ReadVignettePickerState(const Components::VignetteEffect& vignette)
+{
+    return {ColorToArgb(vignette.Color), 1.0f};
+}
+
+void WriteVignettePickerColor(Components::VignetteEffect& vignette, uint32_t argb, float)
+{
+    ArgbToColor(argb, vignette.Color);
+}
+
+void RefreshVignetteColorRow(const InspectorContext& context, UIElement::WeakRef<UIElement> swatchRef,
+                            UIElement::WeakRef<Label> labelRef)
+{
+    const auto* vignette = context.World->GetComponent<Components::VignetteEffect>(context.Entity);
+    UIElement* swatch = swatchRef.Get();
+    Label* label = labelRef.Get();
+    if (!vignette || !swatch || !label)
+        return;
+    StyleSwatch(swatch, ColorToArgb(vignette->Color));
+    label->SetText(FormatRgb(vignette->Color));
+}
 } // namespace
 
 void RegisterVignetteEffectInspector()
@@ -84,7 +107,6 @@ void RegisterVignetteEffectInspector()
         ECS::EntityHandle e = ctx.Entity;
         Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
         Editor::UndoRedoService* undo = ctx.Undo;
-        OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
 
         AddComponentFloatRowWithDrag<V>(ctx.Parent, "Intensity",
             Math::Clamp01(effect->Intensity), w, e, n, undo,
@@ -132,75 +154,13 @@ void RegisterVignetteEffectInspector()
             Label* rgbLabelRaw = rgbLabel.get();
             fieldContainer->AddChild(std::move(rgbLabel));
 
-            auto updateUI = [swatchRaw, rgbLabelRaw, w, e]() {
-                auto* c = w->GetComponent<V>(e);
-                if (!c) return;
-                StyleSwatch(swatchRaw, ColorToArgb(c->Color));
-                rgbLabelRaw->SetText(FormatRgb(c->Color));
+            auto updateUI = [ctx, swatchRef = UIElement::MakeWeakRef(swatchRaw),
+                             labelRef = UIElement::MakeWeakRef(rgbLabelRaw)]
+            {
+                RefreshVignetteColorRow(ctx, swatchRef, labelRef);
             };
-
-            auto clickHandler = [w, e, n, undo, openPicker, updateUI](UIEvent& ev) {
-                if (ev.Button != 0)
-                    return;
-                ev.Stop();
-                if (!openPicker)
-                    return;
-                auto* comp = w->GetComponent<V>(e);
-                if (!comp)
-                    return;
-
-                using Edit = Editor::UndoRedoService::InteractiveEdit;
-                auto edit = std::make_shared<Edit>();
-                if (undo)
-                {
-                    auto target = MakeComponentSnapshotTarget<V>(w, e, n, "Vignette Color");
-                    *edit = undo->BeginInteractiveEdit("Change Vignette Color", std::move(target));
-                }
-
-                ColorPickerCallbacks cbs;
-                cbs.onApply = [w, e, n, edit, updateUI](uint32_t newArgb, float) {
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<V>(e);
-                            if (c) ArgbToColor(newArgb, c->Color);
-                        });
-                        edit->Commit();
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<V>(e);
-                        if (!c) return;
-                        V updated = *c;
-                        ArgbToColor(newArgb, updated.Color);
-                        Editor::CommitComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                cbs.onCancel = [edit, updateUI]() {
-                    if (*edit) edit->Cancel();
-                    updateUI();
-                };
-                cbs.onValueChanging = [w, e, n, edit, updateUI](uint32_t newArgb, float) {
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<V>(e);
-                            if (c) ArgbToColor(newArgb, c->Color);
-                        });
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<V>(e);
-                        if (!c) return;
-                        V updated = *c;
-                        ArgbToColor(newArgb, updated.Color);
-                        Editor::PreviewComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                openPicker(ColorToArgb(comp->Color), 1.0f, std::move(cbs));
-            };
+            auto clickHandler = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<V>(
+                ctx, "Change Vignette Color", "Vignette Color", ReadVignettePickerState, WriteVignettePickerColor, updateUI);
 
             swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
             rgbLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);

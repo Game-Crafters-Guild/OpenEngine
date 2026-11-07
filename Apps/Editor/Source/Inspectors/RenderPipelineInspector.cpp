@@ -508,6 +508,7 @@ static Editor::UndoRedoService::SnapshotTarget MakeRenderPipelineSnapshotTarget(
 {
     Editor::UndoRedoService::SnapshotTarget target;
     target.debugLabel = label;
+    target.Identity = {reinterpret_cast<std::uintptr_t>(pipe)};
 
     target.Capture = [pipe](Editor::UndoRedoService::SnapshotTarget::Snapshot& outSnapshot) -> bool
     {

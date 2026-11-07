@@ -12,6 +12,7 @@
 #include "UndoRedo/UndoRedoService.h"
 
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -60,7 +61,12 @@ ECS::EntityHandle CreateSkyEnvironmentEntity(ECS::World& world, UndoRedoService*
                                              EditorChangeNotifications* notifications)
 {
     if (!undo)
-        return AddSkyEnvironmentEntity(world);
+    {
+        const auto entity = AddSkyEnvironmentEntity(world);
+        if (entity.IsValid())
+            NotifyWorldStructure(notifications, &world);
+        return entity;
+    }
 
     ECS::EntityHandle entity{};
     CommitGenericEdit(world, *undo, kCreateSkyEnvironmentLabel, [&]() {
@@ -71,7 +77,7 @@ ECS::EntityHandle CreateSkyEnvironmentEntity(ECS::World& world, UndoRedoService*
         // removes the entity, redo revives the same handle (DuplicateEntitiesCommand).
         undo->CommitAlreadyApplied(std::make_unique<DuplicateEntitiesCommand>(
             kCreateSkyEnvironmentLabel, &world, notifications, std::vector<ECS::EntityHandle>{entity}, nullptr,
-            nullptr));
+            nullptr), std::bind_front(NotifyWorldStructure, notifications, &world));
     });
     return entity;
 }

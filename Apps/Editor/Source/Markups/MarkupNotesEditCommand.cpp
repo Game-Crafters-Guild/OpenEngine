@@ -100,6 +100,9 @@ bool CommitMarkupNotesEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedo
                            EditorChangeNotifications* notifications, const std::string& label,
                            const std::function<bool()>& edit, const std::function<void()>& vocabularyChanged)
 {
+    if (undo && !undo->CommitPendingEdit())
+        return false;
+
     auto* service = MarkupECS::MarkupService::TryGet();
     const auto* markup = world.GetComponent<Components::Markup>(entity);
     if (!service || !markup)
@@ -124,9 +127,13 @@ bool CommitMarkupNotesEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedo
         undo->CommitAlreadyApplied(std::make_unique<MarkupNotesEditCommand>(
             label, world, entity, notifications, std::move(notesBefore), markupBefore,
             *service->FindNotes(world, entity), *world.GetComponent<Components::Markup>(entity),
-            std::move(addedTags), vocabularyChanged));
+            std::move(addedTags), vocabularyChanged),
+            [notifications, &world, entity]() {
+                if (notifications)
+                    notifications->NotifyComponentCommit<Components::Markup>(&world, entity);
+            });
     }
-    if (notifications)
+    else if (notifications)
         notifications->NotifyComponentCommit<Components::Markup>(&world, entity);
     return true;
 }

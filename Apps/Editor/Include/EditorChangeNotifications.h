@@ -10,6 +10,7 @@
 
 #include "Core/CpuProfiler.h"
 #include "ECS/ECS.h"
+#include "UndoRedo/History/EditChangeKind.h"
 
 namespace GameEngine::ECS
 {
@@ -24,13 +25,7 @@ namespace GameEngine::Editor
 class EditorChangeNotifications
 {
 public:
-    enum class ChangeKind : std::uint8_t
-    {
-        Preview,         // live preview (dragging / scrubbing)
-        Commit,          // committed change from user interaction (end of drag, field commit)
-        UndoRedo,        // committed change from undo or redo — recipients may need to rebuild UI
-        InspectorRebuild // scene data unchanged; inspector UI should refresh (e.g. async download status)
-    };
+    using ChangeKind = EditChangeKind;
 
     struct ComponentChangedEvent
     {
@@ -38,6 +33,8 @@ public:
         ECS::EntityHandle entity{};
         ECS::ComponentTypeId componentType = 0;
         ChangeKind kind = ChangeKind::Commit;
+        // Observer-authored data outside the active history snapshot.
+        bool Untracked = false;
     };
 
     using ComponentChangedCallback = std::function<void(const ComponentChangedEvent&)>;

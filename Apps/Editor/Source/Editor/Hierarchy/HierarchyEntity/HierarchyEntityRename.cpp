@@ -3,6 +3,7 @@
 
 #include "EditorChangeNotifications.h"
 #include "UndoRedo/EntityComponentsEdit.h"
+#include "UndoRedo/UndoRedoService.h"
 
 #include "Components/Name.h"
 #include "UI/Controls/Label.h"
@@ -44,8 +45,10 @@ bool CommitEntityRename(ECS::World& world, ECS::EntityHandle entity, const std::
 {
     if (!ValidateEntityName(name).empty() || !entity.IsValid() || !world.IsValid(entity))
         return false;
+    if (undo && !undo->CommitPendingEdit())
+        return false;
 
-    const bool renamed = CommitEntityComponentsEdit(world, entity, undo, notifications, kRenameEntityLabel, [&]()
+    return CommitEntityComponentsEdit(world, entity, undo, notifications, kRenameEntityLabel, [&world, entity, &name]()
     {
         Components::Name value{};
         std::memcpy(value.value, name.data(), name.size());
@@ -54,13 +57,12 @@ bool CommitEntityRename(ECS::World& world, ECS::EntityHandle entity, const std::
         else
             world.AddComponentImmediate(entity, value);
         return true;
-    });
-    if (renamed && notifications)
+    }, [&world, entity, notifications]()
     {
-        notifications->NotifyComponentChanged(
-            {&world, entity, ECS::GetComponentTypeId<Components::Name>(), EditorChangeNotifications::ChangeKind::Commit});
-    }
-    return renamed;
+        if (notifications)
+            notifications->NotifyComponentChanged(
+                {&world, entity, ECS::GetComponentTypeId<Components::Name>(), EditorChangeNotifications::ChangeKind::Commit});
+    });
 }
 
 void HierarchyEntityRename::Begin(Label* title, UIElement* tree, ECS::World& world, ECS::EntityHandle entity,

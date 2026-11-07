@@ -20,7 +20,6 @@
 @import "theme/settings.css";
 @import "theme/todos.css";
 @import "theme/bookmarks.css";
-@import "theme/undo-history.css";
 @import "panels/DiffPanel.css";
 @import "panels/BuildPanel.css";
 @import "panels/MovieRecorderPanel.css";

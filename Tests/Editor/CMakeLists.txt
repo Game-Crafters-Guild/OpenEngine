@@ -50,6 +50,10 @@ set(EDITOR_TEST_SOURCES
 	SplineConformHoldTests.cpp
 	TerrainBrushPlanetCastTests.cpp
 	UndoRedoServiceTests.cpp
+	GraphSelectionHistoryTests.cpp
+	SceneDocumentHistoryTests.cpp
+	MaterialInspectorHistoryTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/MaterialInspector.cpp
 	PlayModeChangeReviewTests.cpp
 	PlayModeMarkupNotesTests.cpp
 	RenderPipelineInspectorTests.cpp
@@ -326,6 +330,10 @@ set(EDITOR_TEST_SOURCES
 	# GLSL, everything else as C#; pure over strings, no UI.
 	ScriptSyntaxTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/Script/ScriptSyntax.cpp
+	ScriptDocumentDiskTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/Script/ScriptEditorPanel.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/Script/ScriptTextArea.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/CompletionPopup.cpp
 	# B1: pooled GraphPortedNode slots, BindModel, Display:None surplus.
 	# Leaf TUs over the Graph UI elements (no GraphCanvas.cpp — canvas compile is
 	# gated by Editor; these tests cover pool/node binding without it).
@@ -579,7 +587,7 @@ set(EDITOR_TEST_SOURCES
 	# builds one; the rest of the panel types are covered by the source scan.
 	PanelDefaultTabIconTests.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/UIDemoPanel.cpp
-	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/UndoHistoryPanel.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/UndoHistory/UndoHistoryPanel.cpp
 	# Whether a dock config authored icon= at all, and whether it authored it
 	# empty, are different instructions. The two TUs below are the pair that has
 	# to keep them apart: the element that receives the attribute and the parser
@@ -749,6 +757,7 @@ set(EDITOR_TEST_SOURCES
 	# Inline rename: the session the Assets browser and the Hierarchy share, and
 	# the Hierarchy's entity rename on it.
 	InlineRenameTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/EntityHeader/InspectorEntityNameField.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/InlineRenameSession.cpp
 	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Editor/Hierarchy/HierarchyEntity/HierarchyEntityRename.cpp
 	# The wire router: a route that crosses no body, and the short one among those.
@@ -948,6 +957,22 @@ set(EDITOR_TEST_SOURCES
 	TerrainInspectorSectionStyleTests.cpp
 	# The component color row on a ColorLinear member: apply, alpha kept, undo.
 	InspectorComponentColorRowTests.cpp
+	InspectorEffectColorPickerTests.cpp
+	LensFlareColorPickerTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/LensFlareSourceInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurvePresetPicker.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurvePresets.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/RenameLayoutModal.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/BloomEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/ColorFilterEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/AtmosphericCloudLayerInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/FilmSimulationEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/HeightFogEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/VolumetricFogEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/VhsEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/PostProcessEffects/VignetteEffectInspector.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurveField.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/CurveTangents.cpp
 	# The grass inspector's Root Color row (Auto or authored), built in process over a live
 	# World with a stub colour picker. The terrain panel's inspectors register from one TU.
 	TerrainGrassRootColorRowTests.cpp
@@ -1078,10 +1103,88 @@ set(EDITOR_TEST_SOURCES
 	${CMAKE_SOURCE_DIR}/Tests/EngineShutdownTestEnvironment.cpp
 )
 # Always create EditorTests when BUILD_TESTING is enabled; no UISystem/UI gating.
+add_executable(UndoHistoryTests UndoHistoryTests.cpp)
+target_include_directories(UndoHistoryTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/Apps/Editor/Include
+    ${CMAKE_SOURCE_DIR}/Engine/Include
+    ${CMAKE_SOURCE_DIR}/Engine/Modules/Mathematics/Include
+    ${CMAKE_SOURCE_DIR}/Engine/Modules/Types/Include
+    ${CMAKE_SOURCE_DIR}/Engine/Modules/Events/Include
+)
+target_compile_definitions(UndoHistoryTests PRIVATE GE_ENABLE_CPU_PROFILING=0)
+target_link_libraries(UndoHistoryTests PRIVATE GTest::gtest_main)
+ge_set_output_tests(UndoHistoryTests)
+ge_stage_runtime_dependencies(UndoHistoryTests)
+add_test(NAME UndoHistoryTests
+    COMMAND "${CMAKE_COMMAND}"
+        -DTEST_EXE=$<TARGET_FILE:UndoHistoryTests>
+        -DTEST_WORKING_DIR=$<TARGET_FILE_DIR:UndoHistoryTests>
+        -P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
 add_executable(EditorTests ${EDITOR_TEST_SOURCES})
 
 # Find Google Test
 find_package(GTest REQUIRED)
+
+add_executable(GraphPanelHistoryTests
+	GraphPanelHistoryTests.cpp
+	SettingsPanelStub.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/InspectorNotice.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/ShaderGraph/MaterialGraph/MaterialGraphNodeTypes.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/ShaderGraph/MaterialGraph/MaterialGraphNode.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/EditorSearchBars.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/ContextMenuBackendPolicy.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/InterceptableContextMenu.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/AnimationGraphNodeTypes.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphInspectorRows.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphVariableValues.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/GraphPanel.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/ConfirmActionModal.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/SaveSceneChangesModal.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/UIContextMenu.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphCanvas.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphCanvasEditKeys.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphRouteSolver.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNode.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNodeIcons.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNodeRegistry.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNodePool.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNodeSummary.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphPort/GraphPort.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphPort/GraphPortDropSlot.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphPortedNode.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphOverlay.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphKindChrome.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphSubgraphStore.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNest.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphTransitionStore.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/NodeColorSettings.cpp
+)
+target_include_directories(GraphPanelHistoryTests PRIVATE
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules
+	${CMAKE_SOURCE_DIR}/Tests
+)
+target_link_libraries(GraphPanelHistoryTests PRIVATE Engine EditorSDK GTest::gtest_main)
+if(MSVC)
+	target_compile_options(GraphPanelHistoryTests PRIVATE /bigobj /wd4100)
+endif()
+set_target_properties(GraphPanelHistoryTests PROPERTIES
+	CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(GraphPanelHistoryTests)
+ge_stage_runtime_dependencies(GraphPanelHistoryTests)
+if(TARGET StageTestAssets)
+	add_dependencies(GraphPanelHistoryTests StageTestAssets)
+endif()
+add_test(NAME GraphPanelHistoryTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:GraphPanelHistoryTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:GraphPanelHistoryTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
 
 # Pure editing algorithms, independent of UI initialization and engine fixtures.
 add_executable(AnimationEditingTests AnimationEditingTests.cpp)
@@ -1252,6 +1355,29 @@ add_test(NAME LightInspectorTests
 	COMMAND "${CMAKE_COMMAND}"
 		-DTEST_EXE=$<TARGET_FILE:LightInspectorTests>
 		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:LightInspectorTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
+add_executable(MeasureInspectorTests
+	MeasureInspectorTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/MeasureInspector.cpp
+)
+target_include_directories(MeasureInspectorTests PRIVATE
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source
+)
+target_link_libraries(MeasureInspectorTests PRIVATE Engine EditorSDK GTest::gtest GTest::gtest_main)
+set_target_properties(MeasureInspectorTests PROPERTIES
+	CXX_STANDARD 20
+	CXX_STANDARD_REQUIRED ON
+	VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(MeasureInspectorTests)
+ge_stage_runtime_dependencies(MeasureInspectorTests)
+add_test(NAME MeasureInspectorTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:MeasureInspectorTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:MeasureInspectorTests>
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 
@@ -2213,6 +2339,15 @@ if(TARGET EditorTests)
 	ge_stage_test_asset(EditorTests
 	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/CreatePrefabDialog/CreatePrefabDialog.uxml"
 	    "Assets/UI/controls/CreatePrefabDialog/CreatePrefabDialog.uxml")
+
+	ge_stage_test_asset(EditorTests
+	    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/UndoHistory/UndoHistory.uxml"
+	    "Assets/UI/controls/UndoHistory/UndoHistory.uxml")
+	foreach(_layout HistoryRevision HistoryLane HistoryNotice)
+	    ge_stage_test_asset(EditorTests
+	        "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/UndoHistory/${_layout}.uxml"
+	        "Assets/UI/controls/UndoHistory/${_layout}.uxml")
+	endforeach()
 
 	# StagingViewport binds its image from its layout, read from the same install-assets root.
 	ge_stage_test_asset(EditorTests

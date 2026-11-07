@@ -5,6 +5,7 @@
 #include "Components/Rendering/PostProcessEffects/VhsEffect.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "Inspectors/InspectorColorSwatchRow.h"
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
@@ -56,6 +57,31 @@ std::string FormatRgb(const float (&color)[3])
     return text;
 }
 
+template<auto TColor>
+InspectorUI::ColorPickerState ReadVhsPickerState(const Components::VhsEffect& effect)
+{
+    return {ColorToArgb(effect.*TColor), 1.0f};
+}
+
+template<auto TColor>
+void WriteVhsPickerColor(Components::VhsEffect& effect, uint32_t argb, float)
+{
+    ArgbToColor(argb, effect.*TColor);
+}
+
+template<auto TColor>
+void RefreshVhsColorRow(const InspectorContext& context, UIElement::WeakRef<UIElement> swatchRef,
+                       UIElement::WeakRef<Label> labelRef)
+{
+    const auto* effect = context.World->GetComponent<Components::VhsEffect>(context.Entity);
+    UIElement* swatch = swatchRef.Get();
+    Label* label = labelRef.Get();
+    if (!effect || !swatch || !label)
+        return;
+    InspectorUI::StyleColorSwatch(swatch, ColorToArgb(effect->*TColor));
+    label->SetText(FormatRgb(effect->*TColor));
+}
+
 } // namespace
 
 void RegisterVhsEffectInspector()
@@ -76,7 +102,6 @@ void RegisterVhsEffectInspector()
         const ECS::EntityHandle entity = ctx.Entity;
         Editor::EditorChangeNotifications* notifications = ctx.ChangeNotifications;
         Editor::UndoRedoService* undo = ctx.Undo;
-        OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
 
         const auto addStrength = [=](const char* label, float value, float VHS::* member,
                                      const char* undoName, const char* tooltip,
@@ -447,98 +472,14 @@ void RegisterVhsEffectInspector()
             rgbRaw->Style().Set(Style::Cursor, CursorStyle::Pointer);
             field->AddChild(std::move(rgb));
 
-            auto refresh = [swatchRaw, rgbRaw, world, entity]()
+            auto refresh = [ctx, swatchRef = UIElement::MakeWeakRef(swatchRaw),
+                            labelRef = UIElement::MakeWeakRef(rgbRaw)]
             {
-                const auto* current = world->GetComponent<VHS>(entity);
-                if (!current)
-                    return;
-                InspectorUI::StyleColorSwatch(swatchRaw, ColorToArgb(current->DateBurnColor));
-                rgbRaw->SetText(FormatRgb(current->DateBurnColor));
+                RefreshVhsColorRow<&VHS::DateBurnColor>(ctx, swatchRef, labelRef);
             };
-
-            auto click =
-                [world, entity, notifications, undo, openPicker, refresh](
-                    UIEvent& event)
-            {
-                if (event.Button != 0 || !openPicker)
-                    return;
-                event.Stop();
-                const auto* component = world->GetComponent<VHS>(entity);
-                if (!component)
-                    return;
-
-                using Edit = Editor::UndoRedoService::InteractiveEdit;
-                auto edit = std::make_shared<Edit>();
-                if (undo)
-                {
-                    auto target = MakeComponentSnapshotTarget<VHS>(
-                        world, entity, notifications, "VHS Date Burn Color");
-                    *edit = undo->BeginInteractiveEdit(
-                        "Change VHS Date Burn Color", std::move(target));
-                }
-
-                ColorPickerCallbacks callbacks;
-                callbacks.onApply =
-                    [world, entity, notifications, edit, refresh](
-                        uint32_t argb, float)
-                {
-                    if (*edit)
-                    {
-                        edit->Preview([&]
-                        {
-                            if (auto* writable =
-                                    world->GetComponentForWrite<VHS>(entity))
-                            {
-                                ArgbToColor(argb, writable->DateBurnColor);
-                            }
-                        });
-                        edit->Commit();
-                    }
-                    else if (const auto* current =
-                                 world->GetComponent<VHS>(entity))
-                    {
-                        VHS updated = *current;
-                        ArgbToColor(argb, updated.DateBurnColor);
-                        Editor::CommitComponentUpdate(
-                            world, entity, notifications, updated);
-                    }
-                    refresh();
-                };
-                callbacks.onCancel = [edit, refresh]()
-                {
-                    if (*edit)
-                        edit->Cancel();
-                    refresh();
-                };
-                callbacks.onValueChanging =
-                    [world, entity, notifications, edit, refresh](
-                        uint32_t argb, float)
-                {
-                    if (*edit)
-                    {
-                        edit->Preview([&]
-                        {
-                            if (auto* writable =
-                                    world->GetComponentForWrite<VHS>(entity))
-                            {
-                                ArgbToColor(argb, writable->DateBurnColor);
-                            }
-                        });
-                    }
-                    else if (const auto* current =
-                                 world->GetComponent<VHS>(entity))
-                    {
-                        VHS updated = *current;
-                        ArgbToColor(argb, updated.DateBurnColor);
-                        Editor::PreviewComponentUpdate(
-                            world, entity, notifications, updated);
-                    }
-                    refresh();
-                };
-                openPicker(
-                    ColorToArgb(component->DateBurnColor), 1.0f,
-                    std::move(callbacks));
-            };
+            auto click = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<VHS>(
+                ctx, "Change VHS Date Burn Color", "VHS Date Burn Color",
+                ReadVhsPickerState<&VHS::DateBurnColor>, WriteVhsPickerColor<&VHS::DateBurnColor>, refresh);
 
             swatchRaw->RegisterEventHandler(kEventMouseDown, click);
             rgbRaw->RegisterEventHandler(kEventMouseDown, click);
@@ -755,86 +696,14 @@ void RegisterVhsEffectInspector()
             rgbRaw->Style().Set(Style::Cursor, CursorStyle::Pointer);
             field->AddChild(std::move(rgb));
 
-            auto refresh = [swatchRaw, rgbRaw, world, entity]()
+            auto refresh = [ctx, swatchRef = UIElement::MakeWeakRef(swatchRaw),
+                            labelRef = UIElement::MakeWeakRef(rgbRaw)]
             {
-                const auto* current = world->GetComponent<VHS>(entity);
-                if (!current)
-                    return;
-                InspectorUI::StyleColorSwatch(swatchRaw, ColorToArgb(current->OverlayColor));
-                rgbRaw->SetText(FormatRgb(current->OverlayColor));
+                RefreshVhsColorRow<&VHS::OverlayColor>(ctx, swatchRef, labelRef);
             };
-
-            auto click = [world, entity, notifications, undo, openPicker, refresh](UIEvent& event)
-            {
-                if (event.Button != 0 || !openPicker)
-                    return;
-                event.Stop();
-                const auto* component = world->GetComponent<VHS>(entity);
-                if (!component)
-                    return;
-
-                using Edit = Editor::UndoRedoService::InteractiveEdit;
-                auto edit = std::make_shared<Edit>();
-                if (undo)
-                {
-                    auto target = MakeComponentSnapshotTarget<VHS>(
-                        world, entity, notifications, "VHS Transport Color");
-                    *edit = undo->BeginInteractiveEdit(
-                        "Change VHS Transport Color", std::move(target));
-                }
-
-                ColorPickerCallbacks callbacks;
-                callbacks.onApply = [world, entity, notifications, edit, refresh](
-                    uint32_t argb, float)
-                {
-                    if (*edit)
-                    {
-                        edit->Preview([&]
-                        {
-                            if (auto* writable = world->GetComponentForWrite<VHS>(entity))
-                                ArgbToColor(argb, writable->OverlayColor);
-                        });
-                        edit->Commit();
-                    }
-                    else if (const auto* current = world->GetComponent<VHS>(entity))
-                    {
-                        VHS updated = *current;
-                        ArgbToColor(argb, updated.OverlayColor);
-                        Editor::CommitComponentUpdate(
-                            world, entity, notifications, updated);
-                    }
-                    refresh();
-                };
-                callbacks.onCancel = [edit, refresh]()
-                {
-                    if (*edit)
-                        edit->Cancel();
-                    refresh();
-                };
-                callbacks.onValueChanging =
-                    [world, entity, notifications, edit, refresh](
-                        uint32_t argb, float)
-                {
-                    if (*edit)
-                    {
-                        edit->Preview([&]
-                        {
-                            if (auto* writable = world->GetComponentForWrite<VHS>(entity))
-                                ArgbToColor(argb, writable->OverlayColor);
-                        });
-                    }
-                    else if (const auto* current = world->GetComponent<VHS>(entity))
-                    {
-                        VHS updated = *current;
-                        ArgbToColor(argb, updated.OverlayColor);
-                        Editor::PreviewComponentUpdate(
-                            world, entity, notifications, updated);
-                    }
-                    refresh();
-                };
-                openPicker(ColorToArgb(component->OverlayColor), 1.0f,
-                           std::move(callbacks));
-            };
+            auto click = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<VHS>(
+                ctx, "Change VHS Transport Color", "VHS Transport Color",
+                ReadVhsPickerState<&VHS::OverlayColor>, WriteVhsPickerColor<&VHS::OverlayColor>, refresh);
 
             swatchRaw->RegisterEventHandler(kEventMouseDown, click);
             rgbRaw->RegisterEventHandler(kEventMouseDown, click);

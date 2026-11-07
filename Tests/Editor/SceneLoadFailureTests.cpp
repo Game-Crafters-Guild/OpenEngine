@@ -1365,3 +1365,48 @@ TEST_F(SceneLoadFailureTests, ALaterOpenTakesTheFailureNoticeDown)
     EXPECT_TRUE(VisibleModalMessage(root).empty());
 }
 } // namespace
+
+TEST_F(SceneLoadFailureTests, AdditiveLoadOwnsItsSceneRevisionAcrossSave)
+{
+    const auto file = WriteScene("added.scene", kLoadsCleanly);
+    World world;
+    Editor::EditorChangeNotifications notifications;
+    Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&notifications);
+    document.MarkClean();
+    ASSERT_TRUE(document.LoadSceneAdditive(file));
+    EXPECT_TRUE(document.IsDirty());
+    ASSERT_TRUE(undo.CanUndo());
+    const auto addedCount = world.GetEntityCount();
+    undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_LT(world.GetEntityCount(), addedCount);
+    undo.Redo();
+    document.MarkClean();
+    undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
+}
+
+TEST_F(SceneLoadFailureTests, PartialAdditiveLoadAlsoOwnsTheSceneRevision)
+{
+    const auto file = WriteScene("partial.scene", kFailsAfterClear);
+    World world;
+    Editor::EditorChangeNotifications notifications;
+    Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&notifications);
+    document.MarkClean();
+    ASSERT_FALSE(document.LoadSceneAdditive(file));
+    EXPECT_TRUE(document.IsDirty());
+    ASSERT_TRUE(undo.CanUndo());
+    undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_EQ(world.GetEntityCount(), 0u);
+}

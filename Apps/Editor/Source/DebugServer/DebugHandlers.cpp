@@ -1076,6 +1076,43 @@ static Editor::UndoRedoService::InteractiveEdit BeginExistingSplineEdit(Editor::
         label, Editor::SplineUndo::MakeSplineEditableSnapshotTarget(service, handle, world, entity, notifications, label));
 }
 
+static void NotifyComponentWrite(Editor::EditorChangeNotifications* notifications, ECS::World* world,
+                                 ECS::EntityHandle entity, const std::string& componentName,
+                                 const ComponentApplyResult& applied, const std::function<void()>& markDirty)
+{
+    if (!applied.Error.is_null())
+        return;
+    if (applied.SuppressNotify || !notifications)
+    {
+        if (markDirty)
+            markDirty();
+        return;
+    }
+    Editor::EditorChangeNotifications::ComponentChangedEvent event{};
+    event.world = world;
+    event.entity = entity;
+    event.componentType = ResolveComponentTypeIdByName(componentName);
+    event.kind = Editor::EditorChangeNotifications::ChangeKind::UndoRedo;
+    notifications->NotifyComponentChanged(event);
+}
+
+static ComponentApplyResult ApplyComponentWrite(Editor::UndoRedoService* undo,
+                                                Editor::EditorChangeNotifications* notifications, ECS::World* world,
+                                                ECS::EntityHandle entity, const std::string& componentName,
+                                                const json& values, const std::string& label,
+                                                const std::function<void()>& markDirty)
+{
+    ComponentApplyResult applied;
+    (void)Editor::CommitEntityComponentsEdit(*world, entity, undo, notifications, label,
+        [world, entity, &componentName, &values, &applied]() {
+            applied = ApplyComponentValues(world, entity, componentName, values);
+            return applied.Error.is_null();
+        }, [notifications, world, entity, &componentName, &applied, &markDirty]() {
+            NotifyComponentWrite(notifications, world, entity, componentName, applied, markDirty);
+        });
+    return applied;
+}
+
 // set_component's write as one undo step (with `undo`): the entity's components before and after
 // (CommitEntityComponentsEdit) and, for a SplineComponent, the points of the spline it rewrites
 // in place, which live in the spline service rather than in component bytes. A write refused
@@ -1083,26 +1120,17 @@ static Editor::UndoRedoService::InteractiveEdit BeginExistingSplineEdit(Editor::
 static ComponentApplyResult CommitComponentWrite(Editor::UndoRedoService* undo,
                                                  Editor::EditorChangeNotifications* notifications, ECS::World* world,
                                                  ECS::EntityHandle entity, const std::string& componentName,
-                                                 const json& values)
+                                                 const json& values, const std::function<void()>& markDirty)
 {
     const std::string label = "Set " + componentName;
-    ComponentApplyResult applied;
-    const auto write = [&]() {
-        (void)Editor::CommitEntityComponentsEdit(*world, entity, undo, notifications, label, [&]() {
-            applied = ApplyComponentValues(world, entity, componentName, values);
-            return applied.Error.is_null();
-        });
-    };
     if (!undo)
-    {
-        write();
-        return applied;
-    }
+        return ApplyComponentWrite(undo, notifications, world, entity, componentName, values, label, markDirty);
+    ComponentApplyResult applied;
     Editor::CommitGenericEdit(*world, *undo, label, [&]() {
         Editor::UndoRedoService::InteractiveEdit splineEdit;
         if (componentName == "SplineComponent")
             splineEdit = BeginExistingSplineEdit(*undo, world, entity, notifications, label);
-        write();
+        applied = ApplyComponentWrite(undo, notifications, world, entity, componentName, values, label, markDirty);
         splineEdit.Commit();
     });
     return applied;
@@ -4785,24 +4813,18 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     return;
                 app.m_UndoRedo->CommitAlreadyApplied(std::make_unique<Editor::DuplicateEntitiesCommand>(
                     kCreateEntityLabel, world, app.m_ChangeNotifications.get(), std::vector<ECS::EntityHandle>{entity},
-                    nullptr, nullptr));
+                    nullptr, nullptr),
+                    std::bind_front(Editor::NotifyWorldStructure, app.m_ChangeNotifications.get(), world));
             });
         }
         else
         {
             refusal = BuildRequestedEntityOrNone(world, ctx.params, parentHandle, entity);
+            if (refusal.is_null())
+                Editor::NotifyWorldStructure(app.m_ChangeNotifications.get(), world);
         }
         if (!refusal.is_null())
             return refusal;
-
-        // Notify the editor so the hierarchy panel refreshes.
-        if (app.m_ChangeNotifications)
-        {
-            Editor::EditorChangeNotifications::WorldStructureChangedEvent e{};
-            e.world = world;
-            e.kind = Editor::EditorChangeNotifications::ChangeKind::Commit;
-            app.m_ChangeNotifications->NotifyWorldStructureChanged(e);
-        }
 
         return json{{"entityId", entity.id}}; });
 
@@ -5247,25 +5269,12 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         // A port edit is one undo step (CommitComponentWrite): the components the write added
         // or changed (a collider shape brings its PhysicsCollider) and a rewritten spline's points.
         const ComponentApplyResult applied = CommitComponentWrite(app.m_UndoRedo.get(), app.m_ChangeNotifications.get(),
-                                                                  world, entity, componentName, values);
+            world, entity, componentName, values, [scene = app.m_SceneEditor.get()]() {
+                if (scene)
+                    scene->MarkSceneDirty();
+            });
         if (!applied.Error.is_null())
             return applied.Error;
-
-        // Notify like the editor's own edit paths so event-driven UI (inspector
-        // fields, tool availability gates) reacts to debug-driven writes.
-        // UndoRedo kind = "values changed outside the inspector UI; rebuild"
-        // (the drop-command precedent). Data-only fast paths (Parent) opt out
-        // via the apply result — the policy lives in ApplyComponentValues next
-        // to the branch that implements it.
-        if (app.m_ChangeNotifications && !applied.SuppressNotify)
-        {
-            Editor::EditorChangeNotifications::ComponentChangedEvent e{};
-            e.world = world;
-            e.entity = entity;
-            e.componentType = ResolveComponentTypeIdByName(componentName);
-            e.kind = Editor::EditorChangeNotifications::ChangeKind::UndoRedo;
-            app.m_ChangeNotifications->NotifyComponentChanged(e);
-        }
 
         return json{{"ok", true}}; });
 
@@ -5434,6 +5443,15 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         result["nextRedo"] = nr ? std::string(nr) : std::string();
         result["undo"] = std::move(undo);
         result["redo"] = std::move(redo);
+        result["currentNodeId"] = svc->GetCurrentNodeId();
+        result["rootNodeId"] = svc->GetRootNodeId();
+        result["pendingActionId"] = svc->GetPendingActionId();
+        result["pendingLabel"] = svc->GetPendingName() ? svc->GetPendingName() : "";
+        result["lastError"] = svc->GetLastError();
+        result["nodes"] = json::array();
+        for (const auto& node : svc->GetHistoryNodes())
+            result["nodes"].push_back({{"id", node.Id}, {"parentId", node.Parent},
+                {"label", node.GetName()}, {"type", node.GetTypeName()}, {"timestampMs", epochMs(node.Timestamp)}});
         return result; });
 
     // 11. select_entity

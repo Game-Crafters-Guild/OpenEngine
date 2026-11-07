@@ -21,6 +21,7 @@
 #include "MarkupECS/MarkupService.h"
 #include "Markups/MarkupEditorBridge.h"
 #include "Markups/MarkupEditorSurfaces.h"
+#include "Scene/SceneDocumentManager.h"
 #include "SceneView/SceneViewFraming.h"
 #include "SceneView/SceneViewController.h"
 #include "Scripting/ScriptsConfig.h"
@@ -1104,4 +1105,25 @@ TEST_F(MarkupRequestsTest, ARegionFramesItsOutlineSeenFromAbove)
     steep.PitchDeg = -60.0f;
     EXPECT_NEAR(Editor::MarkupFramePose(*volume, steep, Editor::kMarkupDefaultTanHalfFov).PitchDeg, -60.0f, 1e-3f)
         << "a view already looking down more keeps its pitch";
+}
+
+TEST_F(MarkupRequestsTest, CreatedMarkupOwnsItsSceneRevisionAcrossSave)
+{
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&World);
+    document.SetUndoRedoService(&Undo);
+    document.SetChangeNotifications(&Notifications);
+    document.MarkClean();
+    const auto id = Create("Grocery sign");
+    ASSERT_NE(id, 0u);
+    EXPECT_TRUE(document.IsDirty());
+    Undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    Undo.Redo();
+    document.MarkClean();
+    Undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    Undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_TRUE(World.IsValid(ECS::EntityHandle(id)));
 }

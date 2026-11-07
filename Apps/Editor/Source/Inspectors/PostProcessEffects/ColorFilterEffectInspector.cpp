@@ -7,6 +7,7 @@
 #include "Components/Rendering/PostProcessEffects/ColorFilterEffect.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 
+#include "Inspectors/InspectorComponent/InspectorColorPickerEdit.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace GameEngine
 {
@@ -75,6 +77,28 @@ static void StyleSwatch(UIElement* swatch, uint32_t argb)
         .Set(Style::Cursor, CursorStyle::Pointer);
 }
 
+InspectorUI::ColorPickerState ReadColorFilterPickerState(const Components::ColorFilterEffect& filter)
+{
+    return {ColorToArgb(filter.Color), 1.0f};
+}
+
+void WriteColorFilterPickerColor(Components::ColorFilterEffect& filter, uint32_t argb, float)
+{
+    ArgbToColor(argb, filter.Color);
+}
+
+void RefreshColorFilterRow(const InspectorContext& context, UIElement::WeakRef<UIElement> swatchRef,
+                           UIElement::WeakRef<Label> labelRef)
+{
+    const auto* filter = context.World->GetComponent<Components::ColorFilterEffect>(context.Entity);
+    UIElement* swatch = swatchRef.Get();
+    Label* label = labelRef.Get();
+    if (!filter || !swatch || !label)
+        return;
+    StyleSwatch(swatch, ColorToArgb(filter->Color));
+    label->SetText(FormatRgb(filter->Color));
+}
+
 } // namespace
 
 void RegisterColorFilterEffectInspector()
@@ -98,7 +122,6 @@ void RegisterColorFilterEffectInspector()
         ECS::EntityHandle e = ctx.Entity;
         Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
         Editor::UndoRedoService* undo = ctx.Undo;
-        OpenColorPickerWindowFn openPicker = ctx.OpenColorPickerWindow;
 
         auto* blendField = InspectorUI::AddEnumRow(ctx.Parent, "BlendMode", kBlendModes, effect->BlendMode,
             "How tint is combined with scene color");
@@ -133,86 +156,14 @@ void RegisterColorFilterEffectInspector()
             Label* rgbLabelRaw = rgbLabel.get();
             fieldContainer->AddChild(std::move(rgbLabel));
 
-            // The picker's callbacks outlive an inspector rebuild: resolve the row through
-            // weak refs instead of holding the freed widgets.
-            auto clickHandler = [w, e, n, undo, openPicker,
-                                 swatchRef = UIElement::MakeWeakRef(swatchRaw),
-                                 rgbLabelRef = UIElement::MakeWeakRef(rgbLabelRaw)](UIEvent& ev) {
-                if (ev.Button != 0)
-                    return;
-                ev.Stop();
-
-                if (!openPicker)
-                    return;
-
-                auto* comp = w->GetComponent<CF>(e);
-                if (!comp)
-                    return;
-
-                uint32_t currentArgb = ColorToArgb(comp->Color);
-
-                using Edit = Editor::UndoRedoService::InteractiveEdit;
-                auto edit = std::make_shared<Edit>();
-
-                if (undo)
-                {
-                    auto target = MakeComponentSnapshotTarget<CF>(w, e, n, "ColorFilter Color");
-                    *edit = undo->BeginInteractiveEdit("Change ColorFilter Color", std::move(target));
-                }
-
-                auto updateUI = [swatchRef, rgbLabelRef, w, e]() {
-                    auto* c = w->GetComponent<CF>(e);
-                    UIElement* swatch = swatchRef.Get();
-                    Label* rgbLabel = rgbLabelRef.Get();
-                    if (!c || !swatch || !rgbLabel) return;
-                    StyleSwatch(swatch, ColorToArgb(c->Color));
-                    rgbLabel->SetText(FormatRgb(c->Color));
-                };
-
-                ColorPickerCallbacks cbs;
-                cbs.onApply = [w, e, n, edit, updateUI](uint32_t newArgb, float) {
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<CF>(e);
-                            if (c) ArgbToColor(newArgb, c->Color);
-                        });
-                        edit->Commit();
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<CF>(e);
-                        if (!c) return;
-                        CF updated = *c;
-                        ArgbToColor(newArgb, updated.Color);
-                        Editor::CommitComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                cbs.onCancel = [edit, updateUI]() {
-                    if (*edit) edit->Cancel();
-                    updateUI();
-                };
-                cbs.onValueChanging = [w, e, n, edit, updateUI](uint32_t newArgb, float) {
-                    if (*edit)
-                    {
-                        edit->Preview([&] {
-                            auto* c = w->GetComponentForWrite<CF>(e);
-                            if (c) ArgbToColor(newArgb, c->Color);
-                        });
-                    }
-                    else
-                    {
-                        auto* c = w->GetComponent<CF>(e);
-                        if (!c) return;
-                        CF updated = *c;
-                        ArgbToColor(newArgb, updated.Color);
-                        Editor::PreviewComponentUpdate(w, e, n, updated);
-                    }
-                    updateUI();
-                };
-                openPicker(currentArgb, 1.0f, std::move(cbs));
+            auto updateUI = [ctx, swatchRef = UIElement::MakeWeakRef(swatchRaw),
+                             labelRef = UIElement::MakeWeakRef(rgbLabelRaw)]
+            {
+                RefreshColorFilterRow(ctx, swatchRef, labelRef);
             };
+            auto clickHandler = InspectorUI::InspectorColorPickerEdit::MakeComponentPressHandler<CF>(
+                ctx, "Change ColorFilter Color", "ColorFilter Color",
+                ReadColorFilterPickerState, WriteColorFilterPickerColor, updateUI);
 
             swatchRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
             rgbLabelRaw->RegisterEventHandler(kEventMouseDown, clickHandler);
