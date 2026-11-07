@@ -35,6 +35,8 @@ public:
     explicit InspectorColorPickerEdit(Binding binding)
         : m_Binding(std::move(binding))
     {
+        if (m_Binding.Undo && !m_Binding.Undo->CommitPendingEdit())
+            return;
         EnsureEdit();
     }
 

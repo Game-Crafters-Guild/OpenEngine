@@ -280,16 +280,40 @@ TEST_P(InspectorEffectColorPickerTests, PreviewAndApplyWorkWithoutAnUndoService)
     ExpectColor(0.0f, 0.0f, GetParam().Intensity);
 }
 
-TEST_P(InspectorEffectColorPickerTests, ReopeningKeepsTheAuthoredPickerIntensity)
+TEST_P(InspectorEffectColorPickerTests, CancelingAnUnchangedReopenedPickerPreservesThePreviousApply)
 {
     OpenPicker();
     ASSERT_TRUE(Callbacks);
-    Callbacks->onApply(kMixedColor, GetParam().Intensity);
-    ASSERT_TRUE(Undo.CommitPendingEdit());
+    const float intensity = GetParam().Intensity;
+    Callbacks->onApply(kMixedColor, intensity);
     BuildInspector(true);
-    OpenPicker(kMixedColor, GetParam().Intensity);
+    OpenPicker(kMixedColor, intensity);
     Callbacks->onCancel();
-    ExpectColor(0.2f * GetParam().Intensity, GetParam().Intensity, 0.6f * GetParam().Intensity);
+    ExpectColor(0.2f * intensity, intensity, 0.6f * intensity);
+    EXPECT_EQ(Undo.GetUndoCount(), 1u);
+    Undo.Undo();
+    ExpectColor(1.0f, 1.0f, 1.0f);
+    Undo.Redo();
+    ExpectColor(0.2f * intensity, intensity, 0.6f * intensity);
+}
+
+TEST_P(InspectorEffectColorPickerTests, CancelingAReopenedPreviewRestoresTheAppliedColor)
+{
+    OpenPicker();
+    ASSERT_TRUE(Callbacks);
+    const float intensity = GetParam().Intensity;
+    Callbacks->onApply(kRed, intensity);
+    BuildInspector(true);
+    OpenPicker(kRed, intensity);
+    Callbacks->onValueChanging(kBlue, intensity);
+    ExpectColor(0.0f, 0.0f, intensity);
+    Callbacks->onCancel();
+    ExpectColor(intensity, 0.0f, 0.0f);
+    EXPECT_EQ(Undo.GetUndoCount(), 1u);
+    Undo.Undo();
+    ExpectColor(1.0f, 1.0f, 1.0f);
+    Undo.Redo();
+    ExpectColor(intensity, 0.0f, 0.0f);
 }
 
 INSTANTIATE_TEST_SUITE_P(EffectRows, InspectorEffectColorPickerTests, ::testing::Values(
