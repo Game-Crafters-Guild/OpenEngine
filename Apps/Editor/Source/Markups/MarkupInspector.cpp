@@ -162,11 +162,21 @@ void AddColorRow(const InspectorContext& ctx, MarkupEditorBridge& bridge, const 
                 SetMarkupColorArgb(*edited, argb);
         };
         ColorPickerCallbacks callbacks;
-        callbacks.onValueChanging = [edit, write](uint32_t argb, float) {
+        callbacks.onValueChanging = [ctx, edit, write](uint32_t argb, float) {
+            if (ctx.Undo && !*edit)
+                *edit = ctx.Undo->BeginInteractiveEdit("Set Mark-up Color",
+                    InspectorDrag::MakeComponentSnapshotTarget<Markup>(ctx.World, ctx.Entity, ctx.ChangeNotifications, "Mark-up Color"));
+            if (ctx.Undo && !*edit)
+                return;
             if (*edit)
                 edit->Preview([&] { write(argb); });
         };
         callbacks.onApply = [ctx, edit, write](uint32_t argb, float) {
+            if (ctx.Undo && !*edit)
+                *edit = ctx.Undo->BeginInteractiveEdit("Set Mark-up Color",
+                    InspectorDrag::MakeComponentSnapshotTarget<Markup>(ctx.World, ctx.Entity, ctx.ChangeNotifications, "Mark-up Color"));
+            if (ctx.Undo && !*edit)
+                return;
             if (*edit)
             {
                 edit->Preview([&] { write(argb); });

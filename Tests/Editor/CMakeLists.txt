@@ -1283,6 +1283,29 @@ add_test(NAME LightInspectorTests
 		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
 )
 
+add_executable(MeasureInspectorTests
+	MeasureInspectorTests.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Inspectors/MeasureInspector.cpp
+)
+target_include_directories(MeasureInspectorTests PRIVATE
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source
+)
+target_link_libraries(MeasureInspectorTests PRIVATE Engine EditorSDK GTest::gtest GTest::gtest_main)
+set_target_properties(MeasureInspectorTests PROPERTIES
+	CXX_STANDARD 20
+	CXX_STANDARD_REQUIRED ON
+	VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(MeasureInspectorTests)
+ge_stage_runtime_dependencies(MeasureInspectorTests)
+add_test(NAME MeasureInspectorTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:MeasureInspectorTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:MeasureInspectorTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
 # The sky inspector's sun path rows, typed into and dragged over the real undo
 # service. Its own target for the reason above: the rows draw the day on the
 # shared curve editor, whose sources stay out of EditorTests' unity batches.

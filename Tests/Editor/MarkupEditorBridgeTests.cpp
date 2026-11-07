@@ -210,7 +210,8 @@ class MarkupEditorBridgeTest : public ::testing::Test
     template <typename T>
     std::unique_ptr<UIElement> BuildSection(ECS::EntityHandle entity, Editor::UndoRedoService& undo,
                                             std::vector<std::function<void()>>* frameCallbacks = nullptr,
-                                            std::function<void()> requestRefresh = {})
+                                            std::function<void()> requestRefresh = {},
+                                            OpenColorPickerWindowFn openPicker = {})
     {
         Editor::RegisterMarkupInspector(*m_Bridge);
         auto section = std::make_unique<UIElement>();
@@ -222,6 +223,7 @@ class MarkupEditorBridgeTest : public ::testing::Test
         ctx.ChangeNotifications = &Notifications;
         ctx.FrameRefreshCallbacks = frameCallbacks;
         ctx.RequestInspectorRefresh = std::move(requestRefresh);
+        ctx.OpenColorPickerWindow = std::move(openPicker);
         (*InspectorRegistry::Get().TryGetComponentInspector<T>())(ctx);
         return section;
     }
@@ -229,6 +231,24 @@ class MarkupEditorBridgeTest : public ::testing::Test
     std::unique_ptr<UIElement> BuildInspectorSection(ECS::EntityHandle entity, Editor::UndoRedoService& undo)
     {
         return BuildSection<Markup>(entity, undo);
+    }
+
+    std::unique_ptr<UIElement> OpenColorPicker(ECS::EntityHandle entity, Editor::UndoRedoService& undo,
+                                              ColorPickerCallbacks& picker)
+    {
+        auto section = BuildSection<Markup>(entity, undo, nullptr, {},
+            [&picker](uint32_t, float, ColorPickerCallbacks callbacks) { picker = std::move(callbacks); });
+        for (Label* label : FindAll<Label>(*section))
+        {
+            if (label->GetText() != "Status color")
+                continue;
+            UIEvent press{};
+            press.Id = kEventMouseDown;
+            press.Button = 0;
+            label->DispatchEvent(press);
+            break;
+        }
+        return section;
     }
 
     // Writes `text` into the section's comment field and presses Add Comment.
@@ -1092,6 +1112,51 @@ TEST_F(MarkupEditorBridgeTest, TheColorRowShowsTheStatusColorUntilOneIsSet)
     EXPECT_FALSE(Editor::MarkupHasOwnColor(MarkupOf(docks)));
     undo.Undo();
     EXPECT_TRUE(Editor::MarkupHasOwnColor(MarkupOf(docks)));
+}
+
+TEST_F(MarkupEditorBridgeTest, ColorPickerCancelRestoresTheLastSettlementAfterInspectorRebuild)
+{
+    const auto docks = CreateMarkup();
+    Editor::UndoRedoService undo;
+    ColorPickerCallbacks picker;
+    auto section = OpenColorPicker(docks, undo, picker);
+    ASSERT_TRUE(picker.onValueChanging);
+    picker.onValueChanging(0xFFFF0000u, 1.0f);
+    ASSERT_TRUE(undo.CommitPendingEdit());
+    ASSERT_EQ(undo.GetUndoCount(), 1u);
+    section.reset();
+
+    picker.onValueChanging(0xFF00FF00u, 1.0f);
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFF00FF00u);
+    picker.onCancel();
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFFFF0000u);
+    EXPECT_FALSE(undo.HasPendingEdit());
+    ASSERT_EQ(undo.GetUndoCount(), 1u);
+    undo.Undo();
+    EXPECT_FALSE(Editor::MarkupHasOwnColor(MarkupOf(docks)));
+    undo.Redo();
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFFFF0000u);
+}
+
+TEST_F(MarkupEditorBridgeTest, ColorPickerApplyIsUndoableAfterSettlementAndInspectorRebuild)
+{
+    const auto docks = CreateMarkup();
+    Editor::UndoRedoService undo;
+    ColorPickerCallbacks picker;
+    auto section = OpenColorPicker(docks, undo, picker);
+    ASSERT_TRUE(picker.onValueChanging);
+    picker.onValueChanging(0xFFFF0000u, 1.0f);
+    ASSERT_TRUE(undo.CommitPendingEdit());
+    section.reset();
+
+    picker.onApply(0xFF00FF00u, 1.0f);
+    ASSERT_TRUE(undo.CommitPendingEdit());
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFF00FF00u);
+    ASSERT_EQ(undo.GetUndoCount(), 2u);
+    undo.Undo();
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFFFF0000u);
+    undo.Redo();
+    EXPECT_EQ(Editor::MarkupDisplayArgb(MarkupOf(docks)), 0xFF00FF00u);
 }
 
 // A Markup removed and added again on the same entity starts from its own state: the state it had

@@ -160,8 +160,13 @@ void RegisterMeasureInspector()
             }
 
             ColorPickerCallbacks cbs;
-            cbs.onApply = [w, e, n, edit, updateUI](uint32_t newArgb, float)
+            cbs.onApply = [w, e, n, undo, edit, updateUI](uint32_t newArgb, float)
             {
+                if (undo && !*edit)
+                    *edit = undo->BeginInteractiveEdit("Change Measure Color",
+                        MakeComponentSnapshotTarget<Components::MeasureComponent>(w, e, n, "Measure Color"));
+                if (undo && !*edit)
+                    return;
                 if (*edit)
                 {
                     edit->Preview([&]
@@ -189,8 +194,13 @@ void RegisterMeasureInspector()
                     edit->Cancel();
                 updateUI();
             };
-            cbs.onValueChanging = [w, e, n, edit, updateUI](uint32_t newArgb, float)
+            cbs.onValueChanging = [w, e, n, undo, edit, updateUI](uint32_t newArgb, float)
             {
+                if (undo && !*edit)
+                    *edit = undo->BeginInteractiveEdit("Change Measure Color",
+                        MakeComponentSnapshotTarget<Components::MeasureComponent>(w, e, n, "Measure Color"));
+                if (undo && !*edit)
+                    return;
                 if (*edit)
                 {
                     edit->Preview([&]

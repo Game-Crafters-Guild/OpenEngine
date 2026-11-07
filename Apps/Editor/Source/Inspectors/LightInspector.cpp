@@ -799,7 +799,12 @@ void RegisterLightInspector()
                 }
 
                 ColorPickerCallbacks cbs;
-                cbs.onApply = [w, e, n, edit, updateUI](uint32_t newArgb, float) {
+                cbs.onApply = [w, e, n, undo, edit, updateUI](uint32_t newArgb, float) {
+                    if (undo && !*edit)
+                        *edit = undo->BeginInteractiveEdit("Change Light Color",
+                            MakeComponentSnapshotTarget<Components::Light>(w, e, n, "Light Color"));
+                    if (undo && !*edit)
+                        return;
                     if (*edit)
                     {
                         edit->Preview([&] {
@@ -822,7 +827,12 @@ void RegisterLightInspector()
                     if (*edit) edit->Cancel();
                     updateUI();
                 };
-                cbs.onValueChanging = [w, e, n, edit, updateUI](uint32_t newArgb, float) {
+                cbs.onValueChanging = [w, e, n, undo, edit, updateUI](uint32_t newArgb, float) {
+                    if (undo && !*edit)
+                        *edit = undo->BeginInteractiveEdit("Change Light Color",
+                            MakeComponentSnapshotTarget<Components::Light>(w, e, n, "Light Color"));
+                    if (undo && !*edit)
+                        return;
                     if (*edit)
                     {
                         edit->Preview([&] {
