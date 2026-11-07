@@ -201,6 +201,8 @@ public:
     void OnPostLayout() override;
 
 private:
+    class GraphSnapshotCommand;
+    Editor::UndoRedoService::SnapshotTarget MakeGraphSnapshotTarget();
     void RebuildPalette();
     // Rebuilds the palette on the next deferred drain, at most once however often it is asked.
     void SchedulePaletteRebuild();
@@ -339,6 +341,8 @@ private:
     std::string m_GraphTransitionEditLinkId;
 
     Graph::Model m_Model;
+    // A save keeps this identity; replacing the document invalidates its history targets.
+    std::uint64_t m_DocumentId = 1;
     std::string m_PanelKindId;
     RequestOpenGraphAssetFn m_RequestOpenGraphAsset;
     bool m_ForwardingOpenGraph = false;

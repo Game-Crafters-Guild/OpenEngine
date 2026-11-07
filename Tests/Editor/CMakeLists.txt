@@ -1122,6 +1122,65 @@ add_executable(EditorTests ${EDITOR_TEST_SOURCES})
 # Find Google Test
 find_package(GTest REQUIRED)
 
+add_executable(GraphPanelHistoryTests
+	GraphPanelHistoryTests.cpp
+	SettingsPanelStub.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/Controls/InspectorNotice.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/ShaderGraph/MaterialGraph/MaterialGraphNodeTypes.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/ShaderGraph/MaterialGraph/MaterialGraphNode.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/UI/EditorSearchBars.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/ContextMenuBackendPolicy.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/InterceptableContextMenu.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/AnimationGraphNodeTypes.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphInspectorRows.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphVariableValues.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/GraphPanel.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/ConfirmActionModal.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Panels/SaveSceneChangesModal.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules/EditorContextMenu/UIContextMenu.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphCanvas.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphCanvasEditKeys.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphRouteSolver.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNode.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNodeIcons.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNodeRegistry.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNodePool.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNode/GraphNodeSummary.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphPort/GraphPort.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphPort/GraphPortDropSlot.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphPortedNode.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphOverlay.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphKindChrome.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphSubgraphStore.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphNest.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/GraphTransitionStore.cpp
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source/Graph/NodeColorSettings.cpp
+)
+target_include_directories(GraphPanelHistoryTests PRIVATE
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Include
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Source
+	${CMAKE_SOURCE_DIR}/Apps/Editor/Modules
+	${CMAKE_SOURCE_DIR}/Tests
+)
+target_link_libraries(GraphPanelHistoryTests PRIVATE Engine EditorSDK GTest::gtest_main)
+if(MSVC)
+	target_compile_options(GraphPanelHistoryTests PRIVATE /bigobj /wd4100)
+endif()
+set_target_properties(GraphPanelHistoryTests PROPERTIES
+	CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON VCPKG_APPLOCAL_DEPS OFF
+)
+ge_set_output_tests(GraphPanelHistoryTests)
+ge_stage_runtime_dependencies(GraphPanelHistoryTests)
+if(TARGET StageTestAssets)
+	add_dependencies(GraphPanelHistoryTests StageTestAssets)
+endif()
+add_test(NAME GraphPanelHistoryTests
+	COMMAND "${CMAKE_COMMAND}"
+		-DTEST_EXE=$<TARGET_FILE:GraphPanelHistoryTests>
+		-DTEST_WORKING_DIR=$<TARGET_FILE_DIR:GraphPanelHistoryTests>
+		-P "${CMAKE_SOURCE_DIR}/cmake/RunTestExecutable.cmake"
+)
+
 # Pure editing algorithms, independent of UI initialization and engine fixtures.
 add_executable(AnimationEditingTests AnimationEditingTests.cpp)
 target_include_directories(AnimationEditingTests PRIVATE ${CMAKE_SOURCE_DIR}/Apps/Editor/Include)
