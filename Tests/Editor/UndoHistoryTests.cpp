@@ -33,6 +33,24 @@ UndoRedoService::SnapshotTarget IntegerTarget(int& value)
     };
     return target;
 }
+
+UndoRedoService::SnapshotTarget DocumentIntegerTarget(UndoRedoService& history, const void* document, int& value)
+{
+    auto target = IntegerTarget(value);
+    target.Notify = [&history, document](GameEngine::Editor::EditChangeKind)
+    {
+        history.MarkDocumentChanged(document);
+    };
+    return target;
+}
+
+void SetDocumentValue(UndoRedoService& history, const void* document, int& value, int after)
+{
+    auto edit = history.BeginInteractiveEdit("Document Value", DocumentIntegerTarget(history, document, value));
+    edit.Preview([&value, after] { value = after; });
+    edit.Commit();
+    ASSERT_TRUE(history.CommitPendingEdit());
+}
 }
 
 TEST(UndoHistory, ReleasingAGestureLeavesItsValuePending)
@@ -592,4 +610,127 @@ TEST(UndoHistory, ChangeDescriptionsKeepTheirCommittedValues)
     history.Redo();
     EXPECT_EQ(value, 3);
     EXPECT_EQ(history.GetHistoryNodes().front().GetDescription(), "1 -> 3");
+}
+
+TEST(UndoHistory, DocumentSaveMarksIgnoreOtherDocumentsPendingChanges)
+{
+    UndoRedoService history;
+    int scene = 0;
+    int asset = 0;
+    history.MarkSaved(&scene, UndoRedoService::RevisionScope::Document);
+    history.MarkSaved(&asset, UndoRedoService::RevisionScope::Document);
+    auto edit = history.BeginInteractiveEdit("Asset", DocumentIntegerTarget(history, &asset, asset));
+    edit.Preview([&asset] { asset = 1; });
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    EXPECT_FALSE(history.IsAtSavedRevision(&asset));
+    edit.Cancel();
+    EXPECT_TRUE(history.IsAtSavedRevision(&asset));
+    SetDocumentValue(history, &asset, asset, 2);
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    history.Undo();
+    EXPECT_TRUE(history.IsAtSavedRevision(&asset));
+}
+
+TEST(UndoHistory, TrimmedRootsRetainTheLastRevisionForEachDocument)
+{
+    UndoRedoService history({2});
+    int scene = 0;
+    int asset = 0;
+    SetDocumentValue(history, &scene, scene, 1);
+    history.MarkSaved(&scene, UndoRedoService::RevisionScope::Document);
+    const auto saved = history.GetCurrentNodeId();
+    for (int value = 1; value <= 5; ++value)
+        SetDocumentValue(history, &asset, asset, value);
+    EXPECT_GT(history.GetRootNodeId(), saved);
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    history.Undo();
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    SetDocumentValue(history, &scene, scene, 2);
+    EXPECT_FALSE(history.IsAtSavedRevision(&scene));
+    history.Undo();
+    EXPECT_EQ(scene, 1);
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+}
+
+TEST(UndoHistory, NestedCompoundsCombineTheDocumentsChangedByTheirChildren)
+{
+    UndoRedoService history;
+    int scene = 0;
+    int asset = 0;
+    history.MarkSaved(&scene, UndoRedoService::RevisionScope::Document);
+    history.MarkSaved(&asset, UndoRedoService::RevisionScope::Document);
+    history.BeginCompound("Scene And Asset");
+    SetDocumentValue(history, &scene, scene, 1);
+    EXPECT_FALSE(history.IsAtSavedRevision(&scene));
+    EXPECT_TRUE(history.IsAtSavedRevision(&asset));
+    history.BeginCompound("Asset");
+    SetDocumentValue(history, &asset, asset, 2);
+    history.EndCompound();
+    history.EndCompound();
+    ASSERT_EQ(history.GetHistoryNodes().size(), 1u);
+    EXPECT_FALSE(history.IsAtSavedRevision(&scene));
+    EXPECT_FALSE(history.IsAtSavedRevision(&asset));
+    history.Undo();
+    EXPECT_EQ(scene, 0);
+    EXPECT_EQ(asset, 0);
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    EXPECT_TRUE(history.IsAtSavedRevision(&asset));
+    history.Redo();
+    EXPECT_FALSE(history.IsAtSavedRevision(&scene));
+    EXPECT_FALSE(history.IsAtSavedRevision(&asset));
+}
+
+TEST(UndoHistory, DocumentRevisionsTravelWithDetachedHistory)
+{
+    UndoRedoService history({1});
+    int scene = 0;
+    int asset = 0;
+    SetDocumentValue(history, &scene, scene, 1);
+    history.MarkSaved(&scene, UndoRedoService::RevisionScope::Document);
+    SetDocumentValue(history, &asset, asset, 2);
+    SetDocumentValue(history, &asset, asset, 3);
+    auto authored = history.DetachHistory();
+    SetDocumentValue(history, &scene, scene, 99);
+    history.AttachHistory(std::move(authored));
+    scene = 1;
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    history.Undo();
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    history.Redo();
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+}
+
+TEST(UndoHistory, ClearingUnrelatedPendingEditsPreservesADocumentsSaveMark)
+{
+    UndoRedoService history;
+    int scene = 0;
+    int asset = 0;
+    history.MarkSaved(&scene, UndoRedoService::RevisionScope::Document);
+    auto unrelated = history.BeginInteractiveEdit("Asset", DocumentIntegerTarget(history, &asset, asset));
+    unrelated.Preview([&asset] { asset = 2; });
+    history.Clear();
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    auto sceneEdit = history.BeginInteractiveEdit("Scene", DocumentIntegerTarget(history, &scene, scene));
+    sceneEdit.Preview([&scene] { scene = 1; });
+    history.Clear();
+    EXPECT_FALSE(history.IsAtSavedRevision(&scene));
+    EXPECT_EQ(scene, 1);
+    history.MarkSaved(&scene, UndoRedoService::RevisionScope::Document);
+    history.Clear();
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+}
+
+TEST(UndoHistory, ReturningADocumentToItsStartingValueDoesNotTagTheNextAction)
+{
+    UndoRedoService history;
+    int scene = 0;
+    int asset = 0;
+    history.MarkSaved(&scene, UndoRedoService::RevisionScope::Document);
+    auto edit = history.BeginInteractiveEdit("Scene", DocumentIntegerTarget(history, &scene, scene));
+    edit.Preview([&scene] { scene = 1; });
+    edit.Preview([&scene] { scene = 0; });
+    edit.Commit();
+    SetDocumentValue(history, &asset, asset, 2);
+    EXPECT_TRUE(history.IsAtSavedRevision(&scene));
+    EXPECT_EQ(history.GetHistoryNodes().size(), 1u);
 }

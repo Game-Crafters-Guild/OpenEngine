@@ -1,6 +1,8 @@
 #pragma once
 
 #include "UndoRedo/IEditorCommand.h"
+#include "Types/FlatMap.h"
+#include "Types/FlatSet.h"
 
 #include <algorithm>
 #include <chrono>
@@ -24,6 +26,7 @@ public:
         NodeId Parent = 0;
         NodeId PreferredChild = 0;
         std::chrono::system_clock::time_point Timestamp;
+        FlatSet<const void*> Documents;
         const char* GetName() const { return Command->GetName(); }
         std::string GetDescription() const { return Command->GetDescription(); }
         const char* GetTypeName() const { return Command->GetTypeName(); }
@@ -42,6 +45,16 @@ public:
         const auto found = std::lower_bound(m_Nodes.begin(), m_Nodes.end(), id,
             [](const Node& node, NodeId value) { return node.Id < value; });
         return found != m_Nodes.end() && found->Id == id ? &*found : nullptr;
+    }
+
+    /// Last revision that changes this document, excluding unrelated actions.
+    NodeId GetDocumentRevision(const void* document) const
+    {
+        for (const Node* node = Find(m_Current); node; node = Find(node->Parent))
+            if (node->Documents.Contains(document))
+                return node->Id;
+        const NodeId* rootRevision = m_RootDocumentRevisions.Find(document);
+        return rootRevision ? *rootRevision : 0;
     }
 
     std::vector<NodeId> GetAncestors() const
@@ -71,7 +84,8 @@ public:
         return result;
     }
 
-    void Append(NodeId id, std::unique_ptr<IEditorCommand> command, std::size_t limit)
+    void Append(NodeId id, std::unique_ptr<IEditorCommand> command, std::size_t limit,
+                FlatSet<const void*> documents)
     {
         SetPreferredChild(m_Current, id);
         Node node;
@@ -79,6 +93,7 @@ public:
         node.Parent = m_Current;
         node.Timestamp = std::chrono::system_clock::now();
         node.Command = std::move(command);
+        node.Documents = std::move(documents);
         m_Nodes.push_back(std::move(node));
         m_Current = id;
         Trim(limit);
@@ -210,6 +225,8 @@ private:
                 continue;
             }
             const NodeId newRoot = path.front();
+            for (const void* document : Find(newRoot)->Documents)
+                m_RootDocumentRevisions.InsertOrAssign(document, newRoot);
             m_RootPreferredChild = PreferredChild(newRoot);
             m_Root = newRoot;
             std::erase_if(m_Nodes, [newRoot](const Node& node) { return node.Id == newRoot; });
@@ -217,6 +234,7 @@ private:
     }
 
     std::vector<Node> m_Nodes;
+    FlatMap<const void*, NodeId> m_RootDocumentRevisions;
     NodeId m_Current = 0;
     NodeId m_Root = 0;
     NodeId m_RootPreferredChild = 0;

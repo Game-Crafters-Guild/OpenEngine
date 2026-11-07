@@ -63,6 +63,14 @@ protected:
             [x](Spline::SplineData* data) { data->SetPointPosition(0, {x, 0.0f, 0.0f}); });
     }
 
+    std::shared_ptr<ScriptHistoryDocument> EditScript()
+    {
+        auto script = ScriptHistoryDocument::Open("scene-history-mixed-script.cs", "before");
+        script->SetText("after");
+        m_History.CommitAlreadyApplied(std::make_unique<ScriptTextEditCommand>(script, "before", "after"));
+        return script;
+    }
+
     void RemoveNameOutsideHistory()
     {
         m_World.RemoveComponentImmediate<Components::Name>(m_Entity);
@@ -357,6 +365,72 @@ TEST_F(SceneDocumentHistoryTest, RebindingHistoryRefreshesFromTheNewServiceAfter
     EXPECT_TRUE(m_Document.IsDirty());
     replacement.Redo();
     EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, UndoingASplineEditAfterAScriptEditRestoresTheCleanScene)
+{
+    auto script = EditScript();
+    MovePoint(3.0f);
+    m_History.Undo();
+    EXPECT_EQ(script->GetText(), "after");
+    EXPECT_FLOAT_EQ(SplineECS::SplineService::Get().GetSplineData(m_Spline)->Points[0].Position.x, 0.0f);
+    EXPECT_FALSE(m_Document.IsDirty());
+    m_History.Undo();
+    EXPECT_EQ(script->GetText(), "before");
+    EXPECT_FALSE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_FALSE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_TRUE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, SavingAfterAScriptEditKeepsTheSceneCleanWhileOnlyTheScriptIsUndone)
+{
+    MovePoint(3.0f);
+    auto script = EditScript();
+    ASSERT_TRUE(m_History.CommitPendingEdit());
+    m_Document.MarkClean();
+    m_History.Undo();
+    EXPECT_EQ(script->GetText(), "before");
+    EXPECT_FALSE(m_Document.IsDirty());
+    m_History.Undo();
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_FALSE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_EQ(script->GetText(), "after");
+    EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, ScriptOnlyBranchesShareTheSavedSceneRevision)
+{
+    MovePoint(3.0f);
+    ASSERT_TRUE(m_History.CommitPendingEdit());
+    const auto sceneRevision = m_History.GetCurrentNodeId();
+    auto script = EditScript();
+    ASSERT_TRUE(m_History.CommitPendingEdit());
+    const auto scriptBranch = m_History.GetCurrentNodeId();
+    m_Document.MarkClean();
+    ASSERT_TRUE(m_History.Checkout(sceneRevision));
+    MovePoint(7.0f);
+    ASSERT_TRUE(m_History.CommitPendingEdit());
+    EXPECT_TRUE(m_Document.IsDirty());
+    ASSERT_TRUE(m_History.Checkout(sceneRevision));
+    EXPECT_FALSE(m_Document.IsDirty());
+    ASSERT_TRUE(m_History.Checkout(scriptBranch));
+    EXPECT_EQ(script->GetText(), "after");
+    EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, UnrelatedHistoryDoesNotClearAnUntrackedSceneChange)
+{
+    m_Document.MarkDirty();
+    auto script = EditScript();
+    m_History.Undo();
+    EXPECT_EQ(script->GetText(), "before");
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_TRUE(m_Document.IsDirty());
 }
 } // namespace
 } // namespace GameEngine::Editor

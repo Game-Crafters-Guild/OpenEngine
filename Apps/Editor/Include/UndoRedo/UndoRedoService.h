@@ -35,16 +35,33 @@ class UndoRedoService
         bool GestureOpen = true;
         bool Previewed = false;
         std::vector<std::unique_ptr<IEditorCommand>> Consequences;
+        FlatSet<const void*> Documents;
+    };
+
+    struct PendingCompound
+    {
+        std::unique_ptr<CompoundHistoryCommand> Command;
+        FlatSet<const void*> Documents;
     };
 
 public:
     using SnapshotTarget = HistorySnapshotTarget;
     using NodeId = HistoryGraph::NodeId;
+    enum class RevisionScope
+    {
+        History,
+        Document
+    };
+    struct SavedRevision
+    {
+        NodeId Revision = 0;
+        RevisionScope Scope = RevisionScope::History;
+    };
     struct Config { std::size_t maxUndo = 1024; };
     struct History
     {
         HistoryGraph Graph;
-        FlatMap<const void*, NodeId> SavedRevisions;
+        FlatMap<const void*, SavedRevision> SavedRevisions;
     };
 
     UndoRedoService() = default;
@@ -66,11 +83,34 @@ public:
     NodeId GetRootNodeId() const { return m_Graph.GetRoot(); }
     const std::vector<HistoryGraph::Node>& GetHistoryNodes() const { return m_Graph.GetNodes(); }
     const std::string& GetLastError() const { return m_LastError; }
-    void MarkSaved(const void* document) { m_SavedRevisions.InsertOrAssign(document, GetCurrentNodeId()); }
+    /// Document scope ignores revisions whose mutations belong to other documents.
+    void MarkSaved(const void* document, RevisionScope scope = RevisionScope::History)
+    {
+        const NodeId revision = scope == RevisionScope::Document
+            ? m_Graph.GetDocumentRevision(document) : GetCurrentNodeId();
+        m_SavedRevisions.InsertOrAssign(document, SavedRevision{revision, scope});
+    }
     bool IsAtSavedRevision(const void* document) const
     {
-        const NodeId* saved = m_SavedRevisions.Find(document);
-        return saved && *saved == GetCurrentNodeId() && !HasPendingEdit() && !HasPendingCommand();
+        const SavedRevision* saved = m_SavedRevisions.Find(document);
+        if (!saved)
+            return false;
+        if (saved->Scope == RevisionScope::Document)
+            return saved->Revision == m_Graph.GetDocumentRevision(document) && !HasPendingDocumentChange(document);
+        return saved->Revision == GetCurrentNodeId() && !HasPendingEdit() && !HasPendingCommand();
+    }
+    /// Associate a synchronous, recorded mutation with the document it changes.
+    bool MarkDocumentChanged(const void* document)
+    {
+        if (!document || !HistoryMutationScope::IsActiveFor(this) || HistoryMutationScope::IsRestoringFor(this))
+            return false;
+        if (m_Pending)
+            m_Pending->Documents.Insert(document);
+        else if (m_PendingCommand)
+            m_PendingCommandDocuments.Insert(document);
+        else
+            return false;
+        return true;
     }
     bool HasPendingEdit() const
     {
@@ -178,9 +218,11 @@ public:
         if (m_PendingCommand)
         {
             auto command = std::move(m_PendingCommand);
+            auto documents = std::move(m_PendingCommandDocuments);
+            m_PendingCommandDocuments.Clear();
             const NodeId id = std::exchange(m_PendingCommandId, 0);
             if (!command->IsNoOp())
-                CommitInternal(std::move(command), id);
+                CommitInternal(std::move(command), id, std::move(documents));
         }
         if (!m_Pending)
             return true;
@@ -201,7 +243,7 @@ public:
                     compound->Add(std::move(consequence));
                 command = std::move(compound);
             }
-            CommitInternal(std::move(command), edit->Id);
+            CommitInternal(std::move(command), edit->Id, std::move(edit->Documents));
         }
         NotifyHistoryChanged();
         return true;
@@ -229,11 +271,9 @@ public:
     void Clear()
     {
         m_LastError.clear();
-        const bool pending = HasPendingEdit() || HasPendingCommand();
         for (auto& [document, saved] : m_SavedRevisions)
         {
-            (void)document;
-            saved = !pending && saved == GetCurrentNodeId() ? 0 : std::numeric_limits<NodeId>::max();
+            saved.Revision = IsAtSavedRevision(document) ? 0 : std::numeric_limits<NodeId>::max();
         }
         DiscardPendingEdit();
         m_Graph = {};
@@ -247,6 +287,7 @@ public:
             m_Pending->Active = false;
         m_Pending.reset();
         m_PendingCommand.reset();
+        m_PendingCommandDocuments.Clear();
         m_PendingCommandId = 0;
     }
     void Execute(std::unique_ptr<IEditorCommand> command)
@@ -326,7 +367,7 @@ public:
     void BeginCompound(std::string name)
     {
         CommitPendingEdit();
-        m_CompoundStack.push_back(std::make_unique<CompoundHistoryCommand>(std::move(name)));
+        m_CompoundStack.push_back({std::make_unique<CompoundHistoryCommand>(std::move(name)), {}});
     }
     void EndCompound()
     {
@@ -335,8 +376,8 @@ public:
             return;
         auto finished = std::move(m_CompoundStack.back());
         m_CompoundStack.pop_back();
-        if (!finished->Empty())
-            CommitInternal(std::move(finished));
+        if (!finished.Command->Empty())
+            CommitInternal(std::move(finished.Command), 0, std::move(finished.Documents));
     }
 
     class InteractiveEdit
@@ -467,6 +508,17 @@ public:
     }
 
 private:
+    bool HasPendingDocumentChange(const void* document) const
+    {
+        if (HasPendingEdit() && m_Pending->Documents.Contains(document))
+            return true;
+        if (HasPendingCommand() && m_PendingCommandDocuments.Contains(document))
+            return true;
+        return std::any_of(m_CompoundStack.begin(), m_CompoundStack.end(), [document](const PendingCompound& compound)
+        {
+            return compound.Documents.Contains(document);
+        });
+    }
     bool HasPendingCommand() const { return m_PendingCommand && !m_PendingCommand->IsNoOp(); }
     bool HasPendingStep() const
     {
@@ -484,12 +536,16 @@ private:
         edit->After = std::move(after);
         return true;
     }
-    void CommitInternal(std::unique_ptr<IEditorCommand> command, NodeId id = 0)
+    void CommitInternal(std::unique_ptr<IEditorCommand> command, NodeId id, FlatSet<const void*> documents)
     {
         if (!m_CompoundStack.empty())
-            m_CompoundStack.back()->Add(std::move(command));
+        {
+            m_CompoundStack.back().Command->Add(std::move(command));
+            for (const void* document : documents)
+                m_CompoundStack.back().Documents.Insert(document);
+        }
         else
-            m_Graph.Append(id ? id : m_NextEntryId++, std::move(command), m_Config.maxUndo);
+            m_Graph.Append(id ? id : m_NextEntryId++, std::move(command), m_Config.maxUndo, std::move(documents));
         NotifyHistoryChanged();
     }
     void NotifyHistoryChanged()
@@ -501,14 +557,15 @@ private:
     void FireBeforeMutation() { if (m_BeforeMutation) m_BeforeMutation(); }
     Config m_Config{};
     HistoryGraph m_Graph;
-    FlatMap<const void*, NodeId> m_SavedRevisions;
+    FlatMap<const void*, SavedRevision> m_SavedRevisions;
     NodeId m_NextEntryId = 1;
     std::shared_ptr<PendingEdit> m_Pending;
     std::unique_ptr<IEditorCommand> m_PendingCommand;
+    FlatSet<const void*> m_PendingCommandDocuments;
     NodeId m_PendingCommandId = 0;
     bool m_Settling = false;
     std::function<void()> m_BeforeCommit;
-    std::vector<std::unique_ptr<CompoundHistoryCommand>> m_CompoundStack;
+    std::vector<PendingCompound> m_CompoundStack;
     bool m_Replaying = false;
     std::function<void()> m_OnHistoryChanged;
     std::function<void()> m_BeforeMutation;

@@ -85,7 +85,7 @@ void SceneDocumentManager::MarkDirty()
 {
     if (HistoryMutationScope::IsRestoringFor(m_History))
         m_DirtyRefreshPending = true;
-    else if (!HistoryMutationScope::IsActiveFor(m_History))
+    else if (!m_History || !m_History->MarkDocumentChanged(this))
         m_UntrackedDirty = true;
     if (!m_Dirty)
         Logger::Log::Debug("SceneDocumentManager: scene marked dirty");
@@ -100,7 +100,7 @@ void SceneDocumentManager::MarkClean()
     m_UntrackedDirty = false;
     m_DirtyRefreshPending = false;
     if (m_History)
-        m_History->MarkSaved(this);
+        m_History->MarkSaved(this, UndoRedoService::RevisionScope::Document);
 }
 
 void SceneDocumentManager::RefreshDirtyState()
@@ -110,8 +110,7 @@ void SceneDocumentManager::RefreshDirtyState()
 
 void SceneDocumentManager::OnHistoryChanged()
 {
-    if (!m_History || !m_DirtyRefreshPending || m_History->HasOpenInteractiveEdit() ||
-        !HistoryMutationScope::IsRestoringFor(m_History))
+    if (!m_History || m_History->HasOpenInteractiveEdit())
         return;
     m_DirtyRefreshPending = false;
     RefreshDirtyState();
