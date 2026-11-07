@@ -5,6 +5,7 @@
 #include "Editor/Hierarchy/EntityNameEdit.h"
 #include "Panels/Script/ScriptTextEditCommand.h"
 #include "Scene/SceneDocumentManager.h"
+#include "Sky/SkyEnvironment/SkyEnvironmentCreation.h"
 #include "UndoRedo/DeleteEntitiesCommand.h"
 #include "UndoRedo/Spline/SplineUndoHelpers.h"
 #include "UndoRedo/UndoRedoService.h"
@@ -494,5 +495,33 @@ TEST_F(SceneDocumentHistoryTest, RenameOwnershipDoesNotCoverUntrackedObserverWri
     EXPECT_TRUE(m_Document.IsDirty());
     m_Notifications.Unsubscribe(observer);
 }
+TEST_F(SceneDocumentHistoryTest, SkyCreationOwnsItsSceneRevisionAcrossSaveUndoAndRedo)
+{
+    const auto sky = CreateSkyEnvironmentEntity(m_World, &m_History, &m_Notifications);
+    ASSERT_TRUE(sky.IsValid());
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_History.Undo();
+    EXPECT_FALSE(m_World.IsValid(sky));
+    EXPECT_FALSE(m_Document.IsDirty());
+    m_History.Redo();
+    ASSERT_TRUE(m_World.IsValid(sky));
+    m_Document.MarkClean();
+    m_History.Undo();
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, UnrecordedSkyCreationStaysDirtyAfterUndoingAnotherEdit)
+{
+    const auto sky = CreateSkyEnvironmentEntity(m_World, nullptr, &m_Notifications);
+    ASSERT_TRUE(sky.IsValid());
+    EXPECT_TRUE(m_Document.IsDirty());
+    MovePoint(3.0f);
+    m_History.Undo();
+    EXPECT_TRUE(m_World.IsValid(sky));
+    EXPECT_TRUE(m_Document.IsDirty());
+}
+
 } // namespace
 } // namespace GameEngine::Editor

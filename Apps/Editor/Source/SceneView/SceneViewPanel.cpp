@@ -561,12 +561,11 @@ bool SceneViewPanel::HandleSceneViewCommandShortcut(SceneViewController* control
                 const std::string undoName = (newRoots.size() > 1) ? "Duplicate Entities" : "Duplicate Entity";
                 undo->CommitAlreadyApplied(std::make_unique<Editor::DuplicateEntitiesCommand>(
                     undoName, world, m_ChangeNotifications, std::move(clones),
-                    std::move(onClonesRestored), std::move(onClonesRemoved)));
+                    std::move(onClonesRestored), std::move(onClonesRemoved)),
+                    std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
             }
-
-            NotifyWorldStructure(m_ChangeNotifications, world);
-            if (m_Context && m_Context->OnSceneDirty)
-                m_Context->OnSceneDirty();
+            else
+                NotifyWorldStructure(m_ChangeNotifications, world);
 
             // Match HierarchyPanel::DuplicateSelectedEntities: select the new
             // roots through the scene controller that received the shortcut.
@@ -2122,12 +2121,11 @@ ECS::EntityHandle SceneViewPanel::CreateMeasureEntity(const std::array<float, 3>
         undo->CommitAlreadyApplied(std::make_unique<CreateMeasureEntitiesCommand>(
             world,
             m_ChangeNotifications,
-            std::vector<ECS::EntityHandle>{entity, startEntity, endEntity}));
+            std::vector<ECS::EntityHandle>{entity, startEntity, endEntity}),
+            std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
     }
-
-    NotifyWorldStructure(m_ChangeNotifications, world);
-    if (m_Context && m_Context->OnSceneDirty)
-        m_Context->OnSceneDirty();
+    else
+        NotifyWorldStructure(m_ChangeNotifications, world);
     if (m_Controller)
         m_Controller->OnEntityPicked(entity);
 
@@ -3791,6 +3789,8 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             const ECS::EntityHandle skyEntity =
                 Editor::CreateSkyboxEntityFromPolyhavenHdri(*world, *m_Context, onlinePayload->slug,
                                                             onlinePayload->name, m_ChangeNotifications);
+            if (skyEntity.IsValid() && !m_OnSceneAssetDropComplete)
+                NotifyWorldStructure(m_ChangeNotifications, world);
             if (skyEntity.IsValid() && m_OnSceneAssetDropComplete)
             {
                 std::vector<ECS::EntityHandle> roots{skyEntity};
@@ -4015,9 +4015,6 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
                         Logger::Log::Info("SceneViewPanel: assigned {} PBR texture maps for '{}' to mesh entity {}",
                             assignedCount, item.slug, static_cast<uint32_t>(hitEntity.index));
 
-                        if (m_Context && m_Context->OnSceneDirty)
-                            m_Context->OnSceneDirty();
-
                         texturedExistingMesh = true;
                         continue;
                     }
@@ -4081,9 +4078,8 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             }
         }
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
-        if (m_Context && m_Context->OnSceneDirty)
-            m_Context->OnSceneDirty();
+        if (!droppedRoots.empty() && !m_OnSceneAssetDropComplete)
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         // Invalidate download cache so the asset browser shows blue text for newly downloaded items.
         if (m_Context->DownloadManager)
@@ -4192,9 +4188,10 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             }
 
             ECS::EntityHandle skyEntity = Editor::CreateSkyboxEntityFromHdri(
-                *world, am, texPath, m_ChangeNotifications,
-                [ctx = m_Context]() { if (ctx && ctx->OnSceneDirty) ctx->OnSceneDirty(); });
+                *world, am, texPath);
 
+            if (skyEntity.IsValid() && !m_OnSceneAssetDropComplete)
+                NotifyWorldStructure(m_ChangeNotifications, world);
             if (skyEntity.IsValid() && m_OnSceneAssetDropComplete)
             {
                 std::vector<ECS::EntityHandle> roots{skyEntity};
@@ -4307,9 +4304,8 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
                         selectionBeforeAnchor = captured.second;
                     }
 
-                    NotifyWorldStructure(m_ChangeNotifications, world);
-                    if (m_Context && m_Context->OnSceneDirty)
-                        m_Context->OnSceneDirty();
+                    if (!m_OnSceneAssetDropComplete || !viewport)
+                        NotifyWorldStructure(m_ChangeNotifications, world);
 
                     if (m_OnSceneAssetDropComplete && viewport)
                     {
@@ -4428,9 +4424,8 @@ void SceneViewPanel::PerformDrop(const UI::Interaction::DropRequest& request)
         Editor::ShowSceneViewNotice(Editor::DescribeUnplaceableFile(absPath));
     }
 
-    NotifyWorldStructure(m_ChangeNotifications, world);
-    if (m_Context && m_Context->OnSceneDirty)
-        m_Context->OnSceneDirty();
+    if (!droppedRoots.empty() && (!m_OnSceneAssetDropComplete || !viewport))
+        NotifyWorldStructure(m_ChangeNotifications, world);
 
     // Run immediately (not PostAction). Deferring pushed the drop's undo step after later edits
     // (e.g. hierarchy selection), so Undo would remove the drop before the selection change.
@@ -4484,9 +4479,8 @@ void SceneViewPanel::CompleteDeferredDrop(ECS::World& world, ECS::EntityHandle r
                                           const std::vector<UI::Interaction::ItemId>& selectionBefore,
                                           UI::Interaction::ItemId anchorBefore)
 {
-    NotifyWorldStructure(m_ChangeNotifications, &world);
-    if (m_Context && m_Context->OnSceneDirty)
-        m_Context->OnSceneDirty();
+    if (!m_OnSceneAssetDropComplete)
+        NotifyWorldStructure(m_ChangeNotifications, &world);
     if (m_OnSceneAssetDropComplete)
     {
         const std::vector<ECS::EntityHandle> roots{root};

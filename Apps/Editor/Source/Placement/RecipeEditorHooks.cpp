@@ -1,6 +1,7 @@
 #include "Placement/RecipeEditorHooks.h"
 
 #include "Editor/Registries/EditorServiceRegistry.h"
+#include "EditorChangeNotifications.h"
 #include "Placement/FenceSpanOverrideRemap.h"
 #include "UndoRedo/Spline/SplineGroundEditCommand.h"
 #include "UndoRedo/Spline/SplinePointEdits.h"
@@ -11,6 +12,7 @@
 #include "SplineRecipes/RecipeControllers.h"
 #include "SplineRecipes/SplineRecipeSystem.h"
 
+#include <functional>
 #include <memory>
 
 namespace GameEngine::Editor
@@ -21,12 +23,14 @@ std::unique_ptr<IEditorService> RecipeEditorHooks::Create(const EditorServiceCon
     auto* recipes = context.Systems.GetSystem<SplineRecipes::SplineRecipeSystem>();
     if (!recipes)
         return nullptr;
-    return std::make_unique<RecipeEditorHooks>(context.Undo, *recipes);
+    return std::make_unique<RecipeEditorHooks>(context.Undo, *recipes, context.Notifications);
 }
 
-RecipeEditorHooks::RecipeEditorHooks(UndoRedoService* undo, SplineRecipes::SplineRecipeSystem& recipes)
+RecipeEditorHooks::RecipeEditorHooks(UndoRedoService* undo, SplineRecipes::SplineRecipeSystem& recipes,
+                                     EditorChangeNotifications* notifications)
     : m_Undo(undo),
       m_Recipes(recipes),
+      m_Notifications(notifications),
       m_PointEditSubscription(SplinePointEdited().Subscribe(
           [&recipes](const SplinePointEdit& edit)
           { RemapFenceOverridesOnPointEdit(edit, recipes.GetControllers().FenceRunSpanCounts(edit.Entity)); }))
@@ -55,7 +59,8 @@ void RecipeEditorHooks::RecordGroundEdit(ECS::World& world, const SplineRecipes:
             std::make_unique<SplineGroundEditCommand>(&world, edit)))
         return;
     if (edit.Removes())
-        m_Undo->CommitAlreadyApplied(std::make_unique<SplineGroundEditCommand>(&world, edit));
+        m_Undo->CommitAlreadyApplied(std::make_unique<SplineGroundEditCommand>(&world, edit),
+            std::bind_front(NotifyWorldStructure, m_Notifications, &world));
 }
 
 void RecipeEditorHooks::BeginGroundUpdate(ECS::World& world, SplineRecipes::SplineGroundAuthorityController& controller)

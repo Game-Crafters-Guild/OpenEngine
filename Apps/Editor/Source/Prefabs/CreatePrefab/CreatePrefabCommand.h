@@ -36,6 +36,7 @@ class CreatePrefabCommand final : public IEditorCommand
     /// Creates the prefab of the subtree under `root` at `prefabFile`. A file at that path is
     /// replaced only when `replace` is true and no instance in `world` uses it; its bytes are kept for
     /// the undo. Null, with `outError` stating the cause and the fix, when nothing was created.
+    /// The caller publishes the initial change through CommitAlreadyApplied; the command publishes replay.
     static std::unique_ptr<CreatePrefabCommand> Create(ECS::World& world, EditorChangeNotifications* notifications,
                                                        ECS::EntityHandle root, const std::filesystem::path& prefabFile,
                                                        bool replace, std::string& outError);

@@ -276,6 +276,8 @@ class SceneDocumentManager
     EditorChangeNotifications::SubscriptionToken m_SubComponent{};
     EditorChangeNotifications::SubscriptionToken m_SubStructure{};
 
+    void RecordAdditiveLoad(const std::vector<uint8_t>& before);
+
     // Announce and record the failure Scene::GetLastSceneIOError() currently
     // describes, and — when it says the world was already cleared — drop the
     // document identity, so nothing downstream reports a scene that is not in

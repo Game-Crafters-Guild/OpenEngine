@@ -15,6 +15,7 @@
 #include "Scene/SceneSchemaRegistry.h"
 #include "Types/StringUtils.h"
 
+#include <functional>
 #include <algorithm>
 #include <format>
 #include <memory>
@@ -153,8 +154,14 @@ void ApplyPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pre
     std::string error;
     std::unique_ptr<ApplyPrefabOverrideCommand> command =
         ApplyPrefabOverrideCommand::Create(world, notifications, targets, undoName, error);
-    if (command && undo)
-        undo->CommitAlreadyApplied(std::move(command));
+    if (command)
+    {
+        if (undo)
+            undo->CommitAlreadyApplied(std::move(command),
+                std::bind_front(NotifyWorldStructure, notifications, &world));
+        else
+            NotifyWorldStructure(notifications, &world);
+    }
     if (!error.empty())
         ShowSceneViewNotice(std::move(error));
 }

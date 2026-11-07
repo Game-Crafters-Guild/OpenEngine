@@ -22,6 +22,7 @@
 #include "VersionControl/EditorVersionControlService.h"
 #include "VersionControl/SceneDiff/SceneDiffLiveOverlay.h"
 
+#include <functional>
 #include <algorithm>
 #include <cstring>
 #include <sstream>
@@ -769,14 +770,10 @@ void HierarchyVcsController::RevertEntityToBaseline(
         m_Panel.m_Undo->CommitAlreadyApplied(
             std::make_unique<WorldSnapshotCommand>(
                 "Revert Entity to VCS Baseline", &world,
-                m_Panel.m_ChangeNotifications, before, after));
-    if (m_Panel.m_ChangeNotifications)
-    {
-        EditorChangeNotifications::WorldStructureChangedEvent event{};
-        event.world = &world;
-        event.kind = EditorChangeNotifications::ChangeKind::Commit;
-        m_Panel.m_ChangeNotifications->NotifyWorldStructureChanged(event);
-    }
+                m_Panel.m_ChangeNotifications, before, after),
+            std::bind_front(NotifyWorldStructure, m_Panel.m_ChangeNotifications, &world));
+    else
+        NotifyWorldStructure(m_Panel.m_ChangeNotifications, &world);
     RefreshLiveState();
 }
 
@@ -909,14 +906,10 @@ void HierarchyVcsController::RestoreGhostEntity(TreeId id)
         m_Panel.m_Undo->CommitAlreadyApplied(
             std::make_unique<WorldSnapshotCommand>(
                 "Restore Entity from VCS Baseline", &world,
-                m_Panel.m_ChangeNotifications, before, after));
-    if (m_Panel.m_ChangeNotifications)
-    {
-        EditorChangeNotifications::WorldStructureChangedEvent event{};
-        event.world = &world;
-        event.kind = EditorChangeNotifications::ChangeKind::Commit;
-        m_Panel.m_ChangeNotifications->NotifyWorldStructureChanged(event);
-    }
+                m_Panel.m_ChangeNotifications, before, after),
+            std::bind_front(NotifyWorldStructure, m_Panel.m_ChangeNotifications, &world));
+    else
+        NotifyWorldStructure(m_Panel.m_ChangeNotifications, &world);
     // The structure notification above makes the panel rebuild its provider;
     // this controller still owns retiring the ghost, which only ReloadDiffCache
     // re-evaluates against the now-live entity. The panel's own Refresh stops

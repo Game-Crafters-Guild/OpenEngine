@@ -832,7 +832,8 @@ json CreateMarkup(const MarkupRequestContext& context, const json& params)
             // the same handles (which find their notes and outlines again) and stamps the redo.
             context.Undo->CommitAlreadyApplied(std::make_unique<DuplicateEntitiesCommand>(
                 kCreateMarkupLabel, &world, context.Notifications, created,
-                StampRedoOfCreate(context.Bridge, &world, created.front()), nullptr));
+                StampRedoOfCreate(context.Bridge, &world, created.front()), nullptr),
+                std::bind_front(NotifyWorldStructure, context.Notifications, &world));
         });
     }
     else
@@ -843,7 +844,8 @@ json CreateMarkup(const MarkupRequestContext& context, const json& params)
     if (created.empty())
         return Refusal("The world refused a new entity");
 
-    NotifyWorldStructure(context.Notifications, &world);
+    if (!context.Undo)
+        NotifyWorldStructure(context.Notifications, &world);
     const ECS::EntityHandle entity = created.front();
     json answer{{"entityId", entity.id}, {"markup", BuildRow(context, entity)}};
     if (created.size() > 1)
@@ -1139,7 +1141,8 @@ void AddExclusionsToRegion(const MarkupRequestContext& context, ECS::EntityHandl
         if (created.empty())
             return;
         context.Undo->CommitAlreadyApplied(std::make_unique<DuplicateEntitiesCommand>(
-            kExclusionsLabel, &world, context.Notifications, created, nullptr, nullptr));
+            kExclusionsLabel, &world, context.Notifications, created, nullptr, nullptr),
+            std::bind_front(NotifyWorldStructure, context.Notifications, &world));
         UndoRedoService::InteractiveEdit edit = context.Undo->BeginInteractiveEdit(
             kExclusionsLabel, MultiEntityUndo::MakeComponentSnapshotTarget(
                                   &world, {region}, ECS::GetComponentTypeId<MarkupRegion>(), context.Notifications,
@@ -1209,7 +1212,8 @@ void ApplyRegionUpdate(const MarkupRequestContext& context, ECS::EntityHandle en
     if (!update.Exclusions.empty())
     {
         AddExclusionsToRegion(context, entity, author, update.Exclusions, nowUnix);
-        NotifyWorldStructure(context.Notifications, &world);
+        if (!context.Undo)
+            NotifyWorldStructure(context.Notifications, &world);
     }
 }
 

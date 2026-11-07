@@ -2515,7 +2515,7 @@ bool EditorApplication::Initialize()
             {
                 if (auto* rgBuild = sm->GetSystem<Engine::Renderer::RenderGraphBuildSystem>())
                     rgBuild->SetSkipFrameGraphBuild(true);
-                m_EditorServices.Start({m_UndoRedo.get(), *sm});
+                m_EditorServices.Start({m_UndoRedo.get(), *sm, m_ChangeNotifications.get()});
             }
         }
 

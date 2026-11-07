@@ -2,6 +2,7 @@
 
 #include "UndoRedo/History/HistoryMutationScope.h"
 #include "UndoRedo/UndoRedoService.h"
+#include "Scene/WorldSnapshotCommand.h"
 
 #include "Diagnostics/MainThreadHangWatchdog.h"
 #include "Scene/DefaultSceneEntities.h"
@@ -711,6 +712,10 @@ bool SceneDocumentManager::LoadSceneAdditive(const std::filesystem::path& sceneP
     if (!m_World)
         return false;
 
+    if (m_History && !m_History->CommitPendingEdit())
+        return false;
+    const auto before = m_History ? m_World->SerializeWorld() : std::vector<uint8_t>{};
+
     // Additive load resolves synchronously below (ResolveModelMeshRenderers picks
     // up everything still unresolved); drop any deferred replace-open build first
     // so its pump doesn't keep touching a world this load is mutating underneath.
@@ -740,6 +745,7 @@ bool SceneDocumentManager::LoadSceneAdditive(const std::filesystem::path& sceneP
         // An additive load never clears, so the open document survives — but the
         // entities this file did create before aborting are still in the world.
         RecordLoadFailure(scenePath, scenePath);
+        RecordAdditiveLoad(before);
         return false;
     }
 
@@ -785,17 +791,27 @@ bool SceneDocumentManager::LoadSceneAdditive(const std::filesystem::path& sceneP
     m_PendingHierarchyUiFromLoad.reset();
     m_PendingEditorCameraFromLoad.reset();
 
-    MarkDirty();
-
-    if (m_Notifications)
-    {
-        EditorChangeNotifications::WorldStructureChangedEvent e{};
-        e.world = m_World;
-        e.kind = EditorChangeNotifications::ChangeKind::Commit;
-        m_Notifications->NotifyWorldStructureChanged(e);
-    }
-
+    RecordAdditiveLoad(before);
     return true;
+}
+
+void SceneDocumentManager::RecordAdditiveLoad(const std::vector<uint8_t>& before)
+{
+    if (!m_History)
+    {
+        MarkDirty();
+        NotifyWorldStructure(m_Notifications, m_World);
+        return;
+    }
+    auto after = m_World->SerializeWorld();
+    if (before == after)
+        return;
+    m_History->CommitAlreadyApplied(std::make_unique<WorldSnapshotCommand>(
+        "Open Scene Additive", m_World, m_Notifications, before, std::move(after)),
+        [this]() {
+            MarkDirty();
+            NotifyWorldStructure(m_Notifications, m_World);
+        });
 }
 
 void SceneDocumentManager::NewSceneUntitled(Engine::Renderer::RenderServices* renderServices)

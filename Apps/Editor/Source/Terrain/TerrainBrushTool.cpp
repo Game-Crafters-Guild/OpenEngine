@@ -24,6 +24,7 @@
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainZoneAuthoring.h"
 
+#include <functional>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -410,7 +411,8 @@ bool TerrainBrushTool::EndSphereStroke()
         return false;
     std::vector<CBTTerrain::SphereSculptPageState> after = svc->SnapshotSphereSculptPages(before);
     m_UndoRedo->CommitAlreadyApplied(std::make_unique<Editor::SphereSculptStrokeCommand>(
-        svc, std::move(before), std::move(after)));
+        svc, std::move(before), std::move(after)),
+        std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, &m_Owner.GetWorld()));
     return true;
 }
 
@@ -828,15 +830,8 @@ void TerrainBrushTool::FinalizeStroke()
         // stays in sync — no separate compound or post-commit notify needed.
         m_UndoRedo->CommitAlreadyApplied(std::make_unique<Editor::TerrainZoneStrokeCommand>(
             world, m_ChangeNotifications, svc, m_ActiveZone, m_ActivePayload, created,
-            std::move(before), std::move(after)));
-
-        if (created && m_ChangeNotifications)
-        {
-            EditorChangeNotifications::WorldStructureChangedEvent e{};
-            e.world = world;
-            e.kind = EditorChangeNotifications::ChangeKind::Commit;
-            m_ChangeNotifications->NotifyWorldStructureChanged(e);
-        }
+            std::move(before), std::move(after)),
+            std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
     }
 
     m_PayloadBefore = TerrainZonePayload{};

@@ -124,9 +124,13 @@ bool CommitMarkupNotesEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedo
         undo->CommitAlreadyApplied(std::make_unique<MarkupNotesEditCommand>(
             label, world, entity, notifications, std::move(notesBefore), markupBefore,
             *service->FindNotes(world, entity), *world.GetComponent<Components::Markup>(entity),
-            std::move(addedTags), vocabularyChanged));
+            std::move(addedTags), vocabularyChanged),
+            [notifications, &world, entity]() {
+                if (notifications)
+                    notifications->NotifyComponentCommit<Components::Markup>(&world, entity);
+            });
     }
-    if (notifications)
+    else if (notifications)
         notifications->NotifyComponentCommit<Components::Markup>(&world, entity);
     return true;
 }

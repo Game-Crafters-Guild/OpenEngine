@@ -2830,3 +2830,34 @@ TEST_F(PrefabPlaceTests, TheOverridesListOffersNoActionInPlayMode)
     EXPECT_TRUE(list->FindById("prefab-overrides-revert-all"_sid)->HasClass("hidden"));
     EXPECT_TRUE(list->FindById("prefab-overrides-apply-all"_sid)->HasClass("hidden"));
 }
+
+TEST_F(PrefabPlaceTests, ApplyingOverridesOwnsTheSceneRevisionAcrossSave)
+{
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    const auto file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const auto first = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    const auto second = PlaceAt(world, file, 4.0f, 0.0f, 0.0f);
+    const auto lid = FindChild(world, first);
+    world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 2.0f;
+    Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, lid);
+    Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&Notifications());
+    document.MarkClean();
+    const auto menu = OverrideMenuOf(world, lid, ECS::GetComponentTypeId<Components::ReflectionProbe>(), "Intensity", undo);
+    ASSERT_EQ(menu.size(), 2u);
+    menu.front().Run();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    undo.Redo();
+    document.MarkClean();
+    undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_FLOAT_EQ(IntensityOf(world, FindChild(world, second)), 2.0f);
+}

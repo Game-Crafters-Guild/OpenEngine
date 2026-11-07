@@ -9,6 +9,7 @@
 #include "ECS/Entity.h"
 #include "EditorChangeNotifications.h"
 #include "MarkupECS/MarkupService.h"
+#include "Scene/SceneDocumentManager.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include <gtest/gtest.h>
@@ -89,5 +90,36 @@ TEST(MarkupNotesEditCommand, ATagNameTheEditAddedLeavesTheVocabularyOnUndo)
     ASSERT_NE(service.FindTag("Brigde"), MarkupService::kInvalidTag);
     EXPECT_EQ(service.FindNotes(world, lake)->Tags, std::vector<uint32>{service.FindTag("Brigde")});
     EXPECT_EQ(saves, 3);
+    MarkupService::Shutdown();
+}
+
+TEST(MarkupNotesEditCommand, TheRecordedCommentOwnsItsSceneRevision)
+{
+    MarkupService::Initialize();
+    ECS::World world;
+    Editor::EditorChangeNotifications notifications;
+    Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    const auto entity = world.CreateEntity();
+    world.AddComponentImmediate(entity, Markup{});
+    auto& service = MarkupService::Get();
+    ASSERT_TRUE(service.BeginMarkup(world, entity, MarkupAuthor::User, 10));
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&notifications);
+    document.MarkClean();
+
+    ASSERT_TRUE(Editor::CommitMarkupNotesEdit(world, entity, &undo, &notifications, "Add Mark-up Comment",
+        [&]() { return service.AddComment(world, entity, MarkupAuthor::User, 20, "Keep the shore"); }, {}));
+    EXPECT_TRUE(document.IsDirty());
+    undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
+    undo.Redo();
+    document.MarkClean();
+    undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
+    EXPECT_EQ(service.FindNotes(world, entity)->Entries.back().Text, "Keep the shore");
     MarkupService::Shutdown();
 }

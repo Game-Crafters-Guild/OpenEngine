@@ -116,7 +116,6 @@ std::unique_ptr<CreatePrefabCommand> CreatePrefabCommand::Create(ECS::World& wor
     command->m_Prefab = created.Prefab;
     command->m_MembersBefore = std::move(created.Members);
     command->m_WrittenAt = std::filesystem::last_write_time(prefabFile, ec);
-    NotifyWorldStructure(notifications, &world);
     return command;
 }
 

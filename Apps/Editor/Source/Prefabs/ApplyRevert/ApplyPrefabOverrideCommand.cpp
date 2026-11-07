@@ -43,7 +43,6 @@ std::unique_ptr<ApplyPrefabOverrideCommand> ApplyPrefabOverrideCommand::Create(
     Scene::ApplyPrefabOverrides(world, targets, command->m_Edits, outError);
     if (command->m_Edits.empty())
         return nullptr;
-    NotifyWorldStructure(notifications, &world);
     return command;
 }
 

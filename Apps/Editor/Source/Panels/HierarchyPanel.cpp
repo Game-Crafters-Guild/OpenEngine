@@ -1721,10 +1721,10 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             if (Editor::IsHdriPath(texPath))
             {
                 ECS::EntityHandle skybox = Editor::CreateSkyboxEntityFromHdri(
-                    *m_World, *m_Context->Assets, texPath, m_ChangeNotifications,
-                    [ctx = m_Context]() { if (ctx && ctx->OnSceneDirty) ctx->OnSceneDirty(); });
+                    *m_World, *m_Context->Assets, texPath);
                 if (skybox.IsValid())
                 {
+                    NotifyWorldStructure(m_ChangeNotifications, m_World);
                     if (m_Provider)
                         m_Provider->Rebuild();
                     m_Tree->RefreshFromProvider();
@@ -1935,10 +1935,6 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             Editor::ShowSceneViewNotice(Editor::DescribeUnplaceableFile(absPath));
         }
 
-        NotifyWorldStructure(m_ChangeNotifications, m_World);
-        if (m_Context && m_Context->OnSceneDirty)
-            m_Context->OnSceneDirty();
-
         if (m_Provider)
             m_Provider->Rebuild();
         m_Tree->RefreshFromProvider();
@@ -1974,6 +1970,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
 
             if (lastSkybox.IsValid())
             {
+                NotifyWorldStructure(m_ChangeNotifications, m_World);
                 if (m_Provider)
                     m_Provider->Rebuild();
                 m_Tree->RefreshFromProvider();
@@ -2271,10 +2268,11 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             m_ChangeNotifications,
             std::move(states.Before),
             std::move(states.After));
-        m_Undo->CommitAlreadyApplied(std::move(cmd));
+        m_Undo->CommitAlreadyApplied(std::move(cmd),
+            std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, m_World));
     }
-
-    NotifyWorldStructure(m_ChangeNotifications, m_World);
+    else
+        NotifyWorldStructure(m_ChangeNotifications, m_World);
 
     if (m_Provider)
         m_Provider->Rebuild();
@@ -2463,11 +2461,11 @@ void HierarchyPanel::DuplicateSelectedEntities()
         const std::string undoName = (newRoots.size() > 1) ? "Duplicate Entities" : "Duplicate Entity";
         m_Undo->CommitAlreadyApplied(std::make_unique<Editor::DuplicateEntitiesCommand>(
             undoName, m_World, m_ChangeNotifications, std::move(clones),
-            std::move(onClonesRestored), std::move(onClonesRemoved)));
+            std::move(onClonesRestored), std::move(onClonesRemoved)),
+            std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, m_World));
     }
-
-    // Notify world structure changed so the hierarchy rebuilds.
-    NotifyWorldStructure(m_ChangeNotifications, m_World);
+    else
+        NotifyWorldStructure(m_ChangeNotifications, m_World);
 
     if (newRoots.empty())
         return;
@@ -2797,8 +2795,11 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
                 withCapsuleShape,
                 capsule,
                 hierarchyOrder);
-            m_Undo->CommitAlreadyApplied(std::move(cmdObj));
+            m_Undo->CommitAlreadyApplied(std::move(cmdObj),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
         }
+        else
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         // Select after the structure notification refresh has run. Doing this
         // synchronously from key/native-menu command callbacks can re-enter
@@ -2808,7 +2809,6 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             m_Tree->SetExpanded(HierarchyDataProvider::Encode(m_ContextTargetEntity), true);
         }
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
         scheduleSelectCreatedEntity(h);
     };
 
@@ -2860,7 +2860,10 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             return;
         }
         if (m_Undo)
-            m_Undo->CommitAlreadyApplied(std::move(created.Command));
+            m_Undo->CommitAlreadyApplied(std::move(created.Command),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
+        else
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         // Select after the hierarchy refresh posted by the structure notification.
         if (m_Tree)
@@ -2871,7 +2874,6 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             m_Tree->SetExpanded(HierarchyDataProvider::Encode(created.NewParent), true);
         }
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
         scheduleSelectCreatedEntity(created.NewParent);
     };
 
@@ -2917,13 +2919,15 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
                 parentComp,
                 emitter,
                 hierarchyOrder);
-            m_Undo->CommitAlreadyApplied(std::move(cmdObj));
+            m_Undo->CommitAlreadyApplied(std::move(cmdObj),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
         }
+        else
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         if (hasParent && m_Tree)
             m_Tree->SetExpanded(HierarchyDataProvider::Encode(m_ContextTargetEntity), true);
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
         scheduleSelectCreatedEntity(h);
     };
 
@@ -2970,13 +2974,15 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
                 parentComp,
                 probe,
                 hierarchyOrder);
-            m_Undo->CommitAlreadyApplied(std::move(cmdObj));
+            m_Undo->CommitAlreadyApplied(std::move(cmdObj),
+                std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, world));
         }
+        else
+            NotifyWorldStructure(m_ChangeNotifications, world);
 
         if (hasParent && m_Tree)
             m_Tree->SetExpanded(HierarchyDataProvider::Encode(m_ContextTargetEntity), true);
 
-        NotifyWorldStructure(m_ChangeNotifications, world);
         scheduleSelectCreatedEntity(h);
     };
 
@@ -3052,7 +3058,6 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             return true;
 
         const ECS::EntityHandle h = Editor::CreateSkyEnvironmentEntity(*m_World, m_Undo, m_ChangeNotifications);
-        NotifyWorldStructure(m_ChangeNotifications, m_World);
         scheduleSelectCreatedEntity(h);
         return true;
     }
@@ -4602,13 +4607,19 @@ void HierarchyPanel::CommitDropStep(const std::vector<ECS::EntityHandle>& droppe
                                     const std::vector<UI::Interaction::ItemId>& selectionBefore,
                                     UI::Interaction::ItemId anchorBefore)
 {
-    if (!m_Undo || !m_World || droppedRoots.empty())
+    if (!m_World || droppedRoots.empty())
         return;
+    if (!m_Undo)
+    {
+        NotifyWorldStructure(m_ChangeNotifications, m_World);
+        return;
+    }
     m_Undo->CommitAlreadyApplied(std::make_unique<Editor::SceneViewDropUndoCommand>(
         Editor::SceneViewDropUndoCommand::NameFor(*m_World, droppedRoots), m_World, m_ChangeNotifications,
         droppedRoots, selectionBefore, anchorBefore, GetSelectionItemIds(), GetSelectionAnchor(),
         [this](const std::vector<UI::Interaction::ItemId>& ids, UI::Interaction::ItemId anchor)
-        { ApplySelectionProgrammatic(ids, anchor); }));
+        { ApplySelectionProgrammatic(ids, anchor); }),
+        std::bind_front(Editor::NotifyWorldStructure, m_ChangeNotifications, m_World));
 }
 
 void HierarchyPanel::DeferFileDrop(const std::filesystem::path& assetPath, const GUID& assetGuid,
@@ -4775,9 +4786,6 @@ void HierarchyPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             const ECS::EntityHandle root = Editor::PrefabService(*m_Context->Assets).Place(*m_World, assetPath, at, {});
             if (!root.IsValid())
                 return;
-            NotifyWorldStructure(m_ChangeNotifications, m_World);
-            if (m_Context->OnSceneDirty)
-                m_Context->OnSceneDirty();
             if (m_Provider)
                 m_Provider->Rebuild();
             m_Tree->RefreshFromProvider();
@@ -4856,6 +4864,7 @@ void HierarchyPanel::PerformDrop(const UI::Interaction::DropRequest& request)
 
             if (lastCreated.IsValid())
             {
+                NotifyWorldStructure(m_ChangeNotifications, m_World);
                 if (m_Provider)
                     m_Provider->Rebuild();
                 m_Tree->RefreshFromProvider();

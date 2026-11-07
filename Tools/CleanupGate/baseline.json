@@ -4881,7 +4881,7 @@
    "Apps/Editor/Source/DebugServer/Capture/WindowPrintCapture.h": 1,
    "Apps/Editor/Source/DebugServer/Components/ComponentValueReader.h": 1,
    "Apps/Editor/Source/DebugServer/Components/SchemaComponentApply.h": 1,
-   "Apps/Editor/Source/DebugServer/DebugHandlers.cpp": 71,
+   "Apps/Editor/Source/DebugServer/DebugHandlers.cpp": 70,
    "Apps/Editor/Source/DebugServer/DebugServerReply.h": 1,
    "Apps/Editor/Source/DebugServer/EditorDebugServer.cpp": 2,
    "Apps/Editor/Source/DebugServer/EditorDebugServer.h": 1,

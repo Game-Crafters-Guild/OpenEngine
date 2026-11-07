@@ -146,6 +146,13 @@ std::string DescribeCreateRefusal(ECS::World& world, const std::vector<ECS::Enti
     return {};
 }
 
+void NotifyPrefabCreation(const CreatePrefabTarget& target)
+{
+    NotifyWorldStructure(target.Notifications, target.World);
+    if (target.NotifyWorldStructureChanged)
+        target.NotifyWorldStructureChanged();
+}
+
 // Creates a prefab of each root at its file, as one undo step, and selects the one root. When one root
 // fails, the prefabs made before it are undone, so the files and the scene are as before.
 bool CreatePrefabsFromDialog(const CreatePrefabTarget& target, const std::vector<std::filesystem::path>& prefabFiles,
@@ -175,12 +182,13 @@ bool CreatePrefabsFromDialog(const CreatePrefabTarget& target, const std::vector
         if (several)
             target.Undo->BeginCompound(std::format("Create {} Prefabs", target.Roots.size()));
         for (auto& command : commands)
-            target.Undo->CommitAlreadyApplied(std::move(command));
+            target.Undo->CommitAlreadyApplied(std::move(command),
+                [&target]() { NotifyPrefabCreation(target); });
         if (several)
             target.Undo->EndCompound();
     }
-    if (target.NotifyWorldStructureChanged)
-        target.NotifyWorldStructureChanged();
+    if (!created || !target.Undo)
+        NotifyPrefabCreation(target);
     if (created && !several && target.SelectEntity)
         target.SelectEntity(target.Roots.front());
     return created;
@@ -368,6 +376,13 @@ void SelectPrefabAsset(const HierarchyCommandContext& context)
         context.PingAsset(path);
 }
 
+void NotifyPrefabUnpacked(const HierarchyCommandContext& context)
+{
+    NotifyWorldStructure(context.ChangeNotifications, context.World);
+    if (context.NotifyWorldStructureChanged)
+        context.NotifyWorldStructureChanged();
+}
+
 // Unpacks the target instance to `depth` as one undo step; a refusal shows its notice.
 void UnpackPrefab(const HierarchyCommandContext& context, Scene::PrefabUnpackDepth depth)
 {
@@ -382,9 +397,10 @@ void UnpackPrefab(const HierarchyCommandContext& context, Scene::PrefabUnpackDep
         return;
     }
     if (context.Undo)
-        context.Undo->CommitAlreadyApplied(std::move(command));
-    if (context.NotifyWorldStructureChanged)
-        context.NotifyWorldStructureChanged();
+        context.Undo->CommitAlreadyApplied(std::move(command),
+            [&context]() { NotifyPrefabUnpacked(context); });
+    else
+        NotifyPrefabUnpacked(context);
 }
 
 // The instance whose Overrides list is open, kept across a rebuild of the Inspector.

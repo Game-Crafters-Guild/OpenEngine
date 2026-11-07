@@ -12,7 +12,6 @@
 #include "Projects/ProjectStartupScene.h"
 #include "Scene/SceneBackupRecovery.h"
 #include "Scene/SceneDocumentManager.h"
-#include "Scene/WorldSnapshotCommand.h"
 #include "UndoRedo/UndoRedoService.h"
 
 #include "Assets/AssetManager.h"
@@ -806,21 +805,11 @@ void SceneEditorController::Execute(const PendingAction& a)
             m_Doc->DrainSceneBuild();
 
         const OutgoingWorld outgoing = CaptureOutgoingWorld();
-        const auto before = m_World->SerializeWorld();
+        const auto before = m_World->GetEntityCount();
         const bool loaded = m_Doc->LoadSceneAdditive(a.path);
-        const auto after = m_World->SerializeWorld();
+        const auto after = m_World->GetEntityCount();
         if (loaded)
             AddRecentScenePath(a.path);
-        if (m_UndoRedo && before != after)
-        {
-            auto cmd = std::make_unique<WorldSnapshotCommand>(
-                "Open Scene Additive",
-                m_World,
-                m_Notifications,
-                before,
-                after);
-            m_UndoRedo->CommitAlreadyApplied(std::move(cmd));
-        }
         if (!loaded)
             ShowLoadFailure(before != after ? LoadFailureKind::AdditivePartial : LoadFailureKind::Additive,
                             outgoing);

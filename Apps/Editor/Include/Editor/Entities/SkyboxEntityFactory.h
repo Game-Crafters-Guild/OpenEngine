@@ -3,7 +3,6 @@
 #include "ECS/Entity.h"
 
 #include <filesystem>
-#include <functional>
 #include <string_view>
 
 namespace GameEngine
@@ -26,12 +25,10 @@ bool IsHdriPath(const std::filesystem::path& path);
 // the asset manager. The stored HDRIPath is project-relative, since the scene
 // persists it. `sourceSlug` and `resolution` record the Polyhaven origin so the
 // inspector can offer other resolutions. Returns an invalid handle when the path
-// resolves to no asset.
+// resolves to no asset. The caller publishes the creation after recording its command.
 ECS::EntityHandle CreateSkyboxEntityFromHdri(ECS::World& world,
                                              AssetManager& assets,
                                              const std::filesystem::path& hdriPath,
-                                             EditorChangeNotifications* notifications,
-                                             const std::function<void()>& markDirty,
                                              std::string_view sourceSlug = {},
                                              std::string_view resolution = "1k");
 
@@ -41,7 +38,8 @@ ECS::EntityHandle CreateSkyboxEntityFromHdri(ECS::World& world,
 // downloaded 1k file binds now and the preferred resolution downloads and
 // replaces it; with nothing on disk an empty skybox is created and bound when the
 // downloads land, the 1k one first as a preview. Returns the skybox entity, or an
-// invalid handle when none could be created.
+// invalid handle when none could be created. The caller publishes the creation;
+// `notifications` publishes later download assignments.
 ECS::EntityHandle CreateSkyboxEntityFromPolyhavenHdri(ECS::World& world,
                                                       const EditorContext& context,
                                                       std::string_view slug,
