@@ -734,3 +734,73 @@ TEST(UndoHistory, ReturningADocumentToItsStartingValueDoesNotTagTheNextAction)
     EXPECT_TRUE(history.IsAtSavedRevision(&scene));
     EXPECT_EQ(history.GetHistoryNodes().size(), 1u);
 }
+
+TEST(UndoHistory, AlreadyAppliedNotificationsRetainOwnershipWhenCommandsMerge)
+{
+    using GameEngine::Editor::ScriptHistoryDocument;
+    using GameEngine::Editor::ScriptTextEditCommand;
+    UndoRedoService history;
+    auto document = ScriptHistoryDocument::Open("history-applied-owner.cs", "before");
+    history.MarkSaved(document.get(), UndoRedoService::RevisionScope::Document);
+    int notifications = 0;
+    document->SetText("first");
+    history.CommitAlreadyApplied(std::make_unique<ScriptTextEditCommand>(document, "before", "first"),
+        [&history, &notifications, document]
+        {
+            EXPECT_NE(history.GetPendingActionId(), 0u);
+            EXPECT_TRUE(history.GetHistoryNodes().empty());
+            EXPECT_TRUE(history.MarkDocumentChanged(document.get()));
+            ++notifications;
+        });
+    const auto action = history.GetPendingActionId();
+    document->SetText("second");
+    history.CommitAlreadyApplied(std::make_unique<ScriptTextEditCommand>(document, "first", "second"),
+        [&history, &notifications, document, action]
+        {
+            EXPECT_EQ(history.GetPendingActionId(), action);
+            EXPECT_TRUE(history.MarkDocumentChanged(document.get()));
+            ++notifications;
+        });
+    EXPECT_EQ(notifications, 2);
+    EXPECT_FALSE(history.IsAtSavedRevision(document.get()));
+    history.Undo();
+    EXPECT_EQ(document->GetText(), "before");
+    EXPECT_TRUE(history.IsAtSavedRevision(document.get()));
+    history.Redo();
+    EXPECT_EQ(document->GetText(), "second");
+    EXPECT_FALSE(history.IsAtSavedRevision(document.get()));
+    EXPECT_EQ(notifications, 2);
+}
+
+TEST(UndoHistory, RefusedAlreadyAppliedCommandsNotifyWithoutClaimingOwnership)
+{
+    using GameEngine::Editor::ScriptHistoryDocument;
+    using GameEngine::Editor::ScriptTextEditCommand;
+    UndoRedoService history;
+    int value = 0;
+    bool refuse = false;
+    auto target = IntegerTarget(value);
+    const auto capture = target.Capture;
+    target.Capture = [&refuse, capture](auto& bytes) { return !refuse && capture(bytes); };
+    auto edit = history.BeginInteractiveEdit("Position", target);
+    edit.Preview([&value] { value = 1; });
+    refuse = true;
+    auto document = ScriptHistoryDocument::Open("history-applied-refused.cs", "before");
+    document->SetText("after");
+    bool notified = false;
+    {
+        const GameEngine::Editor::HistoryMutationScope outerScope(&history);
+        history.CommitAlreadyApplied(std::make_unique<ScriptTextEditCommand>(document, "before", "after"),
+            [&history, &notified, document]
+            {
+                notified = true;
+                EXPECT_FALSE(history.MarkDocumentChanged(document.get()));
+            });
+    }
+    EXPECT_TRUE(notified);
+    EXPECT_FALSE(history.GetLastError().empty());
+    refuse = false;
+    edit.Cancel();
+    EXPECT_FALSE(history.CanUndo());
+    EXPECT_EQ(document->GetText(), "after");
+}

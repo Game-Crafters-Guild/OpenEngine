@@ -2181,14 +2181,29 @@ TEST_F(PrefabPlaceTests, TheRowMenuRevertsAFieldAndAStaleOverrideIsRefusedWithAN
     const ECS::ComponentTypeId probeType = ECS::GetComponentTypeId<Components::ReflectionProbe>();
 
     Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&Notifications());
+    document.MarkClean();
     std::vector<OverrideMenuEntry> menu = OverrideMenuOf(world, lid, probeType, "Intensity", undo);
     ASSERT_EQ(menu.size(), 2u);
     menu[1].Run();
     EXPECT_EQ(undo.GetUndoCount(), 1u);
     EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_TRUE(document.IsDirty());
     EXPECT_FALSE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).Overridden);
     undo.Undo();
     EXPECT_FLOAT_EQ(IntensityOf(world, lid), 2.0f);
+    EXPECT_FALSE(document.IsDirty());
+    undo.Redo();
+    document.MarkClean();
+    undo.Undo();
+    EXPECT_TRUE(document.IsDirty());
+    undo.Redo();
+    EXPECT_FALSE(document.IsDirty());
+    undo.Undo();
+    document.MarkClean();
 
     menu = OverrideMenuOf(world, lid, probeType, "Intensity", undo);
     ASSERT_EQ(menu.size(), 2u);
@@ -2203,6 +2218,7 @@ TEST_F(PrefabPlaceTests, TheRowMenuRevertsAFieldAndAStaleOverrideIsRefusedWithAN
     menu[1].Run();
     EXPECT_EQ(Editor::TestStubs::LastSceneViewNotice(), "Reflection Probe Intensity is not in the prefab.");
     EXPECT_EQ(undo.GetUndoCount(), steps);
+    EXPECT_FALSE(document.IsDirty());
 }
 
 // Apply and Revert edit the edit world and the prefab file, so the menus offer nothing in Play mode.
@@ -2657,6 +2673,11 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
     Editor::NotifyWorldStructure(&Notifications(), &world);
     const ECS::EntityHandle other = PlaceAt(world, file, 4.0f, 0.0f, 0.0f);
     Editor::UndoRedoService undo;
+    Editor::SceneDocumentManager document;
+    document.SetWorld(&world);
+    document.SetUndoRedoService(&undo);
+    document.SetChangeNotifications(&Notifications());
+    document.MarkClean();
     Editor::PrefabOverridesListReopen reopen;
     const Editor::PrefabOverridesListContext context{{}, {}, &reopen};
     Editor::PrefabBar bar(world, instance.Root, &Notifications(), &undo, context, {}, {}, {});
@@ -2669,6 +2690,7 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
     ASSERT_TRUE(revertAll && applyAll);
 
     revertAll->TriggerClick();
+    EXPECT_TRUE(document.IsDirty());
     EXPECT_EQ(undo.GetUndoCount(), 1u);
     EXPECT_FALSE(world.HasComponent<Components::ReflectionProbe>(instance.Root));
     EXPECT_FLOAT_EQ(IntensityOf(world, instance.Lid), 1.0f);
@@ -2683,6 +2705,7 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
     ASSERT_NE(OverridesListOf(rebuilt), nullptr);
     EXPECT_TRUE(OverridesListOf(rebuilt)->IsPopupOpen()) << "a rebuilt bar opens the list again";
     undo.Undo();
+    EXPECT_FALSE(document.IsDirty());
     EXPECT_TRUE(world.HasComponent<Components::ReflectionProbe>(instance.Root));
     EXPECT_FLOAT_EQ(IntensityOf(world, instance.Lid), 2.0f);
     EXPECT_FALSE(world.HasComponent<Components::ReflectionProbe>(instance.Base));

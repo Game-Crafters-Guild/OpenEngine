@@ -191,7 +191,7 @@ void RestoreEntityComponents(ECS::World& world, ECS::EntityHandle entity, const 
 
 bool CommitEntityComponentsEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedoService* undo,
                                 EditorChangeNotifications* notifications, const std::string& label,
-                                const std::function<bool()>& edit)
+                                const std::function<bool()>& edit, const std::function<void()>& notify)
 {
     if (!world.IsValid(entity))
         return false;
@@ -215,8 +215,10 @@ bool CommitEntityComponentsEdit(ECS::World& world, ECS::EntityHandle entity, Und
     if (undo && !changes.empty())
     {
         undo->CommitAlreadyApplied(
-            std::make_unique<EntityComponentsEditCommand>(label, world, entity, notifications, std::move(changes)));
+            std::make_unique<EntityComponentsEditCommand>(label, world, entity, notifications, std::move(changes)), notify);
     }
+    else if (!changes.empty() && notify)
+        notify();
     return applied;
 }
 

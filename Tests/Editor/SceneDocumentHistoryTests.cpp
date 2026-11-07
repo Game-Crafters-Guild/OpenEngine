@@ -2,6 +2,7 @@
 
 #include "EditorChangeNotifications.h"
 #include "Editor/Entities/ComponentRemoval.h"
+#include "Editor/Hierarchy/EntityNameEdit.h"
 #include "Panels/Script/ScriptTextEditCommand.h"
 #include "Scene/SceneDocumentManager.h"
 #include "UndoRedo/DeleteEntitiesCommand.h"
@@ -431,6 +432,67 @@ TEST_F(SceneDocumentHistoryTest, UnrelatedHistoryDoesNotClearAnUntrackedSceneCha
     EXPECT_TRUE(m_Document.IsDirty());
     m_History.Redo();
     EXPECT_TRUE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, RenameNotificationsBelongToTheRecordedCommand)
+{
+    m_World.AddComponentImmediate(m_Entity, Components::Name{"Original"});
+    m_Document.MarkClean();
+    ASSERT_TRUE(CommitEntityRename(m_World, m_Entity, "Renamed", &m_History, &m_Notifications));
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_History.Undo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Original");
+    EXPECT_FALSE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_Document.MarkClean();
+    m_History.Undo();
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_History.Redo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Renamed");
+    EXPECT_FALSE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, RenamingToTheCurrentNameDoesNotDirtyTheScene)
+{
+    m_World.AddComponentImmediate(m_Entity, Components::Name{"Original"});
+    m_Document.MarkClean();
+    ASSERT_TRUE(CommitEntityRename(m_World, m_Entity, "Original", &m_History, &m_Notifications));
+    EXPECT_FALSE(m_Document.IsDirty());
+    EXPECT_FALSE(m_History.CanUndo());
+}
+
+TEST_F(SceneDocumentHistoryTest, AnUnrecordedRenameStaysDirtyAfterALaterUndo)
+{
+    ASSERT_TRUE(CommitEntityRename(m_World, m_Entity, "Renamed", nullptr, &m_Notifications));
+    MovePoint(3.0f);
+    m_History.Undo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Renamed");
+    EXPECT_TRUE(m_Document.IsDirty());
+}
+
+TEST_F(SceneDocumentHistoryTest, RenameOwnershipDoesNotCoverUntrackedObserverWrites)
+{
+    m_World.AddComponentImmediate(m_Entity, Components::Name{"Original"});
+    const auto other = m_World.CreateEntity();
+    m_World.AddComponentImmediate(other, Components::Name{"Other"});
+    m_Document.MarkClean();
+    const auto observer = m_Notifications.SubscribeComponentChanged(
+        [this, other](const EditorChangeNotifications::ComponentChangedEvent& event)
+        {
+            if (event.entity != m_Entity || event.componentType != ECS::GetComponentTypeId<Components::Name>() ||
+                event.kind != EditChangeKind::Commit)
+                return;
+            *m_World.GetComponentForWrite<Components::Name>(other) = Components::Name{"Observer"};
+            m_Notifications.NotifyComponentChanged(
+                {&m_World, other, ECS::GetComponentTypeId<Components::Name>(), EditChangeKind::Commit, true});
+        });
+    ASSERT_TRUE(CommitEntityRename(m_World, m_Entity, "Renamed", &m_History, &m_Notifications));
+    m_History.Undo();
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(m_Entity)->View(), "Original");
+    EXPECT_EQ(m_World.GetComponent<Components::Name>(other)->View(), "Observer");
+    EXPECT_TRUE(m_Document.IsDirty());
+    m_Notifications.Unsubscribe(observer);
 }
 } // namespace
 } // namespace GameEngine::Editor

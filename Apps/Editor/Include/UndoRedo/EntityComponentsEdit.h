@@ -20,10 +20,10 @@ class UndoRedoService;
 
 /// Records changed, added, or removed component bytes; refused or throwing edits restore the starting components.
 /// Settle the previous action before opening an enclosing snapshot or calling this function.
-/// Enclosing snapshots remain active during `edit`. The caller announces its own writes.
+/// Enclosing snapshots remain active during `edit`. For changed components, `notify` runs before publication.
 bool CommitEntityComponentsEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedoService* undo,
                                 EditorChangeNotifications* notifications, const std::string& label,
-                                const std::function<bool()>& edit);
+                                const std::function<bool()>& edit, const std::function<void()>& notify = {});
 
 // Every component an entity carries, with its bytes, in type id order.
 using EntityComponentBytes = std::vector<std::pair<ECS::ComponentTypeId, std::vector<std::uint8_t>>>;

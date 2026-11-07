@@ -48,7 +48,7 @@ bool CommitEntityRename(ECS::World& world, ECS::EntityHandle entity, const std::
     if (undo && !undo->CommitPendingEdit())
         return false;
 
-    const bool renamed = CommitEntityComponentsEdit(world, entity, undo, notifications, kRenameEntityLabel, [&world, entity, &name]()
+    return CommitEntityComponentsEdit(world, entity, undo, notifications, kRenameEntityLabel, [&world, entity, &name]()
     {
         Components::Name value{};
         std::memcpy(value.value, name.data(), name.size());
@@ -57,13 +57,12 @@ bool CommitEntityRename(ECS::World& world, ECS::EntityHandle entity, const std::
         else
             world.AddComponentImmediate(entity, value);
         return true;
-    });
-    if (renamed && notifications)
+    }, [&world, entity, notifications]()
     {
-        notifications->NotifyComponentChanged(
-            {&world, entity, ECS::GetComponentTypeId<Components::Name>(), EditorChangeNotifications::ChangeKind::Commit});
-    }
-    return renamed;
+        if (notifications)
+            notifications->NotifyComponentChanged(
+                {&world, entity, ECS::GetComponentTypeId<Components::Name>(), EditorChangeNotifications::ChangeKind::Commit});
+    });
 }
 
 void HierarchyEntityRename::Begin(Label* title, UIElement* tree, ECS::World& world, ECS::EntityHandle entity,

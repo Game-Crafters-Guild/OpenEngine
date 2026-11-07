@@ -30,6 +30,15 @@ namespace
 
 constexpr const char* kRevertFieldLabel = "Revert to prefab value";
 
+bool RevertEntityOverrides(ECS::World& world, ECS::EntityHandle entity,
+                           std::span<const Scene::PrefabOverrideTarget> targets, std::string& error)
+{
+    for (const Scene::PrefabOverrideTarget& target : targets)
+        if (target.Entity == entity && !Scene::RevertPrefabOverride(world, entity, target.Override, error))
+            return false;
+    return true;
+}
+
 // The overrides of the target's entity that its row or header shows: the field's lines for a row, the
 // component's addition or removal for a header.
 std::vector<Scene::PrefabOverride> FindTargetOverrides(const OverrideMenuTarget& target)
@@ -171,17 +180,15 @@ void RevertPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pr
     {
         if (!world.IsValid(entity))
             continue;
-        const auto revert = [&world, entity, targets, &error]()
+        CommitEntityComponentsEdit(world, entity, undo, notifications, undoName, [&world, entity, targets, &error]()
         {
-            for (const Scene::PrefabOverrideTarget& target : targets)
-                if (target.Entity == entity && !Scene::RevertPrefabOverride(world, entity, target.Override, error))
-                    return false;
-            return true;
-        };
-        CommitEntityComponentsEdit(world, entity, undo, notifications, undoName, revert);
-        if (notifications)
-            notifications->NotifyComponentChanged({&world, entity, ComponentTypeOfTargets(targets, entity),
-                                                   EditorChangeNotifications::ChangeKind::Commit});
+            return RevertEntityOverrides(world, entity, targets, error);
+        }, [&world, entity, targets, notifications]()
+        {
+            if (notifications)
+                notifications->NotifyComponentChanged({&world, entity, ComponentTypeOfTargets(targets, entity),
+                                                       EditorChangeNotifications::ChangeKind::Commit});
+        });
     }
     if (compound)
         undo->EndCompound();

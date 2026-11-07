@@ -303,21 +303,31 @@ public:
         }
         CommitPendingEdit();
     }
-    void CommitAlreadyApplied(std::unique_ptr<IEditorCommand> command)
+    /// Notify the completed write under its pending command's ownership before publication.
+    void CommitAlreadyApplied(std::unique_ptr<IEditorCommand> command, const std::function<void()>& notify = {})
     {
         if (!command || m_Replaying)
             return;
         if (m_PendingCommand && m_PendingCommand->CanMergeWith(*command) && m_PendingCommand->MergeWith(*command))
         {
+            NotifyAlreadyApplied(notify);
             NotifyHistoryChanged();
             return;
         }
         if (!CommitPendingEdit())
+        {
+            if (notify)
+            {
+                const HistoryMutationScope untrackedScope(nullptr);
+                notify();
+            }
             return;
+        }
         FireBeforeMutation();
         m_PendingCommandId = m_NextEntryId++;
         const bool continuous = command->IsContinuous();
         m_PendingCommand = std::move(command);
+        NotifyAlreadyApplied(notify);
         if (!continuous)
             CommitPendingEdit();
         else
@@ -508,6 +518,13 @@ public:
     }
 
 private:
+    void NotifyAlreadyApplied(const std::function<void()>& notify)
+    {
+        if (!notify)
+            return;
+        const HistoryMutationScope mutationScope(this);
+        notify();
+    }
     bool HasPendingDocumentChange(const void* document) const
     {
         if (HasPendingEdit() && m_Pending->Documents.Contains(document))
