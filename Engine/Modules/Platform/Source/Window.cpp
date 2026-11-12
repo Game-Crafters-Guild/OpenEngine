@@ -227,6 +227,19 @@ namespace {
             s_GlobalMoveCallback(screenX, screenY);
     }
 #endif
+
+    // Wayland gives a surface its window role only when the window is shown. The
+    // compositor then closes the connection if a buffer arrives before the first
+    // configure event, and a swapchain can present at any time. Thus a window that
+    // a swapchain can present to must have its role before the swapchain exists.
+    bool MustShowAtCreation()
+    {
+#if defined(__linux__)
+        return glfwGetPlatform() == GLFW_PLATFORM_WAYLAND;
+#else
+        return false;
+#endif
+    }
 }
 
 #include <GLFW/glfw3.h>
@@ -356,7 +369,10 @@ bool Window::Create(const WindowDesc& desc)
 
     // Create window hidden when StartHidden is requested (so the caller can
     // render a frame before showing) or on Windows for ToolWindow style fixup.
-    const bool createHidden = desc.StartHidden
+    // On Wayland the window is shown at creation. Wayland does not show a window
+    // before its first buffer, so no empty frame is visible.
+    const bool startHidden = desc.StartHidden && !MustShowAtCreation();
+    const bool createHidden = startHidden
 #if defined(_WIN32)
         || desc.ToolWindow
 #endif
@@ -661,7 +677,7 @@ bool Window::Create(const WindowDesc& desc)
 
     // Show the window now unless the caller wants to defer visibility
     // (e.g. to render a frame first and avoid a gray flash).
-    if (createHidden && !desc.StartHidden)
+    if (createHidden && !startHidden)
     {
         glfwShowWindow(m_Handle);
     }
